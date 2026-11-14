@@ -1,0 +1,20 @@
+[package]
+name = "ctxkit"
+version = "0.1.0"
+edition = "2021"
+description = "Surgical context and token toolkit for Claude Code, Claude Desktop, and Antigravity"
+license = "MIT"
+repository = "https://github.com/d-ridelman/ctxkit"
+readme = "README.md"
+keywords = ["claude-code", "antigravity", "tokens", "context", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+regex = "1.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
