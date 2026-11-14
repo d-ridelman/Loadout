@@ -84,6 +84,10 @@ const cases = [
   [false, () => sh(`grep -n "FIELDS${B}|chat_prompts" tests/a.mjs | head`)],
   [false, () => sh(`sed -n 30,48p a.mjs; grep -n "a${B}|b" c.md`)],
   [false, () => sh(`sed -i 's/a/b/' f.txt`)],
+  // -i of a later command in the chain is not sed's flag
+  [false, () => sh(`sed -n 1,5p a.md; grep -n -i -B2 "a${B}|b" c.md`)],
+  [false, () => sh(`sed -n 1,5p a.md | grep -i "a${B}|b"`)],
+  [true, () => sh(`sed 's|a${B}.b;c|d|' -i f.txt`)],
   [false, () => sh(`npm test ${B}\n  --maxWorkers=2`)],
   [false, () => sh(`node scripts/run.mjs "C:${B}Users${B}x"`)],
   [false, () => sh(`python scripts/run.py -c "C:${B}cfg.ini"`)],

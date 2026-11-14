@@ -180,8 +180,11 @@ fn bash_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
         return Some(msg);
     }
     static RE_SED: OnceLock<Regex> = OnceLock::new();
+    // Stay inside sed's own command: an unquoted `;`, `|` or `&` ends it, so `-i` of a later
+    // command in the chain (`sed -n ...; grep -i ...`) is not taken for sed's flag.
     let re_sed = RE_SED.get_or_init(|| {
-        Regex::new(r#"\bsed\b[^\n]*?\s(?:-[A-Za-z]*i\b|--in-place)[^\n]*"#).unwrap()
+        let seg = r#"(?:[^\n;|&'"]|'[^']*'|"(?:[^"\\]|\\.)*")"#;
+        Regex::new(&format!(r"\bsed\b{seg}*?\s(?:-[A-Za-z]*i\b|--in-place){seg}*")).unwrap()
     });
     for m in re_sed.find_iter(cmd) {
         if m.as_str().contains('\\') {
