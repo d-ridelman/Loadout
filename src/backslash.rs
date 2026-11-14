@@ -57,13 +57,15 @@ fn re_inline() -> &'static Regex {
             (r"ruby", r"-[a-z]*e\s+"),
             (r"php", r"-r\s+"),
             (r"pwsh|powershell", r"(?i:-[a-z]{0,2}[ec]|-Command|-EncodedCommand)\s+"),
-            (r"bash|sh|zsh", r"-[a-z]*c\s+"),
+            (r"bash|sh|zsh", r"-[a-z]*c[a-z]*\s+"),
         ];
         let alt: Vec<String> = families
             .iter()
             .map(|(names, flags)| {
                 // Options before the code flag, including the ones that take a value (-X, -W).
-                format!(r#"(?i:{names})(?:\.exe)?["']?\s+(?:-[XW]\s+\S+\s+|-\S*\s+)*?(?:{flags})"#)
+                format!(
+                    r#"(?i:{names})(?:\.exe)?["']?\s+(?:(?:-[XWro]|(?i:-ExecutionPolicy|-ep|-ex|-WindowStyle))\s+\S+\s+|-\S*\s+)*?(?:{flags})"#
+                )
             })
             .collect();
         Regex::new(&format!(r#"(?:^|[\s/\\"'(;&|])(?:{})"#, alt.join("|"))).unwrap()
@@ -106,30 +108,37 @@ fn has_inline_backslash(cmd: &str, lang: Lang) -> Option<&'static str> {
     None
 }
 
-fn has_unquoted_redirect(s: &str) -> bool {
+/// A `>` that writes stdout to a file. With `bash_quotes`, `>` inside quotes is text
+/// ("a -> b", awk's `$3 > 100`) and a backslash escapes the next character, as bash reads it.
+/// PowerShell text is scanned raw: its quoting rules differ and here-strings hold stray quotes.
+fn has_unquoted_redirect(s: &str, bash_quotes: bool) -> bool {
     let bytes = s.as_bytes();
     let mut quote = 0u8;
-    for i in 0..bytes.len() {
+    let mut i = 0;
+    while i < bytes.len() {
         let b = bytes[i];
-        if quote != 0 {
-            // `>` inside quotes is text ("a -> b", awk's `$3 > 100`), not a redirect.
-            if b == quote && !(quote == b'"' && i > 0 && bytes[i - 1] == b'\\') {
-                quote = 0;
-            }
-            continue;
-        }
-        if b == b'"' || b == b'\'' {
-            quote = b;
-            continue;
-        }
-        if b == b'>' {
-            let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
-            // `2>` is stderr and the second `>` of `>>` was handled; `1>` and `&>` do write stdout.
-            if matches!(prev, Some(b'2'..=b'9') | Some(b'>')) {
+        if bash_quotes {
+            if b == b'\\' && quote != b'\'' {
+                i += 2;
                 continue;
             }
+            if quote != 0 {
+                if b == quote {
+                    quote = 0;
+                }
+                i += 1;
+                continue;
+            }
+            if b == b'"' || b == b'\'' {
+                quote = b;
+                i += 1;
+                continue;
+            }
+        }
+        // `2>` is stderr and the second `>` of `>>` was handled; `1>` and `&>` do write stdout.
+        if b == b'>' && !(i > 0 && matches!(bytes[i - 1], b'2'..=b'9' | b'>')) {
             let mut j = i + 1;
-            if j < bytes.len() && bytes[j] == b'>' {
+            if j < bytes.len() && matches!(bytes[j], b'>' | b'|') {
                 j += 1;
             }
             while j < bytes.len() && bytes[j].is_ascii_whitespace() {
@@ -139,6 +148,7 @@ fn has_unquoted_redirect(s: &str) -> bool {
                 return true;
             }
         }
+        i += 1;
     }
     false
 }
@@ -146,12 +156,18 @@ fn has_unquoted_redirect(s: &str) -> bool {
 fn has_heredoc_backslash(cmd: &str) -> bool {
     static RE_START: OnceLock<Regex> = OnceLock::new();
     let re = RE_START.get_or_init(|| {
-        // Tag forms: EOF, 'EOF', "EOF", \EOF; tags may contain `-` (END-TAG).
-        Regex::new(r#"<<-?\s*(\\|["'])?([A-Za-z_][\w-]*)["']?[^\n]*\n"#).unwrap()
+        // Tag forms: EOF, 'EOF', "EOF", \EOF; tags may contain `-` (END-TAG). `<<<` is a
+        // here-string, not a heredoc.
+        Regex::new(r#"(?:^|[^<])<<-?\s*(\\|["'])?([A-Za-z_][\w-]*)["']?[^\n]*\n"#).unwrap()
     });
+    // `<<` inside the body of an earlier heredoc is that heredoc's text (C++ `cout << x`).
+    let mut skip_until = 0;
     for cap in re.captures_iter(cmd) {
         let Some(full) = cap.get(0) else { continue };
         let Some(tag) = cap.get(2) else { continue };
+        if full.start() < skip_until {
+            continue;
+        }
         let body_start = full.end();
         let rest = &cmd[body_start..];
         let mut offset = 0;
@@ -163,14 +179,19 @@ fn has_heredoc_backslash(cmd: &str) -> bool {
                     return true;
                 }
                 closed = true;
+                skip_until = body_start + offset;
                 break;
             }
             offset += line.len() + 1;
         }
-        // bash runs an unterminated heredoc up to end of input. Only a quoted tag is taken as
-        // proof of a heredoc here: a bare `<< word` may be a shift operator inside other code.
+        // bash runs an unterminated heredoc up to end of input. That needs proof it is a
+        // heredoc: a quoted tag, and `<<` not sitting inside a quoted string (a shift in code).
         if !closed && cap.get(1).is_some() && rest.contains('\\') {
-            return true;
+            let line_start = cmd[..tag.start()].rfind('\n').map_or(0, |p| p + 1);
+            let before = &cmd[line_start..tag.start() - 1];
+            if before.matches('\'').count().is_multiple_of(2) && before.matches('"').count().is_multiple_of(2) {
+                return true;
+            }
         }
     }
     false
@@ -224,7 +245,8 @@ fn bash_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     // command in the chain (`sed -n ...; grep -i ...`) is not taken for sed's flag; `)` and a
     // backtick end a command substitution. `-ie` is in-place too (suffix "e").
     let re_sed = RE_SED.get_or_init(|| {
-        let seg = r#"(?:[^\n;|&'"`)]|'[^']*'|"(?:[^"\\]|\\.)*")"#;
+        // An escaped character (`\)` in an unquoted script) is part of the command.
+        let seg = r#"(?:[^\n;|&'"`)\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")"#;
         Regex::new(&format!(r"\bsed\b{seg}*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place){seg}*")).unwrap()
     });
     for m in re_sed.find_iter(cmd) {
@@ -239,11 +261,11 @@ fn bash_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     static RE_ECHO: OnceLock<Regex> = OnceLock::new();
     let re_echo = RE_ECHO.get_or_init(|| {
         // `&>` is a redirect, not the end of the command.
-        Regex::new(r#"(?:^|[\s;&|(])(?:printf|echo)\s((?:[^\n&|]|&>)*)"#).unwrap()
+        Regex::new(r#"(?:^|[\s;&|(])(?:printf|echo)\s((?:>\||&>|[^\n&|])*)"#).unwrap()
     });
     for cap in re_echo.captures_iter(cmd) {
         let arg = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        if arg.contains('\\') && has_unquoted_redirect(arg) {
+        if arg.contains('\\') && has_unquoted_redirect(arg, true) {
             return Some(t(
                 lang,
                 "printf/echo redirects backslash strings to a file.",
@@ -255,9 +277,15 @@ fn bash_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     let re_awk = RE_AWK.get_or_init(|| {
         Regex::new(r#"(?:^|[\s;&|(])g?awk\s([^\n;&|]*)"#).unwrap()
     });
+    // Inside the awk program a redirect is `print ... > "file"`; `$3 > 100` is a comparison.
+    static RE_AWK_PRINT: OnceLock<Regex> = OnceLock::new();
+    let re_print =
+        RE_AWK_PRINT.get_or_init(|| Regex::new(r#"printf?\b[^\n;}]*>>?\s*""#).unwrap());
     for cap in re_awk.captures_iter(cmd) {
         let arg = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        if arg.contains('\\') && (has_unquoted_redirect(arg) || arg.contains("-i inplace")) {
+        if arg.contains('\\')
+            && (has_unquoted_redirect(arg, true) || arg.contains("-i inplace") || re_print.is_match(arg))
+        {
             return Some(t(
                 lang,
                 "awk with backslashes writes to a file.",
@@ -276,7 +304,7 @@ fn ps_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     let re_sink = RE_SINK.get_or_init(|| {
         Regex::new(r#"(?i)\b(?:node|python[\d.]*|py|perl|ruby|bash|Set-Content|Add-Content|Out-File|WriteAllText|WriteAllLines)\b"#).unwrap()
     });
-    if (re_sink.is_match(cmd) || has_unquoted_redirect(cmd)) && has_ps_herestring_backslash(cmd) {
+    if (re_sink.is_match(cmd) || has_unquoted_redirect(cmd, false)) && has_ps_herestring_backslash(cmd) {
         return Some(t(
             lang,
             "PowerShell here-string contains backslashes.",
@@ -285,12 +313,15 @@ fn ps_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     }
     static RE_REPLACE: OnceLock<Regex> = OnceLock::new();
     static RE_WRITE_CMD: OnceLock<Regex> = OnceLock::new();
-    let re_rep = RE_REPLACE.get_or_init(|| Regex::new(r#"(?i)-[ci]?replace\s[^|;\n]*\\"#).unwrap());
+    // The operator's own arguments: up to `|` or `;` outside quotes.
+    let re_rep = RE_REPLACE.get_or_init(|| {
+        Regex::new(r#"(?i)-[ci]?replace\s(?:[^|;\n'"]|'[^']*'|"[^"]*")*"#).unwrap()
+    });
     let re_wr = RE_WRITE_CMD.get_or_init(|| {
         Regex::new(r#"(?i)\b(?:Set-Content|Add-Content|Out-File|WriteAllText|WriteAllLines)\b"#)
             .unwrap()
     });
-    if re_rep.is_match(cmd) && re_wr.is_match(cmd) {
+    if re_wr.is_match(cmd) && re_rep.find_iter(cmd).any(|m| m.as_str().contains('\\')) {
         return Some(t(
             lang,
             "-replace with backslashes writes to a file.",
@@ -313,7 +344,10 @@ fn write_reason(path: &str, content: &str, lang: Lang) -> Option<&'static str> {
     static RE_SUB: OnceLock<Regex> = OnceLock::new();
     let re_dir = re_dir_init(&RE_DIR);
     let re_base = RE_BASE
-        .get_or_init(|| Regex::new(r#"(?i)(?:^|[-_.])(?:patch|fix|edit|rep|sub|tmp)(?:[-_.\d]|$)"#).unwrap());
+        .get_or_init(|| {
+            // The word must end: `fix-2.js`, `fixPaths.js`, `replace_paths.py`, not `fixtures.js`.
+            Regex::new(r#"(?:^|[-_.])(?i:patch(?:es)?|fix(?:es|up)?|edit|rep(?:lace)?|sub|tmp)(?:[-_.\dA-Z]|$)"#).unwrap()
+        });
     let base = Path::new(path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -379,7 +413,7 @@ pub fn post_syntax_error(path: &str) -> Option<String> {
                 "-I",
                 "-c",
                 // Print the error itself, not the traceback of this wrapper.
-                "import ast,sys\ntry: ast.parse(open(sys.argv[1],'rb').read(), sys.argv[1])\nexcept SyntaxError as e: sys.exit(f'SyntaxError: {e.msg} (line {e.lineno})\\n{(e.text or \"\").rstrip()}')",
+                "import ast,sys\ntry: ast.parse(open(sys.argv[1],'rb').read(), sys.argv[1])\nexcept (SyntaxError, ValueError) as e: sys.exit(f'{type(e).__name__}: {getattr(e, \"msg\", e)}' + (f' (line {e.lineno})' if getattr(e, 'lineno', None) else '') + '\\n' + (getattr(e, 'text', None) or '').rstrip())",
                 path,
             ])
             .output()

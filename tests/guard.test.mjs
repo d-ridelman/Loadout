@@ -82,7 +82,60 @@ const postPath = (file_path, cwd = dir) =>
     cwd,
   }).stdout;
 
+const fewLongLines = join(dir, 'few-long.txt');
+writeFileSync(fewLongLines, Array.from({ length: 10 }, () => 'x'.repeat(30000)).join('\n'));
+const midFile = join(dir, 'mid.txt');
+writeFileSync(midFile, Array.from({ length: 100 }, () => 'x'.repeat(300)).join('\n'));
+
 const cases = [
+  // Second review pass: redirect detection must survive escapes and odd quotes
+  [true, () => sh(`echo "C:${B}${B}dir${B}${B}" > f.txt`)],
+  [true, () => sh(`printf 'it'${B}''s a${B}n' > f.txt`)],
+  [true, () => sh(`echo ${B}"a${B}nb${B}" > f.txt`)],
+  [true, () => sh(`echo "a${B}nb" >| f.txt`)],
+  [true, () => ps(`@'\nit's C:${B}x\n'@ > f.txt`)],
+  [true, () => ps(`$p = "C:${B}dir${B}"; @'\nC:${B}x\n'@ > f.txt`)],
+  [true, () => sh(`awk '{print "a${B}tb" > "out.txt"}' in.txt`)],
+  // ...recursive grep: flags and paths are tokens, not substrings
+  [true, () => sh('grep -r -h foo .')],
+  [true, () => sh('rg -tcpp foo')],
+  [true, () => sh('rg -thtml foo')],
+  [true, () => sh(`grep -rn foo . "${smallFile}"`)],
+  [true, () => sh(`rg foo . "${smallFile}"`)],
+  [true, () => sh('rg "a -l b" srcdir')],
+  [false, () => sh('grep -n "x -r y" srcdir')],
+  [false, () => sh(`rg foo "${spacedBig}"`)],
+  [false, () => sh('rg -h')],
+  // ...inline code after clustered or valued options
+  [true, () => sh(`bash -ce "print('a${B}nb')"`)],
+  [true, () => sh(`bash -o pipefail -c "printf 'a${B}n'"`)],
+  [true, () => sh(`node -r ts-node/register -e "console.log('a${B}n')"`)],
+  [true, () => sh(`pwsh -NoProfile -ExecutionPolicy Bypass -Command "Write-Host 'a${B}b'"`)],
+  [false, () => sh(`python -O scripts${B}run.py`)],
+  // ...heredoc detection: <<<, << inside a heredoc body, << inside quotes
+  [false, () => sh(`cat <<< "hello"\nls C:${B}x`)],
+  [false, () => sh(`cat > a.cpp <<'EOF'\nint main(){ std::cout << "Hi"; }\nEOF\ng++ a.cpp -o C:${B}tmp${B}a.exe`)],
+  [false, () => sh(`node -e 'x = a <<"b"'\nls C:${B}x`)],
+  // ...throwaway names, -replace with quoted `;`, sed with an escaped paren
+  [true, () => wr(`D:${B}proj${B}scripts${B}replace_paths.py`, `fs.writeFileSync(p, s.replace(/${B}r${B}n/g, '${B}n'))`)],
+  [true, () => wr(`D:${B}proj${B}scripts${B}fixPaths.js`, `fs.writeFileSync(p, s.replace(/${B}r${B}n/g, '${B}n'))`)],
+  [true, () => wr(`D:${B}proj${B}scripts${B}patches.py`, `fs.writeFileSync(p, s.replace(/${B}r${B}n/g, '${B}n'))`)],
+  [false, () => wr(`D:${B}proj${B}src${B}repo.ts`, `fs.writeFileSync(p, s.replace(/${B}r${B}n/g, '${B}n'))`)],
+  [true, () => ps(`(gc f) -replace 'a;b','C:${B}x' | Set-Content f`)],
+  [true, () => sh(`sed -E s/${B}(a${B})/b/ -i f`)],
+  // ...a tail slice is judged by bytes as well as lines
+  [true, () => rd(fewLongLines, { offset: 2, limit: 1000 })],
+  [true, () => rd(midFile, { offset: 2 })],
+  [true, () => rd(midFile)],
+  [false, () => rd(midFile, { offset: 50 })],
+  ['deny', () => preAgy('read_file', { Path: fewLongLines, StartLine: 2, EndLine: 1000 }).decision],
+  [true, () => ps(`Get-Content -Encoding utf8 "${bigFile}"`)],
+  [true, () => {
+    writeFileSync(join(dir, 'nul.py'), 'x = 1\0\n');
+    const out = postPath(join(dir, 'nul.py'));
+    return out.includes('"block"') && !out.includes('line None');
+  }],
+
   // Regressions from the independent review: read-guard bounds
   [true, () => rd(hugeFile, { offset: 6000, limit: 100000 })],
   [false, () => rd(hugeFile, { offset: 6000, limit: 400 })],

@@ -94,8 +94,7 @@ pub fn read_guard(
     // The limit is absent or above the cap here, so only a short tail can pass. Count just far
     // enough past the offset to know whether more than the cap remains.
     if let Some(start) = offset.map(|o| (o - 1) as usize) {
-        let seen = count_lines_bounded(file_path, start.saturating_add(MAX_READ_LINES + 1))?;
-        if seen.saturating_sub(start) <= MAX_READ_LINES {
+        if tail_fits(file_path, start)? {
             return None;
         }
     }
@@ -123,6 +122,29 @@ fn count_lines(path: &str) -> Option<usize> {
         count += 1;
     }
     Some(count)
+}
+
+/// Whether everything after the first `start` lines stays within both read caps. A few very
+/// long lines are as heavy as many short ones, so bytes count too.
+fn tail_fits(path: &str, start: usize) -> Option<bool> {
+    let mut r = BufReader::new(File::open(path).ok()?);
+    let mut buf = Vec::with_capacity(4096);
+    let (mut index, mut lines, mut bytes) = (0usize, 0usize, 0u64);
+    loop {
+        buf.clear();
+        let n = r.read_until(b'\n', &mut buf).ok()?;
+        if n == 0 {
+            return Some(true);
+        }
+        if index >= start {
+            lines += 1;
+            bytes += n as u64;
+            if lines > MAX_READ_LINES || bytes > MAX_READ_BYTES {
+                return Some(false);
+            }
+        }
+        index += 1;
+    }
 }
 
 fn count_lines_bounded(path: &str, cap: usize) -> Option<usize> {
@@ -188,23 +210,71 @@ fn check_bash_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<Strin
     None
 }
 
+/// Splits a simple command into words; the flag says whether the word was quoted.
+fn shell_tokens(cmd: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let (mut cur, mut quoted, mut quote) = (String::new(), false, None::<char>);
+    for c in cmd.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => cur.push(c),
+            None if c == '"' || c == '\'' => {
+                quote = Some(c);
+                quoted = true;
+            }
+            None if c.is_whitespace() => {
+                if !cur.is_empty() || quoted {
+                    out.push((std::mem::take(&mut cur), quoted));
+                    quoted = false;
+                }
+            }
+            None => cur.push(c),
+        }
+    }
+    if !cur.is_empty() || quoted {
+        out.push((cur, quoted));
+    }
+    out
+}
+
 /// Unbounded recursive search: `grep` with a recursive flag, or `rg` (recursive by default).
 fn check_recursive_grep(trimmed: &str, client: Client, lang: Lang) -> Option<String> {
-    static RE_REC: OnceLock<Regex> = OnceLock::new();
-    static RE_BOUNDED: OnceLock<Regex> = OnceLock::new();
-    // Flags are whole tokens: `-r` inside `user-manager.txt` or `--color` is not a flag.
-    let re_rec = RE_REC.get_or_init(|| {
-        Regex::new(r"^(?:grep\s(?:.*\s)?(?:-[A-Za-z]*[rR][A-Za-z]*|--(?:dereference-)?recursive)(?:\s|$)|rg(?:\s|$))").unwrap()
+    // Work on tokens: `-r` inside `user-manager.txt`, `--color` or a quoted pattern is not a flag.
+    let toks = shell_tokens(trimmed);
+    let is_rg = match toks.first().map(|(t, _)| t.as_str()) {
+        Some("rg") => true,
+        Some("grep") => false,
+        _ => return None,
+    };
+    let flags: Vec<&str> =
+        toks[1..].iter().filter(|(t, quoted)| !quoted && t.starts_with('-')).map(|(t, _)| t.as_str()).collect();
+    // A cluster of short flags, e.g. `-rn`; `allowed` keeps value-taking letters (`-tcpp`) out.
+    let cluster = |f: &str, allowed: &str, any_of: &str| {
+        let body = &f[1..];
+        !body.is_empty()
+            && !body.starts_with('-')
+            && body.chars().all(|c| allowed.contains(c))
+            && body.chars().any(|c| any_of.contains(c))
+    };
+    const BOOL_FLAGS: &str = "ilcnsSwxvHIFPoNuUazZrR";
+    let recursive = is_rg
+        || flags.iter().any(|f| {
+            matches!(*f, "--recursive" | "--dereference-recursive") || cluster(f, BOOL_FLAGS, "rR")
+        });
+    let bounded = flags.iter().any(|f| {
+        matches!(*f, "--files-with-matches" | "--count" | "--count-matches")
+            || f.starts_with("--max-count")
+            || (f.starts_with("-m") && f[2..].chars().all(|c| c.is_ascii_digit()))
+            || cluster(f, BOOL_FLAGS, "lc")
+            || (is_rg && matches!(*f, "--version" | "--help" | "--files" | "--type-list" | "-V" | "-h"))
     });
-    let re_bounded = RE_BOUNDED.get_or_init(|| {
-        Regex::new(r"\s(?:-[A-Za-z]*[lc][A-Za-z]*|--files-with-matches|--count|--max-count[=\s]\d+|-m\s?\d+|--version|--help|--files|--type-list|-V|-h)(?:\s|$)").unwrap()
-    });
-    if !re_rec.is_match(trimmed) || re_bounded.is_match(trimmed) {
+    if !recursive || bounded {
         return None;
     }
-    // Searching one named file is not a recursive walk.
-    let last = trimmed.rsplit(char::is_whitespace).next().unwrap_or("");
-    if Path::new(last.trim_matches(|c| c == '"' || c == '\'')).is_file() {
+    // One pattern and one path that is a file: not a recursive walk.
+    let positional: Vec<&str> =
+        toks[1..].iter().filter(|(t, quoted)| *quoted || !t.starts_with('-')).map(|(t, _)| t.as_str()).collect();
+    if positional.len() == 2 && Path::new(positional[1]).is_file() {
         return None;
     }
     Some(
@@ -234,7 +304,7 @@ fn check_ps_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<String>
     // Flags that still dump the whole file; `-TotalCount` / `-Tail` after the path do not match.
     let re_gc = RE_BARE_GC.get_or_init(|| {
         Regex::new(&format!(
-            r"(?i)^(?:Get-Content|gc|type|cat)\s+(?:-(?:Path|LiteralPath|Raw)\s+)*{PATH_ARG}(?:\s+-Raw)?$"
+            r"(?i)^(?:Get-Content|gc|type|cat)\s+(?:-(?:Path|LiteralPath|Raw)\s+|-Encoding\s+\S+\s+)*{PATH_ARG}(?:\s+-Raw)?$"
         ))
         .unwrap()
     });
