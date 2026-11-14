@@ -716,7 +716,17 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
                 ))
             }
         },
-        None => append_block(&existing, &block),
+        None => {
+            // The block is a sequence item: appending it to a flow list or a mapping breaks the YAML.
+            let first = existing.lines().find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
+            if first.is_some_and(|l| l.trim_end() != "-" && !l.starts_with("- ")) {
+                return Err(format!(
+                    "{}: top level is not a block list (`- ...`); add the entry from examples/dsh-cordis.patch.yml by hand",
+                    patch_path.display()
+                ));
+            }
+            append_block(&existing, &block)
+        }
     };
     if existing == updated {
         println!("  ok DeepSeek Harness profile patch (unchanged): {}", patch_path.display());
@@ -730,19 +740,30 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     }
 
     // The bridge is not bundled with the desktop app; without it the insert loads nothing.
+    // Its peer dependencies pin the exact app version, so an app update needs a matching reinstall.
+    let json_str = |path: PathBuf, key: &str| {
+        let v = if path.exists() { read_json_object(&path).ok() } else { None };
+        v.and_then(|v| v.get(key).and_then(|s| s.as_str()).map(String::from))
+    };
     let plugin_dir = DSH_HOOKS_PLUGIN.split('/').fold(profile.join("node_modules"), |p, s| p.join(s));
-    if plugin_dir.join("package.json").exists() {
+    let installed = json_str(plugin_dir.join("package.json"), "version");
+    let app = json_str(
+        dsh_home.join("dsh-runtimes").join("dsh-primary-runtime").join("runtime.json"),
+        "desktopVersion",
+    );
+    let problem = match (&installed, &app) {
+        (None, _) => "is not installed",
+        (Some(i), Some(a)) if i != a => "does not match the app version",
+        _ => "",
+    };
+    if problem.is_empty() {
         println!("  [ok]   DeepSeek Harness: {DSH_HOOKS_PLUGIN} is installed; restart the app to load hooks");
     } else {
-        let version = read_json_object(
-            &dsh_home.join("dsh-runtimes").join("dsh-primary-runtime").join("runtime.json"),
-        )
-        .ok()
-        .and_then(|v| v.get("desktopVersion").and_then(|s| s.as_str()).map(String::from))
-        .unwrap_or_else(|| "<DSH version>".to_string());
+        let version = app.unwrap_or_else(|| "<DSH version>".to_string());
         println!(
-            "  [warn] DeepSeek Harness: {DSH_HOOKS_PLUGIN} is not installed in {} - hooks stay inactive. Run there: pnpm add -E {DSH_HOOKS_PLUGIN}@{version} @deepseek-ai/dsh-hook-protocol@{version} and restart the app.",
-            profile.display()
+            "  [warn] DeepSeek Harness: {DSH_HOOKS_PLUGIN} {problem} in {} (installed: {}) - hooks stay inactive. Run there: pnpm add -E {DSH_HOOKS_PLUGIN}@{version} @deepseek-ai/dsh-hook-protocol@{version} and restart the app.",
+            profile.display(),
+            installed.as_deref().unwrap_or("none")
         );
     }
     Ok(())
@@ -1327,6 +1348,16 @@ mod tests {
         assert!(first.starts_with(foreign));
         assert_eq!(first.matches("id: ctxkit-hooks").count(), 1);
         assert!(first.contains("name: '@deepseek-ai/dsh-hooks-claude-code'"));
+
+        // A flow list or a mapping at the top level is refused, not corrupted.
+        for root in ["[]\n", "foo: bar\n"] {
+            fs::write(&patch, root).unwrap();
+            assert!(update_dsh_hooks(&home, "ctxkit --dsh", false).is_err());
+            assert_eq!(fs::read_to_string(&patch).unwrap(), root);
+        }
+        fs::write(&patch, "# only a comment\n").unwrap();
+        update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
+        assert!(fs::read_to_string(&patch).unwrap().contains("id: ctxkit-hooks"));
 
         // An orphan end marker above must not make the block multiply.
         fs::write(&patch, format!("{DSH_MARKER_END}\n{foreign}")).unwrap();
