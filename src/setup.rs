@@ -663,12 +663,11 @@ const DSH_HOOKS_PLUGIN: &str = "@deepseek-ai/dsh-hooks-claude-code";
 /// DSH runs hook commands via `pwsh -Command` on Windows and `bash -c` elsewhere.
 fn format_dsh_command(hook_bin_path: &Path, lang: Lang) -> String {
     let raw = hook_bin_path.to_string_lossy().replace('\\', "/");
-    let base = if !raw.contains(' ') {
-        raw
-    } else if cfg!(windows) {
-        format!("& \"{raw}\"")
+    // Always single-quote: a bare path breaks on `'`, `$`, `;` or spaces.
+    let base = if cfg!(windows) {
+        format!("& '{}'", raw.replace('\'', "''"))
     } else {
-        format!("\"{raw}\"")
+        format!("'{}'", raw.replace('\'', "'\\''"))
     };
     match lang {
         Lang::Ru => format!("{base} --dsh --lang ru"),
@@ -703,11 +702,21 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     );
     let existing =
         fs::read_to_string(&patch_path).map_err(|e| format!("read {}: {e}", patch_path.display()))?;
-    let updated = match (existing.find(DSH_MARKER_START), existing.find(DSH_MARKER_END)) {
-        (Some(s), Some(e)) if s < e => {
-            format!("{}{block}{}", &existing[..s], &existing[e + DSH_MARKER_END.len()..])
-        }
-        _ => append_block(&existing, &block),
+    let updated = match existing.find(DSH_MARKER_START) {
+        // Pair the start marker only with an end marker after it; guessing the span of a
+        // half-deleted block would eat the user's own entries.
+        Some(s) => match existing[s..].find(DSH_MARKER_END) {
+            Some(len) => {
+                format!("{}{block}{}", &existing[..s], &existing[s + len + DSH_MARKER_END.len()..])
+            }
+            None => {
+                return Err(format!(
+                    "{}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand and rerun",
+                    patch_path.display()
+                ))
+            }
+        },
+        None => append_block(&existing, &block),
     };
     if existing == updated {
         println!("  ok DeepSeek Harness profile patch (unchanged): {}", patch_path.display());
@@ -1291,9 +1300,9 @@ mod tests {
 
     #[test]
     fn dsh_setup_is_idempotent_and_keeps_foreign_patch_entries() {
-        assert!(format_dsh_command(Path::new("/opt/ctxkit"), Lang::Ru).ends_with("ctxkit --dsh --lang ru"));
-        let spaced = format_dsh_command(Path::new("/Users/Alice Smith/ctxkit"), Lang::En);
-        assert!(spaced.contains("\"/Users/Alice Smith/ctxkit\" --dsh"));
+        assert!(format_dsh_command(Path::new("/opt/ctxkit"), Lang::Ru).ends_with("/opt/ctxkit' --dsh --lang ru"));
+        let odd = format_dsh_command(Path::new("/Users/O'Brien Smith/ctxkit"), Lang::En);
+        assert!(odd.ends_with("Brien Smith/ctxkit' --dsh") && !odd.contains("/O'Brien"));
 
         let home = env::temp_dir().join("cg_dsh_setup_test");
         let _ = fs::remove_dir_all(&home);
@@ -1318,6 +1327,17 @@ mod tests {
         assert!(first.starts_with(foreign));
         assert_eq!(first.matches("id: ctxkit-hooks").count(), 1);
         assert!(first.contains("name: '@deepseek-ai/dsh-hooks-claude-code'"));
+
+        // An orphan end marker above must not make the block multiply.
+        fs::write(&patch, format!("{DSH_MARKER_END}\n{foreign}")).unwrap();
+        update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
+        update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
+        assert_eq!(fs::read_to_string(&patch).unwrap().matches("id: ctxkit-hooks").count(), 1);
+        // A start marker without its end is refused instead of guessing what to replace.
+        let half = format!("{foreign}{DSH_MARKER_START}\n- id: user-later\n");
+        fs::write(&patch, &half).unwrap();
+        assert!(update_dsh_hooks(&home, "ctxkit --dsh", false).is_err());
+        assert_eq!(fs::read_to_string(&patch).unwrap(), half);
 
         let hooks = read_json_object(&home.join("ctxkit-hooks.json")).unwrap();
         assert_eq!(hooks["hooks"]["PreToolUse"][0]["matcher"], "read|write|bash|pwsh");
