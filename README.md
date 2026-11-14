@@ -63,7 +63,7 @@ Before changing `settings.json`, `CLAUDE.md`, `ccd-session-presets.json`, or `ho
 ```text
   PreToolUse / PostToolUse              CLI
   ────────────────────────              ───
-  Claude Code & Antigravity             ctxkit setup   ──▶  models, agents, hooks, diagnostics
+  Claude Code, Antigravity, DSH         ctxkit setup   ──▶  models, agents, hooks, diagnostics
         │                               ctxkit check   ──▶  compact tsc / pytest / go test / cargo
         ├──▶ guard.rs      (< 15 ms, blocks full reads > 28 KB / > 450 lines and broad grep)
         └──▶ backslash.rs  (catches stripped \ pre-tool; checks .json/.js/.py syntax post-tool)
@@ -71,8 +71,8 @@ Before changing `settings.json`, `CLAUDE.md`, `ccd-session-presets.json`, or `ho
 
 | Module | Role | Behavior |
 |---|---|---|
-| `guard.rs` | Read and search guard | Blocks whole-file reads above `28 KB` / `450` lines (and `> 250 KB` without range) in `Read` and `read_file`, while skipping images, audio, video, and PDFs. Blocks bare `cat`, `Get-Content`, and unfiltered recursive `grep -r`/`rg` without touching pipes or `&&` chains. |
-| `backslash.rs` | Escape and syntax guard | On `PreToolUse`, blocks backslash-heavy `node -e`, `python -c`, `sed -i`, heredocs, PowerShell here-strings, and throwaway patch scripts. On `PostToolUse`, validates `.json` (skipping JSONC such as `tsconfig` and `.vscode/`), `.js/.mjs/.cjs` (`node --check`), and `.py` (`ast.parse`). |
+| `guard.rs` | Read and search guard | Blocks whole-file reads above `28 KB` / `450` lines (and `> 250 KB` without range) in `Read`, `read_file`, and DSH `read`, while skipping images, audio, video, and PDFs. A tail read from an offset passes only when the rest fits both caps. Blocks bare `cat`, `Get-Content`, and unfiltered recursive `grep -r`/`rg` (a search in one named file is fine) without touching pipes or `&&` chains. |
+| `backslash.rs` | Escape and syntax guard | On `PreToolUse`, blocks backslash-heavy inline code (`node -e`, `python -c`, `perl -e`, `php -r`, `bash -c`), `sed -i`, heredocs, PowerShell here-strings, and throwaway patch scripts; syntax-check flags such as `node -c` are left alone. On `PostToolUse`, validates `.json` (skipping JSONC such as `tsconfig`, `.vscode/`, and `.devcontainer/`), `.js/.mjs/.cjs` (`node --check`), and `.py` (`ast.parse`). |
 | `check.rs` | Output compressor (`ctxkit check`) | For `cargo check`/`clippy`/`build`, enables `--message-format=json` and prints up to 3 deduplicated `file:line:col` root causes. For `tsc`, `npm test`, `node --test`, `pytest`, or `go test`, prints `OK (<ms>)` on pass, or up to 30 key lines on failure with the full log saved to `%TEMP%/last-check.log` (`/tmp/last-check.log` on Unix). |
 | `setup.rs` | Environment setup (`ctxkit setup`) | Applies `sonnet` + `advisorModel: fable` + `haiku` + `effortLevel: high`, creates `Explore.md` (`haiku`) and `checker.md` (`opus`), and audits CLI version, Claude plugins/`CLAUDE.md`/MCPs, and Antigravity MCPs/plugins/`agy` CLI model. |
 
@@ -111,5 +111,5 @@ node scripts/audit-sessions.mjs 30
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ([Russian](docs/ARCHITECTURE.ru.md)) details the four modules, Claude Code vs Antigravity hook contracts (`"ask"` vs `"allow"`), and the `toMcp` projection pattern.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ([Russian](docs/ARCHITECTURE.ru.md)) details the four modules, Claude Code vs Antigravity hook contracts (`"ask"` vs `"allow"`), the DeepSeek Harness bridge, and the `toMcp` projection pattern.
 - [docs/RESEARCH.md](docs/RESEARCH.md) ([Russian](docs/RESEARCH.ru.md)) covers the Anthropic and `@0xCodila` routing rules, critique of AST-MCP / heavy `PostToolUse` daemons, the 30-session audit tables, and five hidden config leaks.

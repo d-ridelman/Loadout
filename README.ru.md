@@ -63,7 +63,7 @@ cd ctxkit
 ```text
   PreToolUse / PostToolUse              CLI
   ────────────────────────              ───
-  Claude Code & Antigravity             ctxkit setup   ──▶  модели, агенты, хуки, диагностика
+  Claude Code, Antigravity, DSH         ctxkit setup   ──▶  модели, агенты, хуки, диагностика
         │                               ctxkit check   ──▶  сжатие tsc / pytest / go test / cargo
         ├──▶ guard.rs      (< 15 ms, блокирует чтение целиком > 28 KB / > 450 строк и широкий grep)
         └──▶ backslash.rs  (ловит потерю \ до вызова и проверяет .json/.js/.py после записи)
@@ -71,8 +71,8 @@ cd ctxkit
 
 | Модуль | Назначение | Ключевые детали |
 |---|---|---|
-| `guard.rs` | Защита чтения и поиска | Блокирует целиком файлы крупнее `28 KB` / `450` строк (и `> 250 KB` без диапазона) в `Read` и `read_file`, не трогая изображения, видео, аудио и PDF. Останавливает голые `cat`, `Get-Content` и широкий `grep -r`/`rg` без фильтров, не мешая пайпам и `&&`. |
-| `backslash.rs` | Контроль `\` и синтаксиса | На `PreToolUse` ловит `\` в `node -e`, `python -c`, `sed -i`, heredoc, here-string и patch-скриптах. На `PostToolUse` проверяет `.json` (с исключением для JSONC вроде `tsconfig` и `.vscode/`), `.js/.mjs/.cjs` (`node --check`) и `.py` (`ast.parse`). |
+| `guard.rs` | Защита чтения и поиска | Блокирует целиком файлы крупнее `28 KB` / `450` строк (и `> 250 KB` без диапазона) в `Read`, `read_file` и `read` (DSH), не трогая изображения, видео, аудио и PDF. Чтение хвоста от смещения проходит, только если остаток укладывается в оба порога. Останавливает голые `cat`, `Get-Content` и широкий `grep -r`/`rg` без фильтров (поиск в одном названном файле разрешён), не мешая пайпам и `&&`. |
+| `backslash.rs` | Контроль `\` и синтаксиса | На `PreToolUse` ловит `\` в inline-коде (`node -e`, `python -c`, `perl -e`, `php -r`, `bash -c`), `sed -i`, heredoc, here-string и patch-скриптах; флаги проверки синтаксиса вроде `node -c` не трогает. На `PostToolUse` проверяет `.json` (с исключением для JSONC вроде `tsconfig`, `.vscode/` и `.devcontainer/`), `.js/.mjs/.cjs` (`node --check`) и `.py` (`ast.parse`). |
 | `check.rs` | Сжатие логов (`ctxkit check`) | Для `cargo check`/`clippy`/`build` читает JSON-вывод и выводит до 3 уникальных первопричин `file:line:col`. Для `tsc`, `npm test`, `node --test`, `pytest`, `go test` при успехе даёт `OK (<ms>)`, при ошибке до 30 строк и полный лог в `%TEMP%/last-check.log` (`/tmp/last-check.log` на Unix). |
 | `setup.rs` | Автонастройка (`ctxkit setup`) | Ставит схему `sonnet` + `advisorModel: fable` + `haiku` + `effortLevel: high`, создаёт `Explore.md` (`haiku`) и `checker.md` (`opus`), диагностирует CLI (`< 2.1.321`), плагины, `CLAUDE.md`, глобальные MCP и конфиги Antigravity. |
 
@@ -111,5 +111,5 @@ node scripts/audit-sessions.mjs 30
 
 ## Материалы проекта
 
-- [docs/ARCHITECTURE.ru.md](docs/ARCHITECTURE.ru.md) ([English](docs/ARCHITECTURE.md)) описание модулей, контрактов Claude Code и Antigravity (`"ask"` вместо `"allow"`), паттерна `toMcp`.
+- [docs/ARCHITECTURE.ru.md](docs/ARCHITECTURE.ru.md) ([English](docs/ARCHITECTURE.md)) описание модулей, контрактов Claude Code и Antigravity (`"ask"` вместо `"allow"`), моста DeepSeek Harness, паттерна `toMcp`.
 - [docs/RESEARCH.ru.md](docs/RESEARCH.ru.md) ([English](docs/RESEARCH.md)) разбор рекомендаций Anthropic и `@0xCodila`, проверка идей из Gemini-чата, полные таблицы по 30 сессиям и 5 скрытых утечек в конфигах.
