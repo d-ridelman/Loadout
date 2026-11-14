@@ -85,7 +85,7 @@ cd ctxkit
 | `--dry-run` | Показать план правок и диагностику без записи на диск |
 | `--profile <dir>` | Выбрать отдельный профиль (например, `~/.claude-work`) |
 | `--advisor <name>` | Указать советника (`fable` по умолчанию, `opus`, либо `none`) |
-| `--desktop` | Перевести пресеты Claude Desktop (`ccd-session-presets.json`) на `--desktop-model` |
+| `--desktop` | Перевести пресеты Claude Desktop (`ccd-session-presets.json`) на `--desktop-model`. Запускать при полностью закрытом Claude Desktop, включая значок в трее: открытое приложение держит пресеты в памяти и перезаписывает файл, поэтому setup в этом случае ничего не пишет и предупреждает |
 | `--desktop-model <id>` | Идентификатор модели в пресетах Desktop (по умолчанию `claude-sonnet-5-5`) |
 | `--antigravity` | Зарегистрировать `ctxkit` в `~/.gemini/config/hooks.json` и проверить MCP, плагины и модель `agy` CLI |
 | `--dsh` | Записать `~/.dsh/ctxkit-hooks.json` и подключить к нему мост `@deepseek-ai/dsh-hooks-claude-code` в профиле `desktop` DeepSeek Harness (`--dsh-home <path>` заменяет `~/.dsh`); если пакета моста нет, выводит точную команду `pnpm add` |

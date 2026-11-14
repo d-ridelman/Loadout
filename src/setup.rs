@@ -199,7 +199,14 @@ pub fn run_setup(args: &[String]) -> i32 {
             .clone()
             .or_else(|| default_desktop_presets_path(&home));
         if let Some(p) = dpath {
-            if p.exists() {
+            // The running app keeps its presets in memory and saves them over the file, so a
+            // write now would be lost silently. A file passed with --desktop-file is not the app's.
+            if p.exists() && opts.desktop_file.is_none() && claude_desktop_running() {
+                println!(
+                    "  [warn] Claude Desktop is running: it keeps session presets in memory and overwrites {}. Presets left unchanged. Quit it fully (tray icon too) and rerun `ctxkit setup --desktop` from a terminal, or choose the model in the app's model picker.",
+                    p.display()
+                );
+            } else if p.exists() {
                 if let Err(e) = update_desktop_presets(&p, &opts.desktop_model, &opts.effort, opts.dry_run) {
                     eprintln!("ERR: {e}");
                     return 1;
@@ -579,6 +586,33 @@ fn append_block(existing: &str, block: &str) -> String {
     } else {
         format!("{}\n\n{block}\n", existing.trim_end())
     }
+}
+
+/// Whether the Claude Desktop app (not the `claude` CLI) is running. Unknown counts as not running.
+fn claude_desktop_running() -> bool {
+    if cfg!(windows) {
+        Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "(Get-Process claude -ErrorAction SilentlyContinue).Path"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(is_desktop_exe))
+            .unwrap_or(false)
+    } else if cfg!(target_os = "macos") {
+        Command::new("pgrep")
+            .args(["-f", "Claude.app/Contents/MacOS/Claude"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+/// The Desktop app's `claude.exe`, as opposed to the Claude Code CLI binary of the same name.
+// shortcut: known Windows install locations only; extend if Desktop ships to a new folder.
+fn is_desktop_exe(path: &str) -> bool {
+    let p = path.trim().replace('/', "\\").to_ascii_lowercase();
+    p.ends_with("\\claude.exe")
+        && (p.contains("\\anthropicclaude\\") || p.contains("\\windowsapps\\claude") || p.contains("\\programs\\claude\\"))
 }
 
 fn update_desktop_presets(
@@ -1317,6 +1351,15 @@ mod tests {
         let spaced = Path::new("/Users/Alice Smith/.claude/hooks/ctxkit");
         let cmd_ru = format_antigravity_command(spaced, Lang::Ru);
         assert!(cmd_ru.starts_with('"') && cmd_ru.ends_with(" --lang ru"));
+    }
+
+    #[test]
+    fn tells_desktop_app_from_claude_cli() {
+        assert!(is_desktop_exe(r"C:\Users\a\AppData\Local\AnthropicClaude\app-5.11492.5\claude.exe"));
+        assert!(is_desktop_exe(r"C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe"));
+        assert!(!is_desktop_exe(r"C:\Users\a\.local\bin\claude.exe"));
+        assert!(!is_desktop_exe(r"C:\Users\a\AppData\Roaming\npm\node_modules\claude.exe"));
+        assert!(!is_desktop_exe(""));
     }
 
     #[test]

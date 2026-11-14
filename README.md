@@ -85,7 +85,7 @@ Defaults are tuned for a 4-model advisor workflow (`fable` + `claude-sonnet-5-5`
 | `--dry-run` | Print planned edits and diagnostics without modifying files |
 | `--profile <dir>` | Target a secondary profile directory (such as `~/.claude-work`) |
 | `--advisor <name>` | Set advisor model (`fable` by default, `opus`, or `none` to omit) |
-| `--desktop` | Switch Claude Desktop presets (`ccd-session-presets.json`) to `--desktop-model` |
+| `--desktop` | Switch Claude Desktop presets (`ccd-session-presets.json`) to `--desktop-model`. Run it with Claude Desktop fully quit (tray icon too): the running app keeps presets in memory and saves them over the file, so setup skips the write and warns while it runs |
 | `--desktop-model <id>` | Desktop preset `modelId` override (default: `claude-sonnet-5-5`) |
 | `--antigravity` | Register `ctxkit` in `~/.gemini/config/hooks.json` and audit Antigravity MCPs, plugins, and CLI model |
 | `--dsh` | Write `~/.dsh/ctxkit-hooks.json` and mount the `@deepseek-ai/dsh-hooks-claude-code` bridge on it in the DeepSeek Harness `desktop` profile (`--dsh-home <path>` overrides `~/.dsh`); warns with the exact `pnpm add` command when the bridge package is missing |
