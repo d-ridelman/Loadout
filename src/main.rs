@@ -91,7 +91,8 @@ fn main() {
     if io::stdin().read_to_string(&mut raw).is_err() {
         return;
     }
-    let Ok(call) = serde_json::from_str::<Value>(&raw) else {
+    // A BOM before the payload must not turn the hook into a silent pass.
+    let Ok(call) = serde_json::from_str::<Value>(raw.trim_start_matches('\u{feff}')) else {
         return;
     };
 

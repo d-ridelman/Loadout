@@ -48,7 +48,25 @@ pub fn pre_reason(
 fn re_inline() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"(?i)(?:^|[\s/\\"'(;&|])(?:node|nodejs|bun|deno|python[\d.]*|py|perl|ruby|php|pwsh|powershell|bash|sh|zsh)(?:\.exe)?["']?\s+(?:(?:-X\s+\S+\s+)|(?:-\S*\s+))*?(?:-[a-z]{0,2}[ec]|--eval|--print|-p|-Command|-EncodedCommand)\s+"#).unwrap()
+        // Each interpreter has its own "code follows" flags: `-c` is inline code for python and
+        // bash but a syntax check for node, perl and ruby; `-e` is code for node but not for bash.
+        let families = [
+            (r"node|nodejs|bun|deno", r"-[a-z]{0,2}[ep]\s+|--(?:eval|print)(?:\s+|=)"),
+            (r"python[\d.]*|py", r"-[A-Za-z]*c\s+"),
+            (r"perl", r"-[A-Za-z0-9.]*[eE]\s+"),
+            (r"ruby", r"-[a-z]*e\s+"),
+            (r"php", r"-r\s+"),
+            (r"pwsh|powershell", r"(?i:-[a-z]{0,2}[ec]|-Command|-EncodedCommand)\s+"),
+            (r"bash|sh|zsh", r"-[a-z]*c\s+"),
+        ];
+        let alt: Vec<String> = families
+            .iter()
+            .map(|(names, flags)| {
+                // Options before the code flag, including the ones that take a value (-X, -W).
+                format!(r#"(?i:{names})(?:\.exe)?["']?\s+(?:-[XW]\s+\S+\s+|-\S*\s+)*?(?:{flags})"#)
+            })
+            .collect();
+        Regex::new(&format!(r#"(?:^|[\s/\\"'(;&|])(?:{})"#, alt.join("|"))).unwrap()
     })
 }
 
@@ -90,10 +108,24 @@ fn has_inline_backslash(cmd: &str, lang: Lang) -> Option<&'static str> {
 
 fn has_unquoted_redirect(s: &str) -> bool {
     let bytes = s.as_bytes();
+    let mut quote = 0u8;
     for i in 0..bytes.len() {
-        if bytes[i] == b'>' {
+        let b = bytes[i];
+        if quote != 0 {
+            // `>` inside quotes is text ("a -> b", awk's `$3 > 100`), not a redirect.
+            if b == quote && !(quote == b'"' && i > 0 && bytes[i - 1] == b'\\') {
+                quote = 0;
+            }
+            continue;
+        }
+        if b == b'"' || b == b'\'' {
+            quote = b;
+            continue;
+        }
+        if b == b'>' {
             let prev = if i > 0 { Some(bytes[i - 1]) } else { None };
-            if matches!(prev, Some(b'0'..=b'9') | Some(b'&') | Some(b'>')) {
+            // `2>` is stderr and the second `>` of `>>` was handled; `1>` and `&>` do write stdout.
+            if matches!(prev, Some(b'2'..=b'9') | Some(b'>')) {
                 continue;
             }
             let mut j = i + 1;
@@ -114,23 +146,31 @@ fn has_unquoted_redirect(s: &str) -> bool {
 fn has_heredoc_backslash(cmd: &str) -> bool {
     static RE_START: OnceLock<Regex> = OnceLock::new();
     let re = RE_START.get_or_init(|| {
-        Regex::new(r#"<<-?\s*(?:["']?)([A-Za-z_]\w*)["']?[^\n]*\n"#).unwrap()
+        // Tag forms: EOF, 'EOF', "EOF", \EOF; tags may contain `-` (END-TAG).
+        Regex::new(r#"<<-?\s*(\\|["'])?([A-Za-z_][\w-]*)["']?[^\n]*\n"#).unwrap()
     });
     for cap in re.captures_iter(cmd) {
         let Some(full) = cap.get(0) else { continue };
-        let Some(tag) = cap.get(1) else { continue };
+        let Some(tag) = cap.get(2) else { continue };
         let body_start = full.end();
         let rest = &cmd[body_start..];
         let mut offset = 0;
+        let mut closed = false;
         for line in rest.split('\n') {
             let trimmed = line.trim_matches(|c| c == ' ' || c == '\t' || c == '\r');
             if trimmed == tag.as_str() {
                 if rest[..offset].contains('\\') {
                     return true;
                 }
+                closed = true;
                 break;
             }
             offset += line.len() + 1;
+        }
+        // bash runs an unterminated heredoc up to end of input. Only a quoted tag is taken as
+        // proof of a heredoc here: a bare `<< word` may be a shift operator inside other code.
+        if !closed && cap.get(1).is_some() && rest.contains('\\') {
+            return true;
         }
     }
     false
@@ -181,10 +221,11 @@ fn bash_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     }
     static RE_SED: OnceLock<Regex> = OnceLock::new();
     // Stay inside sed's own command: an unquoted `;`, `|` or `&` ends it, so `-i` of a later
-    // command in the chain (`sed -n ...; grep -i ...`) is not taken for sed's flag.
+    // command in the chain (`sed -n ...; grep -i ...`) is not taken for sed's flag; `)` and a
+    // backtick end a command substitution. `-ie` is in-place too (suffix "e").
     let re_sed = RE_SED.get_or_init(|| {
-        let seg = r#"(?:[^\n;|&'"]|'[^']*'|"(?:[^"\\]|\\.)*")"#;
-        Regex::new(&format!(r"\bsed\b{seg}*?\s(?:-[A-Za-z]*i\b|--in-place){seg}*")).unwrap()
+        let seg = r#"(?:[^\n;|&'"`)]|'[^']*'|"(?:[^"\\]|\\.)*")"#;
+        Regex::new(&format!(r"\bsed\b{seg}*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place){seg}*")).unwrap()
     });
     for m in re_sed.find_iter(cmd) {
         if m.as_str().contains('\\') {
@@ -197,7 +238,8 @@ fn bash_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     }
     static RE_ECHO: OnceLock<Regex> = OnceLock::new();
     let re_echo = RE_ECHO.get_or_init(|| {
-        Regex::new(r#"(?:^|[\s;&|(])(?:printf|echo)\s([^\n&|]*)"#).unwrap()
+        // `&>` is a redirect, not the end of the command.
+        Regex::new(r#"(?:^|[\s;&|(])(?:printf|echo)\s((?:[^\n&|]|&>)*)"#).unwrap()
     });
     for cap in re_echo.captures_iter(cmd) {
         let arg = cap.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -243,7 +285,7 @@ fn ps_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     }
     static RE_REPLACE: OnceLock<Regex> = OnceLock::new();
     static RE_WRITE_CMD: OnceLock<Regex> = OnceLock::new();
-    let re_rep = RE_REPLACE.get_or_init(|| Regex::new(r#"(?i)-replace\s[^|\n]*\\"#).unwrap());
+    let re_rep = RE_REPLACE.get_or_init(|| Regex::new(r#"(?i)-[ci]?replace\s[^|;\n]*\\"#).unwrap());
     let re_wr = RE_WRITE_CMD.get_or_init(|| {
         Regex::new(r#"(?i)\b(?:Set-Content|Add-Content|Out-File|WriteAllText|WriteAllLines)\b"#)
             .unwrap()
@@ -271,7 +313,7 @@ fn write_reason(path: &str, content: &str, lang: Lang) -> Option<&'static str> {
     static RE_SUB: OnceLock<Regex> = OnceLock::new();
     let re_dir = re_dir_init(&RE_DIR);
     let re_base = RE_BASE
-        .get_or_init(|| Regex::new(r#"(?i)(?:^|[-_.])(?:patch|fix|edit|rep|sub|tmp)"#).unwrap());
+        .get_or_init(|| Regex::new(r#"(?i)(?:^|[-_.])(?:patch|fix|edit|rep|sub|tmp)(?:[-_.\d]|$)"#).unwrap());
     let base = Path::new(path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -307,13 +349,18 @@ pub fn post_syntax_error(path: &str) -> Option<String> {
         .unwrap_or("")
         .to_ascii_lowercase();
     let base = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    // A missing path or a directory is not a syntax error of the file.
+    if !p.is_file() {
+        return None;
+    }
     if ext == "json" {
         static RE_JSONC: OnceLock<Regex> = OnceLock::new();
         static RE_VSCODE: OnceLock<Regex> = OnceLock::new();
         let re_jsonc = RE_JSONC.get_or_init(|| {
-            Regex::new(r#"(?i)^(?:ts|js)config|^\.?eslintrc|\.code-workspace$"#).unwrap()
+            Regex::new(r#"(?i)^(?:ts|js)config|^\.?eslintrc|^\.?devcontainer|\.code-workspace$"#).unwrap()
         });
-        let re_vscode = RE_VSCODE.get_or_init(|| Regex::new(r#"(?i)[\\/]\.vscode[\\/]"#).unwrap());
+        let re_vscode =
+            RE_VSCODE.get_or_init(|| Regex::new(r#"(?i)(?:^|[\\/])\.(?:vscode|devcontainer)[\\/]"#).unwrap());
         if re_jsonc.is_match(base) || re_vscode.is_match(path) {
             return None;
         }
@@ -331,7 +378,8 @@ pub fn post_syntax_error(path: &str) -> Option<String> {
             .args([
                 "-I",
                 "-c",
-                "import ast,sys; ast.parse(open(sys.argv[1],\"rb\").read(), sys.argv[1])",
+                // Print the error itself, not the traceback of this wrapper.
+                "import ast,sys\ntry: ast.parse(open(sys.argv[1],'rb').read(), sys.argv[1])\nexcept SyntaxError as e: sys.exit(f'SyntaxError: {e.msg} (line {e.lineno})\\n{(e.text or \"\").rstrip()}')",
                 path,
             ])
             .output()

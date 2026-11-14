@@ -16,7 +16,7 @@ pub fn run_check(args: &[String]) -> i32 {
     }
 
     let start = Instant::now();
-    let is_cargo = is_cargo_diagnostic(&args);
+    let is_cargo = is_cargo_diagnostic(args);
     let mut final_args: Vec<String> = args.to_vec();
     if is_cargo && !final_args.iter().any(|a| a.starts_with("--message-format")) {
         // Inject JSON diagnostics after `cargo <subcmd>`

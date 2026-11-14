@@ -63,7 +63,97 @@ writeFileSync(bigImg, Buffer.alloc(300_000, 0x41));
 const failScript = join(dir, 'boom.mjs');
 writeFileSync(failScript, 'throw new TypeError("boom error here");\n');
 
+// Fixtures for the review-regression block below
+const hugeFile = join(dir, 'huge.ts');
+writeFileSync(hugeFile, Array.from({ length: 20000 }, (_, i) => `export const y${i} = ${i}; // pad`).join('\n'));
+const wideFile = join(dir, 'wide.txt');
+writeFileSync(wideFile, Array.from({ length: 400 }, () => 'x'.repeat(500)).join('\n'));
+mkdirSync(join(dir, 'sp ace'));
+const spacedBig = join(dir, 'sp ace', 'big file.ts');
+writeFileSync(spacedBig, readFileSync(bigFile));
+mkdirSync(join(dir, '.vscode'));
+writeFileSync(join(dir, '.vscode', 'settings.json'), '{ // comment\n "a": 1 }');
+mkdirSync(join(dir, '.devcontainer'));
+writeFileSync(join(dir, '.devcontainer', 'devcontainer.json'), '// comment\n{ "a": 1 }');
+const postPath = (file_path, cwd = dir) =>
+  spawnSync(exe, [], {
+    input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Write', tool_input: { file_path } }),
+    encoding: 'utf8',
+    cwd,
+  }).stdout;
+
 const cases = [
+  // Regressions from the independent review: read-guard bounds
+  [true, () => rd(hugeFile, { offset: 6000, limit: 100000 })],
+  [false, () => rd(hugeFile, { offset: 6000, limit: 400 })],
+  [false, () => rd(hugeFile, { offset: 19800, limit: 5000 })],
+  [true, () => rd(hugeFile, { offset: 19000, limit: 5000 })],
+  [true, () => rd(hugeFile, { offset: 19800 })],
+  [true, () => rd(wideFile)],
+  [true, () => rd(wideFile, { offset: 1 })],
+  ['deny', () => preAgy('read_file', { Path: hugeFile, StartLine: 6000, EndLine: 20000 }).decision],
+  // ...shell inspection
+  [false, () => sh('grep foo docs/user-manager.txt')],
+  [false, () => sh('grep -n error src/foo-parser.ts')],
+  [false, () => sh('grep --color=auto foo file.txt')],
+  [false, () => sh('rg --version')],
+  [false, () => sh('rg --files')],
+  [true, () => sh('grep -R foo .')],
+  [true, () => sh('grep -rn foo .')],
+  [false, () => sh('rg -m5 foo src/')],
+  [false, () => sh(`rg foo "${smallFile}"`)],
+  ['ask', () => preAgy('run_command', { CommandLine: `rg foo "${smallFile}"` }).decision],
+  [true, () => ps('rg foo src/')],
+  [true, () => ps(`cat "${bigFile}"`)],
+  [true, () => ps(`Get-Content -Raw "${bigFile}"`)],
+  [false, () => ps(`Get-Content "${bigFile}" -TotalCount 20`)],
+  [true, () => sh(`cat "${spacedBig}"`)],
+  // ...interpreter flags that are not inline code
+  [false, () => sh(`node -c C:${B}proj${B}a.js`)],
+  [false, () => sh(`perl -c C:${B}x${B}s.pl`)],
+  [false, () => sh(`ruby -c C:${B}x${B}s.rb`)],
+  [false, () => sh(`python -E C:${B}x${B}run.py`)],
+  [false, () => sh(`bash -e C:${B}x${B}s.sh`)],
+  [true, () => sh(`node --eval='console.log("a${B}nb")'`)],
+  [true, () => sh(`python -W ignore -c 'print("a${B}nb")'`)],
+  [true, () => sh(`php -r 'echo "a${B}n";'`)],
+  [true, () => sh(`perl -ne 'print if /a${B}d/' f.txt`)],
+  // ...throwaway-script names need a word end
+  [false, () => wr(`D:${B}proj${B}src${B}report.js`, `fs.writeFileSync(p, s.replace(/${B}r${B}n/g, '${B}n'))`)],
+  [false, () => wr(`D:${B}proj${B}src${B}fixtures.js`, `fs.writeFileSync(p, s.replace(/${B}r${B}n/g, '${B}n'))`)],
+  [true, () => wr(`D:${B}proj${B}src${B}fix-2.js`, `fs.writeFileSync(p, s.replace(/${B}r${B}n/g, '${B}n'))`)],
+  // ...redirects: quotes, descriptors
+  [false, () => sh(`printf "a -> b${B}n"`)],
+  [false, () => sh(`echo "Done => C:${B}out${B}file.txt"`)],
+  [false, () => sh(`awk -F'${B}t' '$3 > 100 {print $1}' data.tsv`)],
+  [true, () => sh(`echo 'a${B}nb' 1> out.txt`)],
+  [true, () => sh(`echo 'a${B}nb' &> out.txt`)],
+  [false, () => sh(`echo 'a${B}nb' 2> err.txt`)],
+  // ...heredoc tags, sed -i forms, $(...) boundaries, -creplace
+  [true, () => sh(`cat > f.py <<'END-TAG'\nx='${B}n'\nEND-TAG`)],
+  [true, () => sh(`cat > f.py <<${B}EOF\nx='${B}n'\nEOF`)],
+  [true, () => sh(`python - <<'EOF'\nprint('a${B}nb')`)],
+  [true, () => sh(`sed -ie 's/a${B}.b/c/' f.txt`)],
+  [false, () => sh(`echo $(sed -n 's/${B}./,/p' a.txt) $(grep -i foo b.txt)`)],
+  [true, () => ps(`(gc f.txt) -creplace '${B}s+',' ' | Set-Content f.txt`)],
+  [false, () => ps(`$c = (Get-Content C:${B}a.txt) -replace 'x','y'; Set-Content C:${B}a.txt $c`)],
+  // ...PostToolUse: missing files, JSONC locations, readable Python error
+  ['', () => postPath(join(dir, 'missing.py'))],
+  ['', () => postPath(join(dir, 'missing.js'))],
+  ['', () => postPath(join(dir, '.devcontainer', 'devcontainer.json'))],
+  ['', () => postPath('.vscode/settings.json')],
+  [true, () => {
+    writeFileSync(join(dir, 'syntax.py'), 'def f(:\n    pass\n');
+    const out = postPath(join(dir, 'syntax.py'));
+    return out.includes('"block"') && out.includes('line 1') && !out.includes('Traceback');
+  }],
+  // ...a UTF-8 BOM before the payload must not bypass the hook
+  [true, () => spawnSync(exe, [], {
+    input: '﻿' + JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: `python -c "print('a${B}nb')"` } }),
+    encoding: 'utf8',
+  }).stdout.includes('"deny"')],
+
+
   // Claude Code: inline backslash & heredoc guards
   [true, () => sh(`node - <<'EOF'\nrep("a", "x${B}n");\nEOF`)],
   [true, () => sh(`cat > /tmp/edit.mjs <<'EOF'\nconst re = /system_${B}*/;\nEOF\nnode /tmp/edit.mjs`)],

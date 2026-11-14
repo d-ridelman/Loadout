@@ -82,6 +82,8 @@ pub fn read_guard(
         });
     }
 
+    // Reading from line 1 is a whole-file read, whether or not the offset is spelled out.
+    let offset = offset.filter(|o| *o > 1);
     if bytes > MAX_HUGE_BYTES && (offset.is_none() || limit.is_none()) {
         return Some(match lang {
             Lang::En => format!("File is very large ({kb} KB). Do not read it whole: {hint}"),
@@ -89,13 +91,15 @@ pub fn read_guard(
         });
     }
 
-    if let Some(lines) = count_lines_bounded(file_path, 5000) {
-        let start = offset.unwrap_or(1).saturating_sub(1) as usize;
-        let rem = lines.saturating_sub(start);
-        let eff = limit.map(|l| (l as usize).min(rem)).unwrap_or(rem);
-        if offset.is_some() && eff <= MAX_READ_LINES {
+    // The limit is absent or above the cap here, so only a short tail can pass. Count just far
+    // enough past the offset to know whether more than the cap remains.
+    if let Some(start) = offset.map(|o| (o - 1) as usize) {
+        let seen = count_lines_bounded(file_path, start.saturating_add(MAX_READ_LINES + 1))?;
+        if seen.saturating_sub(start) <= MAX_READ_LINES {
             return None;
         }
+    }
+    if let Some(lines) = count_lines_bounded(file_path, 5000) {
         let prefix = if lines >= 5000 { ">" } else { "" };
         return Some(match lang {
             Lang::En => format!("File is large ({prefix}{lines} lines, {kb} KB). Do not load it whole into main context: {hint}"),
@@ -153,22 +157,23 @@ pub fn shell_read_guard(tool: &str, cmd: &str, client: Client, lang: Lang) -> Op
         return None;
     }
 
-    match client {
-        Client::Claude | Client::Dsh => match tool {
-            "Bash" => check_bash_inspect(trimmed, client, lang),
-            "PowerShell" => check_ps_inspect(trimmed, client, lang),
-            _ => None,
-        },
-        Client::Antigravity => check_ps_inspect(trimmed, client, lang)
+    let dump = match (client, tool) {
+        (Client::Claude | Client::Dsh, "Bash") => check_bash_inspect(trimmed, client, lang),
+        (Client::Claude | Client::Dsh, "PowerShell") => check_ps_inspect(trimmed, client, lang),
+        (Client::Claude | Client::Dsh, _) => return None,
+        (Client::Antigravity, _) => check_ps_inspect(trimmed, client, lang)
             .or_else(|| check_bash_inspect(trimmed, client, lang)),
-    }
+    };
+    dump.or_else(|| check_recursive_grep(trimmed, client, lang))
 }
+
+/// A path argument: quoted (may hold spaces) or a bare token.
+const PATH_ARG: &str = r#"("[^"]+"|'[^']+'|[^"'\s|><&;]+)"#;
 
 fn check_bash_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<String> {
     static RE_BARE_CAT: OnceLock<Regex> = OnceLock::new();
-    let re_cat = RE_BARE_CAT.get_or_init(|| {
-        Regex::new(r#"^cat\s+(?:-[A-Za-z]+\s+)*(["']?[^"'\s|><&;]+["']?)$"#).unwrap()
-    });
+    let re_cat = RE_BARE_CAT
+        .get_or_init(|| Regex::new(&format!(r"^cat\s+(?:-[A-Za-z]+\s+)*{PATH_ARG}$")).unwrap());
     if let Some(cap) = re_cat.captures(trimmed) {
         let target = cap[1].trim_matches(|c| c == '"' || c == '\'');
         if is_big_file(target) {
@@ -180,48 +185,58 @@ fn check_bash_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<Strin
             return Some(format!("{prefix} {}", read_hint(client, lang)));
         }
     }
+    None
+}
 
-    static RE_REC_GREP: OnceLock<Regex> = OnceLock::new();
-    let re_grep = RE_REC_GREP.get_or_init(|| {
-        Regex::new(r#"^(?:grep\s+[^\n]*-[A-Za-z]*r|rg\s+)"#).unwrap()
+/// Unbounded recursive search: `grep` with a recursive flag, or `rg` (recursive by default).
+fn check_recursive_grep(trimmed: &str, client: Client, lang: Lang) -> Option<String> {
+    static RE_REC: OnceLock<Regex> = OnceLock::new();
+    static RE_BOUNDED: OnceLock<Regex> = OnceLock::new();
+    // Flags are whole tokens: `-r` inside `user-manager.txt` or `--color` is not a flag.
+    let re_rec = RE_REC.get_or_init(|| {
+        Regex::new(r"^(?:grep\s(?:.*\s)?(?:-[A-Za-z]*[rR][A-Za-z]*|--(?:dereference-)?recursive)(?:\s|$)|rg(?:\s|$))").unwrap()
     });
-    if re_grep.is_match(trimmed)
-        && !trimmed.contains(" -l")
-        && !trimmed.contains("--files-with-matches")
-        && !trimmed.contains("--count")
-        && !trimmed.contains(" -c")
-        && !trimmed.contains("--max-count")
-        && !trimmed.contains(" -m ")
-    {
-        return Some(match client {
+    let re_bounded = RE_BOUNDED.get_or_init(|| {
+        Regex::new(r"\s(?:-[A-Za-z]*[lc][A-Za-z]*|--files-with-matches|--count|--max-count[=\s]\d+|-m\s?\d+|--version|--help|--files|--type-list|-V|-h)(?:\s|$)").unwrap()
+    });
+    if !re_rec.is_match(trimmed) || re_bounded.is_match(trimmed) {
+        return None;
+    }
+    // Searching one named file is not a recursive walk.
+    let last = trimmed.rsplit(char::is_whitespace).next().unwrap_or("");
+    if Path::new(last.trim_matches(|c| c == '"' || c == '\'')).is_file() {
+        return None;
+    }
+    Some(
+        match client {
             Client::Claude => t(
                 lang,
-                "Use the built-in `Grep` tool (or Haiku `Explore`) instead of raw recursive grep/rg in Bash to avoid bloating shell output.",
-                "Используй встроенный инструмент `Grep` (или `Explore` на Haiku) вместо прямого рекурсивного grep/rg в Bash, чтобы не раздувать вывод shell.",
-            )
-            .to_string(),
+                "Use the built-in `Grep` tool (or Haiku `Explore`) instead of raw recursive grep/rg in the shell to avoid bloating its output.",
+                "Используй встроенный инструмент `Grep` (или `Explore` на Haiku) вместо прямого рекурсивного grep/rg в shell, чтобы не раздувать его вывод.",
+            ),
             Client::Dsh => t(
                 lang,
-                "Use the built-in `grep` tool instead of raw recursive grep/rg in bash to avoid bloating shell output.",
-                "Используй встроенный инструмент `grep` вместо прямого рекурсивного grep/rg в bash, чтобы не раздувать вывод shell.",
-            )
-            .to_string(),
+                "Use the built-in `grep` tool instead of raw recursive grep/rg in the shell to avoid bloating its output.",
+                "Используй встроенный инструмент `grep` вместо прямого рекурсивного grep/rg в shell, чтобы не раздувать его вывод.",
+            ),
             Client::Antigravity => t(
                 lang,
-                "Add `-l` / `-n` / `-m 20` or narrow the target path instead of broad recursive `grep -r`/`rg`.",
-                "Добавь `-l` / `-n` / `-m 20` или сузь путь поиска вместо широкого рекурсивного `grep -r`/`rg`, чтобы не раздувать вывод shell.",
-            )
-            .to_string(),
-        });
-    }
-    None
+                "Add `-l`, `-c` or `-m 20`, or point it at a single file, instead of broad recursive `grep -r`/`rg`.",
+                "Добавь `-l`, `-c` или `-m 20` либо укажи один файл вместо широкого рекурсивного `grep -r`/`rg`, чтобы не раздувать вывод shell.",
+            ),
+        }
+        .to_string(),
+    )
 }
 
 fn check_ps_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<String> {
     static RE_BARE_GC: OnceLock<Regex> = OnceLock::new();
+    // Flags that still dump the whole file; `-TotalCount` / `-Tail` after the path do not match.
     let re_gc = RE_BARE_GC.get_or_init(|| {
-        Regex::new(r#"(?i)^(?:Get-Content|gc|type)\s+(?:-Path\s+)?(["']?[^"'\s|><&;]+["']?)$"#)
-            .unwrap()
+        Regex::new(&format!(
+            r"(?i)^(?:Get-Content|gc|type|cat)\s+(?:-(?:Path|LiteralPath|Raw)\s+)*{PATH_ARG}(?:\s+-Raw)?$"
+        ))
+        .unwrap()
     });
     if let Some(cap) = re_gc.captures(trimmed) {
         let target = cap[1].trim_matches(|c| c == '"' || c == '\'');
