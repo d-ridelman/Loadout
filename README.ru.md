@@ -74,7 +74,7 @@ cd ctxkit
 | `guard.rs` | Защита чтения и поиска | Блокирует целиком файлы крупнее `28 KB` / `450` строк (и `> 250 KB` без диапазона) в `Read` и `read_file`, не трогая изображения, видео, аудио и PDF. Останавливает голые `cat`, `Get-Content` и широкий `grep -r`/`rg` без фильтров, не мешая пайпам и `&&`. |
 | `backslash.rs` | Контроль `\` и синтаксиса | На `PreToolUse` ловит `\` в `node -e`, `python -c`, `sed -i`, heredoc, here-string и patch-скриптах. На `PostToolUse` проверяет `.json` (с исключением для JSONC вроде `tsconfig` и `.vscode/`), `.js/.mjs/.cjs` (`node --check`) и `.py` (`ast.parse`). |
 | `check.rs` | Сжатие логов (`ctxkit check`) | Для `cargo check`/`clippy`/`build` читает JSON-вывод и выводит до 3 уникальных первопричин `file:line:col`. Для `tsc`, `npm test`, `node --test`, `pytest`, `go test` при успехе даёт `OK (<ms>)`, при ошибке до 30 строк и полный лог в `%TEMP%/last-check.log` (`/tmp/last-check.log` на Unix). |
-| `setup.rs` | Автонастройка (`ctxkit setup`) | Ставит схему `sonnet` + `advisorModel: fable` + `haiku` + `effortLevel: high`, создаёт `Explore.md` (`haiku`) и `checker.md` (`opus`), диагностирует устаревший CLI (`< 2.1.321`), более 8 плагинов, раздутый `CLAUDE.md` и лишние глобальные MCP. |
+| `setup.rs` | Автонастройка (`ctxkit setup`) | Ставит схему `sonnet` + `advisorModel: fable` + `haiku` + `effortLevel: high`, создаёт `Explore.md` (`haiku`) и `checker.md` (`opus`), диагностирует CLI (`< 2.1.321`), плагины, `CLAUDE.md`, глобальные MCP и конфиги Antigravity. |
 
 ## Флаги `setup`
 
@@ -87,10 +87,10 @@ cd ctxkit
 | `--advisor <name>` | Указать советника (`fable` по умолчанию, `opus`, либо `none`) |
 | `--desktop` | Перевести пресеты Claude Desktop (`ccd-session-presets.json`) на `--desktop-model` |
 | `--desktop-model <id>` | Идентификатор модели в пресетах Desktop (по умолчанию `claude-sonnet-5-5`) |
-| `--antigravity` | Зарегистрировать `ctxkit` в `~/.gemini/config/hooks.json` |
+| `--antigravity` | Зарегистрировать `ctxkit` в `~/.gemini/config/hooks.json` и проверить MCP, плагины и модель `agy` CLI |
 | `--with-rules` | Добавить в `CLAUDE.md` блок правил (включая триггер `/advisor` и `/clear`) между маркерами `ctxkit` |
 | `--force-agents` | Перезаписать уже существующие `Explore.md` и `checker.md` |
-| `--lang <en\|ru>` | Язык создаваемых файлов агентов и блока правил (по умолчанию `en`; при `ru` добавляет `CTXKIT_LANG=ru` в `settings.json`) |
+| `--lang <en\|ru>` | Язык шаблонов и хуков (`en` по умолчанию; при `ru` пишет `CTXKIT_LANG=ru` в `settings.json` и `--lang ru` в `hooks.json`) |
 
 Язык сообщений самих хуков задаётся переменной `CTXKIT_LANG` (`en` по умолчанию, `ru` для русского) или флагом `--lang`. Полная справка вызывается через `ctxkit setup --help`. В [`examples/`](examples/) лежат шаблоны конфигов с POSIX-заглушками путей; для реальной установки надёжнее запускать `ctxkit setup`, который подставляет точный абсолютный путь под вашу ОС.
 

@@ -38,7 +38,7 @@ CLI args / stdin JSON
 - Перед изменением любого файла (`settings.json`, `CLAUDE.md`, `ccd-session-presets.json`, `hooks.json`) создаётся бэкап `backups/<name>.<unix_ts>.bak` (только при реальной разнице содержимого).
 - Используется merge вместо перезаписи: сохраняются `env`, `permissions`, `enabledPlugins` и сторонние хуки; заменяются только `no-inline-backslash`, прежние хуки `claude-guard` и блоки между маркерами `<!-- claude-guard:start/end -->` или `<!-- ctxkit:start/end -->`.
 - Ключ `--dry-run` показывает все планируемые изменения без записи на диск.
-- Самодиагностика проверяет версию `claude` (`< 2.1.321` при включённом `fable`), количество активных глобальных плагинов (`> 8`), размер `CLAUDE.md` (`> 200` строк или `> 8 KB`) и число глобальных MCP в `~/.claude.json` (`> 2`).
+- Самодиагностика проверяет версию `claude` (`< 2.1.321` при включённом `fable`), количество активных глобальных плагинов (`> 8`), размер `CLAUDE.md` (`> 200` строк или `> 8 KB`) и число глобальных MCP в `~/.claude.json` (`> 2`). При ключе `--antigravity` дополнительно проверяет модель `agy` CLI, включённые плагины в `~/.gemini/config/plugins/` (`> 6`), активные MCP в `mcp_config.json` и плагинах (`> 4`), а также размер файлов правил плагинов (лимит `24 KB`).
 
 ## Контракты протоколов хуков
 
@@ -54,7 +54,7 @@ CLI args / stdin JSON
 
 ## Локализация (`CTXKIT_LANG`)
 
-Ответы хуков (`guard.rs`, `backslash.rs`, `PostToolUse` в `main.rs`) по умолчанию выводятся на английском (`en`) и переключаются на русский через `CTXKIT_LANG=ru` или `--lang ru`. При запуске `ctxkit setup --lang ru` переменная `CTXKIT_LANG=ru` записывается в секцию `env` файла `settings.json`.
+Ответы хуков (`guard.rs`, `backslash.rs`, `PostToolUse` в `main.rs`) по умолчанию выводятся на английском (`en`) и переключаются на русский через `CTXKIT_LANG=ru` или `--lang ru`. При запуске `ctxkit setup --lang ru` переменная `CTXKIT_LANG=ru` записывается в секцию `env` файла `settings.json`, а при `--antigravity` флаг `--lang ru` добавляется к команде в `hooks.json`.
 
 ## Проекция `toMcp` для своих MCP-серверов
 

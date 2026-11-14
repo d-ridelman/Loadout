@@ -38,7 +38,7 @@ CLI args / stdin JSON
 - Writes a timestamped backup under `backups/<name>.<unix_ts>.bak` before modifying any file (`settings.json`, `CLAUDE.md`, `ccd-session-presets.json`, `hooks.json`), and skips backups when contents already match.
 - Merges into existing JSON instead of overwriting: preserves user `env`, `permissions`, `enabledPlugins`, and third-party hooks, while upgrading legacy `no-inline-backslash` hooks, old `claude-guard` entries, and marker blocks (`<!-- claude-guard:start/end -->` or `<!-- ctxkit:start/end -->`).
 - Supports `--dry-run` to preview every change before touching disk.
-- Runs config diagnostics: warns on `claude --version < 2.1.321` when `advisor` is `fable`, more than `8` enabled global plugins, `CLAUDE.md` exceeding `200` lines or `8 KB`, and more than `2` global MCP servers in `~/.claude.json`.
+- Runs config diagnostics: checks `claude --version < 2.1.321` when `advisor` is `fable`, more than `8` enabled global plugins, `CLAUDE.md` exceeding `200` lines or `8 KB`, and more than `2` global MCP servers in `~/.claude.json`. With `--antigravity`, also audits `agy` CLI model, enabled global plugins in `~/.gemini/config/plugins/` (`> 6`), active MCP servers across `mcp_config.json` and plugins (`> 4`), and plugin rule sizes (`24 KB` cap).
 
 ## Hook Protocol Contracts
 
@@ -54,7 +54,7 @@ In Antigravity's hook contract, `"decision": "allow"` auto-approves tool executi
 
 ## Localization (`CTXKIT_LANG`)
 
-Hook responses (`guard.rs`, `backslash.rs`, and `PostToolUse` in `main.rs`) default to English (`en`) and switch to Russian (`ru`) via `CTXKIT_LANG=ru` or `--lang ru`. Running `ctxkit setup --lang ru` writes `CTXKIT_LANG=ru` into Claude Code's `settings.json` `env` block.
+Hook responses (`guard.rs`, `backslash.rs`, and `PostToolUse` in `main.rs`) default to English (`en`) and switch to Russian (`ru`) via `CTXKIT_LANG=ru` or `--lang ru`. Running `ctxkit setup --lang ru` writes `CTXKIT_LANG=ru` into Claude Code's `settings.json` `env` block and appends `--lang ru` to the default Antigravity command in `hooks.json`.
 
 ## `toMcp` Projection for Custom MCP Servers
 

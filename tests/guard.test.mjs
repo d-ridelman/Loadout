@@ -192,11 +192,20 @@ const cases = [
     };
     const origAgy = { 'other-hook': { PreToolUse: [] }, 'claude-guard': { PreToolUse: [] } };
     const origClaudeJson = { mcpServers: { a: {}, b: {}, c: {} } };
+    const origAgyMcp = { mcpServers: { m1: {}, m2: {}, m3: {}, m4: {}, off: { disabled: true } } };
+    mkdirSync(join(setupRoot, 'plugins', 'p1', 'rules'), { recursive: true });
+    mkdirSync(join(setupRoot, 'plugins', 'p2'), { recursive: true });
+    writeFileSync(join(setupRoot, 'plugins', 'p1', 'plugin.json'), '{}');
+    writeFileSync(join(setupRoot, 'plugins', 'p1', 'mcp_config.json'), JSON.stringify({ mcpServers: { ps1: {} } }));
+    writeFileSync(join(setupRoot, 'plugins', 'p1', 'rules', 'AGENTS.md'), '# p1 rules\n');
+    writeFileSync(join(setupRoot, 'plugins', 'p2', 'plugin.json'), '{}');
+    writeFileSync(join(setupRoot, 'config.json'), JSON.stringify({ plugins: { p2: { enabled: false } } }));
 
     writeFileSync(join(profile, 'settings.json'), JSON.stringify(origSettings, null, 2));
     writeFileSync(join(profile, 'CLAUDE.md'), origClaudeMd);
     writeFileSync(desktopFile, JSON.stringify(origDesktop, null, 2));
     writeFileSync(agyFile, JSON.stringify(origAgy, null, 2));
+    writeFileSync(join(setupRoot, 'mcp_config.json'), JSON.stringify(origAgyMcp, null, 2));
     writeFileSync(claudeJson, JSON.stringify(origClaudeJson, null, 2));
 
     const commonArgs = [
@@ -250,6 +259,9 @@ const cases = [
     if (!agy1['other-hook'] || agy1['claude-guard'] || agy1['ctxkit']?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'test-ctxkit') return false;
 
     if (!run1.stdout.includes('3 global MCP servers')) return false;
+    if (!run1.stdout.includes('Antigravity Diagnostics:')) return false;
+    if (!run1.stdout.includes('1 global plugin(s) enabled (p1)')) return false;
+    if (!run1.stdout.includes('5 active global MCP servers (4 in mcp_config.json [m1, m2, m3, m4], 1 in plugins [p1/ps1])')) return false;
 
     // 3) Second run must be idempotent (same files, no extra backups)
     const run2 = spawnSync(exe, commonArgs, { encoding: 'utf8' });
@@ -258,13 +270,31 @@ const cases = [
     if (readdirSync(join(profile, 'backups')).length !== backups1.length) return false;
     if (s1.env?.CTXKIT_LANG !== undefined) return false;
 
-    // 4) --lang ru sets CTXKIT_LANG=ru and switches templates to Russian
+    // 4) --lang ru sets CTXKIT_LANG=ru, switches templates, and appends --lang ru to default Antigravity hook
     const runRu = spawnSync(exe, [...commonArgs, '--lang', 'ru', '--force-agents'], { encoding: 'utf8' });
     if (runRu.status !== 0) return false;
     const sRu = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
     if (sRu.env?.CTXKIT_LANG !== 'ru') return false;
     if (!readFileSync(join(profile, 'CLAUDE.md'), 'utf8').includes('Команда моделей')) return false;
     if (!readFileSync(join(profile, 'agents', 'Explore.md'), 'utf8').includes('исследователь')) return false;
+
+    const agyRuDir = join(setupRoot, 'agy-ru');
+    mkdirSync(agyRuDir, { recursive: true });
+    const agyRuFile = join(agyRuDir, 'hooks.json');
+    writeFileSync(agyRuFile, '{}');
+    const runAgyRu = spawnSync(exe, [
+      'setup',
+      '--profile', profile,
+      '--no-agents',
+      '--antigravity', '--agy-file', agyRuFile,
+      '--claude-json', claudeJson,
+      '--skip-version-check',
+      '--lang', 'ru',
+    ], { encoding: 'utf8' });
+    if (runAgyRu.status !== 0) return false;
+    const agyRu = JSON.parse(readFileSync(agyRuFile, 'utf8'));
+    const agyRuCmd = agyRu['ctxkit']?.PreToolUse?.[0]?.hooks?.[0]?.command || '';
+    if (!agyRuCmd.endsWith(' --lang ru')) return false;
     return true;
   }],
 

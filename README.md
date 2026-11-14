@@ -74,7 +74,7 @@ Before changing `settings.json`, `CLAUDE.md`, `ccd-session-presets.json`, or `ho
 | `guard.rs` | Read and search guard | Blocks whole-file reads above `28 KB` / `450` lines (and `> 250 KB` without range) in `Read` and `read_file`, while skipping images, audio, video, and PDFs. Blocks bare `cat`, `Get-Content`, and unfiltered recursive `grep -r`/`rg` without touching pipes or `&&` chains. |
 | `backslash.rs` | Escape and syntax guard | On `PreToolUse`, blocks backslash-heavy `node -e`, `python -c`, `sed -i`, heredocs, PowerShell here-strings, and throwaway patch scripts. On `PostToolUse`, validates `.json` (skipping JSONC such as `tsconfig` and `.vscode/`), `.js/.mjs/.cjs` (`node --check`), and `.py` (`ast.parse`). |
 | `check.rs` | Output compressor (`ctxkit check`) | For `cargo check`/`clippy`/`build`, enables `--message-format=json` and prints up to 3 deduplicated `file:line:col` root causes. For `tsc`, `npm test`, `node --test`, `pytest`, or `go test`, prints `OK (<ms>)` on pass, or up to 30 key lines on failure with the full log saved to `%TEMP%/last-check.log` (`/tmp/last-check.log` on Unix). |
-| `setup.rs` | Environment setup (`ctxkit setup`) | Applies `sonnet` + `advisorModel: fable` + `haiku` + `effortLevel: high`, creates `Explore.md` (`haiku`) and `checker.md` (`opus`), and checks for outdated CLI (`< 2.1.321`), more than 8 global plugins, oversized `CLAUDE.md`, and extra global MCP servers. |
+| `setup.rs` | Environment setup (`ctxkit setup`) | Applies `sonnet` + `advisorModel: fable` + `haiku` + `effortLevel: high`, creates `Explore.md` (`haiku`) and `checker.md` (`opus`), and audits CLI version, Claude plugins/`CLAUDE.md`/MCPs, and Antigravity MCPs/plugins/`agy` CLI model. |
 
 ## Setup Flags
 
@@ -87,10 +87,10 @@ Defaults are tuned for a 4-model advisor workflow (`fable` + `claude-sonnet-5-5`
 | `--advisor <name>` | Set advisor model (`fable` by default, `opus`, or `none` to omit) |
 | `--desktop` | Switch Claude Desktop presets (`ccd-session-presets.json`) to `--desktop-model` |
 | `--desktop-model <id>` | Desktop preset `modelId` override (default: `claude-sonnet-5-5`) |
-| `--antigravity` | Register `ctxkit` in `~/.gemini/config/hooks.json` |
+| `--antigravity` | Register `ctxkit` in `~/.gemini/config/hooks.json` and audit Antigravity MCPs, plugins, and CLI model |
 | `--with-rules` | Insert or update the compact rule block in `CLAUDE.md` between `ctxkit` markers |
 | `--force-agents` | Overwrite existing `Explore.md` and `checker.md` |
-| `--lang <en\|ru>` | Language for generated agent prompts and `CLAUDE.md` rules (`en` default; `ru` also sets `CTXKIT_LANG=ru` in `settings.json`) |
+| `--lang <en\|ru>` | Language for prompts, rules, and hooks (`en` default; `ru` sets `CTXKIT_LANG=ru` in `settings.json` and adds `--lang ru` in `hooks.json`) |
 
 Hooks read `CTXKIT_LANG` (`en` default, `ru` for Russian messages) or `--lang en|ru`. Run `ctxkit setup --help` for the complete option list. Manual config templates sit in [`examples/`](examples/) using POSIX placeholder paths; run `ctxkit setup` to resolve OS-specific absolute paths automatically.
 

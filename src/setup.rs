@@ -212,7 +212,7 @@ pub fn run_setup(args: &[String]) -> i32 {
         let agy_cmd = opts
             .hook_cmd
             .clone()
-            .unwrap_or_else(|| hook_bin_path.to_string_lossy().replace('\\', "/"));
+            .unwrap_or_else(|| format_antigravity_command(&hook_bin_path, opts.lang));
         if let Err(e) = update_antigravity_hooks(&apath, &agy_cmd, opts.dry_run) {
             eprintln!("ERR: {e}");
             return 1;
@@ -223,7 +223,7 @@ pub fn run_setup(args: &[String]) -> i32 {
         .claude_json
         .clone()
         .unwrap_or_else(|| home.join(".claude.json"));
-    print_diagnostics(&profile, &mut settings_root, &claude_json, &opts);
+    print_diagnostics(&profile, &mut settings_root, &claude_json, &home, &opts);
     0
 }
 
@@ -592,6 +592,23 @@ fn update_desktop_presets(
     write_json_if_changed(path, None, &orig, &next, dry_run, "desktop presets")
 }
 
+fn format_antigravity_command(hook_bin_path: &Path, lang: Lang) -> String {
+    let raw = hook_bin_path.to_string_lossy();
+    let base = if raw.contains(' ') {
+        if cfg!(windows) {
+            format!("\"{}\"", raw.replace('/', "\\"))
+        } else {
+            format!("\"{raw}\"")
+        }
+    } else {
+        raw.replace('\\', "/")
+    };
+    match lang {
+        Lang::Ru => format!("{base} --lang ru"),
+        Lang::En => base,
+    }
+}
+
 fn update_antigravity_hooks(path: &Path, command: &str, dry_run: bool) -> Result<(), String> {
     let orig = read_json_object(path)?;
     let mut next = orig.clone();
@@ -730,6 +747,7 @@ fn print_diagnostics(
     profile: &Path,
     settings: &mut Value,
     claude_json: &Path,
+    home: &Path,
     opts: &SetupOpts,
 ) {
     println!("\nDiagnostics:");
@@ -796,6 +814,236 @@ fn print_diagnostics(
             }
         }
     }
+
+    if opts.antigravity {
+        let agy_dir = opts
+            .agy_file
+            .as_ref()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| home.join(".gemini").join("config"));
+        let agy_cli_settings = if opts.agy_file.is_none() {
+            Some(home.join(".gemini").join("antigravity-cli").join("settings.json"))
+        } else {
+            None
+        };
+        print_antigravity_diagnostics(&agy_dir, agy_cli_settings.as_deref());
+    }
+}
+
+fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>) {
+    println!("\nAntigravity Diagnostics:");
+    if let Some(cli_path) = agy_cli_settings {
+        if let Ok(cfg) = read_json_object(cli_path) {
+            if let Some(model) = cfg.get("model").and_then(|v| v.as_str()) {
+                let lower = model.to_ascii_lowercase();
+                if lower.contains("flash")
+                    || lower.contains("lite")
+                    || lower.contains("mini")
+                    || lower.contains("haiku")
+                {
+                    println!("  [ok]   agy CLI model: {model}");
+                } else if lower.contains("pro") || lower.contains("opus") {
+                    println!(
+                        "  [warn] agy CLI model: {model} (invoke_subagent defaults to Model='inherit'; pass 'flash'/'flash_lite' for search/routine subagents)"
+                    );
+                } else {
+                    println!("  [info] agy CLI model: {model}");
+                }
+            }
+        }
+    }
+
+    let enabled_plugins = discover_enabled_agy_plugins(agy_dir);
+    if agy_dir.join("plugins").is_dir() || !enabled_plugins.is_empty() {
+        let names: Vec<&str> = enabled_plugins.iter().map(|(n, _)| n.as_str()).collect();
+        if enabled_plugins.len() > 6 {
+            println!(
+                "  [warn] Antigravity: {} global plugins enabled ({}). Disable niche plugins in {}/config.json or UI.",
+                enabled_plugins.len(),
+                names.join(", "),
+                agy_dir.display()
+            );
+        } else if names.is_empty() {
+            println!("  [ok]   Antigravity: 0 global plugins enabled");
+        } else {
+            println!(
+                "  [ok]   Antigravity: {} global plugin(s) enabled ({})",
+                enabled_plugins.len(),
+                names.join(", ")
+            );
+        }
+    }
+
+    let global_mcps = collect_active_mcp_names(&agy_dir.join("mcp_config.json"));
+    let mut plugin_mcps = Vec::new();
+    for (pname, pdir) in &enabled_plugins {
+        for srv in collect_active_mcp_names(&pdir.join("mcp_config.json")) {
+            plugin_mcps.push(format!("{pname}/{srv}"));
+        }
+    }
+    let total_mcps = global_mcps.len() + plugin_mcps.len();
+    if agy_dir.join("mcp_config.json").is_file() || total_mcps > 0 {
+        let mut parts = Vec::new();
+        if !global_mcps.is_empty() {
+            parts.push(format!("{} in mcp_config.json [{}]", global_mcps.len(), global_mcps.join(", ")));
+        }
+        if !plugin_mcps.is_empty() {
+            parts.push(format!("{} in plugins [{}]", plugin_mcps.len(), plugin_mcps.join(", ")));
+        }
+        let breakdown = if parts.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", parts.join(", "))
+        };
+        if total_mcps > 4 {
+            println!(
+                "  [warn] Antigravity: {} active global MCP servers{breakdown} - even with Lazy schemas, tool lists and plugin rules grow startup context; keep project-only MCPs in .agents/mcp_config.json or disable unused plugins.",
+                total_mcps
+            );
+        } else {
+            println!("  [ok]   Antigravity: {} active global MCP server(s){breakdown}", total_mcps);
+        }
+    }
+
+    let (rule_files, rule_bytes, oversized) = audit_agy_plugin_rules(&enabled_plugins);
+    if !oversized.is_empty() {
+        let list: Vec<String> = oversized
+            .iter()
+            .map(|(name, b)| format!("{name} ({:.1} KB)", *b as f64 / 1024.0))
+            .collect();
+        println!(
+            "  [warn] Antigravity: plugin rule file(s) exceed 24 KB per-file cap: {}",
+            list.join(", ")
+        );
+    } else if rule_bytes > 16_384 {
+        println!(
+            "  [warn] Antigravity: {} enabled plugin rule file(s) total {:.1} KB - trims startup token baseline when trimmed or scoped per project.",
+            rule_files,
+            rule_bytes as f64 / 1024.0
+        );
+    } else if rule_files > 0 {
+        println!(
+            "  [ok]   Antigravity: {} plugin rule file(s), {:.1} KB total (within 24 KB/file cap)",
+            rule_files,
+            rule_bytes as f64 / 1024.0
+        );
+    }
+}
+
+fn discover_enabled_agy_plugins(agy_dir: &Path) -> Vec<(String, PathBuf)> {
+    let plugins_dir = agy_dir.join("plugins");
+    let Ok(entries) = fs::read_dir(&plugins_dir) else {
+        return Vec::new();
+    };
+    let config_plugins = read_json_object(&agy_dir.join("config.json"))
+        .ok()
+        .and_then(|v| v.get("plugins").cloned());
+
+    let mut active = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if !looks_like_agy_plugin(&path) {
+            continue;
+        }
+        let cfg_override = config_plugins
+            .as_ref()
+            .and_then(|m| m.get(&name))
+            .and_then(|v| v.get("enabled"))
+            .and_then(|v| v.as_bool());
+        let enabled = cfg_override.unwrap_or_else(|| !plugin_manifest_disabled(&path));
+        if enabled {
+            active.push((name, path));
+        }
+    }
+    active.sort_by(|a, b| a.0.cmp(&b.0));
+    active
+}
+
+const AGY_PLUGIN_MANIFESTS: [&str; 4] = [
+    "plugin.json",
+    ".antigravity-plugin/plugin.json",
+    ".gemini-plugin/plugin.json",
+    ".claude-plugin/plugin.json",
+];
+
+fn looks_like_agy_plugin(dir: &Path) -> bool {
+    AGY_PLUGIN_MANIFESTS.iter().any(|rel| dir.join(rel).exists())
+        || ["mcp_config.json", "hooks.json", "rules", "skills"]
+            .iter()
+            .any(|rel| dir.join(rel).exists())
+}
+
+fn plugin_manifest_disabled(dir: &Path) -> bool {
+    for rel in AGY_PLUGIN_MANIFESTS {
+        let p = dir.join(rel);
+        if p.is_file() {
+            if let Ok(v) = read_json_object(&p) {
+                return v.get("disabled").and_then(|d| d.as_bool()) == Some(true);
+            }
+        }
+    }
+    false
+}
+
+fn collect_active_mcp_names(path: &Path) -> Vec<String> {
+    let Ok(v) = read_json_object(path) else {
+        return Vec::new();
+    };
+    let Some(mcps) = v.get("mcpServers").and_then(|m| m.as_object()) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = mcps
+        .iter()
+        .filter_map(|(k, entry)| {
+            if entry.get("disabled").and_then(|d| d.as_bool()) == Some(true) {
+                None
+            } else {
+                Some(k.clone())
+            }
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+fn audit_agy_plugin_rules(plugins: &[(String, PathBuf)]) -> (usize, usize, Vec<(String, usize)>) {
+    let mut count = 0usize;
+    let mut total_bytes = 0usize;
+    let mut oversized = Vec::new();
+    for (pname, pdir) in plugins {
+        let rules_dir = pdir.join("rules");
+        let Ok(entries) = fs::read_dir(&rules_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let is_md = p
+                .extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+            if !p.is_file() || !is_md {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                let len = meta.len() as usize;
+                count += 1;
+                total_bytes += len;
+                if len > 24_000 {
+                    let fname = entry.file_name().to_string_lossy().to_string();
+                    oversized.push((format!("{pname}/{fname}"), len));
+                }
+            }
+        }
+    }
+    oversized.sort_by(|a, b| a.0.cmp(&b.0));
+    (count, total_bytes, oversized)
 }
 
 fn check_claude_version() -> Option<(u64, u64, u64)> {
@@ -831,7 +1079,7 @@ fn print_help() {
          - Backs up existing configs before writing\n\
          - Configures Sonnet main + Fable advisor + Haiku subagents + Opus checker (preserving custom env/hooks/plugins)\n\
          - Wires ctxkit PreToolUse/PostToolUse hooks (replacing legacy claude-guard / no-inline-backslash entries)\n\
-         - Audits enabled plugins, CLAUDE.md size, global MCPs, and Claude CLI version\n\n\
+         - Audits enabled plugins, CLAUDE.md size, global MCPs, Claude CLI version, and Antigravity configs\n\n\
          Options:\n\
            --dry-run              Preview changes without writing files\n\
            --profile <dir>        Claude config dir (default: ~/.claude or CLAUDE_CONFIG_DIR)\n\
@@ -845,7 +1093,7 @@ fn print_help() {
            --desktop              Update Claude Desktop ccd-session-presets.json to Sonnet\n\
            --desktop-model <id>   Desktop modelId (default: claude-sonnet-5-5)\n\
            --desktop-file <path>  Override ccd-session-presets.json path\n\
-           --antigravity          Wire ctxkit into Antigravity hooks.json\n\
+           --antigravity          Wire ctxkit into Antigravity hooks.json and audit MCPs/plugins\n\
            --agy-file <path>      Override Antigravity hooks.json path\n\
            --hook-cmd <cmd>       Override hook command path\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n"
@@ -915,6 +1163,80 @@ mod tests {
         upsert_claude_md(&md, &bdir, &snip, false).unwrap();
         let after_second = fs::read_to_string(&md).unwrap();
         assert_eq!(after_first, after_second);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn formats_antigravity_hook_command_with_lang_and_spaces() {
+        let plain = Path::new(r"C:\Users\alice\.claude\hooks\ctxkit.exe");
+        assert_eq!(
+            format_antigravity_command(plain, Lang::En),
+            "C:/Users/alice/.claude/hooks/ctxkit.exe"
+        );
+        assert_eq!(
+            format_antigravity_command(plain, Lang::Ru),
+            "C:/Users/alice/.claude/hooks/ctxkit.exe --lang ru"
+        );
+        let spaced = Path::new("/Users/Alice Smith/.claude/hooks/ctxkit");
+        let cmd_ru = format_antigravity_command(spaced, Lang::Ru);
+        assert!(cmd_ru.starts_with('"') && cmd_ru.ends_with(" --lang ru"));
+    }
+
+    #[test]
+    fn audits_antigravity_plugins_mcps_and_rules() {
+        let dir = env::temp_dir().join("cg_agy_diag_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("plugins").join("active-one").join("rules")).unwrap();
+        fs::create_dir_all(dir.join("plugins").join("disabled-cfg")).unwrap();
+        fs::create_dir_all(dir.join("plugins").join("disabled-manifest")).unwrap();
+        fs::create_dir_all(dir.join("plugins").join("re-enabled")).unwrap();
+
+        fs::write(dir.join("plugins").join("active-one").join("plugin.json"), "{}").unwrap();
+        fs::write(
+            dir.join("plugins").join("active-one").join("mcp_config.json"),
+            r#"{"mcpServers":{"s1":{},"off":{"disabled":true}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("plugins").join("active-one").join("rules").join("AGENTS.md"),
+            "x".repeat(25_000),
+        )
+        .unwrap();
+        fs::write(dir.join("plugins").join("disabled-cfg").join("plugin.json"), "{}").unwrap();
+        fs::write(
+            dir.join("plugins").join("disabled-manifest").join("plugin.json"),
+            r#"{"disabled":true}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("plugins").join("re-enabled").join("plugin.json"),
+            r#"{"disabled":true}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("config.json"),
+            r#"{"plugins":{"disabled-cfg":{"enabled":false},"re-enabled":{"enabled":true}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("mcp_config.json"),
+            r#"{"mcpServers":{"g1":{},"g2":{"disabled":true}}}"#,
+        )
+        .unwrap();
+
+        let plugins = discover_enabled_agy_plugins(&dir);
+        let pnames: Vec<&str> = plugins.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(pnames, vec!["active-one", "re-enabled"]);
+        assert_eq!(collect_active_mcp_names(&dir.join("mcp_config.json")), vec!["g1"]);
+        assert_eq!(
+            collect_active_mcp_names(&dir.join("plugins").join("active-one").join("mcp_config.json")),
+            vec!["s1"]
+        );
+        let (rcount, rbytes, oversized) = audit_agy_plugin_rules(&plugins);
+        assert_eq!(rcount, 1);
+        assert_eq!(rbytes, 25_000);
+        assert_eq!(oversized, vec![("active-one/AGENTS.md".to_string(), 25_000)]);
+
         let _ = fs::remove_dir_all(&dir);
     }
 }
