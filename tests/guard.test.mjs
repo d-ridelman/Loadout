@@ -150,6 +150,25 @@ const cases = [
   ['ask', () => preAgy('write_file', { Path: `${TMP}notes.md`, Content: 'ok\n' }).decision],
   ['{}', () => runHook({ toolCall: { name: 'run_command', args: { CommandLine: 'git status' } }, stepIdx: 2 }, ['--post'])],
 
+  // DeepSeek Harness (dsh-hooks-claude-code bridge): Claude protocol with DSH tool names
+  [true, () => preClaude('read', { file_path: bigFile })],
+  [false, () => preClaude('read', { file_path: bigFile, offset: 1, limit: 200 })],
+  [true, () => preClaude('pwsh', { command: `Get-Content "${bigFile}"` })],
+  [true, () => preClaude('bash', { command: `python -c "print('a${B}nb')"` })],
+  [true, () => preClaude('write', { file_path: `${TMP}patch.py`, content: `s=open(p).read()\ns=s.replace("a${B}n","b")\nopen(p,'w').write(s)\n` })],
+  ['', () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'bash', tool_input: { command: 'git status' } }, ['--dsh'])],
+  [true, () => {
+    const out = runHook({ hook_event_name: 'PreToolUse', tool_name: 'read', tool_input: { file_path: bigFile } }, ['--dsh', '--lang', 'ru']);
+    const reason = JSON.parse(out).hookSpecificOutput.permissionDecisionReason;
+    return reason.includes('через read с offset и limit') && !reason.includes('Explore');
+  }],
+  [true, () => {
+    const file_path = join(dir, 'dsh-broken.json');
+    writeFileSync(file_path, '{"a": }');
+    const out = runHook({ hook_event_name: 'PostToolUse', tool_name: 'edit', tool_input: { file_path } });
+    return JSON.parse(out).decision === 'block' && out.includes('with edit:');
+  }],
+
   // CLI check mode
   [0, () => spawnSync(exe, ['check', 'node', '-v'], { encoding: 'utf8' }).status],
   [true, () => {

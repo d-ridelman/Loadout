@@ -11,6 +11,8 @@ use std::io::{self, Read};
 pub enum Client {
     Claude,
     Antigravity,
+    /// DeepSeek Harness via @deepseek-ai/dsh-hooks-claude-code: Claude hook protocol, DSH tool names.
+    Dsh,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +79,7 @@ fn main() {
         match a.as_str() {
             "--agy" => forced_client = Some(Client::Antigravity),
             "--claude" => forced_client = Some(Client::Claude),
+            "--dsh" => forced_client = Some(Client::Dsh),
             "--post" => forced_post = true,
             _ => {}
         }
@@ -95,6 +98,11 @@ fn main() {
     let client = forced_client.unwrap_or_else(|| {
         if call.get("toolCall").is_some() {
             Client::Antigravity
+        } else if matches!(
+            call["tool_name"].as_str(),
+            Some("read" | "write" | "edit" | "bash" | "pwsh")
+        ) {
+            Client::Dsh
         } else {
             Client::Claude
         }
@@ -102,7 +110,7 @@ fn main() {
 
     match client {
         Client::Antigravity => handle_antigravity(&call, forced_post, lang),
-        Client::Claude => handle_claude(&call, forced_post, lang),
+        Client::Claude | Client::Dsh => handle_claude(&call, forced_post, lang, client),
     }
 }
 
@@ -149,20 +157,32 @@ fn handle_antigravity(call: &Value, forced_post: bool, lang: Lang) {
     }
 }
 
-fn handle_claude(call: &Value, forced_post: bool, lang: Lang) {
+/// DSH tool names differ from Claude Code only in case/spelling; arguments are the same.
+fn claude_tool_name(tool: &str, client: Client) -> &str {
+    match (client, tool) {
+        (Client::Dsh, "read") => "Read",
+        (Client::Dsh, "write") => "Write",
+        (Client::Dsh, "bash") => "Bash",
+        (Client::Dsh, "pwsh") => "PowerShell",
+        _ => tool,
+    }
+}
+
+fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
     let event = call["hook_event_name"].as_str().unwrap_or("");
-    let tool = call["tool_name"].as_str().unwrap_or("");
+    let tool = claude_tool_name(call["tool_name"].as_str().unwrap_or(""), client);
     let input = &call["tool_input"];
 
     if forced_post || event == "PostToolUse" {
         let path = input["file_path"].as_str().unwrap_or("");
         if let Some(err) = backslash::post_syntax_error(path) {
+            let edit = if client == Client::Dsh { "edit" } else { "Edit" };
             let reason = match lang {
                 Lang::En => format!(
-                    "File {path} failed syntax check after edit (likely a lost or extra backslash). Fix it with Edit:\n{err}"
+                    "File {path} failed syntax check after edit (likely a lost or extra backslash). Fix it with {edit}:\n{err}"
                 ),
                 Lang::Ru => format!(
-                    "После правки файл {path} не разбирается. Возможно, потерян или лишний обратный слеш. Исправь инструментом Edit:\n{err}"
+                    "После правки файл {path} не разбирается. Возможно, потерян или лишний обратный слеш. Исправь инструментом {edit}:\n{err}"
                 ),
             };
             let out = json!({
@@ -178,7 +198,7 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang) {
         let path = input["file_path"].as_str().unwrap_or("");
         let offset = input["offset"].as_u64();
         let limit = input["limit"].as_u64();
-        if let Some(reason) = guard::read_guard(path, offset, limit, Client::Claude, lang) {
+        if let Some(reason) = guard::read_guard(path, offset, limit, client, lang) {
             deny_claude(reason);
         }
         return;
@@ -188,13 +208,13 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang) {
     let content = input["content"].as_str().unwrap_or("");
     let command = input["command"].as_str().unwrap_or("");
 
-    if let Some(reason) = backslash::pre_reason(tool, path, content, command, Client::Claude, lang) {
+    if let Some(reason) = backslash::pre_reason(tool, path, content, command, client, lang) {
         deny_claude(reason);
         return;
     }
 
     if tool == "Bash" || tool == "PowerShell" {
-        if let Some(reason) = guard::shell_read_guard(tool, command, Client::Claude, lang) {
+        if let Some(reason) = guard::shell_read_guard(tool, command, client, lang) {
             deny_claude(reason);
         }
     }

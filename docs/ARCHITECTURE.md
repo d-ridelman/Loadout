@@ -15,6 +15,8 @@ CLI args / stdin JSON
    │
    ├─ stdin has toolCall       ──▶ Antigravity hook     (read_file / write_file / run_command)
    │
+   ├─ --dsh or DSH tool_name   ──▶ DeepSeek Harness     (read / write / edit / bash / pwsh)
+   │
    └─ otherwise                ──▶ Claude Code hook     (PreToolUse / PostToolUse)
 ```
 
@@ -51,6 +53,12 @@ CLI args / stdin JSON
 | `PostToolUse` | Syntax validation and `{"decision": "block"}` | Returns `{}` only (post-write blocking not supported) |
 
 In Antigravity's hook contract, `"decision": "allow"` auto-approves tool execution and bypasses user confirmation policies. On clean checks, `ctxkit` always emits `{"decision": "ask"}` so Antigravity enforces its own built-in security policy.
+
+### DeepSeek Harness Desktop
+
+DeepSeek Harness has no hook config of its own: the `@deepseek-ai/dsh-hooks-claude-code` plugin replays a Claude Code `hooks.json` on its `tools/pre-execute` and `tools/post-execute` seams. The stdin payload and the accepted responses follow the Claude Code column above, so `ctxkit` reuses that handler; only the tool names differ (`read`, `write`, `edit`, `bash`, `pwsh`) and deny hints name those tools instead of `Grep`/`Explore`. The client is selected by `--dsh` or detected from a lowercase `tool_name`.
+
+`ctxkit setup --dsh` writes `~/.dsh/ctxkit-hooks.json` (`PreToolUse`: `read|write|bash|pwsh`, `PostToolUse`: `write|edit`) and appends a marker-delimited `insert` entry (`id: ctxkit-hooks`) to `~/.dsh/profiles/desktop/cordis.patch.yml`, leaving other entries untouched. The hook command is written for the shell the harness uses (`pwsh -Command` on Windows, `bash -c` elsewhere). The bridge package is not bundled with the desktop app and the config is read once at startup, so setup warns when the package is missing from the profile's `node_modules` and the app must be restarted after either change.
 
 ## Localization (`CTXKIT_LANG`)
 

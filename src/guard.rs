@@ -23,6 +23,11 @@ fn read_hint(client: Client, lang: Lang) -> &'static str {
             "search first via grep, then read a slice via read_file with StartLine and EndLine (up to 250 lines).",
             "сначала найди нужное место через grep, затем прочитай фрагмент через read_file с StartLine и EndLine (до 250 строк).",
         ),
+        Client::Dsh => t(
+            lang,
+            "search first via the grep tool, then read a slice via read with offset and limit (up to 250 lines).",
+            "сначала найди нужное место инструментом grep, затем прочитай фрагмент через read с offset и limit (до 250 строк).",
+        ),
     }
 }
 
@@ -149,7 +154,7 @@ pub fn shell_read_guard(tool: &str, cmd: &str, client: Client, lang: Lang) -> Op
     }
 
     match client {
-        Client::Claude => match tool {
+        Client::Claude | Client::Dsh => match tool {
             "Bash" => check_bash_inspect(trimmed, client, lang),
             "PowerShell" => check_ps_inspect(trimmed, client, lang),
             _ => None,
@@ -193,6 +198,12 @@ fn check_bash_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<Strin
                 lang,
                 "Use the built-in `Grep` tool (or Haiku `Explore`) instead of raw recursive grep/rg in Bash to avoid bloating shell output.",
                 "Используй встроенный инструмент `Grep` (или `Explore` на Haiku) вместо прямого рекурсивного grep/rg в Bash, чтобы не раздувать вывод shell.",
+            )
+            .to_string(),
+            Client::Dsh => t(
+                lang,
+                "Use the built-in `grep` tool instead of raw recursive grep/rg in bash to avoid bloating shell output.",
+                "Используй встроенный инструмент `grep` вместо прямого рекурсивного grep/rg в bash, чтобы не раздувать вывод shell.",
             )
             .to_string(),
             Client::Antigravity => t(
@@ -270,6 +281,25 @@ mod tests {
         img_f.write_all(&vec![0u8; 300_000]).unwrap();
         assert!(read_guard(img.to_str().unwrap(), None, None, Client::Antigravity, Lang::En).is_none());
         assert!(read_guard(img.to_str().unwrap(), None, None, Client::Claude, Lang::Ru).is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dsh_hints_name_dsh_tools() {
+        let dir = std::env::temp_dir().join("cg_unit_guard_dsh");
+        let _ = fs::create_dir_all(&dir);
+        let big = dir.join("big.ts");
+        fs::write(&big, "export const v = 1; // padding bytes for size\n".repeat(700)).unwrap();
+        let path = big.to_str().unwrap();
+
+        let deny = read_guard(path, None, None, Client::Dsh, Lang::En).unwrap();
+        assert!(deny.contains("read with offset and limit") && !deny.contains("Explore"));
+        assert!(read_guard(path, Some(1), Some(200), Client::Dsh, Lang::En).is_none());
+        let grep = shell_read_guard("Bash", "rg foo src/", Client::Dsh, Lang::En).unwrap();
+        assert!(grep.contains("`grep` tool") && !grep.contains("Haiku"));
+        let cat = shell_read_guard("PowerShell", &format!("Get-Content {path}"), Client::Dsh, Lang::En);
+        assert!(cat.unwrap().contains("read with offset"));
 
         let _ = fs::remove_dir_all(&dir);
     }

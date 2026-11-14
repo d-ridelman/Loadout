@@ -14,7 +14,7 @@
   <a href="docs/RESEARCH.md">Research (30 Sessions)</a>
 </p>
 
-`ctxkit` is a single native Rust binary for **Claude Code**, **Claude Desktop**, and **Antigravity**. It stops agents from dumping whole files and raw compiler logs into context, blocks shell commands that mangle backslashes, and configures a low-waste model setup with one command.
+`ctxkit` is a single native Rust binary for **Claude Code**, **Claude Desktop**, **Antigravity**, and **DeepSeek Harness Desktop**. It stops agents from dumping whole files and raw compiler logs into context, blocks shell commands that mangle backslashes, and configures a low-waste model setup with one command.
 
 Rust is only the runtime choice for fast startup (`9-14 ms` per hook call without spawning Node or Python). The toolkit targets **any project stack** (TypeScript/JS, Python, Go, Rust, config repositories): in an audit of 30 sessions, `60.5%` of incoming bloat came from reading large source files whole and running unfiltered grep in the shell.
 
@@ -88,6 +88,7 @@ Defaults are tuned for a 4-model advisor workflow (`fable` + `claude-sonnet-5-5`
 | `--desktop` | Switch Claude Desktop presets (`ccd-session-presets.json`) to `--desktop-model` |
 | `--desktop-model <id>` | Desktop preset `modelId` override (default: `claude-sonnet-5-5`) |
 | `--antigravity` | Register `ctxkit` in `~/.gemini/config/hooks.json` and audit Antigravity MCPs, plugins, and CLI model |
+| `--dsh` | Write `~/.dsh/ctxkit-hooks.json` and mount the `@deepseek-ai/dsh-hooks-claude-code` bridge on it in the DeepSeek Harness `desktop` profile (`--dsh-home <path>` overrides `~/.dsh`); warns with the exact `pnpm add` command when the bridge package is missing |
 | `--with-rules` | Insert or update the compact rule block in `CLAUDE.md` between `ctxkit` markers |
 | `--force-agents` | Overwrite existing `Explore.md` and `checker.md` |
 | `--lang <en\|ru>` | Language for prompts, rules, and hooks (`en` default; `ru` sets `CTXKIT_LANG=ru` in `settings.json` and adds `--lang ru` in `hooks.json`) |

@@ -14,7 +14,7 @@
   <a href="docs/RESEARCH.ru.md">Исследование (30 сессий)</a>
 </p>
 
-Нативный бинарник на Rust для **Claude Code**, **Claude Desktop** и **Antigravity**. Режет лишнее раздутие контекста на чтении файлов и логах сборок, защищает обратные слеши в shell-командах и одной командой настраивает экономичную схему моделей.
+Нативный бинарник на Rust для **Claude Code**, **Claude Desktop**, **Antigravity** и **DeepSeek Harness Desktop**. Режет лишнее раздутие контекста на чтении файлов и логах сборок, защищает обратные слеши в shell-командах и одной командой настраивает экономичную схему моделей.
 
 Написан на Rust ради холодного старта за `9-14 ms` без запуска Node или Python на каждый хук. Подходит для **любых стеков** (TypeScript/JS, Python, Go, Rust, конфиги): в реальном аудите 30 сессий `60.5%` входящего мусора давали именно чтения больших `.ts`, `.js`, `.py` и `.md` файлов и вывод grep через консоль.
 
@@ -88,6 +88,7 @@ cd ctxkit
 | `--desktop` | Перевести пресеты Claude Desktop (`ccd-session-presets.json`) на `--desktop-model` |
 | `--desktop-model <id>` | Идентификатор модели в пресетах Desktop (по умолчанию `claude-sonnet-5-5`) |
 | `--antigravity` | Зарегистрировать `ctxkit` в `~/.gemini/config/hooks.json` и проверить MCP, плагины и модель `agy` CLI |
+| `--dsh` | Записать `~/.dsh/ctxkit-hooks.json` и подключить к нему мост `@deepseek-ai/dsh-hooks-claude-code` в профиле `desktop` DeepSeek Harness (`--dsh-home <path>` заменяет `~/.dsh`); если пакета моста нет, выводит точную команду `pnpm add` |
 | `--with-rules` | Добавить в `CLAUDE.md` блок правил (включая триггер `/advisor` и `/clear`) между маркерами `ctxkit` |
 | `--force-agents` | Перезаписать уже существующие `Explore.md` и `checker.md` |
 | `--lang <en\|ru>` | Язык шаблонов и хуков (`en` по умолчанию; при `ru` пишет `CTXKIT_LANG=ru` в `settings.json` и `--lang ru` в `hooks.json`) |

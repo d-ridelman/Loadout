@@ -26,6 +26,8 @@ struct SetupOpts {
     desktop_file: Option<PathBuf>,
     antigravity: bool,
     agy_file: Option<PathBuf>,
+    dsh: bool,
+    dsh_home: Option<PathBuf>,
     hook_cmd: Option<String>,
     claude_json: Option<PathBuf>,
     skip_version_check: bool,
@@ -49,6 +51,8 @@ impl Default for SetupOpts {
             desktop_file: None,
             antigravity: false,
             agy_file: None,
+            dsh: false,
+            dsh_home: None,
             hook_cmd: None,
             claude_json: None,
             skip_version_check: false,
@@ -72,9 +76,10 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--with-rules" => opts.with_rules = true,
             "--desktop" => opts.desktop = true,
             "--antigravity" => opts.antigravity = true,
+            "--dsh" => opts.dsh = true,
             "--skip-version-check" => opts.skip_version_check = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
-            | "--desktop-model" | "--desktop-file" | "--agy-file" | "--hook-cmd"
+            | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home" | "--hook-cmd"
             | "--claude-json" | "--lang") => {
                 let Some(val) = args.get(i + 1) else {
                     eprintln!("ERR: missing value for {flag}");
@@ -89,6 +94,7 @@ pub fn run_setup(args: &[String]) -> i32 {
                     "--desktop-model" => opts.desktop_model = val.clone(),
                     "--desktop-file" => opts.desktop_file = Some(PathBuf::from(val)),
                     "--agy-file" => opts.agy_file = Some(PathBuf::from(val)),
+                    "--dsh-home" => opts.dsh_home = Some(PathBuf::from(val)),
                     "--hook-cmd" => opts.hook_cmd = Some(val.clone()),
                     "--claude-json" => opts.claude_json = Some(PathBuf::from(val)),
                     "--lang" => {
@@ -214,6 +220,22 @@ pub fn run_setup(args: &[String]) -> i32 {
             .clone()
             .unwrap_or_else(|| format_antigravity_command(&hook_bin_path, opts.lang));
         if let Err(e) = update_antigravity_hooks(&apath, &agy_cmd, opts.dry_run) {
+            eprintln!("ERR: {e}");
+            return 1;
+        }
+    }
+
+    if opts.dsh {
+        let dsh_home = opts
+            .dsh_home
+            .clone()
+            .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
+            .unwrap_or_else(|| home.join(".dsh"));
+        let dsh_cmd = opts
+            .hook_cmd
+            .clone()
+            .unwrap_or_else(|| format_dsh_command(&hook_bin_path, opts.lang));
+        if let Err(e) = update_dsh_hooks(&dsh_home, &dsh_cmd, opts.dry_run) {
             eprintln!("ERR: {e}");
             return 1;
         }
@@ -632,6 +654,89 @@ fn update_antigravity_hooks(path: &Path, command: &str, dry_run: bool) -> Result
         }),
     );
     write_json_if_changed(path, None, &orig, &next, dry_run, "antigravity hooks.json")
+}
+
+const DSH_MARKER_START: &str = "# >>> ctxkit (managed by `ctxkit setup --dsh`; do not edit) >>>";
+const DSH_MARKER_END: &str = "# <<< ctxkit <<<";
+const DSH_HOOKS_PLUGIN: &str = "@deepseek-ai/dsh-hooks-claude-code";
+
+/// DSH runs hook commands via `pwsh -Command` on Windows and `bash -c` elsewhere.
+fn format_dsh_command(hook_bin_path: &Path, lang: Lang) -> String {
+    let raw = hook_bin_path.to_string_lossy().replace('\\', "/");
+    let base = if !raw.contains(' ') {
+        raw
+    } else if cfg!(windows) {
+        format!("& \"{raw}\"")
+    } else {
+        format!("\"{raw}\"")
+    };
+    match lang {
+        Lang::Ru => format!("{base} --dsh --lang ru"),
+        Lang::En => format!("{base} --dsh"),
+    }
+}
+
+/// Writes `<dsh_home>/ctxkit-hooks.json` and mounts the official Claude Code hook
+/// bridge on it from the desktop profile's `cordis.patch.yml`.
+fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(), String> {
+    let profile = dsh_home.join("profiles").join("desktop");
+    let patch_path = profile.join("cordis.patch.yml");
+    if !patch_path.exists() {
+        println!("  skip DeepSeek Harness (not found: {})", patch_path.display());
+        return Ok(());
+    }
+
+    let hooks_path = dsh_home.join("ctxkit-hooks.json");
+    let group = |matcher: &str| {
+        json!([{ "matcher": matcher, "hooks": [{ "type": "command", "command": command, "timeout": 10 }] }])
+    };
+    let hooks = json!({ "hooks": {
+        "PreToolUse": group("read|write|bash|pwsh"),
+        "PostToolUse": group("write|edit"),
+    }});
+    let orig = read_json_object(&hooks_path)?;
+    write_json_if_changed(&hooks_path, None, &orig, &hooks, dry_run, "DeepSeek Harness hooks")?;
+
+    let config_path = hooks_path.to_string_lossy().replace('\'', "''");
+    let block = format!(
+        "{DSH_MARKER_START}\n- insert:\n    - id: ctxkit-hooks\n      name: '{DSH_HOOKS_PLUGIN}'\n      config:\n        configPath: '{config_path}'\n{DSH_MARKER_END}"
+    );
+    let existing =
+        fs::read_to_string(&patch_path).map_err(|e| format!("read {}: {e}", patch_path.display()))?;
+    let updated = match (existing.find(DSH_MARKER_START), existing.find(DSH_MARKER_END)) {
+        (Some(s), Some(e)) if s < e => {
+            format!("{}{block}{}", &existing[..s], &existing[e + DSH_MARKER_END.len()..])
+        }
+        _ => append_block(&existing, &block),
+    };
+    if existing == updated {
+        println!("  ok DeepSeek Harness profile patch (unchanged): {}", patch_path.display());
+    } else if dry_run {
+        println!("  [dry-run] update DeepSeek Harness profile patch: {}", patch_path.display());
+    } else {
+        let b = backup_file(&patch_path, &profile)?;
+        println!("  backup -> {}", b.display());
+        fs::write(&patch_path, updated).map_err(|e| format!("write {}: {e}", patch_path.display()))?;
+        println!("  updated DeepSeek Harness profile patch: {}", patch_path.display());
+    }
+
+    // The bridge is not bundled with the desktop app; without it the insert loads nothing.
+    let plugin_dir = DSH_HOOKS_PLUGIN.split('/').fold(profile.join("node_modules"), |p, s| p.join(s));
+    if plugin_dir.join("package.json").exists() {
+        println!("  [ok]   DeepSeek Harness: {DSH_HOOKS_PLUGIN} is installed; restart the app to load hooks");
+    } else {
+        let version = read_json_object(
+            &dsh_home.join("dsh-runtimes").join("dsh-primary-runtime").join("runtime.json"),
+        )
+        .ok()
+        .and_then(|v| v.get("desktopVersion").and_then(|s| s.as_str()).map(String::from))
+        .unwrap_or_else(|| "<DSH version>".to_string());
+        println!(
+            "  [warn] DeepSeek Harness: {DSH_HOOKS_PLUGIN} is not installed in {} - hooks stay inactive. Run there: pnpm add -E {DSH_HOOKS_PLUGIN}@{version} @deepseek-ai/dsh-hook-protocol@{version} and restart the app.",
+            profile.display()
+        );
+    }
+    Ok(())
 }
 
 fn explore_prompt(model: &str, lang: Lang) -> String {
@@ -1075,7 +1180,7 @@ fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
 fn print_help() {
     println!(
         "Usage: ctxkit setup [options]\n\n\
-         Automates low-waste setup for Claude Code, Claude Desktop, and Antigravity:\n\
+         Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness:\n\
          - Backs up existing configs before writing\n\
          - Configures Sonnet main + Fable advisor + Haiku subagents + Opus checker (preserving custom env/hooks/plugins)\n\
          - Wires ctxkit PreToolUse/PostToolUse hooks (replacing legacy claude-guard / no-inline-backslash entries)\n\
@@ -1095,6 +1200,8 @@ fn print_help() {
            --desktop-file <path>  Override ccd-session-presets.json path\n\
            --antigravity          Wire ctxkit into Antigravity hooks.json and audit MCPs/plugins\n\
            --agy-file <path>      Override Antigravity hooks.json path\n\
+           --dsh                  Wire ctxkit into DeepSeek Harness Desktop (dsh-hooks-claude-code bridge)\n\
+           --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --hook-cmd <cmd>       Override hook command path\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n"
     );
@@ -1180,6 +1287,42 @@ mod tests {
         let spaced = Path::new("/Users/Alice Smith/.claude/hooks/ctxkit");
         let cmd_ru = format_antigravity_command(spaced, Lang::Ru);
         assert!(cmd_ru.starts_with('"') && cmd_ru.ends_with(" --lang ru"));
+    }
+
+    #[test]
+    fn dsh_setup_is_idempotent_and_keeps_foreign_patch_entries() {
+        assert!(format_dsh_command(Path::new("/opt/ctxkit"), Lang::Ru).ends_with("ctxkit --dsh --lang ru"));
+        let spaced = format_dsh_command(Path::new("/Users/Alice Smith/ctxkit"), Lang::En);
+        assert!(spaced.contains("\"/Users/Alice Smith/ctxkit\" --dsh"));
+
+        let home = env::temp_dir().join("cg_dsh_setup_test");
+        let _ = fs::remove_dir_all(&home);
+        // No desktop profile: nothing is created.
+        update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
+        assert!(!home.exists());
+
+        let profile = home.join("profiles").join("desktop");
+        fs::create_dir_all(&profile).unwrap();
+        let patch = profile.join("cordis.patch.yml");
+        let foreign = "- id: ui-chat\n  config:\n    transcriptView: standard\n";
+        fs::write(&patch, foreign).unwrap();
+
+        update_dsh_hooks(&home, "ctxkit --dsh", true).unwrap();
+        assert_eq!(fs::read_to_string(&patch).unwrap(), foreign, "dry-run must not write");
+
+        update_dsh_hooks(&home, "old-ctxkit --dsh", false).unwrap();
+        update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
+        let first = fs::read_to_string(&patch).unwrap();
+        update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
+        assert_eq!(first, fs::read_to_string(&patch).unwrap());
+        assert!(first.starts_with(foreign));
+        assert_eq!(first.matches("id: ctxkit-hooks").count(), 1);
+        assert!(first.contains("name: '@deepseek-ai/dsh-hooks-claude-code'"));
+
+        let hooks = read_json_object(&home.join("ctxkit-hooks.json")).unwrap();
+        assert_eq!(hooks["hooks"]["PreToolUse"][0]["matcher"], "read|write|bash|pwsh");
+        assert_eq!(hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"], "ctxkit --dsh");
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
