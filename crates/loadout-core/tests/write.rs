@@ -283,6 +283,36 @@ fn plan_and_journal_carry_no_file_contents() {
     );
 }
 
+/// Сухой прогон на настоящих конфигах (`cargo test -- --ignored`): только `plan`, ничего не пишется.
+/// Каждая переключаемая запись даёт план, файлы клиентов после прогона не изменились.
+#[test]
+#[ignore = "читает настоящий домашний каталог"]
+fn real_machine_plans_are_dry_and_succeed() {
+    let home = PathBuf::from(
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .unwrap(),
+    );
+    let files = [
+        home.join(".claude/settings.json"),
+        home.join(".codex/config.toml"),
+    ];
+    let before: Vec<_> = files.iter().map(|f| fs::read(f).ok()).collect();
+    let r = loadout_core::scan(&home);
+    let mut planned = 0;
+    for e in r.entities.iter().filter(|e| e.can_toggle) {
+        let enable = matches!(e.state, State::Off | State::Unknown);
+        let p = plan(&home, &e.id, enable)
+            .unwrap_or_else(|err| panic!("{} {:?}: {err}", e.name, e.kind));
+        assert_eq!(p.base_sha.len(), 64);
+        planned += 1;
+    }
+    eprintln!("планов построено: {planned}");
+    assert!(planned > 0, "на машине нет ни одной переключаемой записи");
+    let after: Vec<_> = files.iter().map(|f| fs::read(f).ok()).collect();
+    assert_eq!(before, after, "plan не должен менять файлы");
+}
+
 #[test]
 fn tampered_manifest_cannot_point_rollback_at_another_file() {
     let e = env();
