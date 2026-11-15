@@ -44,6 +44,10 @@ if (qa && !process.env.LOADOUT_USER_DATA) {
 const userData = envOf('LOADOUT_USER_DATA')
 if (userData) app.setPath('userData', resolve(userData))
 
+// Окно простое (таблицы, текст, лёгкие эффекты): GPU-процесс с ускорением съедает ~120 МБ ради нескольких градиентов.
+// Программная отрисовка держит приватную память ниже (CONCEPT.md §7, цель 150 МБ).
+app.disableHardwareAcceleration()
+
 const DEV_URL = envOf('ELECTRON_RENDERER_URL')
 /** Единственный файл, которому разрешено вызывать IPC в собранном приложении. */
 const INDEX_URL = pathToFileURL(join(__dirname, '../renderer/index.html')).href
