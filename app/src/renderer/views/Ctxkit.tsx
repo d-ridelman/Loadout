@@ -11,7 +11,7 @@ const SEV: Record<FindingSeverity, { ch: string; label: string; cls: string }> =
 
 const COPY: Record<CtxkitStatus['hook'], string> = {
   same: '● совпадает со встроенным',
-  different: '◐ другая версия: «Применить» обновит',
+  different: '◐ отличается от встроенной: «Применить» заменит её встроенной (это может быть и откат на более старую)',
   missing: '✕ нет: «Применить» установит',
 }
 

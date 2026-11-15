@@ -2,7 +2,8 @@
 // Профиль владельца не трогается: APP_QA=1 + LOADOUT_USER_DATA=state/loadout-qa.
 import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright-core'
@@ -576,6 +577,14 @@ try {
   const hookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
   const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, lang: 'ru', advisor: 'fable' }
+  // Настоящий профиль владельца ctxkit трогать не должен: хеши файлов, которые `setup` пишет, до и после всего шага.
+  // `~/.claude.json` не сравниваем: его переписывает работающий Claude Code, ctxkit его только читает (в проверках с --claude-json на копию).
+  const realHome = homedir()
+  const realFiles = ['.claude/settings.json', '.claude/CLAUDE.md', '.claude/hooks/ctxkit.exe', '.claude/agents/Explore.md', '.claude/agents/checker.md', '.local/bin/ctxkit.exe', '.gemini/config/hooks.json', '.dsh/ctxkit-hooks.json', '.dsh/cordis.patch.yml', 'AppData/Roaming/Claude/ccd-session-presets.json'].map((r) => join(realHome, r))
+  const realState = () => realFiles.map((f) => (existsSync(f) ? createHash('sha256').update(readFileSync(f)).digest('hex') : 'нет'))
+  const realBefore = realState()
+  const realBackups = () => (existsSync(join(realHome, '.claude', 'backups')) ? readdirSync(join(realHome, '.claude', 'backups')).filter((n) => !n.startsWith('.claude.json.backup')).length : 0)
+  const realBackupsBefore = realBackups()
   must(!existsSync(hookExe), 'в копии фикстуры уже есть ctxkit')
   await page.keyboard.press('7')
   await page.getByText('ctxkit 0.', { exact: false }).first().waitFor({ timeout: 15000 })
@@ -590,7 +599,9 @@ try {
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await page.locator('pre.out').waitFor({ timeout: 30000 })
   const preview = await page.locator('pre.out').innerText()
-  must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !preview.includes(home.replaceAll('\\', '/')), `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
+  // путь настоящего домашнего каталога (с именем пользователя) в выводе недопустим ни с прямыми, ни с обратными слэшами
+  const leaks = [realHome, realHome.replaceAll('\\', '/')].some((h) => preview.toLowerCase().includes(h.toLowerCase()))
+  must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
   must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
   await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')
   await page.getByLabel('Язык подсказок и хуков').selectOption('en')
@@ -621,6 +632,8 @@ try {
   await page.keyboard.press('1')
   await levelSel.selectOption('R0') // понижение подтверждения не требует
   must((await refusal(opts)).includes('R2'), 'при R0 применение ctxkit не отвергнуто в main')
+  must(JSON.stringify(realState()) === JSON.stringify(realBefore), 'ctxkit изменил файл настоящего профиля владельца')
+  must(realBackups() === realBackupsBefore, 'ctxkit создал бэкап в настоящем профиле владельца')
   await waitFor(() => levelIs('R0'), 'уровень вернулся в R0')
 
   // reduced motion → «FX: выкл» по умолчанию применяется при загрузке; здесь проверяем переключатель

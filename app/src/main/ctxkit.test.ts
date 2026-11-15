@@ -45,7 +45,7 @@ describe('ctxkit: параметры setup', () => {
     expect(setupArgs(parseSetupOptions(ok), false)).not.toContain('--dry-run')
     const dev = setupArgs(parseSetupOptions(ok), false, 'C:/tmp/h')
     expect(dev).toContain('--profile')
-    expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(4) // профиль, пресеты Desktop, hooks.json Antigravity, каталог DSH
+    expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(5) // профиль, пресеты Desktop, hooks.json Antigravity, каталог DSH, .claude.json
     // ни одного значения из страницы не попадает в аргументы как есть, кроме перечислений
     expect(a.every((x) => x.startsWith('--') || ['setup', 'ru', 'fable'].includes(x))).toBe(true)
   })

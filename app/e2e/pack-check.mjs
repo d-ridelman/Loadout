@@ -84,6 +84,8 @@ try {
   await page.locator('table[aria-label="Ходы по дням"] tbody tr').first().waitFor({ timeout: 120_000 })
   const ctxText = await page.locator('main').innerText()
   console.log('ctxkit в сборке:', /ctxkit \d+\.\d+\.\d+/.exec(ctxText)?.[0], '| находок диагностики:', await page.locator('ul[aria-label="Находки диагностики"] li').count(), '| дней в отчёте:', await page.locator('table[aria-label="Ходы по дням"] tbody tr').count())
+  // что покажет эта машина про установленные копии (сравнение побайтово со встроенной)
+  for (const line of ctxText.split('\n').filter((l) => /ctxkit\.exe:/.test(l))) console.log('  ', line.trim())
   must(!/не удалось|не найден|неподдерживаемая/.test(ctxText), 'в разделе ctxkit ошибка')
   await page.keyboard.press('1')
 

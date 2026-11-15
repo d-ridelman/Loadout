@@ -42,6 +42,8 @@ function homeArgs(home: string): string[] {
     '--desktop-file', join(home, 'AppData', 'Roaming', 'Claude', 'ccd-session-presets.json'),
     '--agy-file', join(home, '.gemini', 'config', 'hooks.json'),
     '--dsh-home', join(home, '.dsh'),
+    // для диагностики setup читает `~/.claude.json` (число глобальных MCP): без этого он читал бы настоящий файл
+    '--claude-json', join(home, '.claude.json'),
   ]
 }
 
