@@ -1,0 +1,31 @@
+[plugins."p1@bundled"]
+enabled = true
+
+[plugins."p2@bundled"]
+enabled = false
+
+[plugins."p3@bundled"]
+
+[marketplaces.bundled]
+source_type = "local"
+source = "/opt/bundled"
+
+[mcp_servers.alpha]
+command = "npx"
+args = ["-y", "pkg", "--api-key=FAKE-SECRET-CXARG"]
+
+[mcp_servers.alpha.env]
+TOKEN = "FAKE-SECRET-CXENV"
+
+[mcp_servers.alpha.tools.t1]
+approval_mode = "approve"
+
+[mcp_servers.remote]
+url = "https://user:FAKE-SECRET-URLPW@h.example.com/mcp?key=FAKE-SECRET-CXQUERY"
+
+[mcp_servers.remote.http_headers]
+Authorization = "Bearer FAKE-SECRET-CXHDR"
+
+[mcp_servers.off]
+command = "x"
+enabled = false

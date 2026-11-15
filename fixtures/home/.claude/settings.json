@@ -1,0 +1,22 @@
+{
+  "disableClaudeAiConnectors": true,
+  "enabledPlugins": {
+    "alpha@mp": true,
+    "beta@mp": false,
+    "dup@mp": true,
+    "ghost@mp": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "node {HOME}/hooks/guard.mjs --token FAKE-SECRET-HOOK", "timeout": 5 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "pwsh -File {HOME}/hooks/sweep.ps1" } ] }
+    ]
+  }
+}

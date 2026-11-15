@@ -1,0 +1,28 @@
+{
+  "oauthAccount": { "emailAddress": "FAKE-SECRET-ACCOUNT@example.com" },
+  "claudeAiMcpEverConnected": ["claude.ai Demo"],
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.example.com/mcp/?key=FAKE-SECRET-QUERY",
+      "headers": { "Authorization": "Bearer FAKE-SECRET-HEADER" }
+    },
+    "local": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["srv.js", "--token", "FAKE-SECRET-ARG", "--header", "Authorization: Bearer FAKE-SECRET-ARGHDR"],
+      "env": { "API_KEY": "FAKE-SECRET-ENV" }
+    }
+  },
+  "_disabledMcpServers": {
+    "old": { "type": "stdio", "command": "old", "env": { "TOKEN": "FAKE-SECRET-OLD" } },
+    "_note": "стэш"
+  },
+  "_mcpServersDisabled": {
+    "old2": { "type": "http", "url": "http://127.0.0.1:4020" }
+  },
+  "projects": {
+    "{HOME}/work/proj": { "mcpServers": { "pm": { "command": "pm" } } },
+    "{HOME}/work/empty": {}
+  }
+}

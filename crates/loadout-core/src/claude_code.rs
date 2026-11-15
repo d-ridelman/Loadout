@@ -1,0 +1,298 @@
+//! Адаптер Claude Code (CLI и вкладка Code в Claude Desktop). Источники — таблица §2 CONCEPT.md.
+
+use crate::mask::mcp_detail;
+use crate::model::{Client, Entity, Kind, State};
+use crate::{frontmatter, scan_hooks, scan_skills, Ctx};
+use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::path::Path;
+
+const CLIENT: Client = Client::ClaudeCode;
+/// Ключи верхнего уровня `~/.claude.json`, где лежат «выключенные» MCP (стэш владельца, не штатный механизм Claude Code).
+const STASH_KEYS: [&str; 2] = ["_disabledMcpServers", "_mcpServersDisabled"];
+
+pub fn scan(c: &mut Ctx) {
+    let settings = c.read_json(&c.home.join(".claude/settings.json"));
+    plugins(c, settings.as_ref());
+    marketplaces(c);
+    let connectors_off = settings
+        .as_ref()
+        .and_then(|s| s.get("disableClaudeAiConnectors"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    mcp(c, connectors_off);
+    let skills = c.home.join(".claude/skills");
+    scan_skills(c, CLIENT, &skills, "user");
+    md_dir(c, "agents", Kind::Agent);
+    md_dir(c, "commands", Kind::Command);
+    if let Some(h) = settings.as_ref().and_then(|s| s.get("hooks")) {
+        scan_hooks(c, CLIENT, "~/.claude/settings.json", "/hooks", h);
+    }
+}
+
+fn plugins(c: &mut Ctx, settings: Option<&Value>) {
+    let file = "~/.claude/plugins/installed_plugins.json";
+    let installed = c.read_json(&c.home.join(".claude/plugins/installed_plugins.json"));
+    let enabled = settings
+        .and_then(|s| s.get("enabledPlugins"))
+        .and_then(Value::as_object);
+    let mut seen = HashSet::new();
+
+    let records = installed
+        .as_ref()
+        .and_then(|v| v.get("plugins"))
+        .and_then(Value::as_object);
+    for (key, recs) in records.into_iter().flatten() {
+        seen.insert(key.clone());
+        let recs = recs.as_array().map(Vec::as_slice).unwrap_or_default();
+        let versions: HashSet<&str> = recs
+            .iter()
+            .filter_map(|r| r.get("version").and_then(Value::as_str))
+            .collect();
+        for (i, r) in recs.iter().enumerate() {
+            let scope = match r.get("scope").and_then(Value::as_str) {
+                Some("project") => format!(
+                    "project:{}",
+                    c.tilde(Path::new(
+                        r.get("projectPath").and_then(Value::as_str).unwrap_or("?")
+                    ))
+                ),
+                Some(s) => s.to_owned(),
+                None => "user".to_owned(),
+            };
+            let is_user = scope == "user";
+            let path_ok = r
+                .get("installPath")
+                .and_then(Value::as_str)
+                .is_some_and(|p| Path::new(p).exists());
+            let flag = enabled.and_then(|m| m.get(key)).and_then(Value::as_bool);
+            let (state, note) = if !path_ok {
+                (
+                    State::Broken,
+                    Some("installPath не существует на диске".to_owned()),
+                )
+            } else if !is_user {
+                (
+                    State::Unknown,
+                    Some(format!(
+                        "флаг включения лежит в настройках области «{scope}», M0 их не читает"
+                    )),
+                )
+            } else {
+                match flag {
+                    Some(true) if versions.len() > 1 => (
+                        State::Stale,
+                        Some(format!("записан в {} версиях", versions.len())),
+                    ),
+                    Some(true) => (State::On, None),
+                    Some(false) => (State::Off, None),
+                    None => (
+                        State::Unknown,
+                        Some("нет записи в enabledPlugins".to_owned()),
+                    ),
+                }
+            };
+            let mut e = Entity::new(
+                CLIENT,
+                Kind::Plugin,
+                scope,
+                key.clone(),
+                state,
+                file,
+                format!("/plugins/{key}/{i}"),
+            )
+            .version(r.get("version").and_then(Value::as_str))
+            .detail(json!({ "sha": r.get("gitCommitSha") }));
+            if let Some(n) = note {
+                e = e.note(n);
+            }
+            c.push(e);
+        }
+    }
+
+    for (key, v) in enabled.into_iter().flatten() {
+        if v.as_bool() == Some(true) && !seen.contains(key) {
+            let e = Entity::new(
+                CLIENT,
+                Kind::Plugin,
+                "user",
+                key.clone(),
+                State::Broken,
+                "~/.claude/settings.json",
+                format!("/enabledPlugins/{key}"),
+            )
+            .note("включён в enabledPlugins, но не установлен");
+            c.push(e);
+        }
+    }
+}
+
+fn marketplaces(c: &mut Ctx) {
+    let Some(v) = c.read_json(&c.home.join(".claude/plugins/known_marketplaces.json")) else {
+        return;
+    };
+    let Some(map) = v.as_object() else {
+        c.warnings
+            .push("~/.claude/plugins/known_marketplaces.json: ожидался объект".into());
+        return;
+    };
+    for (name, m) in map {
+        let src = m
+            .get("source")
+            .and_then(|s| s.get("source"))
+            .and_then(Value::as_str);
+        let e = Entity::new(
+            CLIENT,
+            Kind::Marketplace,
+            "user",
+            name.clone(),
+            State::On,
+            "~/.claude/plugins/known_marketplaces.json",
+            format!("/{name}"),
+        )
+        .detail(json!({ "sourceType": src }));
+        c.push(e);
+    }
+}
+
+fn mcp(c: &mut Ctx, connectors_off: bool) {
+    let Some(v) = c.read_json(&c.home.join(".claude.json")) else {
+        return;
+    };
+    let file = "~/.claude.json";
+    let mut found = Vec::new();
+
+    // Облачные коннекторы claude.ai (CONCEPT.md §5.1, C0/C1): на диске только имена «когда-либо подключались»,
+    // источник правды — аккаунт. Локально их гасит один ключ `disableClaudeAiConnectors`.
+    for (i, name) in v
+        .get("claudeAiMcpEverConnected")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .enumerate()
+    {
+        let (state, note) = if connectors_off {
+            (State::Off, "выключены в Claude Code ключом disableClaudeAiConnectors (все сразу); аккаунт и Desktop не затронуты")
+        } else {
+            (
+                State::Cloud,
+                "в списке «когда-либо подключались»; источник правды — аккаунт claude.ai",
+            )
+        };
+        found.push(
+            Entity::new(
+                CLIENT,
+                Kind::Connector,
+                "cloud",
+                name,
+                state,
+                file,
+                format!("/claudeAiMcpEverConnected/{i}"),
+            )
+            .note(note),
+        );
+    }
+
+    for (name, cfg) in v
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        found.push(
+            Entity::new(
+                CLIENT,
+                Kind::Mcp,
+                "user",
+                name.clone(),
+                State::On,
+                file,
+                format!("/mcpServers/{name}"),
+            )
+            .detail(mcp_detail(cfg)),
+        );
+    }
+    for key in STASH_KEYS {
+        for (name, cfg) in v.get(key).and_then(Value::as_object).into_iter().flatten() {
+            if name.starts_with('_') {
+                continue; // `_note` и подобное — не серверы
+            }
+            found.push(
+                Entity::new(
+                    CLIENT,
+                    Kind::Mcp,
+                    "user",
+                    name.clone(),
+                    State::Off,
+                    file,
+                    format!("/{key}/{name}"),
+                )
+                .note("лежит вне mcpServers, Claude Code его не запускает (стэш, не штатный ключ)")
+                .detail(mcp_detail(cfg)),
+            );
+        }
+    }
+    for (path, p) in v
+        .get("projects")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        for (name, cfg) in p
+            .get("mcpServers")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            let shown = c.tilde(Path::new(path));
+            found.push(
+                Entity::new(
+                    CLIENT,
+                    Kind::Mcp,
+                    format!("project:{shown}"),
+                    name.clone(),
+                    State::On,
+                    file,
+                    format!("/projects/{shown}/mcpServers/{name}"),
+                )
+                .detail(mcp_detail(cfg)),
+            );
+        }
+    }
+    for e in found {
+        c.push(e);
+    }
+}
+
+fn md_dir(c: &mut Ctx, dir: &str, kind: Kind) {
+    let root = c.home.join(".claude").join(dir);
+    let Ok(rd) = std::fs::read_dir(&root) else {
+        return;
+    };
+    let mut files: Vec<_> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect();
+    files.sort();
+    for p in files {
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let fm = frontmatter::read(&p).unwrap_or_default();
+        let name = fm.get("name").cloned().unwrap_or(stem);
+        let e = Entity::new(
+            CLIENT,
+            kind,
+            "user",
+            name,
+            State::On,
+            c.tilde(&p),
+            "frontmatter",
+        )
+        .detail(json!({ "model": fm.get("model") }));
+        c.push(e);
+    }
+}

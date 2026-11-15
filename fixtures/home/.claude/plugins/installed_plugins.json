@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "plugins": {
+    "alpha@mp": [
+      { "scope": "user", "installPath": "{HOME}/.claude/plugins/cache/mp/alpha/1.0.0", "version": "1.0.0", "gitCommitSha": "aaaa111" }
+    ],
+    "beta@mp": [
+      { "scope": "user", "installPath": "{HOME}/.claude/plugins/cache/mp/beta/1.0.0", "version": "1.0.0" }
+    ],
+    "dup@mp": [
+      { "scope": "user", "installPath": "{HOME}/.claude/plugins/cache/mp/dup/v1", "version": "v1" },
+      { "scope": "user", "installPath": "{HOME}/.claude/plugins/cache/mp/dup/v2", "version": "v2" }
+    ],
+    "lost@mp": [
+      { "scope": "user", "installPath": "{HOME}/.claude/plugins/cache/mp/lost/none", "version": "9" }
+    ],
+    "proj@mp": [
+      { "scope": "project", "projectPath": "{HOME}/work/proj", "installPath": "{HOME}/.claude/plugins/cache/mp/proj/1", "version": "1" }
+    ]
+  }
+}
