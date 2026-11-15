@@ -474,6 +474,14 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => validateProfiles(await core('profileDelete', { name: validateName(name) })))
   })
+  ipcMain.handle('profilesQuarantine', (e) => {
+    guard(e)
+    return guarded(async () => {
+      const name: unknown = await core('profilesQuarantine')
+      if (typeof name !== 'string' || !/^profiles\.json\.broken-\d{1,20}$/.test(name)) throw new Error(t('ядро вернуло ответ неожиданной формы', 'the core returned a response of an unexpected shape'))
+      return name
+    })
+  })
   ipcMain.handle('planProfile', (e, name: unknown) => {
     guard(e)
     return guarded(async () => {

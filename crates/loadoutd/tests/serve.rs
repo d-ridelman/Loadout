@@ -751,6 +751,33 @@ fn profiles_save_plan_apply_and_roll_back_over_jsonrpc() {
 }
 
 #[test]
+fn broken_profiles_file_is_an_error_over_jsonrpc_and_is_set_aside_on_request() {
+    let mut s = Server::start_writable();
+    s.call_with("profileSave", json!({ "name": "рабочий" }));
+    let file = s.home.with_extension("backups").join("profiles.json");
+    fs::write(&file, "{ битый").unwrap();
+    for call in [
+        s.call("profiles"),
+        s.call_with("profileSave", json!({ "name": "новый" })),
+        s.call_with("profileDelete", json!({ "name": "рабочий" })),
+    ] {
+        assert!(
+            call["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("profiles.json")),
+            "{call}"
+        );
+    }
+    assert_eq!(fs::read_to_string(&file).unwrap(), "{ битый");
+    let q = s.call("profilesQuarantine");
+    let name = q["result"].as_str().expect("имя отложенного файла");
+    assert!(name.starts_with("profiles.json.broken-"), "{q}");
+    assert!(!file.exists());
+    assert_eq!(s.call("profiles")["result"].as_array().unwrap().len(), 0);
+    assert!(s.call("profilesQuarantine")["error"].is_object());
+}
+
+#[test]
 fn claude_json_rewrites_are_scanned_at_most_every_ten_seconds_but_other_files_are_not_delayed() {
     let mut s = Server::start();
     let cj = s.home.join(".claude.json");

@@ -282,6 +282,8 @@ export interface LoadoutApi {
   /** Без `items` профиль снимается с текущего состояния. */
   saveProfile: (name: string, items?: ProfileItem[]) => Promise<Result<Profile[]>>
   deleteProfile: (name: string) => Promise<Result<Profile[]>>
+  /** Повреждённый `profiles.json` откладывается в `profiles.json.broken-<время>`; возвращает имя файла. Только по явному действию. */
+  quarantineProfiles: () => Promise<Result<string>>
   planProfile: (name: string) => Promise<Result<BatchPlan & { running: string[] }>>
   applyProfile: (name: string, batchSha: string) => Promise<Result<BatchApplied>>
   ctxkitStatus: () => Promise<Result<CtxkitStatus>>

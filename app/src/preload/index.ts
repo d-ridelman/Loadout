@@ -17,6 +17,7 @@ const api: LoadoutApi = {
   profiles: () => ipcRenderer.invoke('profiles'),
   saveProfile: (name, items) => ipcRenderer.invoke('profileSave', name, items),
   deleteProfile: (name) => ipcRenderer.invoke('profileDelete', name),
+  quarantineProfiles: () => ipcRenderer.invoke('profilesQuarantine'),
   planProfile: (name) => ipcRenderer.invoke('planProfile', name),
   applyProfile: (name, batchSha) => ipcRenderer.invoke('applyProfile', name, batchSha),
   ctxkitStatus: () => ipcRenderer.invoke('ctxkit:status'),
