@@ -24,7 +24,7 @@ Findings from 30 recorded sessions (`26,256` turns; full breakdown in [the resea
 
 | Baseline leak | How `ctxkit` addresses it |
 |---|---|
-| `95.3%` of turns ran on `Opus` or `Fable` (including Desktop presets and search) | `ctxkit setup` moves routine work to `Sonnet`, search to `Haiku` (`Explore`), and keeps `Fable` for escalations and `Opus` for `checker` |
+| `95.3%` of turns ran on `Opus` or `Fable` (including Desktop presets and search) | `ctxkit setup --main-model sonnet --advisor fable` moves routine work to `Sonnet` and keeps `Fable` for escalations; setup also adds search on `Haiku` (`Explore`) and `Opus` for `checker` |
 | `60.5%` of `tool_result` chars came from full-file reads and unfiltered `rg`/`cat` | `PreToolUse` hook permits bounded slices (`<= 450` lines) and steers full reads to `Grep`, LSP, or `Explore` |
 | `11.2%` came from verbose compiler and test runner logs | `ctxkit check <cmd>` collapses passing runs to `OK (<ms>)` and extracts root causes on failure |
 | Mangled `\` escapes in inline one-liners triggered extra rewrite loops | Blocks backslash-bearing `node -e`, `python -c`, heredocs, and here-strings before execution; validates edited files on `PostToolUse` |
@@ -74,18 +74,20 @@ Before changing `settings.json`, `CLAUDE.md`, `ccd-session-presets.json`, or `ho
 | `guard.rs` | Read and search guard | Blocks whole-file reads above `28 KB` / `450` lines (and `> 250 KB` without range) in `Read`, `read_file`, and DSH `read`, while skipping images, audio, video, and PDFs. A tail read from an offset passes only when the rest fits both caps. Blocks bare `cat`, `Get-Content`, and unfiltered recursive `grep -r`/`rg` (a search in one named file is fine) without touching pipes or `&&` chains. |
 | `backslash.rs` | Escape and syntax guard | On `PreToolUse`, blocks backslash-heavy inline code (`node -e`, `python -c`, `perl -e`, `php -r`, `bash -c`), `sed -i`, heredocs, PowerShell here-strings, and throwaway patch scripts; syntax-check flags such as `node -c` are left alone. On `PostToolUse`, validates `.json` (skipping JSONC such as `tsconfig`, `.vscode/`, and `.devcontainer/`), `.js/.mjs/.cjs` (`node --check`), and `.py` (`ast.parse`). |
 | `check.rs` | Output compressor (`ctxkit check`) | For `cargo check`/`clippy`/`build`, enables `--message-format=json` and prints up to 3 deduplicated `file:line:col` root causes. For `tsc`, `npm test`, `node --test`, `pytest`, or `go test`, prints `OK (<ms>)` on pass, or up to 30 key lines on failure with the full log saved to `%TEMP%/last-check.log` (`/tmp/last-check.log` on Unix). |
-| `setup.rs` | Environment setup (`ctxkit setup`) | Applies `sonnet` + `advisorModel: fable` + `modelSettings.<model>.effortLevel: high` (plus the top-level `effortLevel`, which newer models ignore), writes `CLAUDE_CODE_SUBAGENT_MODEL` only with an explicit `--subagent`, creates `Explore.md` (`haiku`) and `checker.md` (`opus`), and audits CLI version, Claude plugins/`CLAUDE.md`/MCPs, and Antigravity MCPs/plugins/`agy` CLI model. |
+| `setup.rs` | Environment setup (`ctxkit setup`) | Wires the hooks, creates `Explore.md` (`haiku`) and `checker.md` (`opus`), adds the rules block with `--with-rules`, and audits CLI version, Claude plugins/`CLAUDE.md`/MCPs, and Antigravity MCPs/plugins/`agy` CLI model. Model, advisor and effort are set **only by flags**: `--main-model`, `--advisor`, `--effort` (the former scheme: `ctxkit setup --main-model sonnet --advisor fable --effort high`); `CLAUDE_CODE_SUBAGENT_MODEL` only with `--subagent`. Every run prints "was -> became" (or "kept") per setting, also with `--dry-run`. |
 
 ## Setup Flags
 
-Defaults are tuned for a 4-model advisor workflow (`fable` + `claude-sonnet-5-5`). Override them if your plan or client uses different model IDs (for example `--advisor opus` or `--advisor none`, and `--desktop-model <id>`).
+`setup` does not change your model choices on its own: `model`, `advisorModel` and the effort are written only when you pass the flag, otherwise they stay as they are (a key that is absent stays absent) and the output says `model: opus (kept; pass --main-model sonnet to set)`. For the workflow ctxkit was tuned for (`fable` advisor + `claude-sonnet-5-5` main model) run `ctxkit setup --main-model sonnet --advisor fable --effort high`. The Loadout window always passes `--advisor` (its form field) and never `--main-model` or `--effort`.
 
 | Flag | Purpose |
 |---|---|
 | `--dry-run` | Print planned edits and diagnostics without modifying files |
 | `--profile <dir>` | Target a secondary profile directory (such as `~/.claude-work`) |
-| `--advisor <name>` | Set advisor model (`fable` by default, `opus`, or `none` to omit) |
-| `--desktop` | Switch Claude Desktop presets (`ccd-session-presets.json`) to `--desktop-model`. Run it with Claude Desktop fully quit (tray icon too): the running app keeps presets in memory and saves them over the file, so setup skips the write and warns while it runs |
+| `--main-model <name>` | Write `model` (for example `sonnet`) |
+| `--advisor <name>` | Write `advisorModel` (`fable`, `opus`, or `none` to remove it) |
+| `--effort <level>` | Write the effort: `modelSettings.<model>.effortLevel` for `--main-model` or your own `model` (known model, `low`/`medium`/`high`/`xhigh`), the top-level `effortLevel`, and the effort of Desktop presets with `--desktop` |
+| `--desktop` | Set the `modelId` (`--desktop-model`) of Claude Desktop presets (`ccd-session-presets.json`); the effort of a preset changes only with `--effort`. Run it with Claude Desktop fully quit (tray icon too): the running app keeps presets in memory and saves them over the file, so setup skips the write and warns while it runs |
 | `--desktop-model <id>` | Desktop preset `modelId` override (default: `claude-sonnet-5-5`) |
 | `--antigravity` | Register `ctxkit` in `~/.gemini/config/hooks.json` and audit Antigravity MCPs, plugins, and CLI model |
 | `--dsh` | Write `~/.dsh/ctxkit-hooks.json` and mount the `@deepseek-ai/dsh-hooks-claude-code` bridge on it in the DeepSeek Harness `desktop` profile (`--dsh-home <path>` overrides `~/.dsh`); warns with the exact `pnpm add` command when the bridge package is missing |

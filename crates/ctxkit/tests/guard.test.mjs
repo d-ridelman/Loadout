@@ -415,6 +415,7 @@ const cases = [
       '--antigravity', '--agy-file', agyFile,
       '--claude-json', claudeJson,
       '--hook-cmd', 'test-ctxkit',
+      '--main-model', 'sonnet', '--advisor', 'fable', '--effort', 'high', // models are written only with explicit flags
       '--skip-version-check',
     ];
 
@@ -470,7 +471,7 @@ const cases = [
     // 3) Second run must be idempotent (same files, no extra backups)
     const run2 = spawnSync(exe, commonArgs, { encoding: 'utf8' });
     if (run2.status !== 0) return false;
-    for (const line of ['  model: sonnet (unchanged)', '  advisorModel: fable (unchanged)', '  desktop preset dev: model claude-sonnet-5-5, effort high (unchanged)']) {
+    for (const line of ['  model: sonnet (unchanged)', '  advisorModel: fable (unchanged)', '  desktop preset dev: model claude-sonnet-5-5 (unchanged), effort high (unchanged)']) {
       if (!run2.stdout.includes(line)) return `second run lacks: ${line}`;
     }
     if (!run1.stdout.includes('  desktop preset dev: model claude-opus-5-5 -> claude-sonnet-5-5, effort max -> high')) return false;
@@ -578,8 +579,10 @@ const cases = [
     if (s.KEEP_ME?.a !== 1 || s.env?.KEEP_ME !== '42' || s.env?.CTXKIT_LANG !== undefined) return false;
     if (JSON.stringify(cmds('PreToolUse')) !== '["custom-other-hook"]' || cmds('PostToolUse').length !== 0) return false;
     if (JSON.stringify(cmds('Stop')) !== JSON.stringify([foreignStop.command]) || cmds('SessionStart')[0] !== 'echo start') return false;
-    if (s.model !== 'sonnet' || !run.stdout.includes('model: "sonnet"') || !run.stdout.includes('latest:')) return false; // models are only printed
-    if (!run.stdout.includes('desktop preset dev: model "claude-sonnet-5-5"')) return false;
+    // setup without model flags kept the user's own 'opus'; uninstall does not touch it either and only prints it
+    if (s.model !== 'opus' || !run.stdout.includes('model: "opus"') || !run.stdout.includes('latest:')) return false;
+    if (!setupRun.stdout.includes('  model: opus (kept; pass --main-model sonnet to set)') || s.advisorModel !== undefined || s.effortLevel !== undefined) return false;
+    if (!run.stdout.includes('desktop preset dev: model "claude-sonnet-5-5", effort "low"')) return false; // preset effort kept without --effort
     if (readFileSync(join(profile, 'CLAUDE.md'), 'utf8') !== origMd) return false;
     if (existsSync(hookBin) || !existsSync(join(profile, 'agents', 'checker.md'))) return false; // binary gone, agents stay
     const agy = JSON.parse(readFileSync(agyFile, 'utf8'));

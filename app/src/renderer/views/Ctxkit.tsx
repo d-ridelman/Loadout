@@ -98,8 +98,8 @@ export function Ctxkit({ level, onNotice }: Props) {
       <h2>ctxkit</h2>
       <p className="mute small">
         {t(
-          'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и переключает рутину на дешёвые модели. Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.',
-          'A bundled toolkit that keeps agent context in check: limits whole-file reads, catches broken escaping, compresses build output and moves routine work to cheaper models. Hooks are written into client settings, so applying requires level R2.',
+          'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и подсказывает агентам дешёвый поиск и независимую проверку. Основную модель и effort окно не меняет. Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.',
+          'A bundled toolkit that keeps agent context in check: limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review. The window does not change the main model or effort. Hooks are written into client settings, so applying requires level R2.',
         )}
       </p>
 
@@ -131,7 +131,7 @@ export function Ctxkit({ level, onNotice }: Props) {
         >
           <fieldset className="choices">
             <legend className="mute small">{t('Что настроить', 'What to configure')}</legend>
-            <label><input type="checkbox" checked disabled /> {t('Claude Code: хуки, модели, агенты Explore и checker (всегда)', 'Claude Code: hooks, models, Explore and checker agents (always)')}</label>
+            <label><input type="checkbox" checked disabled /> {t('Claude Code: хуки, агенты Explore и checker (всегда); основная модель и effort не меняются', 'Claude Code: hooks, Explore and checker agents (always); main model and effort are not changed')}</label>
             <label><input type="checkbox" checked={!opts.noStopGate} onChange={(e) => change({ noStopGate: !e.target.checked })} /> {t('Шлюз Stop: один раз за ход возвращает модель, если правки кода остались без checker или советника', 'Stop gate: once per turn sends the model back if code edits were not followed by checker or the advisor')}</label>
             <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил в CLAUDE.md', 'Rules block in CLAUDE.md')}</label>
             <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> {t('Claude Desktop (пресеты; закройте его перед применением)', 'Claude Desktop (presets; close it before applying)')}</label>
@@ -146,7 +146,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             </select>
           </label>
           <label>
-            {t('Модель-советник', 'Advisor model')}
+            {t('Модель-советник (записывается в advisorModel при применении)', 'Advisor model (written to advisorModel when applied)')}
             <select value={opts.advisor} onChange={(e) => change({ advisor: e.target.value as SetupOptions['advisor'] })}>
               <option value="fable">{t('Fable (по умолчанию)', 'Fable (default)')}</option>
               <option value="opus">Opus</option>

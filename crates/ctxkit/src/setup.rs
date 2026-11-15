@@ -16,13 +16,15 @@ const LEGACY_MARKER_END: &str = "<!-- claude-guard:end -->";
 struct SetupOpts {
     dry_run: bool,
     profile_dir: Option<PathBuf>,
-    main_model: String,
-    advisor: String,
+    /// `--main-model` / `--advisor` / `--effort`: model choices are written only when given. Without the
+    /// flag the user's `model` / `advisorModel` / `effortLevel` stay as they are (or stay absent).
+    main_model: Option<String>,
+    advisor: Option<String>,
     subagent: String,
     /// `--subagent` given: only then `CLAUDE_CODE_SUBAGENT_MODEL` is written (it would put every
     /// subagent without its own `model`, code writers included, on that model); `subagent` alone sets Explore.md.
     subagent_env: bool,
-    effort: String,
+    effort: Option<String>,
     no_agents: bool,
     force_agents: bool,
     with_rules: bool,
@@ -47,11 +49,11 @@ impl Default for SetupOpts {
         Self {
             dry_run: false,
             profile_dir: None,
-            main_model: "sonnet".to_string(),
-            advisor: "fable".to_string(),
+            main_model: None,
+            advisor: None,
             subagent: "haiku".to_string(),
             subagent_env: false,
-            effort: "high".to_string(),
+            effort: None,
             no_agents: false,
             force_agents: false,
             with_rules: false,
@@ -100,13 +102,13 @@ pub fn run_setup(args: &[String]) -> i32 {
                 };
                 match flag {
                     "--profile" => opts.profile_dir = Some(PathBuf::from(val)),
-                    "--main-model" => opts.main_model = val.clone(),
-                    "--advisor" => opts.advisor = val.clone(),
+                    "--main-model" => opts.main_model = Some(val.clone()),
+                    "--advisor" => opts.advisor = Some(val.clone()),
                     "--subagent" => {
                         opts.subagent = val.clone();
                         opts.subagent_env = true;
                     }
-                    "--effort" => opts.effort = val.clone(),
+                    "--effort" => opts.effort = Some(val.clone()),
                     "--desktop-model" => opts.desktop_model = val.clone(),
                     "--desktop-file" => opts.desktop_file = Some(PathBuf::from(val)),
                     "--agy-file" => opts.agy_file = Some(PathBuf::from(val)),
@@ -231,7 +233,7 @@ pub fn run_setup(args: &[String]) -> i32 {
         if let Err(e) = upsert_claude_md(
             &profile.join("CLAUDE.md"),
             &backup_dir,
-            &rules_snippet(&opts),
+            &rules_snippet(&opts, &settings_root),
             opts.dry_run,
         ) {
             eprintln!("ERR: {e}");
@@ -248,7 +250,7 @@ pub fn run_setup(args: &[String]) -> i32 {
             if let Err(e) = upsert_claude_md(
                 &dsh_agents,
                 &dsh_backup,
-                &rules_snippet(&opts),
+                &rules_snippet(&opts, &settings_root),
                 opts.dry_run,
             ) {
                 eprintln!("ERR: {e}");
@@ -271,9 +273,12 @@ pub fn run_setup(args: &[String]) -> i32 {
                     p.display()
                 );
             } else if p.exists() {
-                if let Err(e) =
-                    update_desktop_presets(&p, &opts.desktop_model, &opts.effort, opts.dry_run)
-                {
+                if let Err(e) = update_desktop_presets(
+                    &p,
+                    &opts.desktop_model,
+                    opts.effort.as_deref(),
+                    opts.dry_run,
+                ) {
                     eprintln!("ERR: {e}");
                     return 1;
                 }
@@ -481,70 +486,77 @@ fn update_claude_settings(
 
     // What setup changes in the user's choices is printed as "was -> became" (also in --dry-run).
     let old = |v: &Value| v.as_str().map(str::to_string);
-    println!(
-        "{}",
-        change_line(
-            "model",
-            old(&orig["model"]).as_deref(),
-            Some(&opts.main_model)
-        )
-    );
-    root.insert("model".to_string(), Value::String(opts.main_model.clone()));
-    let advisor = (!opts.advisor.eq_ignore_ascii_case("none")).then_some(opts.advisor.as_str());
-    println!(
-        "{}",
-        change_line(
-            "advisorModel",
-            old(&orig["advisorModel"]).as_deref(),
-            advisor
-        )
-    );
-    match advisor {
-        Some(a) => {
-            root.insert("advisorModel".to_string(), Value::String(a.to_string()));
+    // Model, advisor and effort are the user's choices: written only with --main-model / --advisor /
+    // --effort. Otherwise the value stays (or stays absent) and the line says so.
+    let kept = |label: &str, hint: &str, cur: &Value| {
+        println!("{}", kept_line(label, cur.as_str(), hint));
+    };
+    match opts.main_model.as_deref() {
+        Some(m) => {
+            println!(
+                "{}",
+                change_line("model", old(&orig["model"]).as_deref(), Some(m))
+            );
+            root.insert("model".to_string(), Value::String(m.to_string()));
         }
-        None => {
-            root.remove("advisorModel");
-        }
+        None => kept("model", "--main-model sonnet", &orig["model"]),
     }
-    println!(
-        "{}",
-        change_line(
-            "effortLevel",
-            old(&orig["effortLevel"]).as_deref(),
-            Some(&opts.effort)
-        )
-    );
-    root.insert(
-        "effortLevel".to_string(),
-        Value::String(opts.effort.clone()),
-    );
-
-    // Claude Code ignores a top-level user-level `effortLevel` on Opus 5.5 and later models; the per-model
-    // `modelSettings` entry (v2.1.251+) is the documented way. `max` is not accepted there.
-    match (
-        canonical_model_id(&opts.main_model),
-        matches!(opts.effort.as_str(), "low" | "medium" | "high" | "xhigh"),
-    ) {
-        (Some(id), true) => {
-            let entry = ensure_object(ensure_object(root, "modelSettings")?, &id)?;
+    match opts.advisor.as_deref() {
+        Some(a) => {
+            let advisor = (!a.eq_ignore_ascii_case("none")).then_some(a);
             println!(
                 "{}",
                 change_line(
-                    &format!("effort modelSettings.{id}"),
-                    entry.get("effortLevel").and_then(old).as_deref(),
-                    Some(&opts.effort)
+                    "advisorModel",
+                    old(&orig["advisorModel"]).as_deref(),
+                    advisor
                 )
             );
-            entry.insert("effortLevel".to_string(), Value::String(opts.effort.clone()));
+            match advisor {
+                Some(a) => root.insert("advisorModel".to_string(), Value::String(a.to_string())),
+                None => root.remove("advisorModel"),
+            };
         }
-        _ => println!(
-            "  effort: modelSettings not written (needs a known main model and low|medium|high|xhigh); top-level effortLevel only"
-        ),
+        None => kept("advisorModel", "--advisor fable", &orig["advisorModel"]),
+    }
+    match opts.effort.as_deref() {
+        Some(e) => {
+            println!(
+                "{}",
+                change_line("effortLevel", old(&orig["effortLevel"]).as_deref(), Some(e))
+            );
+            root.insert("effortLevel".to_string(), Value::String(e.to_string()));
+            // Claude Code ignores a top-level user-level `effortLevel` on Opus 5.5 and later models; the per-model
+            // `modelSettings` entry (v2.1.251+) is the documented way. `max` is not accepted there.
+            // The model is the one from --main-model, else the user's own `model`.
+            let main = opts.main_model.clone().or_else(|| old(&orig["model"]));
+            match (
+                main.as_deref().and_then(canonical_model_id),
+                matches!(e, "low" | "medium" | "high" | "xhigh"),
+            ) {
+                (Some(id), true) => {
+                    let entry = ensure_object(ensure_object(root, "modelSettings")?, &id)?;
+                    println!(
+                        "{}",
+                        change_line(
+                            &format!("effort modelSettings.{id}"),
+                            entry.get("effortLevel").and_then(old).as_deref(),
+                            Some(e)
+                        )
+                    );
+                    entry.insert("effortLevel".to_string(), Value::String(e.to_string()));
+                }
+                _ => println!(
+                    "  effort: modelSettings not written (needs a known main model, from --main-model or the `model` in settings.json, and low|medium|high|xhigh); top-level effortLevel only"
+                ),
+            }
+        }
+        None => kept("effortLevel", "--effort high", &orig["effortLevel"]),
     }
 
-    let env_obj = ensure_object(root, "env")?;
-    let sub_old = env_obj.get("CLAUDE_CODE_SUBAGENT_MODEL").and_then(old);
+    let sub_old = orig["env"]["CLAUDE_CODE_SUBAGENT_MODEL"]
+        .as_str()
+        .map(str::to_string);
     if opts.subagent_env {
         println!(
             "{}",
@@ -563,17 +575,21 @@ fn update_claude_settings(
             sub_old.as_deref().unwrap_or_default()
         );
     }
-    if opts.subagent_env {
-        env_obj.insert(
-            "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
-            Value::String(opts.subagent.clone()),
-        );
-    }
-    match opts.lang {
-        Lang::Ru => {
+    // `env` is created only when something goes into it.
+    if opts.subagent_env || opts.lang == Lang::Ru {
+        let env_obj = ensure_object(root, "env")?;
+        if opts.subagent_env {
+            env_obj.insert(
+                "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
+                Value::String(opts.subagent.clone()),
+            );
+        }
+        if opts.lang == Lang::Ru {
             env_obj.insert("CTXKIT_LANG".to_string(), Value::String("ru".to_string()));
         }
-        Lang::En => {
+    }
+    if opts.lang == Lang::En {
+        if let Some(env_obj) = root.get_mut("env").and_then(|e| e.as_object_mut()) {
             env_obj.remove("CTXKIT_LANG");
         }
     }
@@ -621,6 +637,14 @@ fn change_line(label: &str, old: Option<&str>, new: Option<&str>) -> String {
     } else {
         format!("  {label}: {} -> {}", show(old), show(new))
     }
+}
+
+/// The line for a setting that setup leaves alone because its flag was not given.
+fn kept_line(label: &str, current: Option<&str>, hint: &str) -> String {
+    format!(
+        "  {label}: {} (kept; pass {hint} to set)",
+        current.unwrap_or("(unset)")
+    )
 }
 
 /// Canonical id for the `modelSettings` key. shortcut: alias table of 2026-11-15 (docs: `sonnet` is Sonnet 5.5,
@@ -896,7 +920,7 @@ fn is_desktop_exe(path: &str) -> bool {
 fn update_desktop_presets(
     path: &Path,
     model_id: &str,
-    effort: &str,
+    effort: Option<&str>,
     dry_run: bool,
 ) -> Result<(), String> {
     let orig = read_json_object(path)?;
@@ -909,18 +933,23 @@ fn update_desktop_presets(
     let apply = |name: &str, s: &mut Map<String, Value>| {
         let was = |k: &str| s.get(k).and_then(|v| v.as_str()).map(str::to_string);
         let (m0, e0) = (was("modelId"), was("effort"));
-        let line = if m0.as_deref() == Some(model_id) && e0.as_deref() == Some(effort) {
-            format!("model {model_id}, effort {effort} (unchanged)")
+        let shown = |v: &Option<String>| v.clone().unwrap_or_else(|| "(unset)".to_string());
+        let model = if m0.as_deref() == Some(model_id) {
+            format!("model {model_id} (unchanged)")
         } else {
-            format!(
-                "model {} -> {model_id}, effort {} -> {effort}",
-                m0.as_deref().unwrap_or("(unset)"),
-                e0.as_deref().unwrap_or("(unset)")
-            )
+            format!("model {} -> {model_id}", shown(&m0))
         };
-        println!("  desktop preset {name}: {line}");
+        // Without --effort the preset's own effort stays.
+        let eff = match effort {
+            Some(e) if e0.as_deref() == Some(e) => format!("effort {e} (unchanged)"),
+            Some(e) => format!("effort {} -> {e}", shown(&e0)),
+            None => format!("effort {} (kept; pass --effort to set)", shown(&e0)),
+        };
+        println!("  desktop preset {name}: {model}, {eff}");
         s.insert("modelId".to_string(), Value::String(model_id.to_string()));
-        s.insert("effort".to_string(), Value::String(effort.to_string()));
+        if let Some(e) = effort {
+            s.insert("effort".to_string(), Value::String(e.to_string()));
+        }
     };
     for (_acct_id, acct) in accounts.iter_mut() {
         if let Some(presets) = acct.get_mut("presets").and_then(|v| v.as_array_mut()) {
@@ -1220,12 +1249,11 @@ You are an independent verifier. You did not write this code and must never modi
     }
 }
 
-fn rules_snippet(opts: &SetupOpts) -> String {
-    let adv = if opts.advisor.eq_ignore_ascii_case("none") {
-        None
-    } else {
-        Some(opts.advisor.as_str())
-    };
+/// The rules block. Model names come from `settings` (the result of this run: the flags, else the user's
+/// own `model` / `advisorModel`); a model that is not set anywhere is not named.
+fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
+    let main = settings["model"].as_str();
+    let adv = settings["advisorModel"].as_str();
     // The gate sentence must match what setup really wires (--no-stop-gate) and what is configured (--advisor none).
     let gate = match (opts.no_stop_gate, adv.is_some(), opts.lang) {
         (true, _, _) => "",
@@ -1244,15 +1272,17 @@ fn rules_snippet(opts: &SetupOpts) -> String {
     };
     match opts.lang {
         Lang::Ru => {
-            let adv_line = match adv {
-                Some(a) => format!(
-                    "- Основная сессия — **{}**. Не фиксируй подход и не правь код по задаче больше чем в одном файле, не вызвав **advisor ({a})**; зови его и при второй одинаковой ошибке подряд.\n",
-                    opts.main_model
+            let adv_line = match (main, adv) {
+                (Some(m), Some(a)) => format!(
+                    "- Основная сессия — **{m}**. Не фиксируй подход и не правь код по задаче больше чем в одном файле, не вызвав **advisor ({a})**; зови его и при второй одинаковой ошибке подряд.\n"
                 ),
-                None => format!(
-                    "- Основная сессия — **{}**; для сложной архитектуры подключай старшую модель точечно.\n",
-                    opts.main_model
+                (None, Some(a)) => format!(
+                    "- Не фиксируй подход и не правь код по задаче больше чем в одном файле, не вызвав **advisor ({a})**; зови его и при второй одинаковой ошибке подряд.\n"
                 ),
+                (Some(m), None) => format!(
+                    "- Основная сессия — **{m}**; для сложной архитектуры подключай старшую модель точечно.\n"
+                ),
+                (None, None) => "- Рутину веди на более лёгкой модели; для сложной архитектуры подключай старшую точечно.\n".to_string(),
             };
             format!(
                 "{MARKER_START}\n\
@@ -1268,12 +1298,15 @@ fn rules_snippet(opts: &SetupOpts) -> String {
             )
         }
         Lang::En => {
-            let adv_line = match adv {
-                Some(a) => format!(
-                    "- Main session runs on **{}**. Do not lock a plan or edit code across more than one file without calling **advisor ({a})** first; call it again when the same error repeats twice.\n",
-                    opts.main_model
+            let adv_line = match (main, adv) {
+                (Some(m), Some(a)) => format!(
+                    "- Main session runs on **{m}**. Do not lock a plan or edit code across more than one file without calling **advisor ({a})** first; call it again when the same error repeats twice.\n"
                 ),
-                None => format!("- Main session runs on **{}**.\n", opts.main_model),
+                (None, Some(a)) => format!(
+                    "- Do not lock a plan or edit code across more than one file without calling **advisor ({a})** first; call it again when the same error repeats twice.\n"
+                ),
+                (Some(m), None) => format!("- Main session runs on **{m}**.\n"),
+                (None, None) => "- Keep routine work on a lighter model; bring a stronger one in only for hard architecture.\n".to_string(),
             };
             format!(
                 "{MARKER_START}\n\
@@ -1299,7 +1332,7 @@ fn print_diagnostics(
     opts: &SetupOpts,
 ) {
     println!("\nDiagnostics:");
-    if !opts.skip_version_check && opts.advisor.eq_ignore_ascii_case("fable") {
+    if !opts.skip_version_check && settings["advisorModel"].as_str() == Some("fable") {
         match check_claude_version() {
             Some(ver) => {
                 if ver < (2, 1, 321) {
@@ -1749,22 +1782,22 @@ fn print_help() {
         "Usage: ctxkit setup [options]\n\n\
          Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness:\n\
          - Backs up existing configs before writing\n\
-         - Configures Sonnet main + Fable advisor + Haiku subagents + Opus checker (preserving custom env/hooks/plugins)\n\
+         - Creates the Explore (haiku) and checker (opus) agents; model, advisor and effort are NOT changed unless you pass --main-model / --advisor / --effort (the previous scheme: --main-model sonnet --advisor fable --effort high). Changes are printed as \"was -> became\"; custom env/hooks/plugins are preserved\n\
          - Wires ctxkit PreToolUse/PostToolUse hooks (replacing legacy claude-guard / no-inline-backslash entries)\n\
          - Wires a once-per-turn Stop gate: a turn that edited code without checker/advisor afterwards is sent back once\n\
          - Audits enabled plugins, CLAUDE.md size, global MCPs, Claude CLI version, and Antigravity configs\n\n\
          Options:\n\
            --dry-run              Preview changes without writing files\n\
            --profile <dir>        Claude config dir (default: ~/.claude or CLAUDE_CONFIG_DIR)\n\
-           --main-model <name>    Main model (default: sonnet)\n\
-           --advisor <name>       Advisor model (default: fable; pass \"none\" to omit)\n\
+           --main-model <name>    Write `model` (not written without this flag; e.g. sonnet)\n\
+           --advisor <name>       Write `advisorModel` (not written without this flag; e.g. fable; \"none\" removes it)\n\
            --subagent <name>      Explore model and CLAUDE_CODE_SUBAGENT_MODEL (the env var is written only when this flag is given; Explore.md default: haiku)\n\
-           --effort <level>       Main model effort (default: high), saved as modelSettings.<model>.effortLevel (known model, low|medium|high|xhigh) and as top-level effortLevel\n\
+           --effort <level>       Write effort (not written without this flag): modelSettings.<model>.effortLevel for the --main-model or your own `model` (known model, low|medium|high|xhigh), top-level effortLevel, and Desktop presets with --desktop\n\
            --no-stop-gate         Do not wire the Stop gate (and remove ours if present; env CTXKIT_GATE=0 mutes it per session)\n\
            --no-agents            Skip creating Explore.md and checker.md\n\
            --force-agents         Overwrite existing Explore.md / checker.md\n\
            --with-rules           Add/update idempotent rules block in CLAUDE.md\n\
-           --desktop              Update Claude Desktop ccd-session-presets.json to Sonnet\n\
+           --desktop              Set modelId (--desktop-model) in Claude Desktop ccd-session-presets.json; effort only with --effort\n\
            --desktop-model <id>   Desktop modelId (default: claude-sonnet-5-5)\n\
            --desktop-file <path>  Override ccd-session-presets.json path\n\
            --antigravity          Wire ctxkit into Antigravity hooks.json and audit MCPs/plugins\n\
@@ -1792,7 +1825,11 @@ mod tests {
             r#"{"modelSettings":{"claude-opus-5-5":{"effortLevel":"low"}},"env":{"KEEP":"1"}}"#,
         )
         .unwrap();
-        let mut opts = SetupOpts::default();
+        let mut opts = SetupOpts {
+            main_model: Some("sonnet".to_string()),
+            effort: Some("high".to_string()),
+            ..SetupOpts::default()
+        };
         let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
         assert_eq!(
             s["modelSettings"]["claude-sonnet-5-5"]["effortLevel"],
@@ -1809,7 +1846,7 @@ mod tests {
         );
         assert_eq!(s["env"]["KEEP"], "1");
         opts.subagent_env = true;
-        opts.effort = "max".to_string(); // not accepted in modelSettings
+        opts.effort = Some("max".to_string()); // not accepted in modelSettings
         let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
         assert_eq!(s["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "haiku");
         assert_eq!(
@@ -1888,21 +1925,69 @@ mod tests {
 
     #[test]
     fn rules_mention_the_gate_and_advisor_only_when_configured() {
-        let with = |no_gate: bool, advisor: &str, lang: Lang| {
-            rules_snippet(&SetupOpts {
-                no_stop_gate: no_gate,
-                advisor: advisor.to_string(),
-                lang,
-                ..SetupOpts::default()
-            })
+        let with = |no_gate: bool, settings: Value, lang: Lang| {
+            rules_snippet(
+                &SetupOpts {
+                    no_stop_gate: no_gate,
+                    lang,
+                    ..SetupOpts::default()
+                },
+                &settings,
+            )
         };
+        let adv = json!({ "model": "sonnet", "advisorModel": "fable" });
         for lang in [Lang::Ru, Lang::En] {
-            let full = with(false, "fable", lang);
+            let full = with(false, adv.clone(), lang);
             assert!(full.contains("Stop") && full.contains("advisor"));
-            assert!(!with(true, "fable", lang).contains("Stop"));
-            let none = with(false, "none", lang);
+            assert!(full.contains("**sonnet**") && full.contains("(fable)"));
+            assert!(!with(true, adv.clone(), lang).contains("Stop"));
+            let none = with(false, json!({ "model": "opus" }), lang);
             assert!(none.contains("Stop") && !none.contains("advisor"));
+            assert!(none.contains("**opus**"), "the user's own model is named");
+            // nothing set anywhere: no model names at all
+            let blank = with(false, json!({}), lang);
+            assert!(!blank.contains("sonnet") && !blank.contains("opus"));
+            assert!(!blank.contains("advisor"));
         }
+    }
+
+    #[test]
+    fn without_flags_model_advisor_effort_are_not_touched_or_created() {
+        let d = std::env::temp_dir().join(format!("ctxkit_setup_noflags_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let path = d.join("settings.json");
+        let theirs = r#"{"model":"opus","advisorModel":"opus","effortLevel":"low","modelSettings":{"claude-opus-5-5":{"effortLevel":"low"}}}"#;
+        fs::write(&path, theirs).unwrap();
+        let opts = SetupOpts::default();
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
+        let theirs: Value = serde_json::from_str(theirs).unwrap();
+        for k in ["model", "advisorModel", "effortLevel", "modelSettings"] {
+            assert_eq!(s[k], theirs[k], "{k} stays");
+        }
+        assert!(s.get("env").is_none(), "no empty env is created");
+        // an empty settings.json gets hooks only
+        fs::write(&path, "{}").unwrap();
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
+        for k in [
+            "model",
+            "advisorModel",
+            "effortLevel",
+            "modelSettings",
+            "env",
+        ] {
+            assert!(s.get(k).is_none(), "{k} is not written");
+        }
+        assert!(s["hooks"]["PreToolUse"].is_array());
+        assert_eq!(
+            kept_line("model", Some("opus"), "--main-model sonnet"),
+            "  model: opus (kept; pass --main-model sonnet to set)"
+        );
+        assert_eq!(
+            kept_line("model", None, "--main-model sonnet"),
+            "  model: (unset) (kept; pass --main-model sonnet to set)"
+        );
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -2001,7 +2086,7 @@ mod tests {
         .unwrap();
 
         let opts = SetupOpts::default();
-        let snip = rules_snippet(&opts);
+        let snip = rules_snippet(&opts, &json!({ "model": "sonnet" }));
         upsert_claude_md(&md, &bdir, &snip, false).unwrap();
         let after_first = fs::read_to_string(&md).unwrap();
         assert!(after_first.contains("# My Custom Rules"));
