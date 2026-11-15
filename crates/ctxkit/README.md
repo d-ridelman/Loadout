@@ -36,8 +36,8 @@ Findings from 30 recorded sessions (`26,256` turns; full breakdown in [the resea
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/d-ridelman/ctxkit.git
-cd ctxkit/crates/ctxkit
+git clone https://github.com/d-ridelman/Loadout.git
+cd Loadout/crates/ctxkit
 .\scripts\install.ps1
 
 # Open a new terminal so User PATH picks up %USERPROFILE%\.local\bin, or call it directly:
@@ -48,8 +48,8 @@ cd ctxkit/crates/ctxkit
 ### macOS and Linux
 
 ```bash
-git clone https://github.com/d-ridelman/ctxkit.git
-cd ctxkit/crates/ctxkit
+git clone https://github.com/d-ridelman/Loadout.git
+cd Loadout/crates/ctxkit
 ./scripts/install.sh
 
 ~/.local/bin/ctxkit setup --dry-run

@@ -36,8 +36,8 @@
 ### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/d-ridelman/ctxkit.git
-cd ctxkit/crates/ctxkit
+git clone https://github.com/d-ridelman/Loadout.git
+cd Loadout/crates/ctxkit
 .\scripts\install.ps1
 
 # Скрипт добавит %USERPROFILE%\.local\bin в User PATH; для текущего окна укажи путь явно:
@@ -48,8 +48,8 @@ cd ctxkit/crates/ctxkit
 ### macOS и Linux
 
 ```bash
-git clone https://github.com/d-ridelman/ctxkit.git
-cd ctxkit/crates/ctxkit
+git clone https://github.com/d-ridelman/Loadout.git
+cd Loadout/crates/ctxkit
 ./scripts/install.sh
 
 ~/.local/bin/ctxkit setup --lang ru --dry-run
