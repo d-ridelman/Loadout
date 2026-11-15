@@ -1,4 +1,5 @@
 /** Форма вывода `loadout scan --json` (crates/loadout-core/src/model.rs). Менять только вместе с ядром. */
+import type { Lang } from './i18n'
 
 export type ClientId = 'claude-code' | 'claude-desktop' | 'codex' | 'antigravity' | 'deepseek'
 
@@ -228,6 +229,9 @@ export interface LoadoutApi {
   scan: () => Promise<ScanResponse>
   copyText: (text: string) => Promise<void>
   /** Уровень записи хранит main; страница может его только прочитать и попросить сменить. */
+  /** Язык интерфейса (сохранённый или по локали системы) и его смена: ядро перезапускается с новым языком сообщений. */
+  getLang: () => Promise<Lang>
+  setLang: (lang: Lang) => Promise<Lang>
   getWriteLevel: () => Promise<WriteLevel>
   setWriteLevel: (level: WriteLevel) => Promise<WriteLevel>
   plan: (intent: Intent) => Promise<PlanResponse>

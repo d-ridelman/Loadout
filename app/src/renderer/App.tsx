@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { Lang } from '../shared/i18n'
 import { CLIENTS } from '../shared/model'
 import type { ClientId, Entity, Intent, ScanResult, WriteLevel } from '../shared/model'
 import { buildRows, groupOf, onlyUnknown } from './aggregate'
@@ -72,7 +73,7 @@ function applyFilters(rows: Row[], f: Filters): Row[] {
   })
 }
 
-export function App() {
+export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void }) {
   const [scan, setScan] = useState<ScanState>({ status: 'loading' })
   const [view, setView] = useState<View>('matrix')
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
@@ -348,6 +349,10 @@ export function App() {
         <button onClick={requestPlugin} title="Установить плагин Claude Code из добавленного маркетплейса (R2)">Установить плагин</button>
         <button onClick={() => void load(scan.status === 'ready')} aria-label="Пересканировать (клавиша R)">Скан</button>
         <button onClick={() => setPalette(true)} aria-label="Палитра команд">Ctrl+K</button>
+        <select aria-label="Язык / Language" title="Язык / Language" className="mono" value={lang} onChange={(e) => onLang(e.target.value as Lang)}>
+          <option value="ru">RU</option>
+          <option value="en">EN</option>
+        </select>
       </header>
 
       <nav aria-label="Разделы">

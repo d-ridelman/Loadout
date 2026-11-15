@@ -4,6 +4,8 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { getLang, isLang, langFromLocale, setLang } from '../shared/i18n'
+import type { Lang } from '../shared/i18n'
 import { CLIENTS, LEVEL_RANK } from '../shared/model'
 import type { ChangedEvent, ClientId, Intent, Result, ScanResponse, WriteLevel } from '../shared/model'
 import * as ctxkit from './ctxkit'
@@ -77,7 +79,7 @@ function ensureSidecar(): Sidecar | string {
     return tidy(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`)
   }
   // Каталог бэкапов передаём всегда, а право писать проверяет main (уровень R1) перед каждым `apply` и `rollback`.
-  const args = ['serve', '--backups', join(app.getPath('userData'), 'backups')]
+  const args = ['serve', '--backups', join(app.getPath('userData'), 'backups'), '--lang', getLang()]
   const homeOverride = envOf('LOADOUT_HOME')
   if (homeOverride) args.push('--home', homeOverride)
   let readySeen = false
@@ -134,19 +136,36 @@ async function pushChanged(params: unknown): Promise<void> {
 /** Уровень записи (CONCEPT.md §5) хранится в профиле приложения; по умолчанию R0 — только чтение. */
 const settingsFile = (): string => join(app.getPath('userData'), 'settings.json')
 
-function readWriteLevel(): WriteLevel {
+function readSettings(): Record<string, unknown> {
   try {
     const raw: unknown = JSON.parse(readFileSync(settingsFile(), 'utf8'))
-    const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>)['writeLevel'] : undefined
-    return v === 'R1' || v === 'R2' ? v : 'R0'
+    return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
   } catch {
-    return 'R0'
+    return {}
   }
 }
 
-function saveWriteLevel(level: WriteLevel): void {
+/** Ключи настроек пишутся по одному: запись одного не стирает остальные. */
+function saveSetting(key: 'writeLevel' | 'lang', value: string): void {
   mkdirSync(app.getPath('userData'), { recursive: true })
-  writeFileSync(settingsFile(), JSON.stringify({ writeLevel: level }))
+  writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), [key]: value }))
+}
+
+function readWriteLevel(): WriteLevel {
+  const v = readSettings()['writeLevel']
+  return v === 'R1' || v === 'R2' ? v : 'R0'
+}
+
+function saveWriteLevel(level: WriteLevel): void {
+  saveSetting('writeLevel', level)
+}
+
+/** Язык: сохранённый выбор, иначе по локали системы (русская — русский, остальные — английский). `LOADOUT_LANG` — только для разработки и проверок. */
+function initialLang(): Lang {
+  const forced = envOf('LOADOUT_LANG')
+  if (isLang(forced)) return forced
+  const saved = readSettings()['lang']
+  return isLang(saved) ? saved : langFromLocale(app.getLocale())
 }
 
 /** Процессы клиентов по имени образа; Claude Desktop и Claude Code оба зовутся `claude.exe`, поэтому это предупреждение, а не запрет. */
@@ -321,6 +340,7 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
+  setLang(initialLang())
   Menu.setApplicationMenu(null)
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
   ipcMain.handle('scan', (e) => (trusted(e) ? runScan() : Promise.reject(new Error('untrusted sender'))))
@@ -332,6 +352,19 @@ void app.whenReady().then(() => {
   const guard = (e: IpcMainInvokeEvent): void => {
     if (!trusted(e)) throw new Error('untrusted sender')
   }
+  ipcMain.handle('lang:get', (e) => (guard(e), getLang()))
+  ipcMain.handle('lang:set', (e, lang: unknown) => {
+    guard(e)
+    if (!isLang(lang)) throw new Error('invalid language')
+    if (lang !== getLang()) {
+      setLang(lang)
+      saveSetting('lang', lang)
+      // сообщения ядра на языке процесса: ядро перезапускается с новым `--lang`, следующий запрос поднимет его заново
+      sidecar?.stop()
+      sidecar = undefined
+    }
+    return lang
+  })
   ipcMain.handle('writeLevel:get', (e) => (guard(e), readWriteLevel()))
   ipcMain.handle('writeLevel:set', async (e, level: unknown) => {
     guard(e)

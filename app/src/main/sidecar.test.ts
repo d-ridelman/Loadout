@@ -200,7 +200,7 @@ describe('validate', () => {
   })
 
   const plan = {
-    op: 'toggle', level: 'R1', notes: [] as string[],
+    op: 'toggle', level: 'R1', notes: [] as string[], trash: '',
     entity: 'a1', client: 'codex', kind: 'plugin', name: 'n', file: '~/f', pointer: 'p', enable: false,
     from: 'true', to: 'false', noop: false, affects: [], baseSha: 'a'.repeat(64),
   }
