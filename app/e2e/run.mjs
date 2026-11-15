@@ -296,6 +296,18 @@ try {
       await page.keyboard.press(key)
       await page.waitForTimeout(250)
       if (key === '1') await layout(page, `${name}@${w}`)
+      if (name === 'hooks') {
+        // все события конвейера достижимы: если они не помещаются, сетка прокручивается, а не обрезается
+        const reach = await page.evaluate(() => {
+          const wrap = document.querySelector('.tablewrap.scrollx')
+          const heads = [...document.querySelectorAll('.pipe .h')]
+          wrap.scrollLeft = wrap.scrollWidth
+          const last = heads[heads.length - 1].getBoundingClientRect()
+          return { overflowX: getComputedStyle(wrap).overflowX, events: heads.length, lastRight: Math.round(last.right), wrapRight: Math.round(wrap.getBoundingClientRect().right) }
+        })
+        must(reach.overflowX === 'auto' && reach.lastRight <= reach.wrapRight + 1, `последнее событие хуков недостижимо: ${JSON.stringify(reach)}`)
+        await page.evaluate(() => { document.querySelector('.tablewrap.scrollx').scrollLeft = 0 })
+      }
       if (w === 1920) {
         const v = await axeCheck(page, name)
         must(v.length === 0, `axe нашёл нарушения на экране «${name}»: ${v.map((x) => x.id).join(', ')}`)

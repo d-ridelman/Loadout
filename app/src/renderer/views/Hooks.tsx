@@ -18,7 +18,8 @@ export function Hooks({ hooks, onShow }: { hooks: Entity[]; onShow: (e: Entity) 
   return (
     <>
       <h2>{t('Конвейер хуков · события слева направо в порядке жизненного цикла', 'Hook pipeline · events left to right in lifecycle order')}</h2>
-      <div className="hud tablewrap">
+      {/* событий может быть больше, чем помещается в окно: сетка прокручивается по горизонтали, а не обрезается */}
+      <div className="hud tablewrap scrollx" tabIndex={0} role="region" aria-label={t('Хуки по событиям и клиентам: прокрутка', 'Hooks by event and client: scrollable')}>
         <div className="pipe" role="group" aria-label={t('Хуки по событиям и клиентам', 'Hooks by event and client')} style={{ gridTemplateColumns: `130px repeat(${events.length}, minmax(150px, 1fr))` }}>
           <div />
           {events.map((ev) => (

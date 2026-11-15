@@ -111,6 +111,8 @@ body.paused * { animation-play-state: paused !important; }
 .check { display: inline-flex; gap: 6px; align-items: center; color: var(--mute); }
 /* `clip`, а не `auto`: у `auto` прокручиваемым предком становилась обёртка и шапка таблицы (sticky) не залипала при прокрутке страницы */
 .tablewrap { padding: 2px 8px 8px; overflow-x: clip; }
+/* конвейер хуков: у него нет залипающей шапки, поэтому прокрутка допустима (в матрице нужна `clip`, иначе шапка не залипает) */
+.tablewrap.scrollx { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; }
 th { font: 600 11px var(--mono); text-align: center; color: var(--mute); padding: 8px 6px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
 th:first-child { text-align: left; }
