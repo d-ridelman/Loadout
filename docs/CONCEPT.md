@@ -28,7 +28,7 @@
 | | включение плагинов | `~/.claude/settings.json` → `enabledPlugins`, `extraKnownMarketplaces` | JSON | проверено (ключи) |
 | | MCP | `~/.claude.json` → `mcpServers`; выключение — несколько механизмов: верхнеуровневые `_disabledMcpServers`, `_mcpServersDisabled` и поля в `projects.*` (`disabledMcpServers`, `enabledMcpjsonServers`, `disabledMcpjsonServers`). Проверено в M0: `_disabledMcpServers` и `_mcpServersDisabled` — стэш владельца (записи вынесены из `mcpServers`, Claude Code их не запускает); `projects.<путь>.disabledMcpServers` — массив имён серверов, судя по содержимому, переключатель `/mcp` на проект (в двух проектах 8 и 1 имя; M0 его не применяет). `enabledMcpjsonServers`/`disabledMcpjsonServers` не проверял | JSON, **внутри OAuth-аккаунт и кеши** | проверено |
 | | скилы | `~/.claude/skills/<имя>/SKILL.md` с frontmatter `name`, `description` (16 каталогов со `SKILL.md`, ещё `synced/` без `SKILL.md` — служебный); плюс скилы из плагинов | MD | проверено (структура; frontmatter видел на одном файле, `bash-tui`) |
-| | хуки | `~/.claude/settings.json` → `hooks` (`PreToolUse`, `PostToolUse`, `SessionStart`); скрипты в `~/.claude/hooks/` | JSON | проверено |
+| | хуки | `~/.claude/settings.json` → `hooks` (`PreToolUse`, `PostToolUse`, `SessionStart`, `Stop`); скрипты в `~/.claude/hooks/` | JSON | проверено |
 | | агенты, команды, правила | `~/.claude/agents/`, `commands/`, `rules/` | MD | проверено (каталоги) |
 | | использование | `~/.claude.json` → `skillUsage`, `pluginUsage` | JSON | проверено (ключи), смысл полей — гипотеза |
 | **Claude Desktop (чат)** | MCP | `%APPDATA%\Claude\claude_desktop_config.json` → `mcpServers`, `preferences` | JSON | проверено |
@@ -108,7 +108,7 @@ Entity {
    | Клиент | События | Статус |
    |---|---|---|
    | Codex | `SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, SubagentStart, SubagentStop, Stop, Interrupt` | проверено (`~/.codex/hooks.json`) |
-   | Claude Code | в `settings.json` сейчас используются `SessionStart, PreToolUse, PostToolUse`; полный набор событий клиента не проверен | частично |
+   | Claude Code | в `settings.json` сейчас используются `SessionStart, PreToolUse, PostToolUse, Stop` (`Stop` — шлюз ctxkit, один раз за ход возвращает к `checker`/advisor); полный набор событий клиента не проверен | частично |
    | Antigravity | схема `~/.gemini/config/hooks.json` не разобрана | гипотеза |
    | DeepSeek | `PreToolUse`, `PostToolUse` (файл `ctxkit-hooks.json`, формат как у Claude Code); других событий в нём нет, полный набор клиента не проверен | частично |
    | Claude Desktop (чат) | хуков на диске не найдено | не найдено |

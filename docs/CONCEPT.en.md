@@ -28,7 +28,7 @@ Non-goals (v1):
 | | enabling plugins | `~/.claude/settings.json` → `enabledPlugins`, `extraKnownMarketplaces` | JSON | verified (keys) |
 | | MCP | `~/.claude.json` → `mcpServers`; disabling works through several mechanisms: top-level `_disabledMcpServers`, `_mcpServersDisabled` and fields in `projects.*` (`disabledMcpServers`, `enabledMcpjsonServers`, `disabledMcpjsonServers`). Verified in M0: `_disabledMcpServers` and `_mcpServersDisabled` are the owner's stash (entries moved out of `mcpServers`, Claude Code does not start them); `projects.<path>.disabledMcpServers` is an array of server names, judging by its contents a per-project `/mcp` toggle (in two projects, 8 and 1 names; M0 does not apply it). `enabledMcpjsonServers`/`disabledMcpjsonServers` were not verified | JSON, **contains an OAuth account and caches inside** | verified |
 | | skills | `~/.claude/skills/<name>/SKILL.md` with frontmatter `name`, `description` (16 directories with `SKILL.md`, plus `synced/` without `SKILL.md` — a service directory); plus skills from plugins | MD | verified (structure; frontmatter seen in one file, `bash-tui`) |
-| | hooks | `~/.claude/settings.json` → `hooks` (`PreToolUse`, `PostToolUse`, `SessionStart`); scripts in `~/.claude/hooks/` | JSON | verified |
+| | hooks | `~/.claude/settings.json` → `hooks` (`PreToolUse`, `PostToolUse`, `SessionStart`, `Stop`); scripts in `~/.claude/hooks/` | JSON | verified |
 | | agents, commands, rules | `~/.claude/agents/`, `commands/`, `rules/` | MD | verified (directories) |
 | | usage | `~/.claude.json` → `skillUsage`, `pluginUsage` | JSON | verified (keys), the meaning of the fields is a hypothesis |
 | **Claude Desktop (chat)** | MCP | `%APPDATA%\Claude\claude_desktop_config.json` → `mcpServers`, `preferences` | JSON | verified |
@@ -108,7 +108,7 @@ In the mockup (`mockup/index.html`), items 1–5 and 7 work; the Journal (6) is 
    | Client | Events | Status |
    |---|---|---|
    | Codex | `SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, SubagentStart, SubagentStop, Stop, Interrupt` | verified (`~/.codex/hooks.json`) |
-   | Claude Code | `settings.json` currently uses `SessionStart, PreToolUse, PostToolUse`; the client's full event set has not been verified | partial |
+   | Claude Code | `settings.json` currently uses `SessionStart, PreToolUse, PostToolUse, Stop` (`Stop` is the ctxkit gate that sends the model back to `checker`/advisor once per turn); the client's full event set has not been verified | partial |
    | Antigravity | the schema of `~/.gemini/config/hooks.json` has not been analyzed | hypothesis |
    | DeepSeek | `PreToolUse`, `PostToolUse` (file `ctxkit-hooks.json`, Claude Code format); there are no other events in it, the client's full set has not been verified | partial |
    | Claude Desktop (chat) | no hooks found on disk | not found |
