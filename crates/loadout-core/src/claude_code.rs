@@ -2,7 +2,7 @@
 
 use crate::mask::mcp_detail;
 use crate::model::{Client, Entity, Kind, State};
-use crate::{frontmatter, scan_hooks, scan_skills, Ctx};
+use crate::{esc_ptr, frontmatter, scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::Path;
@@ -45,10 +45,21 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
     for (key, recs) in records.into_iter().flatten() {
         seen.insert(key.clone());
         let recs = recs.as_array().map(Vec::as_slice).unwrap_or_default();
-        let versions: HashSet<&str> = recs
+        let is_user_rec = |r: &Value| {
+            r.get("scope")
+                .and_then(Value::as_str)
+                .is_none_or(|s| s == "user")
+        };
+        fn version_of(r: &Value) -> Option<&str> {
+            r.get("version").and_then(Value::as_str)
+        }
+        // Разные версии в одной области — расхождение (stale). В разных областях это норма, только пометка.
+        let user_versions: HashSet<&str> = recs
             .iter()
-            .filter_map(|r| r.get("version").and_then(Value::as_str))
+            .filter(|r| is_user_rec(r))
+            .filter_map(version_of)
             .collect();
+        let all_versions: HashSet<&str> = recs.iter().filter_map(version_of).collect();
         for (i, r) in recs.iter().enumerate() {
             let scope = match r.get("scope").and_then(Value::as_str) {
                 Some("project") => format!(
@@ -80,9 +91,16 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                 )
             } else {
                 match flag {
-                    Some(true) if versions.len() > 1 => (
+                    Some(true) if user_versions.len() > 1 => (
                         State::Stale,
-                        Some(format!("записан в {} версиях", versions.len())),
+                        Some(format!(
+                            "в области user записано {} версий",
+                            user_versions.len()
+                        )),
+                    ),
+                    Some(true) if all_versions.len() > 1 => (
+                        State::On,
+                        Some("в другой области (project/local) стоит другая версия".to_owned()),
                     ),
                     Some(true) => (State::On, None),
                     Some(false) => (State::Off, None),
@@ -99,7 +117,7 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                 key.clone(),
                 state,
                 file,
-                format!("/plugins/{key}/{i}"),
+                format!("/plugins/{}/{i}", esc_ptr(key)),
             )
             .version(r.get("version").and_then(Value::as_str))
             .detail(json!({ "sha": r.get("gitCommitSha") }));
@@ -119,7 +137,7 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                 key.clone(),
                 State::Broken,
                 "~/.claude/settings.json",
-                format!("/enabledPlugins/{key}"),
+                format!("/enabledPlugins/{}", esc_ptr(key)),
             )
             .note("включён в enabledPlugins, но не установлен");
             c.push(e);
@@ -148,7 +166,7 @@ fn marketplaces(c: &mut Ctx) {
             name.clone(),
             State::On,
             "~/.claude/plugins/known_marketplaces.json",
-            format!("/{name}"),
+            format!("/{}", esc_ptr(name)),
         )
         .detail(json!({ "sourceType": src }));
         c.push(e);
@@ -208,7 +226,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool) {
                 name.clone(),
                 State::On,
                 file,
-                format!("/mcpServers/{name}"),
+                format!("/mcpServers/{}", esc_ptr(name)),
             )
             .detail(mcp_detail(cfg)),
         );
@@ -226,7 +244,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool) {
                     name.clone(),
                     State::Off,
                     file,
-                    format!("/{key}/{name}"),
+                    format!("/{key}/{}", esc_ptr(name)),
                 )
                 .note("лежит вне mcpServers, Claude Code его не запускает (стэш, не штатный ключ)")
                 .detail(mcp_detail(cfg)),
@@ -245,6 +263,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool) {
             .into_iter()
             .flatten()
         {
+            // `shown` — путь для показа (с `~`), а не настоящий ключ `projects`; для записи в M3 ключ ищется по `scope`.
             let shown = c.tilde(Path::new(path));
             found.push(
                 Entity::new(
@@ -254,7 +273,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool) {
                     name.clone(),
                     State::On,
                     file,
-                    format!("/projects/{shown}/mcpServers/{name}"),
+                    format!("/projects/{shown}/mcpServers/{}", esc_ptr(name)),
                 )
                 .detail(mcp_detail(cfg)),
             );

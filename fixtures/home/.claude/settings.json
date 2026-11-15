@@ -15,6 +15,13 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "TOKEN=FAKE-SECRET-HOOKENV node {HOME_UPPER}/hooks/post.mjs --header \"Authorization: Bearer FAKE-SECRET-HOOKHDR\"" }
+        ]
+      }
+    ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "pwsh -File {HOME}/hooks/sweep.ps1" } ] }
     ]

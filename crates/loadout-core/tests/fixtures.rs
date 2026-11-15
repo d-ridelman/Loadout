@@ -25,8 +25,12 @@ fn copy_tree(from: &Path, to: &Path, home: &str) {
         if src.is_dir() {
             copy_tree(&src, &dst, home);
         } else {
-            let text = fs::read_to_string(&src).unwrap();
-            fs::write(&dst, text.replace("{HOME}", home)).unwrap();
+            // `{HOME_UPPER}` — тот же путь в другом регистре: так Windows-клиенты иногда пишут пути проектов.
+            let text = fs::read_to_string(&src)
+                .unwrap()
+                .replace("{HOME_UPPER}", &home.to_uppercase())
+                .replace("{HOME}", home);
+            fs::write(&dst, text).unwrap();
         }
     }
 }
@@ -96,8 +100,14 @@ fn claude_code_inventory() {
     );
     assert_eq!(
         count(&r, c, Kind::Mcp, State::On),
-        3,
-        "github, local, pm (проектный)"
+        4,
+        "github, local, pm и pu (проектные)"
+    );
+    assert!(
+        r.entities
+            .iter()
+            .any(|e| e.name == "pu" && e.scope == "project:~/work/up"),
+        "путь проекта в другом регистре приведён к ~"
     );
     assert_eq!(
         count(&r, c, Kind::Mcp, State::Off),
@@ -117,7 +127,16 @@ fn claude_code_inventory() {
         .expect("имя берётся из frontmatter");
     assert!(odd.note.is_some(), "расхождение каталога и имени отмечено");
     assert_eq!(count(&r, c, Kind::Agent, State::On), 1);
-    assert_eq!(count(&r, c, Kind::Hook, State::On), 2);
+    assert_eq!(count(&r, c, Kind::Hook, State::On), 3);
+    let post = r
+        .entities
+        .iter()
+        .find(|e| e.name.starts_with("PostToolUse"))
+        .unwrap();
+    assert_eq!(
+        post.name, "PostToolUse: post",
+        "метка хука не содержит ни секрета, ни переменной окружения"
+    );
 }
 
 #[test]

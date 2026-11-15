@@ -8,6 +8,19 @@ use serde_json::{json, Value};
 const CLIENT: Client = Client::Codex;
 const CONFIG: &str = "~/.codex/config.toml";
 
+/// Ключ TOML в указателе: голый, если состоит из `A-Za-z0-9_-`, иначе в кавычках.
+fn toml_key(name: &str) -> String {
+    if !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        name.to_owned()
+    } else {
+        format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
 pub fn scan(c: &mut Ctx) {
     config(c);
     if let Some(v) = c.read_json(&c.home.join(".codex/hooks.json")) {
@@ -55,7 +68,7 @@ fn config(c: &mut Ctx) {
             name.clone(),
             state,
             CONFIG,
-            format!("plugins.\"{name}\""),
+            format!("plugins.{}", toml_key(name)),
         );
         if let Some(n) = note {
             e = e.note(n);
@@ -75,7 +88,7 @@ fn config(c: &mut Ctx) {
             name.clone(),
             State::On,
             CONFIG,
-            format!("marketplaces.{name}"),
+            format!("marketplaces.{}", toml_key(name)),
         )
         .detail(json!({ "sourceType": m.get("source_type") }));
         c.push(e);
@@ -98,7 +111,7 @@ fn config(c: &mut Ctx) {
             name.clone(),
             state,
             CONFIG,
-            format!("mcp_servers.{name}"),
+            format!("mcp_servers.{}", toml_key(name)),
         )
         .detail(mcp_detail(m));
         c.push(e);
