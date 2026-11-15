@@ -58,6 +58,13 @@ async function launch(env) {
     env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', ...env },
   })
   const page = await app.firstWindow()
+  // Фокус окна ОС: пока владелец работает в другом окне, фокус у Chromium не доходит до страницы и шаги про палитру и клики по диалогам падают по таймауту.
+  await app.evaluate(({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows()[0]
+    w.show()
+    w.focus()
+    w.webContents.focus()
+  })
   const pid = app.process().pid
   return { app, page, pid }
 }
@@ -302,11 +309,12 @@ try {
 
   // разделы по цифрам
   await page.keyboard.press('2')
-  must((await page.locator('.node').count()) === 5, 'на радаре должно быть 5 клиентов')
+  // раздел рисуется не мгновенно: считаем с ожиданием, а не сразу после нажатия клавиши
+  await waitFor(async () => (await page.locator('.node').count()) === 5, 'на радаре должно быть 5 клиентов')
   await page.keyboard.press('3')
-  must((await page.locator('.pipe .hk').count()) > 0, 'в конвейере нет хуков')
+  await waitFor(async () => (await page.locator('.pipe .hk').count()) > 0, 'в конвейере нет хуков')
   await page.keyboard.press('4')
-  must((await page.locator('.find').count()) > 0, 'Доктор ничего не нашёл на фикстуре с поломками')
+  await waitFor(async () => (await page.locator('.find').count()) > 0, 'Доктор ничего не нашёл на фикстуре с поломками')
   await page.keyboard.press('1')
 
   // снимки по размерам и разделам

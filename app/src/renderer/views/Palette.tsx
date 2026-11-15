@@ -36,7 +36,10 @@ export function Palette({ items, onClose }: { items: PaletteItem[]; onClose: () 
     if (!i) return
     i.run()
     // выбранное в палитре сразу доступно с клавиатуры: фокус на таблицу, если она есть на новом экране
-    requestAnimationFrame(() => document.getElementById('grid')?.focus())
+    // кадр может прийти поздно (окно не на переднем плане): если за это время открылся диалог или палитра снова, фокус у них забирать нельзя
+    requestAnimationFrame(() => {
+      if (!document.querySelector('[role=dialog]')) document.getElementById('grid')?.focus()
+    })
   }
 
   return (
