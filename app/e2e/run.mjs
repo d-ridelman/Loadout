@@ -657,6 +657,7 @@ try {
   const preview = await page.locator('pre.out').innerText()
   // путь настоящего домашнего каталога (с именем пользователя) в выводе недопустим ни с прямыми, ни с обратными слэшами
   const leaks = [realHome, realHome.replaceAll('\\', '/')].some((h) => preview.toLowerCase().includes(h.toLowerCase()))
+  must(preview.includes('Stop gate: on'), `в предпросмотре нет строки про шлюз Stop: ${preview.slice(0, 300)}`)
   must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
   must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
   await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')

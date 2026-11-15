@@ -491,8 +491,12 @@ fn update_claude_settings(
     // Stop takes no matcher. The gate fires once per turn (see gate.rs); --no-stop-gate removes our group.
     if opts.no_stop_gate {
         remove_our_hook_event(hooks_obj, "Stop");
+        println!("  Stop gate: off (--no-stop-gate); our Stop hook is removed if present");
     } else {
         upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd);
+        println!(
+            "  Stop gate: on, hook Stop sends the model back once per turn if code edits lack checker/advisor; remove with --no-stop-gate"
+        );
     }
 
     write_json_if_changed(
