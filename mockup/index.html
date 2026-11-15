@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Loadout — макет</title>
+<style>
+:root{
+  --bg:#282a36;--panel:#21222c;--line:#44475a;--fg:#f8f8f2;--mute:#9aa5ce;--deco:#6272a4;
+  --cyan:#8be9fd;--green:#50fa7b;--orange:#ffb86c;--pink:#ff79c6;--purple:#bd93f9;--red:#ff5555;--yellow:#f1fa8c;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;--sans:Inter,system-ui,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:13px/1.45 var(--sans);overflow:auto}
+button,input,select{font:inherit;color:inherit}
+button{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:4px 10px;cursor:pointer}
+select{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:4px 6px}
+button:hover:not(:disabled){border-color:var(--cyan)}
+button:disabled{opacity:.55;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.mono{font-family:var(--mono)}
+.mute{color:var(--mute)}
+
+/* каркас */
+/* окно приложения: минимум 1100x640, как у Electron-окна (minWidth/minHeight) */
+#app{display:grid;height:100vh;min-width:1100px;min-height:640px;grid-template:48px 1fr 26px/172px 1fr 348px}
+header{grid-column:1/4;display:flex;align-items:center;gap:14px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.logo{font:700 15px var(--mono);letter-spacing:.28em;color:var(--cyan);text-shadow:0 0 10px rgba(139,233,253,.55)}
+.logo i{color:var(--pink);font-style:normal}
+header .sp{flex:1}
+nav{background:var(--panel);border-right:1px solid var(--line);padding:10px 8px;display:flex;flex-direction:column;gap:4px}
+nav button{text-align:left;border-color:transparent;background:none;padding:7px 10px;display:flex;justify-content:space-between}
+nav button[aria-current=page]{background:rgba(189,147,249,.14);border-color:var(--purple);color:var(--fg)}
+nav small{color:var(--mute)}
+main{overflow:auto;padding:14px 16px;position:relative}
+aside{background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:14px}
+footer{grid-column:1/4;display:flex;gap:18px;align-items:center;padding:0 14px;background:var(--panel);border-top:1px solid var(--line);font:11px var(--mono);color:var(--mute)}
+
+/* HUD-панель: уголки */
+.hud{position:relative;border:1px solid var(--line);background:var(--panel);
+ background-image:
+  linear-gradient(var(--cyan),var(--cyan)),linear-gradient(var(--cyan),var(--cyan)),
+  linear-gradient(var(--cyan),var(--cyan)),linear-gradient(var(--cyan),var(--cyan)),
+  linear-gradient(var(--cyan),var(--cyan)),linear-gradient(var(--cyan),var(--cyan)),
+  linear-gradient(var(--cyan),var(--cyan)),linear-gradient(var(--cyan),var(--cyan));
+ background-size:10px 1px,1px 10px,10px 1px,1px 10px,10px 1px,1px 10px,10px 1px,1px 10px;
+ background-position:0 0,0 0,100% 0,100% 0,0 100%,0 100%,100% 100%,100% 100%;
+ background-repeat:no-repeat;border-radius:2px}
+h2{margin:0 0 10px;font:600 11px var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--purple)}
+
+/* эффекты по уровням */
+body[data-fx=off] .fx,body[data-fx=off] #scan{display:none}
+#scan{position:fixed;inset:0;pointer-events:none;z-index:50;opacity:.035;
+ background:repeating-linear-gradient(0deg,#fff 0 1px,transparent 1px 3px)}
+body[data-fx=low] #scan{display:none}
+body[data-fx=full] .logo,body[data-fx=low] .logo{animation:flick 6s infinite}
+body[data-fx=off] .logo{text-shadow:none}
+@keyframes flick{0%,96%,100%{opacity:1}97%{opacity:.7}98%{opacity:1}99%{opacity:.8}}
+@keyframes pulse{50%{opacity:.7}}
+body[data-fx=low] .pulse,body[data-fx=full] .pulse{animation:pulse 2.2s ease-in-out infinite}
+@keyframes sweep{to{transform:rotate(360deg)}}
+body[data-fx=full] .beam{animation:sweep 5s linear infinite}
+body[data-fx=low] .beam,body[data-fx=off] .beam{animation:none}
+body[data-fx=full] .cur{box-shadow:0 0 12px rgba(139,233,253,.45)}
+
+/* состояния */
+.s-on{color:var(--green)}.s-off{color:var(--mute)}.s-broken{color:#ff6e6e}
+.s-stale{color:var(--orange)}.s-shadowed{color:var(--purple)}.s-cloud{color:var(--cyan)}.s-none{color:var(--deco)}
+body.paused *{animation-play-state:paused!important}
+.g{font:15px var(--mono)}
+
+/* матрица */
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.chip[aria-pressed=true]{border-color:var(--pink);background:rgba(255,121,198,.12)}
+input[type=search]{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:4px 8px;min-width:150px;width:170px}
+.bar select{max-width:190px}
+table{border-collapse:collapse;width:100%}
+th{font:600 11px var(--mono);text-align:center;color:var(--mute);padding:8px 6px;border-bottom:1px solid var(--line);position:sticky;top:-14px;background:var(--panel);z-index:2}
+th:first-child{text-align:left}
+td{padding:6px;border-bottom:1px solid rgba(68,71,90,.55);text-align:center}
+td.name{text-align:left}
+tr:hover td{background:rgba(68,71,90,.25)}
+td.c{cursor:pointer}
+.cur{outline:2px solid var(--cyan);outline-offset:-2px;background:rgba(139,233,253,.08)}
+.badge{display:inline-block;min-width:54px;font:10px var(--mono);text-align:center;border:1px solid var(--deco);border-radius:3px;padding:0 4px;margin-right:8px;color:var(--mute)}
+.k-plugin{border-color:var(--purple);color:var(--purple)}.k-mcp{border-color:var(--cyan);color:var(--cyan)}
+.k-skill{border-color:var(--green);color:var(--green)}.k-hook{border-color:var(--pink);color:var(--pink)}
+.k-agent,.k-rule,.k-connector{border-color:var(--orange);color:var(--orange)}
+.origin{font:11px var(--mono);color:var(--mute);margin-left:8px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font:11px var(--mono);color:var(--mute);margin-top:10px}
+
+/* радар */
+.radar{display:grid;grid-template-columns:minmax(360px,520px) 1fr;gap:16px}
+.rwrap{position:relative;aspect-ratio:1;max-width:520px;width:100%;margin:auto}
+.rcirc{position:absolute;inset:14%;border-radius:50%;border:1px solid var(--deco);
+ background:radial-gradient(circle,transparent 0 24%,rgba(98,114,164,.22) 24.5% 25%,transparent 25.5% 49%,rgba(98,114,164,.22) 49.5% 50%,transparent 50.5%)}
+.beam{position:absolute;inset:14%;border-radius:50%;background:conic-gradient(from 0deg,rgba(139,233,253,.28),transparent 22%);transform-origin:50% 50%;will-change:transform}
+body[data-fx=off] .beam{display:none}
+.node{position:absolute;width:112px;margin:-34px 0 0 -56px;text-align:center;padding:6px 4px;background:var(--bg);border:1px solid var(--line);border-radius:4px;cursor:pointer}
+.node:hover,.node[aria-pressed=true]{border-color:var(--cyan)}
+.node b{display:block;font:600 11px var(--mono)}
+.node .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font:12px var(--mono)}
+.card{padding:12px;margin-bottom:12px}
+
+/* хуки */
+.pipe{display:grid;grid-template-columns:120px repeat(6,minmax(120px,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.pipe>div{background:var(--panel);padding:6px 8px;min-height:44px}
+.pipe .h{font:600 10px var(--mono);color:var(--cyan);text-align:center}
+.pipe .na{background:repeating-linear-gradient(135deg,var(--panel) 0 6px,#262833 6px 12px);color:var(--mute);text-align:center;font:11px var(--mono)}
+.hk{display:block;font:11px var(--mono);margin:2px 0;padding:1px 6px;border-left:2px solid var(--pink);background:rgba(255,121,198,.08);cursor:pointer;text-align:left;width:100%;border-radius:0;border-top:0;border-right:0;border-bottom:0}
+.hk small{color:var(--mute)}
+
+/* доктор */
+.find{display:grid;grid-template-columns:26px 1fr auto;gap:10px;padding:10px 12px;margin-bottom:8px;align-items:start}
+.sev{font:15px var(--mono)}
+.find p{margin:2px 0 0;color:var(--mute)}
+
+/* инспектор */
+pre{margin:6px 0;background:var(--bg);border:1px solid var(--line);padding:8px;overflow:auto;font:11.5px/1.5 var(--mono);white-space:pre-wrap}
+.add{color:var(--green)}.del{color:var(--red)}
+.reveal{border:1px dashed var(--orange);color:var(--orange);padding:0 6px;margin-left:6px;font:10px var(--mono);user-select:none}
+
+/* палитра */
+#pal{position:fixed;inset:0;background:rgba(33,34,44,.72);display:none;align-items:flex-start;justify-content:center;padding-top:14vh;z-index:90}
+#pal.open{display:flex}
+#pal .box{width:560px;max-width:92vw}
+#pal input{width:100%;background:var(--bg);border:0;border-bottom:1px solid var(--line);padding:12px;font-size:15px}
+#pal ul{list-style:none;margin:0;padding:4px;max-height:50vh;overflow:auto}
+#pal li{padding:6px 10px;display:flex;justify-content:space-between;cursor:pointer;border-radius:3px}
+#pal li[aria-selected=true]{background:rgba(189,147,249,.22)}
+#pal li[aria-selected=true] .mute{color:var(--fg)}
+#help{position:fixed;right:360px;bottom:40px;display:none;padding:12px;z-index:80;width:260px}
+#help.open{display:block}
+kbd{font:11px var(--mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:0 5px;background:var(--bg)}
+#boot{position:fixed;inset:0;background:var(--bg);z-index:100;display:none;place-items:center;font:12px var(--mono);color:var(--green)}
+#boot.on{display:grid}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body data-fx="full">
+<div id="scan" aria-hidden="true"></div>
+<div id="boot" aria-hidden="true"><pre id="bootlog" style="border:0;background:none"></pre></div>
+
+<div id="app">
+  <header>
+    <span class="logo">LOAD<i>/</i>OUT</span>
+    <span class="mute mono" id="scanInfo"></span>
+    <span class="sp"></span>
+    <label class="mute">FX
+      <select id="fx" aria-label="Уровень эффектов">
+        <option value="off">выкл</option><option value="low">лёгкие</option><option value="full" selected>полные</option>
+      </select>
+    </label>
+    <span class="mono s-on" title="Макет работает только на чтение. Запись — этапы M3–M4 в CONCEPT.md">R0 · только чтение</span>
+    <button id="palBtn" aria-label="Палитра команд">Ctrl+K</button>
+  </header>
+
+  <nav aria-label="Разделы" id="nav"></nav>
+  <main id="main" tabindex="-1"></main>
+  <aside id="insp" aria-label="Инспектор"></aside>
+
+  <footer>
+    <span id="stCount"></span>
+    <span class="s-broken" id="stBroken"></span>
+    <span class="sp" style="flex:1"></span>
+    <span>данные макета иллюстративные · форма модели — docs/CONCEPT.md §3</span>
+  </footer>
+</div>
+
+<div id="help" class="hud" role="dialog" aria-label="Шпаргалка">
+  <h2>Клавиши</h2>
+  <div class="kv"><kbd>j</kbd><span>строка вниз</span><kbd>k</kbd><span>строка вверх</span>
+  <kbd>h / l</kbd><span>клиент влево / вправо</span><kbd>Enter</kbd><span>открыть инспектор</span>
+  <kbd>/</kbd><span>поиск</span><kbd>1–5</kbd><span>разделы</span>
+  <kbd>Ctrl+K</kbd><span>палитра</span><kbd>?</kbd><span>эта справка</span><kbd>Esc</kbd><span>закрыть</span></div>
+</div>
+
+<div id="pal" role="dialog" aria-modal="true" aria-label="Палитра команд"><div class="box hud">
+  <input id="palIn" placeholder="Сущность, раздел или действие…" aria-label="Команда">
+  <ul id="palList" role="listbox"></ul>
+</div></div>
+
+<script>
+"use strict";
+/* ---------- данные: форма совпадает с моделью из CONCEPT.md §3 ---------- */
+const CLIENTS=[
+ {id:"cc",name:"Claude Code"},{id:"cd",name:"Claude Desktop"},{id:"cx",name:"Codex"},
+ {id:"ag",name:"Antigravity"},{id:"ds",name:"DeepSeek"}];
+const GLYPH={on:["●","включено"],off:["○","выключено"],broken:["✕","сломано"],stale:["◐","расхождение версий"],
+ shadowed:["◒","перекрыто другой областью"],cloud:["☁","только в приложении"],none:["–","нет"]};
+const I=(state,scope,version,file,ptr,snippet,note)=>({state,scope,version,file,ptr,snippet,note});
+const U="~/.claude/settings.json",CJ="~/.claude.json",CT="~/.codex/config.toml",
+ AG="~/.gemini/config/mcp_config.json",CD="%APPDATA%/Claude/claude_desktop_config.json";
+const ROWS=[
+ {key:"glidehand",kind:"plugin",origin:"marketplace: glidehand",inst:{
+  cc:I("on","user","0.9.2",U,"/enabledPlugins/glidehand@glidehand",['"glidehand@glidehand": true'],"Тип у экземпляров разный: плагин в Claude Code, MCP-сервер в Codex и Antigravity."),
+  cx:{...I("on","user","—",CT,"mcp_servers.glidehand",['[mcp_servers.glidehand]','command = "glidehand"']),kind:"mcp"},
+  ag:{...I("on","user","—",AG,"/mcpServers/glidehand",['{ "command": "glidehand" }']),kind:"mcp"}}},
+ {key:"harnio",kind:"plugin",origin:"marketplace: harnio",inst:{
+  cc:I("on","user","1.4.0",U,"/enabledPlugins/harnio@harnio",['"harnio@harnio": true']),
+  cx:I("on","user","1.4.0",CT,'plugins."harnio@harnio"',['[plugins."harnio@harnio"]','enabled = true']),
+  ag:I("stale","user","1.3.1","~/.gemini/config/plugins/harnio/plugin.json","/version",['{ "name": "harnio", "version": "1.3.1" }'],"Версия отстаёт от Claude Code и Codex (1.4.0).")}},
+ {key:"ponytail",kind:"plugin",origin:"marketplace: ponytail",inst:{
+  cc:I("on","user","3a91c0",U,"/enabledPlugins/ponytail@ponytail",['"ponytail@ponytail": true'])}},
+ {key:"skill-creator",kind:"plugin",origin:"marketplace: claude-plugins-official",inst:{
+  cc:I("stale","user + project","b5b01ac / fa4eb54","~/.claude/plugins/installed_plugins.json",'/plugins/skill-creator@claude-plugins-official',['[ {scope:"user", version:"b5b01ac…"},','  {scope:"project", version:"fa4eb54…"} ]'],"Один плагин установлен в двух версиях и двух областях.")}},
+ {key:"playwright",kind:"mcp",origin:"npx @playwright/mcp",inst:{
+  cc:I("on","user","—",CJ,"/mcpServers/playwright",['{ "command": "npx", "args": ["@playwright/mcp"] }']),
+  cd:I("on","user","—",CD,"/mcpServers/playwright",['{ "command": "npx", "args": ["@playwright/mcp"] }']),
+  cx:I("on","user","—",CT,"mcp_servers.playwright",['[mcp_servers.playwright]','command = "npx"']),
+  ag:I("off","user","—",AG,"/mcpServers/playwright",['{ "disabled": true }'])}},
+ {key:"chrome-devtools",kind:"mcp",origin:"npx chrome-devtools-mcp",inst:{
+  cx:I("on","user","—",CT,"mcp_servers.chrome-devtools",['[mcp_servers.chrome-devtools]','command = "npx"']),
+  ag:I("broken","user","—",AG,"/mcpServers/chrome-devtools",['{ "command": "chrome-devtools-mcp" }'],"Команда не найдена в PATH.")}},
+ {key:"anytype",kind:"mcp",origin:"локальный сервер",inst:{
+  cc:I("on","user","—",CJ,"/mcpServers/anytype",['{ "command": "anytype-mcp" }']),
+  cd:I("on","user","—",CD,"/mcpServers/anytype",['{ "command": "anytype-mcp",','  "env": { "ANYTYPE_TOKEN": {{secret}} } }'],"Токен лежит в конфиге открытым текстом."),
+  ag:I("on","user","—",AG,"/mcpServers/anytype",['{ "command": "anytype-mcp" }'])}},
+ {key:"bash-tui",kind:"skill",origin:"~/.claude/skills",inst:{
+  cc:I("on","user","—","~/.claude/skills/bash-tui/SKILL.md","frontmatter",["name: bash-tui","description: Build professional TUIs in pure Bash…"]),
+  cx:I("on","user","—","~/.codex/skills/bash-tui/SKILL.md","frontmatter",["name: bash-tui"]),
+  ds:I("on","user","—","~/.dsh/skills/bash-tui/SKILL.md","frontmatter",["name: bash-tui"])}},
+ {key:"api-security",kind:"skill",origin:"~/.claude/skills",inst:{
+  cc:I("on","user","—","~/.claude/skills/api-security/SKILL.md","frontmatter",["name: api-security"]),
+  cx:I("shadowed","project","—","<проект>/.codex/skills/api-security/SKILL.md","frontmatter",["name: api-security"],"Перекрывает одноимённый скил области user."),
+  ds:I("on","user","—","~/.dsh/skills/api-security/SKILL.md","frontmatter",["name: api-security"])}},
+ {key:"ctxkit-hooks",kind:"hook",origin:"PreToolUse · Bash",inst:{
+  cc:I("on","user","—",U,"/hooks/PreToolUse/0",['{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "ctxkit …" }] }']),
+  cx:I("on","user","—","~/.codex/hooks.json","/hooks/PreToolUse/0",['{ "matcher": "Bash", "command": "ctxkit …" }']),
+  ag:I("on","user","—","~/.gemini/config/hooks.json","—",['{ … }'],"Схема hooks.json Antigravity не разобрана, запись иллюстративная."),
+  ds:I("on","user","—","~/.dsh/ctxkit-hooks.json","/hooks",['{ "PreToolUse": [ … ] }'])}},
+ {key:"checker",kind:"agent",origin:"~/.claude/agents",inst:{
+  cc:I("on","user","—","~/.claude/agents/checker.md","frontmatter",["name: checker","model: opus"])}},
+ {key:"karpathy-guidelines",kind:"rule",origin:"плагин karpathy-skills",inst:{
+  cx:I("on","plugin","—","~/.codex/rules/","—",["…"]),
+  ag:I("on","plugin","—","~/.gemini/config/plugins/claude-kit/rules/","—",["…"])}},
+ {key:"claude.ai Connectors",kind:"connector",origin:"облако",inst:{
+  cd:I("cloud","cloud","—","—","—",["Список хранится на сервере claude.ai."],"С диска не читается. Loadout не управляет облачными коннекторами.")}}
+];
+const EVENTS=["SessionStart","UserPromptSubmit","PreToolUse","PermissionRequest","PostToolUse","Stop"];
+const HOOKS=[
+ {c:"cc",e:"SessionStart",n:"temp-sweep",src:"user"},{c:"cc",e:"PreToolUse",n:"ctxkit",m:"Bash",src:"user"},
+ {c:"cc",e:"PreToolUse",n:"no-inline-backslash",m:"Bash",src:"user"},{c:"cc",e:"PostToolUse",n:"ctxkit",m:"Bash",src:"user"},
+ {c:"cx",e:"SessionStart",n:"ponytail-init",src:"plugin: ponytail"},{c:"cx",e:"PreToolUse",n:"ctxkit",m:"Bash",src:"user"},
+ {c:"cx",e:"PermissionRequest",n:"auto-allow-safe",src:"user"},{c:"cx",e:"Stop",n:"notify",src:"user"},
+ {c:"ag",e:"PreToolUse",n:"ctxkit",src:"user"},{c:"ag",e:"Stop",n:"notify",src:"user"},
+ {c:"ds",e:"PreToolUse",n:"ctxkit",m:"shell",src:"user"},{c:"ds",e:"PostToolUse",n:"ctxkit",src:"user"}];
+const NA={cd:EVENTS,ag:["UserPromptSubmit","PermissionRequest","SessionStart","PostToolUse"],ds:["SessionStart","UserPromptSubmit","PermissionRequest","Stop"]};
+const DEMO_SECRET="demo-not-a-real-secret";
+
+/* ---------- производное ---------- */
+const FINDINGS=[];
+for(const r of ROWS)for(const c of CLIENTS){const x=r.inst[c.id];if(!x)continue;
+ if(x.state==="broken")FINDINGS.push({sev:"✕",cls:"s-broken",key:r.key,c:c.id,t:`${r.key}: сломано в ${c.name}`,d:x.note});
+ if(x.state==="stale")FINDINGS.push({sev:"◐",cls:"s-stale",key:r.key,c:c.id,t:`${r.key}: расхождение в ${c.name}`,d:x.note});
+ if(x.state==="shadowed")FINDINGS.push({sev:"◒",cls:"s-shadowed",key:r.key,c:c.id,t:`${r.key}: перекрыто в ${c.name}`,d:x.note});
+ if(x.snippet.some(l=>l.includes("{{secret}}")))FINDINGS.push({sev:"!",cls:"s-stale",key:r.key,c:c.id,t:`${r.key}: секрет в открытом виде (${c.name})`,d:"Предложение: вынести в переменную окружения. Значение в Loadout всегда замаскировано."});}
+FINDINGS.push({sev:"i",cls:"s-cloud",key:null,c:null,t:"Свалка бэкапов: ~20 файлов *.bak в ~/.codex и ~/.gemini/config",d:"Loadout их не трогает и в эти каталоги ничего не добавляет. Свои бэкапы кладёт в %APPDATA%/Loadout."});
+
+/* ---------- состояние ---------- */
+const S={view:"matrix",kind:"all",state:"all",q:"",row:0,col:0,client:null,sel:null};
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+const VIEWS=[["matrix","Матрица"],["radar","Радар"],["hooks","Хуки"],["doctor","Доктор"],["journal","Журнал"]];
+
+function visibleRows(){
+ return ROWS.filter(r=>(S.kind==="all"||r.kind===S.kind||Object.values(r.inst).some(x=>x.kind===S.kind))
+  &&(S.state==="all"||Object.values(r.inst).some(x=>x.state===S.state))
+  &&(!S.client||r.inst[S.client])
+  &&(!S.q||(r.key+" "+r.origin).toLowerCase().includes(S.q.toLowerCase())));
+}
+const cell=(r,cid)=>{const x=r.inst[cid]||null;return x?x.state:"none"};
+/* раскладка-независимая клавиша: j/k/h/l работают и на русской раскладке */
+const keyOf=e=>e.code&&e.code.startsWith("Key")?e.code.slice(3).toLowerCase():e.key;
+
+/* ---------- рендер ----------
+   Демо: данные статические, поэтому innerHTML. В приложении имена приходят с диска (в том числе из чужих плагинов),
+   там только JSX и маскирование элементами, без dangerouslySetInnerHTML. */
+function renderNav(){
+ $("#nav").innerHTML=VIEWS.map(([id,t],i)=>`<button data-v="${id}" ${S.view===id?'aria-current="page"':""}><span>${t}</span><small>${i+1}</small></button>`).join("");
+ $("#nav").querySelectorAll("button").forEach(b=>b.onclick=()=>go(b.dataset.v));
+}
+function go(v){S.view=v;render()}
+function render(){renderNav();({matrix,radar,hooks,doctor,journal})[S.view]();renderInspector();status()}
+
+function status(){
+ const n=ROWS.reduce((a,r)=>a+Object.keys(r.inst).length,0);
+ $("#stCount").textContent=`${ROWS.length} сущностей · ${n} экземпляров · ${CLIENTS.length} клиентов`;
+ const b=FINDINGS.filter(f=>f.sev==="✕").length;$("#stBroken").textContent=b?`✕ сломано: ${b}`:"";
+ $("#scanInfo").textContent="скан: демо-данные";
+}
+
+function matrix(){
+ const rows=visibleRows();S.row=Math.min(S.row,Math.max(rows.length-1,0));
+ const kinds=["all","plugin","mcp","skill","hook","agent","rule","connector"];
+ const states=["all","on","off","broken","stale","shadowed"];
+ $("#main").innerHTML=`
+ <div class="bar">
+  <input type="search" id="q" placeholder="Поиск ( / )" aria-label="Поиск" value="${esc(S.q)}">
+  ${kinds.map(k=>`<button class="chip" data-k="${k}" aria-pressed="${S.kind===k}">${k==="all"?"все типы":k}</button>`).join("")}
+  <select id="st" aria-label="Фильтр по состоянию">${states.map(s=>`<option value="${s}" ${S.state===s?"selected":""}>${s==="all"?"любое состояние":(GLYPH[s][0]+" "+GLYPH[s][1])}</option>`).join("")}</select>
+  ${S.client?`<button id="clr">клиент: ${CLIENTS.find(c=>c.id===S.client).name} ✕</button>`:""}
+ </div>
+ <div class="hud" style="padding:2px 8px 8px"><table role="grid" id="grid" tabindex="0" aria-label="Матрица сущностей по клиентам" aria-rowcount="${rows.length+1}" aria-activedescendant="g-${S.row}-${S.col}">
+  <thead><tr><th scope="col">СУЩНОСТЬ</th>${CLIENTS.map(c=>`<th scope="col">${c.name.toUpperCase()}</th>`).join("")}</tr></thead>
+  <tbody>${rows.map((r,ri)=>`<tr role="row" data-r="${ri}"><td class="name" role="rowheader"><span class="badge k-${r.kind}" title="${[...new Set([r.kind,...Object.values(r.inst).map(x=>x.kind).filter(Boolean)])].join(' + ')}">${[...new Set([r.kind,...Object.values(r.inst).map(x=>x.kind).filter(Boolean)])].join("+")}</span><b>${esc(r.key)}</b><span class="origin">${esc(r.origin)}</span></td>
+   ${CLIENTS.map((c,ci)=>{const st=cell(r,c.id),g=GLYPH[st];
+    return `<td class="c ${ri===S.row&&ci===S.col?"cur":""}" role="gridcell" id="g-${ri}-${ci}" aria-selected="${ri===S.row&&ci===S.col}" data-r="${ri}" data-c="${ci}" aria-label="${esc(r.key)}, ${c.name}: ${g[1]}"><span class="g s-${st} ${st==="broken"?"pulse":""}" aria-hidden="true">${g[0]}</span></td>`}).join("")}</tr>`).join("")}
+  ${rows.length?"":`<tr><td colspan="6" class="mute" style="padding:24px;text-align:center">Ничего не найдено по фильтрам</td></tr>`}</tbody></table></div>
+ <div class="legend">${Object.entries(GLYPH).map(([k,v])=>`<span><span class="g s-${k}">${v[0]}</span> ${v[1]}</span>`).join("")}</div>`;
+ $("#q").oninput=e=>{S.q=e.target.value;const p=e.target.selectionStart;matrix();$("#q").focus();$("#q").setSelectionRange(p,p)};
+ $("#st").onchange=e=>{S.state=e.target.value;S.row=0;matrix();$("#st").focus()};
+ document.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{S.kind=b.dataset.k;S.row=0;matrix();document.querySelector(`.chip[data-k="${b.dataset.k}"]`).focus()});
+ if($("#clr"))$("#clr").onclick=()=>{S.client=null;matrix()};
+ document.querySelectorAll("td.c").forEach(td=>td.onclick=()=>{S.row=+td.dataset.r;S.col=+td.dataset.c;pick(rows);matrix();$("#grid").focus()});
+ $("#grid").onkeydown=e=>{
+  const mv={j:[1,0],ArrowDown:[1,0],k:[-1,0],ArrowUp:[-1,0],h:[0,-1],ArrowLeft:[0,-1],l:[0,1],ArrowRight:[0,1]}[keyOf(e)];
+  if(mv){e.preventDefault();S.row=Math.max(0,Math.min(rows.length-1,S.row+mv[0]));S.col=Math.max(0,Math.min(4,S.col+mv[1]));pick(rows);matrix();$("#grid").focus()}
+  else if(e.key==="Enter"){pick(rows);renderInspector()}};
+ if(rows.length)S.sel={key:rows[S.row].key,c:CLIENTS[S.col].id};else S.sel=null; /* инспектор всегда показывает ячейку под курсором */
+ renderInspector();
+}
+function pick(rows){const r=rows[S.row];if(r){S.sel={key:r.key,c:CLIENTS[S.col].id};renderInspector()}}
+
+function renderInspector(){
+ const el=$("#insp");
+ const r=S.sel&&ROWS.find(x=>x.key===S.sel.key);
+ if(!r){el.innerHTML=`<h2>Инспектор</h2><p class="mute">Выбери ячейку матрицы.</p>`;return}
+ const c=CLIENTS.find(x=>x.id===S.sel.c),x=r.inst[c.id];
+ const states=CLIENTS.map(k=>`<span title="${k.name}: ${GLYPH[cell(r,k.id)][1]}" class="g s-${cell(r,k.id)}">${GLYPH[cell(r,k.id)][0]}</span>`).join(" ");
+ if(!x){el.innerHTML=`<h2>${esc(r.key)}</h2><p>${states}</p><p class="mute">В ${c.name} этой сущности нет. Копирование между клиентами — этап M4.</p>`;return}
+ const mask=l=>l.includes("{{secret}}")?esc(l).replace("{{secret}}",`<span id="sec">••••••••••••</span><span class="reveal" id="rev" tabindex="0" role="button" aria-label="Показать значение, пока удерживается">держать</span>`):esc(l);
+ el.innerHTML=`
+ <h2>Инспектор</h2>
+ <div class="hud card"><div><span class="badge k-${esc(x.kind||r.kind)}">${esc(x.kind||r.kind)}</span><b>${esc(r.key)}</b></div>
+  <div class="mono" style="margin:6px 0">${states}</div>
+  <div class="kv"><span class="mute">клиент</span><span>${c.name}</span>
+  <span class="mute">состояние</span><span class="s-${x.state}">${GLYPH[x.state][0]} ${GLYPH[x.state][1]}</span>
+  <span class="mute">область</span><span>${esc(x.scope)}</span><span class="mute">версия</span><span>${esc(x.version)}</span>
+  <span class="mute">файл</span><span style="word-break:break-all">${esc(x.file)}</span><span class="mute">путь ключа</span><span style="word-break:break-all">${esc(x.ptr)}</span></div></div>
+ ${x.note?`<div class="card hud" style="border-color:var(--orange)"><b class="s-stale">Замечание</b><p style="margin:4px 0 0">${esc(x.note)}</p></div>`:""}
+ <h2>Источник</h2><pre>${x.snippet.map(mask).join("\n")}</pre>
+ ${x.state==="cloud"?"":`<h2>Предпросмотр записи (M3)</h2>
+ <pre><span class="mute">${esc(x.file)}</span>\n<span class="${x.state==="off"?"add":"del"}">${x.state==="off"?"+ включить":"- выключить"} ${esc(r.key)}</span></pre>`}
+ <div style="display:flex;gap:6px;flex-wrap:wrap">
+  ${x.state==="cloud"?"":`<button disabled title="Запись включается с M3 (CONCEPT.md §5)">${x.state==="off"?"Включить":"Выключить"}</button>`}
+  <button id="cp">Копировать путь</button><button disabled title="M2">Открыть в редакторе</button></div>
+ <p class="mute" style="font-size:11px;margin-top:10px">Запись идёт через план → diff → проверку процесса → бэкап → атомарную запись → проверку → откат.</p>`;
+ const rev=$("#rev");
+ if(rev){const on=()=>{$("#sec").textContent=DEMO_SECRET},off=()=>{$("#sec").textContent="••••••••••••"};
+  rev.onmousedown=on;rev.onmouseup=off;rev.onmouseleave=off;rev.onblur=off;
+  rev.onkeydown=e=>{if(e.key===" "||e.key==="Enter"){e.preventDefault();on()}};rev.onkeyup=off}
+ $("#cp").onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(x.file).catch(()=>{});
+}
+
+function radar(){
+ const pos=[[50,6],[91,40],[76,90],[24,90],[9,40]];
+ const stat=c=>{const all=ROWS.filter(r=>r.inst[c.id]).map(r=>r.inst[c.id]);return{n:all.length,bad:all.filter(x=>x.state==="broken").length,warn:all.filter(x=>x.state==="stale"||x.state==="shadowed").length}};
+ $("#main").innerHTML=`<div class="radar">
+  <div class="hud card"><h2>Радар клиентов</h2><div class="rwrap">
+   <div class="rcirc"></div><div class="beam fx"></div>
+   <div style="position:absolute;inset:0;display:grid;place-items:center;pointer-events:none"><div style="text-align:center"><div class="mono" style="font-size:28px;color:var(--cyan)">${ROWS.length}</div><div class="mute mono" style="font-size:11px">сущностей</div></div></div>
+   ${CLIENTS.map((c,i)=>{const s=stat(c),col=s.bad?"var(--red)":s.warn?"var(--orange)":"var(--green)";
+    return `<button class="node" style="left:${pos[i][0]}%;top:${pos[i][1]}%" data-c="${c.id}" aria-pressed="${S.client===c.id}" aria-label="${c.name}: ${s.n} сущностей, проблем ${s.bad+s.warn}"><b>${c.name}</b><span class="mute mono" style="font-size:11px"><span class="dot pulse" style="background:${col}"></span>${s.n} · ⚠ ${s.bad+s.warn}</span></button>`}).join("")}
+  </div></div>
+  <div><div class="hud card"><h2>По типам</h2><div class="kv">${["plugin","mcp","skill","hook","agent","rule","connector"].map(k=>`<span class="badge k-${k}">${k}</span><span>${ROWS.filter(r=>r.kind===k).length}</span>`).join("")}</div></div>
+  <div class="hud card"><h2>Проблемы (${FINDINGS.length})</h2>${FINDINGS.slice(0,5).map(f=>`<div style="margin:4px 0"><span class="g ${f.cls}">${f.sev}</span> ${esc(f.t)}</div>`).join("")}<button id="toDoc" style="margin-top:8px">Открыть Доктора</button></div></div></div>`;
+ document.querySelectorAll(".node").forEach(n=>n.onclick=()=>{S.client=n.dataset.c;S.col=CLIENTS.findIndex(c=>c.id===S.client);go("matrix")});
+ $("#toDoc").onclick=()=>go("doctor");
+}
+
+function hooks(){
+ $("#main").innerHTML=`<h2>Конвейер хуков · порядок выполнения слева направо</h2>
+ <div class="hud" style="padding:8px"><div class="pipe" role="group" aria-label="Хуки по событиям и клиентам">
+  <div></div>${EVENTS.map(e=>`<div class="h">${e}</div>`).join("")}
+  ${CLIENTS.filter(c=>c.id!=="cd").map(c=>`<div class="mono" style="color:var(--mute)">${c.name}</div>`+EVENTS.map(e=>{
+   if((NA[c.id]||[]).includes(e))return `<div class="na" title="Событие отсутствует у клиента">нет события</div>`;
+   const hs=HOOKS.filter(h=>h.c===c.id&&h.e===e);
+   return `<div>${hs.map(h=>h.n==="ctxkit"
+     ?`<button class="hk" data-c="${c.id}">${esc(h.n)}<br><small>${esc(h.m||"*")} · ${esc(h.src)}</small></button>`
+     :`<div class="hk" style="cursor:default">${esc(h.n)}<br><small>${esc(h.m||"*")} · ${esc(h.src)}</small></div>`).join("")||'<span class="mute">·</span>'}</div>`}).join("")).join("")}
+ </div></div><p class="mute">Штриховка — у клиента нет такого события (таблица соответствия в CONCEPT.md §4). У Claude Desktop (чат) хуков на диске не найдено. Набор событий по клиентам в макете иллюстративный, не проверен.</p>`;
+ document.querySelectorAll("button.hk").forEach(b=>b.onclick=()=>{S.sel={key:"ctxkit-hooks",c:b.dataset.c};renderInspector()});
+}
+
+function doctor(){
+ $("#main").innerHTML=`<h2>Доктор · ${FINDINGS.length} находок</h2>`+FINDINGS.map((f,i)=>`
+  <div class="hud find"><span class="sev ${f.cls}" aria-hidden="true">${f.sev}</span><div><b>${esc(f.t)}</b><p>${esc(f.d||"")}</p></div>
+  ${f.key?`<button data-i="${i}">Показать</button>`:""}</div>`).join("");
+ document.querySelectorAll("button[data-i]").forEach(b=>b.onclick=()=>{const f=FINDINGS[+b.dataset.i];
+  S.kind="all";S.state="all";S.q="";S.client=null;S.view="matrix";S.col=CLIENTS.findIndex(c=>c.id===f.c);
+  S.row=visibleRows().findIndex(r=>r.key===f.key);S.sel={key:f.key,c:f.c};render()});
+}
+function journal(){
+ $("#main").innerHTML=`<h2>Журнал</h2><div class="hud card"><p>Здесь будут снимки состояния, diff «что изменилось» и откат. Раздел появляется с этапа M3 (CONCEPT.md §5, §10).</p></div>`;
+}
+
+/* ---------- палитра, справка, клавиши ---------- */
+let palItems=[],palSel=0;
+let palOpener=null;
+function palOpen(){palOpener=document.activeElement;$("#pal").classList.add("open");$("#palIn").value="";palFilter();$("#palIn").focus()}
+function palClose(){$("#pal").classList.remove("open");const o=palOpener&&document.body.contains(palOpener)?palOpener:$("#grid")||$("#main");if(o)o.focus()}
+function palFilter(){
+ const q=$("#palIn").value.toLowerCase();
+ palItems=[...VIEWS.map(([id,t])=>({t:"Раздел: "+t,h:"",f:()=>go(id)})),
+  ...ROWS.map(r=>({t:r.key,h:r.kind,f:()=>{S.kind="all";S.state="all";S.q="";S.client=null;S.view="matrix";S.row=ROWS.indexOf(r);S.sel={key:r.key,c:Object.keys(r.inst)[0]};S.col=CLIENTS.findIndex(c=>c.id===S.sel.c);render()}})),
+  {t:"FX: выкл",h:"действие",f:()=>setFx("off")},{t:"FX: полные",h:"действие",f:()=>setFx("full")}]
+  .filter(i=>i.t.toLowerCase().includes(q)).slice(0,30);
+ palSel=0;palDraw();
+}
+function palDraw(){$("#palList").innerHTML=palItems.map((i,n)=>`<li role="option" aria-selected="${n===palSel}" data-n="${n}"><span>${esc(i.t)}</span><span class="mute mono">${esc(i.h)}</span></li>`).join("");
+ document.querySelectorAll("#palList li").forEach(li=>li.onclick=()=>palRun(+li.dataset.n));
+ const s=document.querySelector("#palList [aria-selected=true]");if(s)s.scrollIntoView({block:"nearest"})}
+function palRun(n){const i=palItems[n];palClose();if(i){i.f();const g=$("#grid")||$("#main");g.focus()}}
+$("#palIn").oninput=palFilter;
+$("#palIn").onkeydown=e=>{
+ if(e.key==="ArrowDown"){palSel=Math.min(palItems.length-1,palSel+1);palDraw();e.preventDefault()}
+ else if(e.key==="ArrowUp"){palSel=Math.max(0,palSel-1);palDraw();e.preventDefault()}
+ else if(e.key==="Enter")palRun(palSel);else if(e.key==="Escape")palClose()};
+$("#pal").onclick=e=>{if(e.target.id==="pal")palClose()};
+$("#palBtn").onclick=palOpen;
+
+function setFx(v){document.body.dataset.fx=v;$("#fx").value=v}
+$("#fx").onchange=e=>setFx(e.target.value);
+if(matchMedia("(prefers-reduced-motion:reduce)").matches)setFx("off");
+/* анимации на паузу, когда окно скрыто или без фокуса */
+const pause=()=>document.body.classList.toggle("paused",document.hidden||!document.hasFocus());
+["visibilitychange"].forEach(n=>document.addEventListener(n,pause));
+addEventListener("blur",pause);addEventListener("focus",pause);
+
+document.addEventListener("keydown",e=>{
+ const k=keyOf(e),typing=/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+ if((e.ctrlKey||e.metaKey)&&k==="k"){e.preventDefault();palOpen();return}
+ if(e.key==="Escape"){$("#help").classList.remove("open");if($("#pal").classList.contains("open"))palClose();return}
+ if(typing)return;
+ if(e.code==="Slash"&&e.shiftKey||e.key==="?"){$("#help").classList.toggle("open");return}
+ if((e.code==="Slash"||e.key==="/")&&S.view==="matrix"){e.preventDefault();$("#q").focus();return}
+ if(/^[1-5]$/.test(e.key)){go(VIEWS[+e.key-1][0]);return}
+ if(S.view==="matrix"&&document.activeElement.id!=="grid"&&/^[jkhl]$/.test(k)){$("#grid").focus();$("#grid").dispatchEvent(new KeyboardEvent("keydown",{key:e.key,code:e.code,bubbles:true}))}
+});
+
+/* ---------- старт ---------- */
+function boot(){
+ if(document.body.dataset.fx!=="full"){render();return}
+ const b=$("#boot"),log=$("#bootlog"),lines=["> loadout 0.0.0-concept","> scan claude-code ........ ok","> scan claude-desktop ..... ok","> scan codex .............. ok","> scan antigravity ........ ok","> scan deepseek ........... ok","> read-only: R0"];
+ b.classList.add("on");let i=0;
+ const t=setInterval(()=>{log.textContent+=(lines[i++]||"")+"\n";if(i>lines.length){clearInterval(t);b.classList.remove("on");render()}},70);
+ render();
+}
+boot();
+</script>
+</body>
+</html>
