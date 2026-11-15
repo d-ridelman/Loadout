@@ -1255,12 +1255,15 @@ fn real_machine_plans_are_dry_and_succeed() {
         assert_eq!(before[i], after[i], "plan не должен менять {f:?}");
     }
     for f in &files {
-        let mut tmp = f.clone().into_os_string();
-        tmp.push(".loadout.tmp");
-        assert!(
-            !Path::new(&tmp).exists(),
-            "после plan остался временный файл записи"
+        let (dir, base) = (
+            f.parent().unwrap(),
+            f.file_name().unwrap().to_string_lossy(),
         );
+        let left = fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with(&format!("{base}.loadout.")) && n.ends_with(".tmp")
+        });
+        assert!(!left, "после plan остался временный файл записи");
     }
 }
 

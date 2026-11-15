@@ -20,6 +20,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub mod skill;
 
+#[cfg(test)]
+mod race_tests;
+
 /// Почему запись нельзя переключить (показывается в инспекторе).
 pub fn why_not(e: &Entity) -> String {
     match (e.client, e.kind) {
@@ -1085,17 +1088,41 @@ fn new_op_dir(store: &Path) -> Result<(String, PathBuf), String> {
     ))
 }
 
-/// Временный файл рядом: тот же том, значит `rename` атомарен. Имя оканчивается на `.tmp`, сторож его не видит.
-fn atomic_write(file: &Path, bytes: &[u8]) -> Result<(), String> {
+// Шов для тестов гонок: колбэк вызывается между записью временного файла и сверкой с ожидаемым содержимым.
+#[cfg(test)]
+type Hook = Box<dyn Fn(&Path)>;
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BEFORE_SWAP: std::cell::RefCell<Option<Hook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Временный файл рядом: тот же том, значит `rename` атомарен. Имя `<файл>.loadout.<pid>.tmp` оканчивается на `.tmp`
+/// (сторож его не видит), а pid не даёт двум ядрам писать в один временный файл.
+/// Перед самым `rename` файл сверяется с `expect` (тем, что было при плане): если за время записи бэкапа и временного
+/// файла его успел переписать клиент, замены нет и ничего не записано.
+fn atomic_write(file: &Path, bytes: &[u8], expect: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let mut name = file.as_os_str().to_owned();
-    name.push(".loadout.tmp");
+    name.push(format!(".loadout.{}.tmp", std::process::id()));
     let tmp = PathBuf::from(name);
     let res = (|| {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
         drop(f);
+        #[cfg(test)]
+        BEFORE_SWAP.with(|h| {
+            if let Some(hook) = h.borrow().as_ref() {
+                hook(file);
+            }
+        });
+        if std::fs::read(file).ok().as_deref() != Some(expect) {
+            return Err(std::io::Error::other(crate::tr!(
+                "файл изменился перед заменой: его переписал другой процесс, запись отменена, повторите",
+                "the file changed just before the swap: another process rewrote it; nothing was written, try again"
+            )));
+        }
         // клиент мог на миг открыть файл без права на замену: пробуем несколько раз
         let mut last = Ok(());
         for _ in 0..5 {
@@ -1190,7 +1217,7 @@ fn commit(
             return fail(e);
         }
     }
-    if let Err(e) = atomic_write(&p.file, &p.new) {
+    if let Err(e) = atomic_write(&p.file, &p.new, &p.old) {
         // вынос не состоялся: корзина возвращается к прежнему виду (новой копии нет, устаревшая на месте)
         if let Some(t) = p.trash.as_ref().filter(|t| t.after.is_some()) {
             match &t.before {
@@ -1629,7 +1656,7 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     if let Err(e) = write_manifest(&dir, &r) {
         return fail(e);
     }
-    if let Err(e) = atomic_write(&file, &before) {
+    if let Err(e) = atomic_write(&file, &before, &current) {
         return fail(e);
     }
     // как и после записи: чужую свежую запись не затираем, запись об откате остаётся
