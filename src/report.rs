@@ -122,6 +122,9 @@ fn model_slot(model: &str) -> usize {
 // skipped, which is several times faster than building a `serde_json::Value` per row.
 // Every field is lenient: a value of an unexpected type reads as absent instead of failing the
 // row, like the `Value`-based reader this replaced.
+// shortcut: structural errors inside an object (duplicate keys, a lone `\ud83d` surrogate) still
+// drop that row's blocks, as the old reader dropped the whole row; Claude Code writes neither
+// duplicates nor, in practice, broken surrogates. Catch the error in `ObjV::visit_map` if it shows up.
 type S<'a> = Option<Cow<'a, str>>;
 
 macro_rules! skip_scalars {
