@@ -1,14 +1,49 @@
 //! `loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek]` — только чтение.
 
+mod serve;
+
 use loadout_core::model::{Client, ScanResult};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+fn home_or_default(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.or_else(|| {
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+    })
+}
+
+/// `loadout serve [--home ПУТЬ]`: постоянный процесс для окна (JSON-RPC по stdio и сторож файлов).
+fn serve_main(args: &[String]) -> ExitCode {
+    let mut home = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--home" => home = it.next().map(PathBuf::from),
+            other => {
+                eprintln!("неизвестный аргумент: {other}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let Some(home) = home_or_default(home) else {
+        eprintln!("не удалось определить домашний каталог, укажите --home");
+        return ExitCode::from(2);
+    };
+    serve::run(&home);
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("serve") {
+        return serve_main(&args[1..]);
+    }
     if args.first().map(String::as_str) != Some("scan") {
         eprintln!("использование: loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek]");
+        eprintln!("             loadout serve [--home ПУТЬ]");
         return ExitCode::from(2);
     }
     let (mut json, mut pretty) = (false, false);

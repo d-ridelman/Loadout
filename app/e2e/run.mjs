@@ -84,6 +84,68 @@ async function layout(page, label) {
   must(m.misaligned === 0, `${label}: колонки шапки и ячеек смещены`)
 }
 
+/** Процессы ядра (`loadout*.exe`) любого вида: после проверок их остаться не должно. */
+function coreLeftovers() {
+  try {
+    const out = execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'loadout*.exe' } | Select-Object -ExpandProperty ProcessId`],
+      { encoding: 'utf8' },
+    )
+    return out.split(/\s+/).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/** PID ядра, запущенного окном на этом домашнем каталоге (по командной строке). */
+function sidecarPids(homeLeaf) {
+  const out = execFileSync(
+    'powershell',
+    ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "Name='loadout.exe'" | Where-Object { $_.CommandLine -like '*serve*' -and $_.CommandLine -like '*${homeLeaf}*' } | Select-Object -ExpandProperty ProcessId`],
+    { encoding: 'utf8' },
+  )
+  return out.split(/\s+/).filter(Boolean)
+}
+
+/** Подпись ячейки матрицы: строка по имени, колонка клиента по номеру (0 — Claude Code). */
+function cellLabel(page, rowName, clientIdx) {
+  return page.evaluate(
+    ([name, idx]) => {
+      const row = [...document.querySelectorAll('tbody tr')].find((tr) => tr.querySelector('td.name b')?.textContent === name)
+      return row ? row.children[idx + 1]?.getAttribute('aria-label') ?? null : null
+    },
+    [rowName, clientIdx],
+  )
+}
+
+async function waitFor(fn, what, ms = 12000) {
+  const end = Date.now() + ms
+  for (;;) {
+    const v = await fn()
+    if (v) return v
+    if (Date.now() > end) throw new Error(`не дождались: ${what}`)
+    await new Promise((r) => setTimeout(r, 150))
+  }
+}
+
+const axeSource = readFileSync(join(appDir, 'node_modules', 'axe-core', 'axe.min.js'), 'utf8')
+
+/** Обход axe-core по правилам WCAG A/AA и ARIA (включая контраст). Шумные для окна приложения правила выключены. */
+async function axeCheck(page, label) {
+  await page.evaluate(axeSource) // через CDP: CSP страницы (`script-src 'self'`) на это не распространяется
+  const violations = await page.evaluate(async () => {
+    const r = await window.axe.run(document, {
+      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'cat.aria', 'cat.color'] },
+      // `color-contrast-enhanced` — уровень AAA (7:1); цель проекта — AA (4,5:1), его проверяет `color-contrast`
+      rules: { 'color-contrast-enhanced': { enabled: false }, region: { enabled: false }, 'page-has-heading-one': { enabled: false }, 'landmark-one-main': { enabled: false } },
+    })
+    return r.violations.map((v) => ({ id: v.id, impact: v.impact, count: v.nodes.length, sample: v.nodes[0]?.target?.join(' ') }))
+  })
+  for (const v of violations) log(`  axe ${label}: ${v.id} (${v.impact}) ×${v.count} ${v.sample}`)
+  return violations
+}
+
 function leftovers() {
   try {
     const out = execFileSync(
@@ -128,6 +190,9 @@ try {
   // ---- основной сценарий ----
   session = await launch({ LOADOUT_HOME: home })
   let { app, page } = session
+  const pageErrors = []
+  page.on('pageerror', (e) => pageErrors.push(`pageerror: ${e.message.slice(0, 200)}`))
+  page.on('console', (m) => m.type() === 'error' && pageErrors.push(`console.error: ${m.text().slice(0, 200)}`))
   await page.waitForSelector('#grid', { timeout: 20000 })
   must((await page.title()) === 'Loadout', 'заголовок окна не Loadout')
 
@@ -186,15 +251,51 @@ try {
       await page.keyboard.press(key)
       await page.waitForTimeout(250)
       if (key === '1') await layout(page, `${name}@${w}`)
+      if (w === 1920) {
+        const v = await axeCheck(page, name)
+        must(v.length === 0, `axe нашёл нарушения на экране «${name}»: ${v.map((x) => x.id).join(', ')}`)
+      }
       await shot(page, `m1-${name}-${w}`)
     }
     await page.keyboard.press('1')
   }
 
+  // ---- живое обновление: правка конфига на диске меняет матрицу без кнопки «Скан» и без экрана «загрузка» ----
+  await resize(app, 1280, 800)
+  await page.keyboard.press('1')
+  await page.getByLabel('Поиск').fill('')
+  await page.locator('#grid').focus()
+  await page.evaluate(() => (document.getElementById('grid').dataset.alive = '1'))
+  const cfg = join(home, '.codex', 'config.toml')
+  const original = readFileSync(cfg, 'utf8')
+  must(String(await cellLabel(page, 'p1', 2)).includes('включено'), 'p1 в Codex исходно включён')
+  writeFileSync(cfg, original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false'))
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'глиф p1 сменился на «выключено» сам')
+  must((await page.evaluate(() => document.getElementById('grid')?.dataset.alive)) === '1', 'таблица пересоздана: данные должны меняться на месте')
+  must((await page.evaluate(() => document.activeElement?.id)) === 'grid', 'фокус слетел с таблицы при обновлении')
+  must((await page.locator('td.fresh').count()) > 0, 'изменение не подсвечено значком Δ')
+  must((await page.locator('td.fresh .delta').first().innerText()) === 'Δ', 'подсветка без значка (только цвет)')
+  must((await page.locator('[role=status]').count()) === 0, 'при обновлении показан экран «загрузка»')
+
+  // ---- убитое ядро поднимается заново, окно догоняет изменения, сделанные за время паузы ----
+  const leaf = home.split(/[\\/]/).pop()
+  const pids = sidecarPids(leaf)
+  must(pids.length === 1, `ядро для окна должно быть одно, найдено: ${pids.length}`)
+  execFileSync('taskkill', ['/PID', pids[0], '/F'], { stdio: 'ignore' })
+  writeFileSync(cfg, original) // правка, пока ядра нет
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'после перезапуска ядра окно догнало правку', 15000)
+  const after = sidecarPids(leaf)
+  must(after.length === 1 && after[0] !== pids[0], 'ядро не перезапустилось')
+  // и сторож у нового ядра работает
+  writeFileSync(cfg, original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false'))
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'сторож нового ядра работает')
+  writeFileSync(cfg, original)
+
   // reduced motion → «FX: выкл» по умолчанию применяется при загрузке; здесь проверяем переключатель
   await page.getByLabel('Уровень эффектов').selectOption('off')
   must((await page.evaluate(() => document.documentElement.dataset.fx)) === 'off', 'FX не выключился')
 
+  must(pageErrors.length === 0, `ошибки страницы: ${pageErrors.join(' | ')}`)
   await close(session)
 
   // ---- состояние «загрузка» ----
@@ -241,6 +342,16 @@ try {
   process.exitCode = 1
 } finally {
   for (const h of homes) rmSync(h, { recursive: true, force: true })
+  const core = coreLeftovers()
+  log('оставшихся процессов ядра (loadout*.exe):', core.length)
+  for (const id of core) {
+    try {
+      execFileSync('taskkill', ['/PID', id, '/F'], { stdio: 'ignore' })
+    } catch {
+      /* уже закрыт */
+    }
+  }
+  if (core.length) process.exitCode = 1
   const left = leftovers()
   log('оставшихся процессов electron проверочного профиля:', left.length)
   if (left.length) {

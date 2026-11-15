@@ -1,10 +1,11 @@
 import { app, BrowserWindow, clipboard, ipcMain, Menu, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
-import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { ScanResponse, ScanResult } from '../shared/model'
+import type { ChangedEvent, ScanResponse } from '../shared/model'
+import { Sidecar } from './sidecar'
+import { validateDiff, validateScan } from './validate'
 
 /**
  * Переменные окружения (`LOADOUT_BIN`, `LOADOUT_HOME`, `LOADOUT_USER_DATA`, `ELECTRON_RENDERER_URL`) нужны разработке
@@ -40,66 +41,65 @@ function sidecarPath(): string {
   return envOf('LOADOUT_BIN') ?? resolve(app.getAppPath(), '..', 'target', 'release', 'loadout.exe')
 }
 
-function validate(raw: unknown): ScanResult {
-  const o = raw as Partial<ScanResult> | null
-  if (!o || !Array.isArray(o.entities) || !Array.isArray(o.warnings)) {
-    throw new Error('ядро вернуло данные неожиданной формы')
+let sidecar: Sidecar | undefined
+let lastWindow: BrowserWindow | undefined
+
+/** Постоянное ядро: `loadout serve` по JSON-RPC. Падает — поднимается заново (см. sidecar.ts). */
+function ensureSidecar(): Sidecar | string {
+  if (sidecar) return sidecar
+  const bin = sidecarPath()
+  if (!existsSync(bin) || !basename(bin).toLowerCase().startsWith('loadout')) {
+    return tidy(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`)
   }
-  if (o.entities.length > 100_000) throw new Error('ядро вернуло слишком много записей')
-  const clients = ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek']
-  const kinds = ['plugin', 'mcp', 'skill', 'hook', 'agent', 'command', 'marketplace', 'connector']
-  const states = ['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
-  for (const e of o.entities) {
-    const ok =
-      typeof e?.id === 'string' &&
-      typeof e.logicalKey === 'string' &&
-      typeof e.name === 'string' &&
-      typeof e.scope === 'string' &&
-      clients.includes(e.client) &&
-      kinds.includes(e.kind) &&
-      states.includes(e.state) &&
-      typeof e.origin?.file === 'string' &&
-      typeof e.origin.pointer === 'string' &&
-      typeof e.detail === 'object' &&
-      e.detail !== null
-    if (!ok) throw new Error('в ответе ядра есть запись неожиданной формы')
-  }
-  if (!o.warnings.every((w) => typeof w === 'string')) throw new Error('предупреждения ядра неожиданной формы')
-  return o as ScanResult
+  const args = ['serve']
+  const homeOverride = envOf('LOADOUT_HOME')
+  if (homeOverride) args.push('--home', homeOverride)
+  let readySeen = false
+  sidecar = new Sidecar({
+    bin,
+    args,
+    onNotification: (method, params) => {
+      if (method === 'changed') void pushChanged(params)
+      else if (method === 'ready') {
+        // Повторный `ready` значит, что ядро перезапустилось: за время паузы файлы могли измениться, окно догоняем
+        if (readySeen) void pushChanged(undefined)
+        readySeen = true
+      }
+    },
+  })
+  sidecar.start()
+  return sidecar
 }
 
 /** Только для проверок окна: задержка ответа, чтобы снять состояние «загрузка». */
 async function runScan(): Promise<ScanResponse> {
   const delay = qa ? Number(process.env.LOADOUT_QA_DELAY_MS ?? 0) : 0
   if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay))
-  return doScan()
+  const s = ensureSidecar()
+  if (typeof s === 'string') return { ok: false, error: s }
+  const started = Date.now()
+  try {
+    return { ok: true, data: validateScan(await s.request('scan')), ms: Date.now() - started }
+  } catch (e) {
+    return { ok: false, error: tidy(e instanceof Error ? e.message : 'не удалось разобрать ответ ядра') }
+  }
 }
 
-function doScan(): Promise<ScanResponse> {
-  const bin = sidecarPath()
-  if (!existsSync(bin) || !basename(bin).toLowerCase().startsWith('loadout')) {
-    return Promise.resolve({
-      ok: false,
-      error: tidy(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`),
-    })
+/** Ядро сообщило об изменении: забираем снимок, проверяем так же, как ответ на запрос, и отдаём окну. */
+async function pushChanged(params: unknown): Promise<void> {
+  const win = lastWindow
+  if (!win || win.isDestroyed() || !sidecar) return
+  try {
+    // `undefined` — перезапуск ядра: различий не знаем, окну уходят свежие данные без подсветки
+    const diff = params === undefined
+      ? { added: [], removed: [], changed: [], warningsChanged: false, factsChanged: false }
+      : validateDiff(params)
+    const data = validateScan(await sidecar.request('snapshot'))
+    const event: ChangedEvent = { data, diff }
+    win.webContents.send('changed', event)
+  } catch {
+    /* битое событие не должно ронять окно: следующий скан или ручное обновление догонит */
   }
-  const args = ['scan', '--json']
-  const homeOverride = envOf('LOADOUT_HOME')
-  if (homeOverride) args.push('--home', homeOverride)
-  const started = Date.now()
-  return new Promise((done) => {
-    execFile(bin, args, { timeout: 20_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, stdout) => {
-      if (err) {
-        done({ ok: false, error: tidy(`ядро не ответило: ${err.message.split('\n')[0] ?? 'ошибка запуска'}`) })
-        return
-      }
-      try {
-        done({ ok: true, data: validate(JSON.parse(stdout)), ms: Date.now() - started })
-      } catch (e) {
-        done({ ok: false, error: tidy(e instanceof Error ? e.message : 'не удалось разобрать ответ ядра') })
-      }
-    })
-  })
 }
 
 /** Принимаем вызовы только от нашей страницы: файл из сборки или адрес dev-сервера. */
@@ -108,6 +108,11 @@ function trusted(e: IpcMainInvokeEvent): boolean {
   return url.split('#')[0] === INDEX_URL || (DEV_URL !== undefined && url.startsWith(DEV_URL))
 }
 
+/** Окно проверок не мешает владельцу: за экраном, без кнопки на панели задач (`LOADOUT_QA_VISIBLE=1` возвращает на экран). */
+const qaHidden = qa && process.env.LOADOUT_QA_VISIBLE !== '1'
+// Без этого Chromium не рисует перекрытое или внеэкранное окно, и снимки зависают.
+if (qa) app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1480,
@@ -115,6 +120,8 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 640,
     show: false,
+    skipTaskbar: qaHidden,
+    ...(qaHidden ? { x: -6000, y: 0 } : {}),
     title: 'Loadout',
     backgroundColor: '#282a36',
     autoHideMenuBar: true,
@@ -126,7 +133,8 @@ function createWindow(): void {
       webSecurity: true,
     },
   })
-  win.once('ready-to-show', () => win.show())
+  lastWindow = win
+  win.once('ready-to-show', () => (qaHidden ? win.showInactive() : win.show()))
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (ev) => ev.preventDefault())
   if (DEV_URL) void win.loadURL(DEV_URL)
@@ -147,4 +155,6 @@ void app.whenReady().then(() => {
   })
 })
 
+// Ядро — дочерний процесс окна: закрываем stdin (по EOF оно выходит само) и добиваем, если завис.
+app.on('before-quit', () => sidecar?.stop())
 app.on('window-all-closed', () => app.quit())

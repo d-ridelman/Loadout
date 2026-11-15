@@ -5,9 +5,12 @@ pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
 pub mod deepseek;
+pub mod diff;
+pub mod facts;
 pub mod frontmatter;
 pub mod mask;
 pub mod model;
+pub mod watch;
 
 use model::{Client, Entity, Kind, ScanResult, State};
 use serde_json::{json, Value};
@@ -149,7 +152,8 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
             c.tilde(&md),
             "frontmatter",
         )
-        .detail(json!({ "description": desc }));
+        .detail(json!({ "description": desc }))
+        .fs_named(); // имя уже прошло safe_name, а запасное — имя каталога
         if name != dir_name {
             e = e.note(format!(
                 "имя в frontmatter «{name}» не совпадает с каталогом «{dir_name}»"
@@ -429,8 +433,22 @@ pub fn scan(home: &Path) -> ScanResult {
             &mut e.origin.pointer,
         ] {
             scrub_str(s, &forms);
-            // Строки из файлов в именах, областях и указателях: слова, похожие на токен, скрываются.
-            *s = mask::scrub_words(s);
+        }
+        // Строки из файлов в именах, областях и указателях: слова, похожие на токен, скрываются.
+        // Имена из файловой системы (каталоги скилов, каталог Codex) не трогаем: они не секрет, а скрытие сливает записи.
+        let fs = e.fs_named;
+        let fields: [&mut String; 5] = [
+            &mut e.name,
+            &mut e.scope,
+            &mut e.logical_key,
+            &mut e.origin.file,
+            &mut e.origin.pointer,
+        ];
+        for (i, s) in fields.into_iter().enumerate() {
+            let fs_field = matches!(i, 0 | 2 | 4) && fs;
+            if !fs_field {
+                *s = mask::scrub_words(s);
+            }
         }
         if let Some(s) = e.note.as_mut() {
             scrub_str(s, &forms);
@@ -453,6 +471,7 @@ pub fn scan(home: &Path) -> ScanResult {
     ScanResult {
         entities: c.entities,
         warnings: c.warnings,
+        facts: facts::collect(home),
     }
 }
 

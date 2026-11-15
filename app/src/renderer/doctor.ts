@@ -1,4 +1,4 @@
-import type { ClientId, Entity } from '../shared/model'
+import type { ClientId, Entity, Facts } from '../shared/model'
 import { CLIENTS } from '../shared/model'
 
 export type Severity = 'error' | 'warn' | 'info'
@@ -15,9 +15,51 @@ export interface Finding {
 const clientName = (id: ClientId): string => CLIENTS.find((c) => c.id === id)?.name ?? id
 const SECRETISH = /token|secret|passw|credential|cookie|auth|key$|^pat$|_pat$|pwd|oauth/i
 
-/** Автоматические находки Доктора. Чистая функция над результатом скана: проверяется без окна. */
-export function diagnose(entities: readonly Entity[], warnings: readonly string[]): Finding[] {
+const NO_FACTS: Facts = { backups: [], brokenLinks: [] }
+
+/**
+ * Автоматические находки Доктора. Единственное место, где факты скана превращаются в выводы: ядро отдаёт
+ * записи и счётчики, окно решает, что из этого проблема. Чистая функция: проверяется без окна.
+ */
+export function diagnose(entities: readonly Entity[], warnings: readonly string[], facts: Facts = NO_FACTS): Finding[] {
   const out: Finding[] = []
+
+  // Резервные копии, которые копят сторонние установщики: только число, имён файлов ядро не отдаёт.
+  for (const b of facts.backups) {
+    out.push({
+      id: `backups:${b.client}:${b.dir}`,
+      severity: 'info',
+      title: `${clientName(b.client)}: ${b.count} ${plural(b.count, 'резервная копия', 'резервные копии', 'резервных копий')} в ${b.dir}`,
+      detail: 'Их оставляют установщики сторонних инструментов при правке конфигов. Loadout копий не создаёт и не трогает; свои бэкапы будет хранить отдельно (M3).',
+    })
+  }
+
+  // Ссылки (junction) на кеш, который почистили: пакет в списке есть, а запустить его нечем.
+  for (const l of facts.brokenLinks) {
+    if (l.broken === 0) continue
+    out.push({
+      id: `links:${l.client}:${l.dir}`,
+      severity: l.broken === l.total ? 'error' : 'warn',
+      title: `${clientName(l.client)}: ${l.broken} из ${l.total} ссылок на пакеты ведут в никуда`,
+      detail: `Каталог ${l.dir}. Цель ссылок (кеш npx) удалена; пакеты, пока их не скачают заново, не запустятся.`,
+    })
+  }
+
+  // Маркетплейс без единого плагина: остался от удалённых плагинов или добавлен впрок.
+  const used = new Set<string>()
+  for (const e of entities) {
+    if (e.kind === 'plugin') used.add(`${e.client}|${e.name.slice(e.name.lastIndexOf('@') + 1)}`)
+  }
+  for (const e of entities) {
+    if (e.kind !== 'marketplace' || used.has(`${e.client}|${e.name}`)) continue
+    out.push({
+      id: `orphan:${e.id}`,
+      severity: 'info',
+      title: `${e.name}: маркетплейс без плагинов (${clientName(e.client)})`,
+      detail: 'Ни один найденный плагин этого клиента не установлен из этого маркетплейса.',
+      entity: e,
+    })
+  }
 
   // Несколько записей с одним именем в одном клиенте и одном состоянии (две версии плагина, десять хуков) дают
   // одну находку: подробности и остальные записи видны в инспекторе.

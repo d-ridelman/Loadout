@@ -97,6 +97,10 @@ td.name b { word-break: break-word; }
 tr:hover td { background: rgba(68, 71, 90, 0.25); }
 td.c { cursor: pointer; white-space: nowrap; }
 .cur { outline: 2px solid var(--cyan); outline-offset: -2px; background: rgba(139, 233, 253, 0.08); }
+/* изменено при последнем обновлении с диска: значок Δ и рамка, не только цвет; анимация только при FX */
+.delta { margin-left: 4px; font: 700 12px var(--mono); color: var(--cyan); }
+td.fresh { box-shadow: inset 0 0 0 1px var(--cyan); }
+html[data-fx='low'] td.fresh, html[data-fx='full'] td.fresh { animation: pulse 1.4s ease-in-out 5; }
 .more { margin-left: 4px; font: 11px var(--mono); color: var(--mute); }
 .empty { padding: 24px; text-align: center; color: var(--mute); }
 .badge { display: inline-block; min-width: 54px; font: 11px var(--mono); text-align: center; border: 1px solid var(--deco); border-radius: 3px; padding: 0 4px; margin-right: 8px; color: var(--mute); }

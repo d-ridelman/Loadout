@@ -1,5 +1,6 @@
 /target
 /state/loadout-qa/
-/state/loadout-qa-detect/
+/state/loadout-qa-*/
+/state/real-*.png
 node_modules/
 /app/out/

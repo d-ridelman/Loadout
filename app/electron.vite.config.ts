@@ -27,5 +27,8 @@ export default defineConfig({
   preload: {},
   renderer: {
     plugins: [react(), csp],
+    // Без `data:`-шрифтов: Vite встраивает мелкие файлы base64, а CSP (`font-src 'self'`) такие шрифты блокирует
+    // (e2e поймал console.error на каждый). Все ресурсы остаются файлами.
+    build: { assetsInlineLimit: 0 },
   },
 })

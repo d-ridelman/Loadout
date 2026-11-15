@@ -32,7 +32,7 @@ const DETAIL_LABELS: Record<string, string> = {
   id: 'id записи',
 }
 
-export function Inspector({ row, sel, onPick }: { row: Row | undefined; sel: Sel | null; onPick: (idx: number) => void }) {
+export function Inspector({ row, sel, onPick }: { row: Row | undefined; sel: Sel | null; onPick: (id: string) => void }) {
   if (!row || !sel) {
     return (
       <>
@@ -64,7 +64,8 @@ export function Inspector({ row, sel, onPick }: { row: Row | undefined; sel: Sel
       </>
     )
   }
-  const e: Entity = cell.instances[Math.min(sel.idx, cell.instances.length - 1)] ?? cell.instances[0]!
+  // запись по id: при обновлении данных с диска номера в списке сдвигаются, а выбор должен остаться на той же записи
+  const e: Entity = cell.instances.find((x) => x.id === sel.id) ?? cell.instances[0]!
   const details = Object.entries(e.detail)
     .map(([k, v]) => [k, show(v)] as const)
     .filter((kv): kv is readonly [string, string] => kv[1] !== null)
@@ -91,9 +92,9 @@ export function Inspector({ row, sel, onPick }: { row: Row | undefined; sel: Sel
         <>
           <h2>Записи ({cell.instances.length})</h2>
           <ul className="instances">
-            {cell.instances.map((x, i) => (
+            {cell.instances.map((x) => (
               <li key={x.id}>
-                <button aria-pressed={i === sel.idx} onClick={() => onPick(i)}>
+                <button aria-pressed={x.id === e.id} onClick={() => onPick(x.id)}>
                   <Glyph state={x.state} /> {x.scope}
                   {x.kind !== e.kind || cell.instances.some((y) => y !== x && y.kind !== x.kind) ? ` · ${x.kind}` : ''}
                 </button>

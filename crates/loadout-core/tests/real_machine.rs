@@ -109,6 +109,56 @@ fn no_secret_value_reaches_the_scan_output() {
 
     let result = loadout_core::scan(&home);
     let out = serde_json::to_string(&result).expect("вывод сериализуется");
+
+    // Нижняя граница: «ноль утечек» не должен получаться оттого, что сканер молча ничего не нашёл
+    // (отвергнутый файл, скрытые имена, склеенные записи).
+    assert!(
+        result.warnings.is_empty(),
+        "предупреждения скана: {:?}",
+        result.warnings
+    );
+    for (dir, client) in [
+        (".claude", "claude-code"),
+        (".codex", "codex"),
+        (".gemini/config", "antigravity"),
+        (".dsh", "deepseek"),
+    ] {
+        if home.join(dir).is_dir() {
+            let n = result
+                .entities
+                .iter()
+                .filter(|e| e.client.slug() == client)
+                .count();
+            assert!(n > 0, "каталог {dir} есть, а записей {client} нет");
+        }
+    }
+    if home.join(".dsh/cordis.patch.yml").is_file() {
+        let mcp = result
+            .entities
+            .iter()
+            .filter(|e| e.client.slug() == "deepseek" && e.kind == loadout_core::model::Kind::Mcp)
+            .count();
+        assert!(
+            mcp > 0,
+            "cordis.patch.yml есть, а MCP dsh не найдено: файл отвергнут?"
+        );
+    }
+    let hidden: Vec<_> = result
+        .entities
+        .iter()
+        // указатель с путём проекта может быть частично скрыт (сегмент похож на токен): строки от этого не сливаются,
+        // а id считается до скрытия
+        .filter(|e| {
+            [&e.name, &e.logical_key, &e.scope]
+                .iter()
+                .any(|s| s.contains("<masked"))
+        })
+        .map(|e| format!("{}/{:?}/{}", e.client.slug(), e.kind, e.logical_key))
+        .collect();
+    assert!(
+        hidden.is_empty(),
+        "скрытые имена склеивают записи: {hidden:?}"
+    );
     let hits: Vec<(&String, &String)> = secrets
         .iter()
         .filter(|(value, _)| out.contains(value.as_str()))

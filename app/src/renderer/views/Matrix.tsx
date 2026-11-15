@@ -8,7 +8,8 @@ import { Glyph, KindBadge } from '../ui'
 export interface Sel {
   rowKey: string
   client: ClientId
-  idx: number
+  /** Выбранная запись в ячейке по id (а не по номеру: при обновлении данных номера сдвигаются); `null` — главная. */
+  id: string | null
 }
 
 export interface Filters {
@@ -34,16 +35,18 @@ interface Props {
   sel: Sel | null
   onSelect: (s: Sel) => void
   searchRef: RefObject<HTMLInputElement | null>
+  /** Записи, изменившиеся при последнем обновлении с диска: отмечаются значком Δ (не только цветом). */
+  fresh: ReadonlySet<string>
 }
 
-export function Matrix({ rows, total, filters, setFilters, sel, onSelect, searchRef }: Props) {
+export function Matrix({ rows, total, filters, setFilters, sel, onSelect, searchRef, fresh }: Props) {
   const curRow = Math.max(0, sel ? rows.findIndex((r) => r.key === sel.rowKey) : 0)
   const curCol = Math.max(0, sel ? CLIENTS.findIndex((c) => c.id === sel.client) : 0)
 
   const pick = (ri: number, ci: number) => {
     const row = rows[Math.min(Math.max(ri, 0), rows.length - 1)]
     const client = CLIENTS[Math.min(Math.max(ci, 0), CLIENTS.length - 1)]
-    if (row && client) onSelect({ rowKey: row.key, client: client.id, idx: 0 })
+    if (row && client) onSelect({ rowKey: row.key, client: client.id, id: null })
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTableElement>) => {
@@ -139,14 +142,15 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
                   const state = cell?.state ?? 'none'
                   const active = ri === curRow && ci === curCol && sel !== null
                   const more = (cell?.instances.length ?? 0) - 1
+                  const isFresh = cell?.instances.some((i) => fresh.has(i.id)) ?? false
                   return (
                     <td
                       key={c.id}
                       id={`cell-${ri}-${ci}`}
                       role="gridcell"
-                      className={`c${active ? ' cur' : ''}`}
+                      className={`c${active ? ' cur' : ''}${isFresh ? ' fresh' : ''}`}
                       aria-selected={active}
-                      aria-label={`${r.name}, ${c.name}: ${GLYPH[state].label}${more > 0 ? `, ещё записей: ${more}` : ''}`}
+                      aria-label={`${r.name}, ${c.name}: ${GLYPH[state].label}${more > 0 ? `, ещё записей: ${more}` : ''}${isFresh ? ', изменено только что' : ''}`}
                       onClick={() => {
                         pick(ri, ci)
                         document.getElementById('grid')?.focus()
@@ -154,6 +158,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
                     >
                       <Glyph state={state} pulse />
                       {more > 0 ? <span className="more">+{more}</span> : null}
+                      {isFresh ? <span className="delta" aria-hidden="true">Δ</span> : null}
                     </td>
                   )
                 })}

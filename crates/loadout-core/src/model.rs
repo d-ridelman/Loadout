@@ -64,13 +64,13 @@ pub enum State {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Origin {
     pub file: String,
     pub pointer: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entity {
     pub id: String,
@@ -87,12 +87,18 @@ pub struct Entity {
     pub note: Option<String>,
     /// Только уже замаскированные данные: секретные значения сюда не попадают (см. mask.rs).
     pub detail: Value,
+    /// Имя и указатель взяты из имени файла или каталога, а не из содержимого файла: слова-токены в них не прячем,
+    /// иначе разные записи (`app-69f0dc45…` в каталоге Codex) сольются в одну строку `<masked>`.
+    #[serde(skip)]
+    pub fs_named: bool,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
 pub struct ScanResult {
     pub entities: Vec<Entity>,
     pub warnings: Vec<String>,
+    /// Счётчики по каталогам клиентов (резервные копии, битые ссылки); выводы делает Доктор.
+    pub facts: crate::facts::Facts,
 }
 
 /// FNV-1a 64: стабильный между версиями Rust, в отличие от `DefaultHasher`.
@@ -151,7 +157,14 @@ impl Entity {
             origin: Origin { file, pointer },
             note: None,
             detail: json!({}),
+            fs_named: false,
         }
+    }
+
+    /// Пометка «имя из файловой системы» (см. [`Entity::fs_named`]).
+    pub fn fs_named(mut self) -> Self {
+        self.fs_named = true;
+        self
     }
 
     pub fn version(mut self, v: Option<&str>) -> Self {

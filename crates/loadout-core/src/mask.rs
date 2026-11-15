@@ -645,7 +645,7 @@ pub fn safe_name(s: &str) -> Option<&str> {
 /// разделителями (`/ \ : @ , = ;` и пробел), похожие на токен, заменяются. Разделители сохраняются.
 pub fn scrub_words(s: &str) -> String {
     let is_delim =
-        |c: char| c.is_whitespace() || matches!(c, '/' | '\\' | ':' | '@' | ',' | '=' | ';');
+        |c: char| c.is_whitespace() || matches!(c, '/' | '\\' | ':' | '@' | ',' | '=' | ';' | '~');
     let mut out = String::with_capacity(s.len());
     let mut word = String::new();
     let flush = |word: &mut String, out: &mut String| {

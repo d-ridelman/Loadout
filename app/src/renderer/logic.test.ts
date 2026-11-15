@@ -89,6 +89,29 @@ describe('doctor', () => {
     ])
   })
 
+  it('факты ядра превращаются в находки: копии, битые ссылки, маркетплейс без плагинов', () => {
+    const f = diagnose(
+      [
+        ent({ kind: 'marketplace', name: 'lonely', logicalKey: 'lonely' }),
+        ent({ kind: 'marketplace', name: 'used', logicalKey: 'used' }),
+        ent({ kind: 'plugin', name: 'p@used', logicalKey: 'p' }),
+      ],
+      [],
+      {
+        backups: [{ client: 'codex', dir: '~/.codex', count: 21 }],
+        brokenLinks: [
+          { client: 'deepseek', dir: '~/.dsh/x', broken: 3, total: 3 },
+          { client: 'deepseek', dir: '~/.dsh/y', broken: 0, total: 5 },
+        ],
+      },
+    )
+    const ids = f.map((x) => x.id.split(':')[0])
+    expect(ids.sort()).toEqual(['backups', 'links', 'orphan'])
+    expect(f.find((x) => x.id.startsWith('backups'))?.title).toContain('21 резервная копия')
+    expect(f.find((x) => x.id.startsWith('links'))?.severity).toBe('error')
+    expect(f.find((x) => x.id.startsWith('orphan'))?.title).toContain('lonely')
+  })
+
   it('скил в двух областях одного клиента — находка, в разных клиентах — нет', () => {
     const dup = diagnose(
       [

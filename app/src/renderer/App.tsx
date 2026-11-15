@@ -62,11 +62,18 @@ export function App() {
   const [fx, setFx] = useState<Fx>(initialFx)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const load = useCallback(async () => {
-    setScan({ status: 'loading' })
+  /** Записи, изменившиеся при последнем обновлении с диска (подсвечиваются на несколько секунд). */
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set())
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const freshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  /** `silent`: данные меняются на месте, без экрана «загрузка»: он размонтировал бы таблицу и сбросил фокус и выбор. */
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setScan({ status: 'loading' })
     try {
       const r = await window.loadout.scan()
       setScan(r.ok ? { status: 'ready', data: r.data, ms: r.ms } : { status: 'error', error: r.error })
+      if (r.ok) setUpdatedAt(new Date())
     } catch (e) {
       setScan({ status: 'error', error: e instanceof Error ? e.message : 'не удалось запросить скан' })
     }
@@ -75,11 +82,27 @@ export function App() {
     void load()
   }, [load])
 
+  // Сторож файлов: ядро заметило смысловое изменение, данные приходят уже проверенными.
+  useEffect(() => {
+    const off = window.loadout.onChanged((e) => {
+      setScan((prev) => ({ status: 'ready', data: e.data, ms: prev.status === 'ready' ? prev.ms : 0 }))
+      setUpdatedAt(new Date())
+      setFresh(new Set([...e.diff.added, ...e.diff.changed]))
+      clearTimeout(freshTimer.current)
+      freshTimer.current = setTimeout(() => setFresh(new Set()), 8000)
+    })
+    return () => {
+      off()
+      clearTimeout(freshTimer.current)
+    }
+  }, [])
+
   const entities = useMemo<Entity[]>(() => (scan.status === 'ready' ? scan.data.entities : []), [scan])
   const warnings = scan.status === 'ready' ? scan.data.warnings : []
+  const facts = scan.status === 'ready' ? scan.data.facts : undefined
   const rows = useMemo(() => buildRows(entities), [entities])
   const visible = useMemo(() => applyFilters(rows, filters), [rows, filters])
-  const findings = useMemo(() => diagnose(entities, warnings), [entities, warnings])
+  const findings = useMemo(() => diagnose(entities, warnings, facts), [entities, warnings, facts])
   const hooks = useMemo(() => entities.filter((e) => e.kind === 'hook'), [entities])
   const selRow = sel ? rows.find((r) => r.key === sel.rowKey) : undefined
 
@@ -109,9 +132,8 @@ export function App() {
     (e: Entity) => {
       const key = `${groupOf(e.kind)}:${e.logicalKey}`
       const row = rows.find((r) => r.key === key)
-      const idx = Math.max(0, row?.cells[e.client]?.instances.findIndex((x) => x.id === e.id) ?? 0)
       setFilters({ ...DEFAULT_FILTERS, hideUnknown: e.state !== 'unknown' })
-      setSel({ rowKey: key, client: e.client, idx })
+      setSel({ rowKey: key, client: e.client, id: row?.cells[e.client]?.instances.some((x) => x.id === e.id) ? e.id : null })
       setView('matrix')
     },
     [rows],
@@ -120,7 +142,7 @@ export function App() {
   const showRow = useCallback((row: Row) => {
     const client = CLIENTS.find((c) => row.cells[c.id])?.id ?? 'claude-code'
     setFilters({ ...DEFAULT_FILTERS, hideUnknown: false })
-    setSel({ rowKey: row.key, client, idx: 0 })
+    setSel({ rowKey: row.key, client, id: null })
     setView('matrix')
   }, [])
 
@@ -152,7 +174,7 @@ export function App() {
       } else if (/^[1-5]$/.test(e.key)) {
         setView(VIEWS[Number(e.key) - 1]?.id ?? 'matrix')
       } else if (k === 'r' && !e.ctrlKey && !e.metaKey) {
-        void load()
+        void load(true)
       } else if (view === 'matrix' && /^[jkhl]$/.test(k)) {
         const grid = document.getElementById('grid')
         if (grid && document.activeElement !== grid) {
@@ -168,7 +190,7 @@ export function App() {
   const paletteItems = useMemo<PaletteItem[]>(
     () => [
       ...VIEWS.map((v) => ({ label: `Раздел: ${v.label}`, hint: 'раздел', run: () => setView(v.id) })),
-      { label: 'Пересканировать', hint: 'действие', run: () => void load() },
+      { label: 'Пересканировать', hint: 'действие', run: () => void load(true) },
       ...(['off', 'low', 'full'] as const).map((m) => ({ label: `Эффекты: ${m === 'off' ? 'выкл' : m === 'low' ? 'лёгкие' : 'полные'}`, hint: 'действие', run: () => setFx(m) })),
       ...rows.map((r) => ({ label: r.name, hint: r.kinds.join('+'), run: () => showRow(r) })),
     ],
@@ -198,7 +220,7 @@ export function App() {
         <span className="mono s-on" title="Приложение работает только на чтение. Запись — этапы M3–M4 (docs/CONCEPT.md)">
           R0 · только чтение
         </span>
-        <button onClick={() => void load()} aria-label="Пересканировать (клавиша R)">Скан</button>
+        <button onClick={() => void load(scan.status === 'ready')} aria-label="Пересканировать (клавиша R)">Скан</button>
         <button onClick={() => setPalette(true)} aria-label="Палитра команд">Ctrl+K</button>
       </header>
 
@@ -223,7 +245,7 @@ export function App() {
             <button onClick={() => void load()}>Повторить</button>
           </div>
         ) : view === 'matrix' ? (
-          <Matrix rows={visible} total={rows.length} filters={filters} setFilters={setFilters} sel={sel} onSelect={setSel} searchRef={searchRef} />
+          <Matrix rows={visible} total={rows.length} filters={filters} setFilters={setFilters} sel={sel} onSelect={setSel} searchRef={searchRef} fresh={fresh} />
         ) : view === 'radar' ? (
           <Radar entities={entities} findings={findings} activeClient={filters.client} onClient={filterClient} onDoctor={() => setView('doctor')} />
         ) : view === 'hooks' ? (
@@ -241,11 +263,16 @@ export function App() {
       </main>
 
       <aside aria-label="Инспектор">
-        <Inspector row={selRow} sel={sel} onPick={(idx) => sel && setSel({ ...sel, idx })} />
+        <Inspector row={selRow} sel={sel} onPick={(id) => sel && setSel({ ...sel, id })} />
       </aside>
 
       <footer>
         <span>{entities.length} записей · {rows.length} строк · {CLIENTS.length} клиентов</span>
+        {updatedAt ? (
+          <span title="Ядро следит за конфигами клиентов и присылает изменения само">
+            наблюдение за файлами · обновлено {updatedAt.toLocaleTimeString('ru-RU')}
+          </span>
+        ) : null}
         {problems > 0 ? <span className="s-broken">✕ сломано: {problems}</span> : null}
         {warnings.length > 0 ? <span className="s-stale">◐ предупреждений: {warnings.length}</span> : null}
         <span className="sp" />
