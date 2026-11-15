@@ -164,18 +164,23 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
         settings["advisorModel"].as_str().map(str::to_string),
         None,
     ));
+    let sub = settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"].as_str();
+    // Older `ctxkit setup` wrote haiku here: it puts every subagent without its own `model`, code writers included, on haiku.
+    let sub_haiku = sub.is_some_and(|v| v.to_ascii_lowercase().contains("haiku"));
     out.push(f(
         "subagent_model",
-        "info",
+        if sub_haiku { "warn" } else { "info" },
         t(
             lang,
             "CLAUDE_CODE_SUBAGENT_MODEL",
             "CLAUDE_CODE_SUBAGENT_MODEL",
         ),
-        settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"]
-            .as_str()
-            .map(str::to_string),
-        None,
+        sub.map(str::to_string),
+        sub_haiku.then_some(t(
+            lang,
+            "here haiku also goes to subagents that write code: remove the key and set model in agent files",
+            "haiku здесь достаётся и субагентам, которые пишут код: убери ключ и задай model в файлах агентов",
+        )),
     ));
 
     let missing: Vec<&str> = ["Explore.md", "checker.md"]
@@ -347,7 +352,7 @@ mod tests {
         let cmd = format!("\"{}\"", exe.to_string_lossy().replace('\\', "/"));
         let settings = json!({
             "model": "sonnet",
-            "env": {"CLAUDE_CODE_SUBAGENT_MODEL": "haiku"},
+            "env": {"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"},
             "hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": cmd}]}]}
         });
         fs::write(d.join("settings.json"), settings.to_string()).unwrap();
@@ -364,6 +369,22 @@ mod tests {
             .all(|x| x.severity != "warn" && x.severity != "error"));
         fs::remove_file(&exe).unwrap();
         assert_eq!(sev(&diagnose(&d, Lang::En), "hooks"), "error");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn subagent_env_haiku_warns_but_other_values_do_not() {
+        let d = temp("ctxkit_doctor_subagent_env");
+        let write = |v: &str| {
+            let s = json!({"model": "sonnet", "env": {"CLAUDE_CODE_SUBAGENT_MODEL": v}});
+            fs::write(d.join("settings.json"), s.to_string()).unwrap();
+        };
+        write("haiku");
+        assert_eq!(sev(&diagnose(&d, Lang::En), "subagent_model"), "warn");
+        write("claude-haiku-5-5");
+        assert_eq!(sev(&diagnose(&d, Lang::En), "subagent_model"), "warn");
+        write("sonnet");
+        assert_eq!(sev(&diagnose(&d, Lang::En), "subagent_model"), "info");
         let _ = fs::remove_dir_all(&d);
     }
 

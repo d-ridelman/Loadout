@@ -432,7 +432,8 @@ const cases = [
 
     const s1 = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
     if (s1.model !== 'sonnet' || s1.advisorModel !== 'fable' || s1.effortLevel !== 'high') return false;
-    if (s1.env?.KEEP_ME !== '42' || s1.env?.CLAUDE_CODE_SUBAGENT_MODEL !== 'haiku') return false;
+    if (s1.env?.KEEP_ME !== '42' || s1.env?.CLAUDE_CODE_SUBAGENT_MODEL !== undefined) return false; // env only with --subagent
+    if (s1.modelSettings?.['claude-sonnet-5-5']?.effortLevel !== 'high') return false;
     if (!Array.isArray(s1.hooks?.SessionStart) || s1.hooks.SessionStart.length !== 1) return false;
     const preCmds = s1.hooks.PreToolUse.flatMap((e) => e.hooks.map((h) => h.command));
     if (!preCmds.includes('test-ctxkit') || !preCmds.includes('custom-other-hook')) return false;

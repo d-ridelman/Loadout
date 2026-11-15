@@ -17,6 +17,9 @@ struct SetupOpts {
     main_model: String,
     advisor: String,
     subagent: String,
+    /// `--subagent` given: only then `CLAUDE_CODE_SUBAGENT_MODEL` is written (it would put every
+    /// subagent without its own `model`, code writers included, on that model); `subagent` alone sets Explore.md.
+    subagent_env: bool,
     effort: String,
     no_agents: bool,
     force_agents: bool,
@@ -43,6 +46,7 @@ impl Default for SetupOpts {
             main_model: "sonnet".to_string(),
             advisor: "fable".to_string(),
             subagent: "haiku".to_string(),
+            subagent_env: false,
             effort: "high".to_string(),
             no_agents: false,
             force_agents: false,
@@ -92,7 +96,10 @@ pub fn run_setup(args: &[String]) -> i32 {
                     "--profile" => opts.profile_dir = Some(PathBuf::from(val)),
                     "--main-model" => opts.main_model = val.clone(),
                     "--advisor" => opts.advisor = val.clone(),
-                    "--subagent" => opts.subagent = val.clone(),
+                    "--subagent" => {
+                        opts.subagent = val.clone();
+                        opts.subagent_env = true;
+                    }
                     "--effort" => opts.effort = val.clone(),
                     "--desktop-model" => opts.desktop_model = val.clone(),
                     "--desktop-file" => opts.desktop_file = Some(PathBuf::from(val)),
@@ -461,11 +468,29 @@ fn update_claude_settings(
         Value::String(opts.effort.clone()),
     );
 
+    // Claude Code ignores a top-level user-level `effortLevel` on Opus 5.5 and later models; the per-model
+    // `modelSettings` entry (v2.1.251+) is the documented way. `max` is not accepted there.
+    match (
+        canonical_model_id(&opts.main_model),
+        matches!(opts.effort.as_str(), "low" | "medium" | "high" | "xhigh"),
+    ) {
+        (Some(id), true) => {
+            let entry = ensure_object(ensure_object(root, "modelSettings")?, &id)?;
+            entry.insert("effortLevel".to_string(), Value::String(opts.effort.clone()));
+            println!("  effort: modelSettings.{id}.effortLevel = {}", opts.effort);
+        }
+        _ => println!(
+            "  effort: modelSettings not written (needs a known main model and low|medium|high|xhigh); top-level effortLevel only"
+        ),
+    }
+
     let env_obj = ensure_object(root, "env")?;
-    env_obj.insert(
-        "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
-        Value::String(opts.subagent.clone()),
-    );
+    if opts.subagent_env {
+        env_obj.insert(
+            "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
+            Value::String(opts.subagent.clone()),
+        );
+    }
     match opts.lang {
         Lang::Ru => {
             env_obj.insert("CTXKIT_LANG".to_string(), Value::String("ru".to_string()));
@@ -508,6 +533,19 @@ fn update_claude_settings(
         "settings.json",
     )?;
     Ok(next)
+}
+
+/// Canonical id for the `modelSettings` key. shortcut: alias table of 2026-11-15 (docs: `sonnet` is Sonnet 5.5,
+/// `opus` Opus 5.5, `haiku` Haiku 5.5, `fable` Fable 5.2); refresh when the aliases move to new releases.
+fn canonical_model_id(model: &str) -> Option<String> {
+    match model {
+        "sonnet" => Some("claude-sonnet-5-5".to_string()),
+        "opus" => Some("claude-opus-5-5".to_string()),
+        "haiku" => Some("claude-haiku-5-5".to_string()),
+        "fable" => Some("claude-fable-5-2".to_string()),
+        m if m.starts_with("claude-") => Some(m.to_string()),
+        _ => None,
+    }
 }
 
 fn ensure_object<'a>(
@@ -1554,8 +1592,8 @@ fn print_help() {
            --profile <dir>        Claude config dir (default: ~/.claude or CLAUDE_CONFIG_DIR)\n\
            --main-model <name>    Main model (default: sonnet)\n\
            --advisor <name>       Advisor model (default: fable; pass \"none\" to omit)\n\
-           --subagent <name>      CLAUDE_CODE_SUBAGENT_MODEL (default: haiku)\n\
-           --effort <level>       effortLevel (default: high)\n\
+           --subagent <name>      Explore model and CLAUDE_CODE_SUBAGENT_MODEL (the env var is written only when this flag is given; Explore.md default: haiku)\n\
+           --effort <level>       Main model effort (default: high), saved as modelSettings.<model>.effortLevel (known model, low|medium|high|xhigh) and as top-level effortLevel\n\
            --no-stop-gate         Do not wire the Stop gate (and remove ours if present; env CTXKIT_GATE=0 mutes it per session)\n\
            --no-agents            Skip creating Explore.md and checker.md\n\
            --force-agents         Overwrite existing Explore.md / checker.md\n\
@@ -1575,6 +1613,49 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effort_goes_to_model_settings_and_subagent_env_only_when_asked() {
+        let d = std::env::temp_dir().join(format!("ctxkit_setup_effort_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let path = d.join("settings.json");
+        fs::write(
+            &path,
+            r#"{"modelSettings":{"claude-opus-5-5":{"effortLevel":"low"}},"env":{"KEEP":"1"}}"#,
+        )
+        .unwrap();
+        let mut opts = SetupOpts::default();
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
+        assert_eq!(
+            s["modelSettings"]["claude-sonnet-5-5"]["effortLevel"],
+            "high"
+        );
+        assert_eq!(
+            s["modelSettings"]["claude-opus-5-5"]["effortLevel"], "low",
+            "other models stay"
+        );
+        assert_eq!(s["effortLevel"], "high");
+        assert!(
+            s["env"]["CLAUDE_CODE_SUBAGENT_MODEL"].is_null(),
+            "no env without --subagent"
+        );
+        assert_eq!(s["env"]["KEEP"], "1");
+        opts.subagent_env = true;
+        opts.effort = "max".to_string(); // not accepted in modelSettings
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
+        assert_eq!(s["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "haiku");
+        assert_eq!(
+            s["modelSettings"]["claude-sonnet-5-5"]["effortLevel"], "high",
+            "max is not written"
+        );
+        assert_eq!(
+            canonical_model_id("claude-sonnet-5-5").as_deref(),
+            Some("claude-sonnet-5-5")
+        );
+        assert_eq!(canonical_model_id("gpt"), None);
+        let _ = fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn parses_semver_strings() {
