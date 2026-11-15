@@ -86,10 +86,14 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
         let Some(fm) = frontmatter::read(&md) else {
             continue;
         };
-        let name = fm.get("name").cloned().unwrap_or_else(|| dir_name.clone());
+        // Имя и описание — текст из файла: проходят фильтры, чтобы секрет из описания не попал в вывод.
+        let name = fm
+            .get("name")
+            .and_then(|n| mask::safe_name(n))
+            .map_or_else(|| dir_name.clone(), str::to_owned);
         let desc: String = fm
             .get("description")
-            .map(|s| s.chars().take(200).collect())
+            .map(|s| mask::mask_prose(&s.chars().take(200).collect::<String>()))
             .unwrap_or_default();
         let mut e = Entity::new(
             client,
@@ -116,6 +120,12 @@ pub(crate) fn scan_hooks(c: &mut Ctx, client: Client, file: &str, root_ptr: &str
         return;
     };
     for (event, groups) in events {
+        let Some(ev) = mask::safe_name(event) else {
+            c.warnings.push(format!(
+                "{file}: событие хука с недопустимым именем пропущено"
+            ));
+            continue;
+        };
         for (gi, g) in groups.as_array().into_iter().flatten().enumerate() {
             let matcher = g.get("matcher").and_then(Value::as_str);
             for (hi, h) in g
@@ -133,14 +143,14 @@ pub(crate) fn scan_hooks(c: &mut Ctx, client: Client, file: &str, root_ptr: &str
                     client,
                     Kind::Hook,
                     "user",
-                    format!("{event}: {label}"),
+                    format!("{ev}: {label}"),
                     State::On,
                     file,
                     format!("{root_ptr}/{}/{gi}/hooks/{hi}", esc_ptr(event)),
                 )
                 .logical(label)
                 .detail(json!({
-                    "event": event,
+                    "event": ev,
                     "matcher": matcher.and_then(mask::safe_matcher),
                     "type": h.get("type").and_then(Value::as_str).and_then(mask::safe_version),
                     "command": mask::join_line(&tokens),
@@ -196,16 +206,11 @@ fn hook_label(tokens: &[String]) -> String {
 }
 
 /// Вложенная командная строка (`bash -c "tool --x"`) приходит одним токеном с пробелами:
-/// для метки раскрываем её в токены. Токен, у которого первое слово — путь, считаем одним путём с пробелами.
+/// для метки раскрываем её в токены. Путь с пробелами (каждое слово с разделителем) остаётся одним токеном.
 fn expand_nested(tokens: &[String], depth: usize) -> Vec<String> {
     let mut out = Vec::new();
     for t in tokens {
-        let mut words = t.split_whitespace();
-        let first = words.next().unwrap_or("");
-        // Путь с пробелами: первое слово с разделителем и дальше ни одного флага (`-x`).
-        let looks_like_path = first.contains(['/', '\\']) && !words.any(|w| w.starts_with('-'));
-        let nested = t.contains(char::is_whitespace) && !looks_like_path;
-        if nested && depth < 3 {
+        if mask::is_nested_command(t) && depth < 3 {
             out.extend(expand_nested(&mask::split_shell(t), depth + 1));
         } else {
             out.push(t.clone());
@@ -249,6 +254,17 @@ fn scrub_str(s: &mut String, forms: &[String]) {
     for f in forms {
         *s = replace_ci(s, f);
     }
+    // Смешанные разделители (`C:\Users/x\y`): сверяем ещё и копию с прямыми слэшами.
+    if s.contains('\\') {
+        let normalized = s.replace('\\', "/");
+        let mut r = normalized.clone();
+        for f in forms {
+            r = replace_ci(&r, f);
+        }
+        if r != normalized {
+            *s = r;
+        }
+    }
 }
 
 fn scrub(v: &mut Value, forms: &[String]) {
@@ -278,6 +294,21 @@ fn home_forms(home: &Path) -> Vec<String> {
         let unc = format!("\\\\localhost\\{drive}${}", rest.replace('/', "\\"));
         forms.push(unc.replace('\\', "/"));
         forms.push(unc);
+    }
+    // Короткое имя 8.3 (`RIDELM~1`): первые шесть букв и цифр имени, верхний регистр.
+    if let (Some(user), Some(parent)) = (home.file_name().and_then(|n| n.to_str()), home.parent()) {
+        let short: String = user
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(6)
+            .collect::<String>()
+            .to_ascii_uppercase();
+        if user.chars().count() > 8 && short.len() >= 2 {
+            let parent = parent.to_string_lossy().replace('\\', "/");
+            for n in 1..=3 {
+                forms.push(format!("{parent}/{short}~{n}"));
+            }
+        }
     }
     // Домашний каталог WSL/Linux/macOS с тем же именем пользователя (в конфигах Codex встречается `/home/<имя>/…`).
     if let Some(user) = home.file_name().and_then(|n| n.to_str()) {
@@ -404,6 +435,20 @@ mod tests {
             ("😀 C:/Users/al/x 日本語", "😀 ~/x 日本語"),
             ("C:\\\\Users\\\\al\\\\x", "~\\\\x"), // путь внутри JSON-строки
             ("\\\\localhost\\c$\\Users\\al\\p", "~\\p"),
+        ] {
+            let mut s = input.to_owned();
+            scrub_str(&mut s, &forms);
+            assert_eq!(s, want, "{input}");
+        }
+    }
+
+    #[test]
+    fn scrub_mixed_separators_and_short_names() {
+        let forms = home_forms(Path::new("C:\\Users\\Alexandra Petrova"));
+        for (input, want) in [
+            ("C:\\Users/Alexandra Petrova\\x/Zed/y", "~/x/Zed/y"),
+            ("C:/Users/ALEXAN~1/x.txt", "~/x.txt"),
+            ("C:\\Users\\ALEXAN~2\\x", "~/x"),
         ] {
             let mut s = input.to_owned();
             scrub_str(&mut s, &forms);

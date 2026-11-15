@@ -68,7 +68,8 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                         r.get("projectPath").and_then(Value::as_str).unwrap_or("?")
                     ))
                 ),
-                Some(s) => s.to_owned(),
+                Some(s @ ("user" | "local" | "managed" | "enterprise")) => s.to_owned(),
+                Some(_) => "other".to_owned(), // неизвестное значение из файла в вывод не пускаем
                 None => "user".to_owned(),
             };
             let is_user = scope == "user";
