@@ -58,13 +58,6 @@ async function launch(env) {
     env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', ...env },
   })
   const page = await app.firstWindow()
-  // Фокус окна ОС: пока владелец работает в другом окне, фокус у Chromium не доходит до страницы и шаги про палитру и клики по диалогам падают по таймауту.
-  await app.evaluate(({ BrowserWindow }) => {
-    const w = BrowserWindow.getAllWindows()[0]
-    w.show()
-    w.focus()
-    w.webContents.focus()
-  })
   const pid = app.process().pid
   return { app, page, pid }
 }
