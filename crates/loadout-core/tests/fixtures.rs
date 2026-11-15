@@ -320,6 +320,15 @@ fn deepseek_inventory_with_js_tag() {
         1,
         "прочие плагины dsh"
     );
+    let plugin = r
+        .entities
+        .iter()
+        .find(|e| e.client == c && e.kind == Kind::Plugin)
+        .expect("плагин dsh");
+    assert_eq!(
+        plugin.logical_key, "@deepseek-ai/dsh-something",
+        "ведущая @ областного пакета не отбрасывается: пустой ключ склеил бы все такие плагины"
+    );
     assert_eq!(count(&r, c, Kind::Skill, State::On), 1);
 }
 

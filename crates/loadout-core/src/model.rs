@@ -127,7 +127,12 @@ impl Entity {
             &pointer,
         ]);
         // «glidehand@glidehand» и «glidehand» (MCP) — одна логическая сущность (CONCEPT.md §2).
-        let logical_key = name.split('@').next().unwrap_or(&name).to_lowercase();
+        // Суффикс `@маркетплейс` отбрасываем, а ведущую `@` областного пакета (`@deepseek-ai/dsh-x`) оставляем.
+        let logical_key = name
+            .rfind('@')
+            .filter(|i| *i > 0)
+            .map_or(name.as_str(), |i| &name[..i])
+            .to_lowercase();
         Self {
             id,
             logical_key,

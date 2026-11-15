@@ -1,0 +1,83 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+
+export interface PaletteItem {
+  label: string
+  hint: string
+  run: () => void
+}
+
+/** Палитра команд (Ctrl+K). Фокус возвращается туда, откуда её открыли. */
+export function Palette({ items, onClose }: { items: PaletteItem[]; onClose: () => void }) {
+  const [q, setQ] = useState('')
+  const [n, setN] = useState(0)
+  const input = useRef<HTMLInputElement>(null)
+  const opener = useRef<Element | null>(document.activeElement)
+  const listRef = useRef<HTMLUListElement>(null)
+
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    return items.filter((i) => i.label.toLowerCase().includes(needle)).slice(0, 40)
+  }, [items, q])
+
+  useEffect(() => input.current?.focus(), [])
+  useEffect(() => {
+    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' })
+  }, [n, shown])
+
+  const close = () => {
+    onClose()
+    const o = opener.current
+    if (o instanceof HTMLElement && document.contains(o)) o.focus()
+    else document.getElementById('grid')?.focus()
+  }
+  const run = (i: PaletteItem | undefined) => {
+    close()
+    if (!i) return
+    i.run()
+    // выбранное в палитре сразу доступно с клавиатуры: фокус на таблицу, если она есть на новом экране
+    requestAnimationFrame(() => document.getElementById('grid')?.focus())
+  }
+
+  return (
+    <div className="palette" role="dialog" aria-modal="true" aria-label="Палитра команд" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="hud box">
+        <input
+          ref={input}
+          value={q}
+          placeholder="Сущность, раздел или действие…"
+          aria-label="Команда"
+          role="combobox"
+          aria-expanded="true"
+          aria-controls="pal-list"
+          aria-activedescendant={shown[n] ? `pal-${n}` : undefined}
+          onChange={(e) => {
+            setQ(e.target.value)
+            setN(0)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault()
+              setN(Math.min(shown.length - 1, n + 1))
+            } else if (e.key === 'ArrowUp') {
+              e.preventDefault()
+              setN(Math.max(0, n - 1))
+            } else if (e.key === 'Enter') run(shown[n])
+            else if (e.key === 'Escape') close()
+            else if (e.key === 'Tab') {
+              e.preventDefault() // ловушка фокуса: в диалоге только поле ввода
+            }
+          }}
+        />
+        <ul id="pal-list" ref={listRef} role="listbox">
+          {shown.map((i, k) => (
+            <li key={`${i.label}-${k}`} id={`pal-${k}`} role="option" aria-selected={k === n} onClick={() => run(i)}>
+              <span>{i.label}</span>
+              <span className="mute mono">{i.hint}</span>
+            </li>
+          ))}
+          {shown.length === 0 ? <li className="mute" aria-disabled="true">Ничего не найдено</li> : null}
+        </ul>
+      </div>
+    </div>
+  )
+}

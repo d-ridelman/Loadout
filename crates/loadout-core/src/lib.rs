@@ -233,9 +233,19 @@ fn hook_label(tokens: &[String]) -> String {
                 && !is_switch(t)
         })
         .map(stem)
-        .find(|s| !RUNNERS.contains(&s.to_ascii_lowercase().as_str()))
+        // значения флагов (`--lang ru`) именем хука быть не могут, даже если путь к программе скрыт
+        .find(|s| {
+            let l = s.to_ascii_lowercase();
+            !RUNNERS.contains(&l.as_str()) && !VALUE_WORDS.contains(&l.as_str())
+        })
         .unwrap_or_else(|| "hook".to_owned())
 }
+
+/// Слова, которые бывают значениями флагов, а не именами программ.
+const VALUE_WORDS: [&str; 12] = [
+    "ru", "en", "true", "false", "debug", "info", "warn", "error", "trace", "latest", "main",
+    "origin",
+];
 
 /// Хуки, которые одна внешняя программа ставит сразу в несколько клиентов, лежат в каталоге `<программа>/agent-hooks`
 /// (у владельца `~/.orca/agent-hooks/codex-hook.cmd`, `dsh-hook.cmd`) и называются по клиенту. Для сопоставления между

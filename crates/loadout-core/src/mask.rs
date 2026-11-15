@@ -444,7 +444,15 @@ fn mask_args_ex(args: &[String], depth: usize, start: Pos) -> Vec<String> {
             // команда ожидается после управляющего оператора; имя пакета — после npx/uvx, флаги его не сбрасывают
             pos = Pos {
                 cmd: is_control_op(a),
-                pkg: launcher || (pos.pkg && is_flag),
+                // имя пакета возможно сразу после npx/uvx и после флагов без значения (`-y`); флаг со значением
+                // (`--header секрет`) сбивает счёт, и следующее слово пакетом не считается
+                pkg: launcher
+                    || (pos.pkg
+                        && is_flag
+                        && matches!(
+                            a.as_str(),
+                            "-y" | "--yes" | "-q" | "--quiet" | "--no-install"
+                        )),
             };
             hide_next = hide;
             out.push(shown);

@@ -1,0 +1,60 @@
+import { CLIENTS } from '../../shared/model'
+import type { Entity } from '../../shared/model'
+
+/** Порядок событий жизненного цикла: известные идут в таком порядке, остальные в конце по алфавиту. */
+const ORDER = [
+  'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse',
+  'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt',
+]
+
+export function Hooks({ hooks, onShow }: { hooks: Entity[]; onShow: (e: Entity) => void }) {
+  const eventOf = (e: Entity) => (typeof e.detail['event'] === 'string' ? e.detail['event'] : '?')
+  const events = [...new Set(hooks.map(eventOf))].sort((a, b) => {
+    const [ia, ib] = [ORDER.indexOf(a), ORDER.indexOf(b)]
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b)
+  })
+  if (hooks.length === 0) return <p className="mute">Хуков не найдено.</p>
+  return (
+    <>
+      <h2>Конвейер хуков · события слева направо в порядке жизненного цикла</h2>
+      <div className="hud tablewrap">
+        <div className="pipe" role="group" aria-label="Хуки по событиям и клиентам" style={{ gridTemplateColumns: `130px repeat(${events.length}, minmax(150px, 1fr))` }}>
+          <div />
+          {events.map((ev) => (
+            <div key={ev} className="h">{ev}</div>
+          ))}
+          {CLIENTS.map((c) => (
+            <PipeRow key={c.id} name={c.name} events={events} hooks={hooks.filter((h) => h.client === c.id)} eventOf={eventOf} onShow={onShow} />
+          ))}
+        </div>
+      </div>
+      <p className="mute small">
+        Показаны только события, которые есть в найденных файлах. Пустая ячейка значит «хука нет», а не «клиент не поддерживает событие»:
+        набор событий каждого клиента ядро не проверяет. Хуки-обёртки одной программы (например, `orca-agent-hooks`) собраны под общим ключом.
+      </p>
+    </>
+  )
+}
+
+function PipeRow({ name, events, hooks, eventOf, onShow }: { name: string; events: string[]; hooks: Entity[]; eventOf: (e: Entity) => string; onShow: (e: Entity) => void }) {
+  return (
+    <>
+      <div className="mono mute rowname">{name}</div>
+      {events.map((ev) => {
+        const list = hooks.filter((h) => eventOf(h) === ev)
+        return (
+          <div key={ev}>
+            {list.length === 0 ? <span className="mute">·</span> : null}
+            {list.map((h) => (
+              <button key={h.id} className="hk" onClick={() => onShow(h)}>
+                {h.logicalKey}
+                <br />
+                <small>{typeof h.detail['matcher'] === 'string' ? h.detail['matcher'] : '*'} · {h.scope}</small>
+              </button>
+            ))}
+          </div>
+        )
+      })}
+    </>
+  )
+}
