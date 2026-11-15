@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod uninstall;
+
 const MARKER_START: &str = "<!-- ctxkit:start -->";
 const MARKER_END: &str = "<!-- ctxkit:end -->";
 const LEGACY_MARKER_START: &str = "<!-- claude-guard:start -->";
@@ -35,6 +37,8 @@ struct SetupOpts {
     claude_json: Option<PathBuf>,
     skip_version_check: bool,
     no_stop_gate: bool,
+    /// `--uninstall`: take out what setup added (see `uninstall.rs`).
+    uninstall: bool,
     lang: Lang,
 }
 
@@ -62,6 +66,7 @@ impl Default for SetupOpts {
             claude_json: None,
             skip_version_check: false,
             no_stop_gate: false,
+            uninstall: false,
             lang: Lang::En,
         }
     }
@@ -85,6 +90,7 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--dsh" => opts.dsh = true,
             "--skip-version-check" => opts.skip_version_check = true,
             "--no-stop-gate" => opts.no_stop_gate = true,
+            "--uninstall" => opts.uninstall = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
             | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home"
             | "--hook-cmd" | "--claude-json" | "--lang") => {
@@ -126,6 +132,13 @@ pub fn run_setup(args: &[String]) -> i32 {
         i += 1;
     }
 
+    if opts.uninstall {
+        if let Some(bad) = uninstall::reject_setup_only_flags(args) {
+            eprintln!("ERR: {bad} is a setup option and cannot be combined with --uninstall");
+            return 2;
+        }
+    }
+
     let Some(home) = home_dir() else {
         eprintln!("ERR: cannot determine USERPROFILE / HOME directory");
         return 1;
@@ -148,6 +161,18 @@ pub fn run_setup(args: &[String]) -> i32 {
         let s = hook_bin_path.to_string_lossy().replace('\\', "/");
         format!("\"{s}\"")
     });
+
+    if opts.uninstall {
+        return uninstall::run(
+            &opts,
+            &home,
+            &profile,
+            custom_profile,
+            &hook_bin_path,
+            bin_name,
+            &hook_cmd,
+        );
+    }
 
     if opts.dry_run {
         println!("[dry-run] profile: {}", profile.display());
@@ -1668,7 +1693,8 @@ fn print_help() {
            --dsh                  Wire ctxkit into DeepSeek Harness Desktop (dsh-hooks-claude-code bridge)\n\
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --hook-cmd <cmd>       Override hook command path\n\
-           --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n"
+           --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
+           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries) and the hooks/ctxkit binary. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
     );
 }
 

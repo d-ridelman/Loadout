@@ -498,6 +498,86 @@ const cases = [
     return true;
   }],
 
+  // setup --uninstall: only ours goes, foreign hooks/keys/text stay, a second run changes nothing
+  [true, () => {
+    const root = join(dir, 'uninstall-test');
+    const profile = join(root, 'profile');
+    const agyFile = join(root, 'agy-hooks.json');
+    const dshHome = join(root, 'dsh');
+    const claudeJson = join(root, 'claude.json');
+    const presets = join(root, 'ccd-session-presets.json');
+    mkdirSync(join(dshHome, 'profiles', 'desktop'), { recursive: true });
+    mkdirSync(profile, { recursive: true });
+    const foreignStop = { type: 'command', command: 'node C:/tools/ctxkit-helper/stop.js' };
+    const origSettings = {
+      model: 'opus',
+      KEEP_ME: { a: 1 },
+      env: { KEEP_ME: '42' },
+      hooks: {
+        SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo start' }] }],
+        PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: 'custom-other-hook' }] }],
+        Stop: [{ hooks: [foreignStop] }],
+      },
+    };
+    const origMd = '# My own rules\nKeep this.\n';
+    const origPatch = '- keep: 1\n';
+    const origAgy = { 'other-hook': { PreToolUse: [] } };
+    writeFileSync(join(profile, 'settings.json'), JSON.stringify(origSettings, null, 2));
+    writeFileSync(join(profile, 'CLAUDE.md'), origMd);
+    writeFileSync(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), origPatch);
+    writeFileSync(join(dshHome, 'AGENTS.md'), '# dsh rules\n');
+    writeFileSync(agyFile, JSON.stringify(origAgy, null, 2));
+    writeFileSync(claudeJson, '{}');
+    writeFileSync(presets, JSON.stringify({ byAccount: { a: { presets: [{ name: 'dev', settings: { modelId: 'claude-opus-5-5', effort: 'low' } }] } } }));
+
+    const common = ['--profile', profile, '--claude-json', claudeJson, '--antigravity', '--agy-file', agyFile, '--dsh', '--dsh-home', dshHome, '--desktop-file', presets, '--lang', 'ru'];
+    const hookBin = join(profile, 'hooks', BIN_NAME);
+    const setupRun = spawnSync(exe, ['setup', '--with-rules', '--desktop', '--skip-version-check', ...common], { encoding: 'utf8' });
+    if (setupRun.status !== 0 || !existsSync(hookBin)) return false;
+    const afterSetup = {
+      s: readFileSync(join(profile, 'settings.json'), 'utf8'),
+      md: readFileSync(join(profile, 'CLAUDE.md'), 'utf8'),
+      patch: readFileSync(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8'),
+    };
+    if (!afterSetup.md.includes('<!-- ctxkit:start -->') || !afterSetup.patch.includes('ctxkit-hooks') || !existsSync(join(dshHome, 'ctxkit-hooks.json'))) return false;
+    const state = () => [join(profile, 'settings.json'), join(profile, 'CLAUDE.md'), agyFile, join(dshHome, 'AGENTS.md'), join(dshHome, 'ctxkit-hooks.json'), join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), hookBin]
+      .map((f) => (existsSync(f) ? readFileSync(f, 'utf8') : null)).join('\u0000');
+    const before = state();
+
+    // dry-run: nothing changes, no backups appear
+    const nBackups = () => (existsSync(join(profile, 'backups')) ? readdirSync(join(profile, 'backups')).length : 0);
+    const nb0 = nBackups();
+    const dry = spawnSync(exe, ['setup', '--uninstall', '--dry-run', ...common], { encoding: 'utf8' });
+    if (dry.status !== 0 || state() !== before || nBackups() !== nb0) return false;
+
+    // setup-only flags are refused, nothing changes
+    const bad = spawnSync(exe, ['setup', '--uninstall', '--no-agents', ...common], { encoding: 'utf8' });
+    if (bad.status !== 2 || state() !== before) return false;
+
+    const run = spawnSync(exe, ['setup', '--uninstall', ...common], { encoding: 'utf8' });
+    if (run.status !== 0) return false;
+    const s = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+    const cmds = (ev) => (s.hooks?.[ev] ?? []).flatMap((g) => g.hooks.map((h) => h.command));
+    if (s.KEEP_ME?.a !== 1 || s.env?.KEEP_ME !== '42' || s.env?.CTXKIT_LANG !== undefined) return false;
+    if (JSON.stringify(cmds('PreToolUse')) !== '["custom-other-hook"]' || cmds('PostToolUse').length !== 0) return false;
+    if (JSON.stringify(cmds('Stop')) !== JSON.stringify([foreignStop.command]) || cmds('SessionStart')[0] !== 'echo start') return false;
+    if (s.model !== 'sonnet' || !run.stdout.includes('model: "sonnet"') || !run.stdout.includes('latest:')) return false; // models are only printed
+    if (!run.stdout.includes('desktop preset dev: model "claude-sonnet-5-5"')) return false;
+    if (readFileSync(join(profile, 'CLAUDE.md'), 'utf8') !== origMd) return false;
+    if (existsSync(hookBin) || !existsSync(join(profile, 'agents', 'checker.md'))) return false; // binary gone, agents stay
+    const agy = JSON.parse(readFileSync(agyFile, 'utf8'));
+    if (agy.ctxkit || !agy['other-hook']) return false;
+    if (existsSync(join(dshHome, 'ctxkit-hooks.json'))) return false;
+    if (readFileSync(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8') !== origPatch) return false;
+    if (readFileSync(join(dshHome, 'AGENTS.md'), 'utf8') !== '# dsh rules\n') return false;
+
+    // a second uninstall changes nothing and makes no backup
+    const after = state();
+    const nb1 = nBackups();
+    const again = spawnSync(exe, ['setup', '--uninstall', ...common], { encoding: 'utf8' });
+    return again.status === 0 && state() === after && nBackups() === nb1;
+  }],
+
   // Localization (default en vs CTXKIT_LANG=ru / --lang ru)
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }).includes('File is large')],
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }, [], { CTXKIT_LANG: 'ru' }).includes('Файл большой')],

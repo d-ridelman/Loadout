@@ -96,6 +96,17 @@ Defaults are tuned for a 4-model advisor workflow (`fable` + `claude-sonnet-5-5`
 
 Hooks read `CTXKIT_LANG` (`en` default, `ru` for Russian messages) or `--lang en|ru`. Run `ctxkit setup --help` for the complete option list. Manual config templates sit in [`examples/`](examples/) using POSIX placeholder paths; run `ctxkit setup` to resolve OS-specific absolute paths automatically.
 
+## How to roll back
+
+```powershell
+ctxkit setup --uninstall --dry-run     # what would be removed
+ctxkit setup --uninstall               # remove it (add the same --profile / --antigravity / --dsh you used for setup)
+```
+
+`--uninstall` removes only what `ctxkit setup` added: our elements in the `PreToolUse` / `PostToolUse` / `Stop` hooks of `settings.json` (a hook is ours when the first two words of its command are a file named `ctxkit`, `claude-guard` or `no-inline-backslash`; other people's hooks in the same group stay), `env.CTXKIT_LANG`, the rules block between the `ctxkit` markers in `CLAUDE.md`, and our binary `hooks/ctxkit` (last, so no hook is left pointing at a missing file). With `--antigravity` / `--agy-file` it removes the `ctxkit` entry from `hooks.json`; with `--dsh` / `--dsh-home` it removes `ctxkit-hooks.json`, the ctxkit block in `cordis.patch.yml` and the rules block in `AGENTS.md`. Every file is backed up first; a second run changes nothing. `~/.local/bin/ctxkit` is deleted only when it is a byte copy of the current binary or of `hooks/ctxkit`, otherwise its path is printed. If the running binary cannot delete itself (Windows), it prints `remove manually: <path>` and still exits `0`.
+
+It does **not** touch `model`, `advisorModel`, `effortLevel`, `modelSettings`, `env.CLAUDE_CODE_SUBAGENT_MODEL`, Claude Desktop presets or the `Explore.md` / `checker.md` agent files: the previous values are not known, and `modelSettings` can hold entries written by Claude Code itself. It prints their current values and the path to the latest and earliest `backups/settings.json.*.bak` (the earliest is most likely the state before the first setup) so you can copy the old values back by hand. Setup-only options (`--no-agents`, `--effort`, `--main-model`, ...) are rejected together with `--uninstall`.
+
 ## Diagnostics and report (`doctor`, `report`)
 
 ```powershell
