@@ -1,5 +1,5 @@
 import { t } from '../shared/i18n'
-import type { CtxkitReport, DayStats } from '../shared/model'
+import type { CtxkitDoctor, CtxkitReport, DayStats } from '../shared/model'
 
 /** Итоги по периоду. Только арифметика над счётчиками ctxkit: «сэкономленных токенов» здесь нет, базовой линии «до» у отчёта нет. */
 export interface Summary {
@@ -75,4 +75,16 @@ export function segments(d: DayStats): { key: 'sonnet' | 'haiku' | 'opusFable' |
     { key: 'other' as const, label: t('другие', 'other'), n: m.other },
   ]
   return all.filter((s) => s.n > 0).map((s) => ({ ...s, w: total > 0 ? s.n / total : 0 }))
+}
+
+/**
+ * Стоит ли галочка «без шлюза Stop» по текущему состоянию профиля: `true`, если ctxkit установлен, а шлюза нет
+ * (находка `stop_gate` уровня info), `false`, если шлюз есть. `null`, если ctxkit не установлен (находка `hooks`
+ * уровня warn) или находок нет: тогда остаётся значение по умолчанию (шлюз ставится).
+ */
+export function stopGateOff(d: CtxkitDoctor): boolean | null {
+  const sev = (id: string): string | undefined => d.findings.find((f) => f.id === id)?.severity
+  if (sev('hooks') === 'warn') return null
+  const g = sev('stop_gate')
+  return g === 'ok' ? false : g === 'info' ? true : null
 }

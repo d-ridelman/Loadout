@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
 import { getLang, t } from '../../shared/i18n'
-import { chars, daysDesc, pct, segments, summarize } from '../ctxkit-stats'
+import { chars, daysDesc, pct, segments, stopGateOff, summarize } from '../ctxkit-stats'
 
 // t() только во время рендера: язык выбирается до первой отрисовки, а не при импорте модуля
 const sev = (s: FindingSeverity): { ch: string; label: string; cls: string } =>
@@ -63,6 +63,15 @@ export function Ctxkit({ level, onNotice }: Props) {
   const [result, setResult] = useState<SetupResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Галочка шлюза Stop берёт начальное значение из профиля (шлюз выключен — «Применить» не должен молча включить его),
+  // но не затирает выбор, который пользователь уже сделал.
+  const [gateTouched, setGateTouched] = useState(false)
+  useEffect(() => {
+    if (doctor.status !== 'ready' || gateTouched) return
+    const off = stopGateOff(doctor.data)
+    if (off !== null) setOpts((o) => (o.noStopGate === off ? o : { ...o, noStopGate: off }))
+  }, [doctor, gateTouched])
 
   const key = JSON.stringify(opts)
   const change = (patch: Partial<SetupOptions>) => {
@@ -132,7 +141,7 @@ export function Ctxkit({ level, onNotice }: Props) {
           <fieldset className="choices">
             <legend className="mute small">{t('Что настроить', 'What to configure')}</legend>
             <label><input type="checkbox" checked disabled /> {t('Claude Code: хуки, агенты Explore и checker (всегда); основная модель и effort не меняются', 'Claude Code: hooks, Explore and checker agents (always); main model and effort are not changed')}</label>
-            <label><input type="checkbox" checked={!opts.noStopGate} onChange={(e) => change({ noStopGate: !e.target.checked })} /> {t('Шлюз Stop: один раз за ход возвращает модель, если правки кода остались без checker или советника', 'Stop gate: once per turn sends the model back if code edits were not followed by checker or the advisor')}</label>
+            <label><input type="checkbox" checked={!opts.noStopGate} onChange={(e) => { setGateTouched(true); change({ noStopGate: !e.target.checked }) }} /> {t('Шлюз Stop: один раз за ход возвращает модель, если правки кода остались без checker или советника', 'Stop gate: once per turn sends the model back if code edits were not followed by checker or the advisor')}</label>
             <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил в CLAUDE.md', 'Rules block in CLAUDE.md')}</label>
             <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> {t('Claude Desktop (пресеты; закройте его перед применением)', 'Claude Desktop (presets; close it before applying)')}</label>
             <label><input type="checkbox" checked={opts.antigravity} onChange={(e) => change({ antigravity: e.target.checked })} /> Antigravity</label>

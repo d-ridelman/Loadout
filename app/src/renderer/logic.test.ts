@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Entity } from '../shared/model'
+import type { CtxkitDoctor, Entity, FindingSeverity } from '../shared/model'
+import { stopGateOff } from './ctxkit-stats'
 import { buildRows, onlyUnknown, scopeRank } from './aggregate'
 import { plural } from '../shared/i18n'
 import { diagnose } from './doctor'
@@ -71,6 +72,21 @@ describe('aggregate', () => {
     const rows = buildRows([ent({ logicalKey: 'a', state: 'unknown', scope: 'project:~/x' })])
     expect(onlyUnknown(rows[0]!)).toBe(true)
     expect(scopeRank('user')).toBeLessThan(scopeRank('project:~/x'))
+  })
+})
+
+describe('галочка шлюза Stop', () => {
+  const doc = (...f: [string, FindingSeverity][]): CtxkitDoctor => ({
+    version: '1',
+    findings: f.map(([id, severity]) => ({ id, severity, message: id, detail: null, fix: null })),
+  })
+  it('берётся из находки stop_gate, но только когда ctxkit установлен', () => {
+    expect(stopGateOff(doc(['hooks', 'ok'], ['stop_gate', 'info']))).toBe(true)
+    expect(stopGateOff(doc(['hooks', 'ok'], ['stop_gate', 'ok']))).toBe(false)
+    expect(stopGateOff(doc(['hooks', 'error'], ['stop_gate', 'info']))).toBe(true)
+    // чистый профиль: хука нет, «нет шлюза» — не выбор пользователя, остаётся шлюз по умолчанию
+    expect(stopGateOff(doc(['hooks', 'warn'], ['stop_gate', 'info']))).toBeNull()
+    expect(stopGateOff(doc())).toBeNull()
   })
 })
 

@@ -738,6 +738,20 @@ try {
   await waitFor(() => ourStop() === 0, 'ctxkit убрал хук Stop при снятой галочке')
   await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор: нет шлюза Stop')
   must(JSON.parse(readFileSync(settingsFile, 'utf8')).hooks.PreToolUse !== undefined, 'снятие шлюза затронуло остальные хуки')
+  // окно передаёт только --advisor: основная модель и effort остаются как были, советник — выбор из формы
+  const sNow = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  const sPre = JSON.parse(settingsBefore)
+  must(sNow.model === sPre.model && sNow.effortLevel === sPre.effortLevel && JSON.stringify(sNow.modelSettings) === JSON.stringify(sPre.modelSettings), 'окно изменило model, effortLevel или modelSettings')
+  must(sNow.advisorModel === 'fable', `advisorModel из формы не записан: ${sNow.advisorModel}`)
+  // уход из раздела и возврат: галочка берётся из профиля (шлюза нет), а не сбрасывается на «шлюз включён»
+  await page.keyboard.press('1')
+  await page.keyboard.press('7')
+  await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 15000 })
+  await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор после возврата в раздел')
+  await waitFor(async () => !(await page.getByRole('checkbox', { name: /Шлюз Stop/ }).isChecked()), 'галочка «Шлюз Stop» после возврата в раздел должна остаться снятой')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(async () => (await page.locator('pre.out').innerText()).includes('Stop gate: off'), 'предпросмотр после возврата должен говорить «Stop gate: off»')
+  must(ourStop() === 0, 'предпросмотр после возврата вернул шлюз')
   await page.keyboard.press('1')
   await levelSel.selectOption('R0') // понижение подтверждения не требует
   must((await refusal(opts)).includes('R2'), 'при R0 применение ctxkit не отвергнуто в main')
