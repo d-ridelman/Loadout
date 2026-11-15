@@ -1,3 +1,4 @@
+use crate::fsx::write_atomic;
 use crate::{parse_lang, Lang};
 use serde_json::{json, Map, Value};
 use std::env;
@@ -501,7 +502,7 @@ fn write_json_if_changed(
     }
     let pretty =
         serde_json::to_string_pretty(updated).map_err(|e| format!("serialize {label}: {e}"))?;
-    fs::write(path, format!("{pretty}\n")).map_err(|e| format!("write {}: {e}", path.display()))?;
+    write_atomic(path, format!("{pretty}\n").as_bytes())?;
     println!("  updated {label}: {}", path.display());
     Ok(())
 }
@@ -889,7 +890,7 @@ fn write_agent_file(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    write_atomic(path, content.as_bytes())?;
     println!("  wrote agent: {}", path.display());
     Ok(())
 }
@@ -926,7 +927,7 @@ fn upsert_claude_md(
     } else if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    fs::write(path, updated).map_err(|e| format!("write {}: {e}", path.display()))?;
+    write_atomic(path, updated.as_bytes())?;
     println!("  updated CLAUDE.md rules: {}", path.display());
     Ok(())
 }
@@ -1205,8 +1206,7 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
                 patch_path.display()
             );
         } else {
-            fs::write(&patch_path, "# DeepSeek Harness profile patch\n")
-                .map_err(|e| format!("write {}: {e}", patch_path.display()))?;
+            write_atomic(&patch_path, b"# DeepSeek Harness profile patch\n")?;
             println!(
                 "  created DeepSeek Harness profile patch: {}",
                 patch_path.display()
@@ -1287,8 +1287,7 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     } else {
         let b = backup_file(&patch_path, &profile)?;
         println!("  backup -> {}", b.display());
-        fs::write(&patch_path, updated)
-            .map_err(|e| format!("write {}: {e}", patch_path.display()))?;
+        write_atomic(&patch_path, updated.as_bytes())?;
         println!(
             "  updated DeepSeek Harness profile patch: {}",
             patch_path.display()

@@ -104,7 +104,7 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
     } else {
         let b = backup_file(path, backup_dir)?;
         println!("  backup -> {}", b.display());
-        fs::write(path, updated).map_err(|e| format!("write {}: {e}", path.display()))?;
+        write_atomic(path, updated.as_bytes())?;
         println!("  removed rules block: {}", path.display());
     }
     Ok(())
@@ -170,7 +170,7 @@ fn remove_dsh(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
     } else {
         let b = backup_file(&patch, &profile)?;
         println!("  backup -> {}", b.display());
-        fs::write(&patch, updated).map_err(|e| format!("write {}: {e}", patch.display()))?;
+        write_atomic(&patch, updated.as_bytes())?;
         println!(
             "  removed ctxkit block from DeepSeek Harness profile patch: {}",
             patch.display()

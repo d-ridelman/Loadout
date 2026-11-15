@@ -11,7 +11,6 @@
 Найдено при ревью и аудите, в этот заход не берётся. Номера строк даны на 16.11.
 
 - [ ] Бэкапы и корзина Loadout хранят конфиги целиком, открытым текстом, вместе с секретами в `env` MCP, и не чистятся: `crates/loadout-core/src/write.rs:1148`, `crates/loadout-core/src/trash.rs:13`, `trash.rs:65-77`, `app/package.json:41` (`deleteAppDataOnUninstall: false`). `manifests()` читает все операции подряд.
-- [ ] `ctxkit setup` пишет чужие файлы не атомарно: `fs::write` поверх `settings.json`, `CLAUDE.md`, `hooks.json`, `ccd-session-presets.json` (`crates/ctxkit/src/setup.rs`). `serde_json` без `preserve_order` пересортировывает ключи чужих файлов; признак общий на воркспейс, нужен отдельный прогон `cargo test` ядра.
 - [ ] Битый `profiles.json` превращается в «профилей нет», и следующее сохранение его затирает: `crates/loadout-core/src/profiles.rs:35-41`, `profiles.rs:86-91`.
 - [ ] Нет `requestSingleInstanceLock` (`app/src/main/index.ts:350`); временный файл `.loadout.tmp` без pid в имени.
 - [ ] Нет повторной сверки sha перед `rename` в commit и rollback: `crates/loadout-core/src/write.rs:1152-1190`, `write.rs:1603-1638`.

@@ -1,6 +1,7 @@
 mod backslash;
 mod check;
 mod doctor;
+mod fsx;
 mod gate;
 mod guard;
 mod report;

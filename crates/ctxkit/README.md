@@ -60,6 +60,8 @@ cd Loadout/crates/ctxkit
 
 Before changing `settings.json`, `CLAUDE.md`, `ccd-session-presets.json`, or `hooks.json`, `ctxkit setup` creates a timestamped backup under `backups/`. Custom `env`, permissions, enabled plugins, and third-party hooks are preserved, while legacy `claude-guard` and `no-inline-backslash` hook entries are upgraded in place.
 
+Every file `setup` rewrites is written atomically: the new content goes to a temporary file beside the target and is renamed over it, so a crash or a full disk leaves the old file whole. A symbolic link is written through (it stays a link) and the permissions of the old file carry over. Known limit: `serde_json` keeps object keys sorted, so a JSON file that `setup` rewrites (`settings.json`, `hooks.json`, the presets file) comes back with its keys in alphabetical order and standard indentation; the values are unchanged. Keeping the order would need the `preserve_order` feature of `serde_json`, which is one switch for the whole Cargo workspace and would also change what `loadout-core` writes when it copies values (the build of the whole workspace and `cargo test -p loadout-core` would produce different output), so it stays off.
+
 ## What's Inside
 
 ```text
