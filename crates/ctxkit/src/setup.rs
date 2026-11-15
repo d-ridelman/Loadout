@@ -589,8 +589,12 @@ fn update_claude_settings(
         }
     }
     if opts.lang == Lang::En {
-        if let Some(env_obj) = root.get_mut("env").and_then(|e| e.as_object_mut()) {
-            env_obj.remove("CTXKIT_LANG");
+        let emptied = root
+            .get_mut("env")
+            .and_then(|e| e.as_object_mut())
+            .is_some_and(|env_obj| env_obj.remove("CTXKIT_LANG").is_some() && env_obj.is_empty());
+        if emptied {
+            root.remove("env"); // our `--lang ru` created it
         }
     }
 
@@ -705,22 +709,35 @@ pub(crate) fn command_is_ours(cmd: &str, current: Option<&str>) -> bool {
     current.is_some_and(|c| c.trim() == cmd.trim()) || our_name(cmd).is_some()
 }
 
-/// Which of our names (`ctxkit` or a legacy one) the command's first two words carry.
+/// File name of a command word without directory and (.exe/.js/.mjs/.cmd) extension, lower case.
+fn word_stem(w: &str) -> String {
+    let base = w
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    [".exe", ".js", ".mjs", ".cmd"]
+        .iter()
+        .find_map(|e| base.strip_suffix(e))
+        .unwrap_or(&base)
+        .to_string()
+}
+
+/// Which of our names (`ctxkit` or a legacy one) the command runs: the first word, or the second one when
+/// the first is a script launcher (`node C:/x/no-inline-backslash.mjs`). `logger.exe ctxkit` is not ours.
 pub(crate) fn our_name(cmd: &str) -> Option<&'static str> {
-    first_words(cmd, 2).iter().find_map(|w| {
-        let base = w
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let stem = [".exe", ".js", ".mjs", ".cmd"]
-            .iter()
-            .find_map(|e| base.strip_suffix(e))
-            .unwrap_or(&base);
-        ["ctxkit", "claude-guard", "no-inline-backslash"]
-            .into_iter()
-            .find(|n| *n == stem)
-    })
+    const OURS: [&str; 3] = ["ctxkit", "claude-guard", "no-inline-backslash"];
+    const LAUNCHERS: [&str; 9] = [
+        "node", "nodejs", "bun", "deno", "npx", "python", "python3", "py", "&",
+    ];
+    let words = first_words(cmd, 2);
+    let stem0 = word_stem(words.first()?);
+    let stem = if LAUNCHERS.contains(&stem0.as_str()) {
+        word_stem(words.get(1)?)
+    } else {
+        stem0
+    };
+    OURS.into_iter().find(|n| *n == stem)
 }
 
 fn hook_is_ours(h: &Value, current: Option<&str>) -> bool {
@@ -862,9 +879,10 @@ pub(crate) fn marker_span(text: &str) -> Option<(usize, usize)> {
         (MARKER_START, MARKER_END),
         (LEGACY_MARKER_START, LEGACY_MARKER_END),
     ] {
-        if let (Some(s), Some(e)) = (text.find(start_m), text.find(end_m)) {
-            if s < e {
-                return Some((s, e + end_m.len()));
+        // The end marker is searched after the start: the same text in the user's own notes before it is not ours.
+        if let Some(s) = text.find(start_m) {
+            if let Some(len) = text[s..].find(end_m) {
+                return Some((s, s + len + end_m.len()));
             }
         }
     }
@@ -1952,6 +1970,33 @@ mod tests {
     }
 
     #[test]
+    fn marker_after_user_text_and_empty_env_left_by_lang_ru() {
+        // an end marker in the user's own notes before our block must not hide the block
+        let text = format!("note {MARKER_END}\n\n{MARKER_START}\nx\n{MARKER_END}\n");
+        let (s, e) = marker_span(&text).unwrap();
+        assert_eq!(&text[s..e], format!("{MARKER_START}\nx\n{MARKER_END}"));
+        assert_eq!(marker_span(&format!("{MARKER_START} only")), None);
+
+        let d = std::env::temp_dir().join(format!("ctxkit_setup_env_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let path = d.join("settings.json");
+        let ru = SetupOpts {
+            lang: Lang::Ru,
+            ..SetupOpts::default()
+        };
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &ru).unwrap();
+        assert_eq!(s["env"]["CTXKIT_LANG"], "ru");
+        let s =
+            update_claude_settings(&path, &d.join("b"), "\"x\"", &SetupOpts::default()).unwrap();
+        assert!(
+            s.get("env").is_none(),
+            "env created by --lang ru goes with it"
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn without_flags_model_advisor_effort_are_not_touched_or_created() {
         let d = std::env::temp_dir().join(format!("ctxkit_setup_noflags_{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
@@ -2031,6 +2076,8 @@ mod tests {
         for foreign in [
             "node C:/tools/ctxkit-helper/stop.js",
             "D:/x/crates/ctxkit/notify.js",
+            "C:/tools/logger.exe ctxkit",
+            "notify-send claude-guard",
             "\"C:/Program Files/ctxkit/other.exe\"",
             "custom-other-hook",
             "node x.js ctxkit",

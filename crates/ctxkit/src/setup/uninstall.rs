@@ -89,7 +89,14 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
     let existing = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let updated = strip_rules_blocks(&existing);
     if existing == updated {
-        println!("  ok rules block (not present): {}", path.display());
+        if existing.contains(MARKER_START) || existing.contains(LEGACY_MARKER_START) {
+            println!(
+                "  [warn] {}: a ctxkit start marker has no end marker; remove the leftover block by hand",
+                path.display()
+            );
+        } else {
+            println!("  ok rules block (not present): {}", path.display());
+        }
     } else if dry_run {
         println!("  [dry-run] remove rules block: {}", path.display());
     } else {
@@ -383,6 +390,17 @@ pub(super) fn run(
             && (same_file_bytes(&exe, &local) || same_file_bytes(hook_bin, &local));
         if hook_bin.exists() {
             remove_bin(hook_bin, &exe, opts.dry_run, opts.lang);
+            if !(opts.antigravity || opts.agy_file.is_some() || opts.dsh || opts.dsh_home.is_some())
+            {
+                println!(
+                    "  {}",
+                    t(
+                        opts.lang,
+                        "[note] If setup ran with --antigravity / --dsh, their hooks now point at the removed binary: run the rollback again with the same flags.",
+                        "[note] Если setup запускался с --antigravity / --dsh, их хуки указывают на удалённый бинарь: запустите откат с теми же флагами."
+                    )
+                );
+            }
         }
         if local_is_ours {
             remove_bin(&local, &exe, opts.dry_run, opts.lang);

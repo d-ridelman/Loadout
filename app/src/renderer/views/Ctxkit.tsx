@@ -107,8 +107,8 @@ export function Ctxkit({ level, onNotice }: Props) {
       <h2>ctxkit</h2>
       <p className="mute small">
         {t(
-          'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и подсказывает агентам дешёвый поиск и независимую проверку. Основную модель и effort окно не меняет. Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.',
-          'A bundled toolkit that keeps agent context in check: limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review. The window does not change the main model or effort. Hooks are written into client settings, so applying requires level R2.',
+          'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и подсказывает агентам дешёвый поиск и независимую проверку. Основную модель Claude Code и effort окно не меняет (пресеты Claude Desktop правятся только по галочке ниже). Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.',
+          'A bundled toolkit that keeps agent context in check: limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review. The window does not change the Claude Code main model or effort (Claude Desktop presets are edited only with the checkbox below). Hooks are written into client settings, so applying requires level R2.',
         )}
       </p>
 

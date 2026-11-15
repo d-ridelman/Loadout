@@ -533,7 +533,7 @@ const cases = [
       env: { KEEP_ME: '42' },
       hooks: {
         SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo start' }] }],
-        PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: 'custom-other-hook' }] }],
+        PreToolUse: [{ matcher: 'Edit', hooks: [{ type: 'command', command: 'custom-other-hook' }, { type: 'command', command: 'C:/tools/logger.exe ctxkit' }] }],
         Stop: [{ hooks: [foreignStop] }],
       },
     };
@@ -577,7 +577,7 @@ const cases = [
     const s = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
     const cmds = (ev) => (s.hooks?.[ev] ?? []).flatMap((g) => g.hooks.map((h) => h.command));
     if (s.KEEP_ME?.a !== 1 || s.env?.KEEP_ME !== '42' || s.env?.CTXKIT_LANG !== undefined) return false;
-    if (JSON.stringify(cmds('PreToolUse')) !== '["custom-other-hook"]' || cmds('PostToolUse').length !== 0) return false;
+    if (JSON.stringify(cmds('PreToolUse')) !== '["custom-other-hook","C:/tools/logger.exe ctxkit"]' || cmds('PostToolUse').length !== 0) return false;
     if (JSON.stringify(cmds('Stop')) !== JSON.stringify([foreignStop.command]) || cmds('SessionStart')[0] !== 'echo start') return false;
     // setup without model flags kept the user's own 'opus'; uninstall does not touch it either and only prints it
     if (s.model !== 'opus' || !run.stdout.includes('model: "opus"') || !run.stdout.includes('latest:')) return false;
