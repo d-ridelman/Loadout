@@ -43,8 +43,44 @@ export type Intent =
   | { op: 'copy'; entity: string; to: ClientId }
   /** Новый MCP-сервер: локальный (`command`) или удалённый (`url`). Значения env уходят только в ядро. */
   | { op: 'add'; to: ClientId; name: string; command: string; args: string[]; url: string; env: { key: string; value: string }[] }
+  /** Скил из каталога подготовки, который заполнил main (`stage` — его номер, `sub` — путь скила внутри). */
+  | { op: 'installSkill'; stage: string; sub: string; name: string }
 
-export type OpKind = 'toggle' | 'edit' | 'copy' | 'add'
+export type OpKind = 'toggle' | 'edit' | 'copy' | 'add' | 'installSkill'
+
+/** Плагин из каталога добавленного маркетплейса (`marketplace.json`). */
+export interface CatalogPlugin {
+  name: string
+  description: string
+  version?: string
+  installed: boolean
+  /** Пусто — ставится отсюда; иначе почему нет (например, источник `command`). */
+  why?: string
+}
+
+export interface Marketplace {
+  name: string
+  /** Откуда добавлен, для показа (`owner/repo`, адрес, путь с `~`). */
+  source: string
+  plugins: CatalogPlugin[]
+  /** Каталог не прочитан (ещё не скачан, повреждён): почему. */
+  error?: string
+}
+
+/** Скил, найденный в подготовленном источнике. */
+export interface SkillCandidate {
+  sub: string
+  name: string
+  description: string
+}
+
+export interface SkillFetch {
+  dryRun: boolean
+  /** Для предпросмотра — что будет выполнено; после выполнения — пусто. */
+  command: string
+  stage: string
+  skills: SkillCandidate[]
+}
 export type Level = 'R1' | 'R2'
 
 /** Предпросмотр: ключ и старое/новое значение (команды замаскированы), содержимого файла в нём нет. */
@@ -255,6 +291,12 @@ export interface LoadoutApi {
   ctxkitSetup: (options: SetupOptions, dryRun: boolean) => Promise<Result<SetupResult>>
   /** Установка плагина Claude Code через его CLI (`имя@маркетплейс`). `dryRun` — показать команду; установка требует R2 и такого же предпросмотра. */
   pluginInstall: (spec: string, dryRun: boolean) => Promise<Result<SetupResult>>
+  /** Добавление маркетплейса Claude Code (`owner/repo`, https-адрес, локальный путь): тот же порядок, что у установки. */
+  marketplaceAdd: (source: string, dryRun: boolean) => Promise<Result<SetupResult>>
+  /** Добавленные маркетплейсы и их каталоги (только чтение). */
+  marketplaces: () => Promise<Result<Marketplace[]>>
+  /** Скачать (GitHub) или скопировать (папка) источник скила в каталог подготовки Loadout. `dryRun` — только показать что и куда. */
+  skillFetch: (source: string, dryRun: boolean) => Promise<Result<SkillFetch>>
   /** Подписка на изменения конфигов; возвращает отписку. */
   onChanged: (cb: (e: ChangedEvent) => void) => () => void
 }

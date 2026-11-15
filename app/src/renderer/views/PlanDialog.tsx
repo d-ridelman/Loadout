@@ -24,6 +24,7 @@ function title(p: Plan | undefined, intent: Intent): string {
   if (op === 'add') return t('Добавить MCP-сервер', 'Add MCP server')
   if (op === 'edit') return t('Правка команды', 'Edit command')
   if (op === 'copy') return t('Копирование в другой клиент', 'Copy to another client')
+  if (op === 'installSkill') return t('Установить скил', 'Install skill')
   return intent.op === 'toggle' && intent.enable ? t('Включить', 'Enable') : t('Выключить', 'Disable')
 }
 
@@ -32,6 +33,7 @@ function applyLabel(p: Plan | undefined, intent: Intent): string {
   if (intent.op === 'add') return t('Добавить', 'Add')
   if (intent.op === 'edit') return t('Записать команду', 'Write command')
   if (intent.op === 'copy') return t('Скопировать', 'Copy')
+  if (intent.op === 'installSkill') return t('Установить', 'Install')
   if (p?.trash === 'in') return t('Вернуть из корзины', 'Restore from trash')
   if (!intent.enable && p?.trash === 'out') return t('Вынести в корзину', 'Move to trash')
   return intent.enable ? t('Включить', 'Enable') : t('Выключить', 'Disable')
@@ -40,7 +42,7 @@ function applyLabel(p: Plan | undefined, intent: Intent): string {
 /** Предпросмотр любой записи (CONCEPT.md §5, шаги 1–2): что именно поменяется, и только после подтверждения запись. */
 export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
   const [state, setState] = useState<PlanState>({ status: 'loading' })
-  const shown = entity?.name ?? (intent.op === 'add' ? intent.name : '')
+  const shown = entity?.name ?? (intent.op === 'add' || intent.op === 'installSkill' ? intent.name : '')
   const [busy, setBusy] = useState(false)
   const [applyError, setApplyError] = useState<string | null>(null)
   const applyRef = useRef<HTMLButtonElement>(null)
@@ -105,7 +107,11 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
         <>
           <dl className="kv">
             <dt>{t('файл', 'file')}</dt><dd className="wrap"><Path p={state.plan.file} /></dd>
-            <dt>{t('ключ', 'key')}</dt><dd className="wrap">{state.plan.pointer}</dd>
+            {state.plan.pointer ? (
+              <>
+                <dt>{t('ключ', 'key')}</dt><dd className="wrap">{state.plan.pointer}</dd>
+              </>
+            ) : null}
             <dt>{t('было', 'before')}</dt><dd className="wrap mono">{state.plan.from}</dd>
             <dt>{t('станет', 'after')}</dt><dd className="wrap mono"><b>{state.plan.to}</b></dd>
           </dl>
@@ -130,10 +136,15 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
             </p>
           ) : null}
           <p className="mute small">
-            {t(
-              'Перед записью копия файла сохранится в бэкап, остальное содержимое файла не меняется. Если файл изменится до записи, она не пройдёт.',
-              'Before writing, a copy of the file is saved as a backup; the rest of the file is left untouched. If the file changes before the write, it will not go through.',
-            )}
+            {state.plan.op === 'installSkill'
+              ? t(
+                  'Копия скила сохранится в бэкап операции, другие файлы не меняются. Откат — в журнале, пока скил не правили. Если источник изменится до записи, она не пройдёт.',
+                  'A copy of the skill is saved in the operation backup; no other files change. Roll back from the journal while the skill is unedited. If the source changes before the write, it will not go through.',
+                )
+              : t(
+                  'Перед записью копия файла сохранится в бэкап, остальное содержимое файла не меняется. Если файл изменится до записи, она не пройдёт.',
+                  'Before writing, a copy of the file is saved as a backup; the rest of the file is left untouched. If the file changes before the write, it will not go through.',
+                )}
           </p>
         </>
       )}

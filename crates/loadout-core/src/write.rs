@@ -17,6 +17,8 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod skill;
+
 /// Почему запись нельзя переключить (показывается в инспекторе).
 pub fn why_not(e: &Entity) -> String {
     match (e.client, e.kind) {
@@ -146,6 +148,13 @@ pub enum Intent {
         #[serde(default)]
         env: Vec<EnvPair>,
     },
+    /// Установить скил Claude Code из каталога подготовки `<бэкапы>/staging/<stage>` (его заполняет main).
+    InstallSkill {
+        stage: String,
+        #[serde(default)]
+        sub: String,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -160,7 +169,7 @@ impl Intent {
             Intent::Toggle { entity, .. }
             | Intent::Edit { entity, .. }
             | Intent::Copy { entity, .. } => entity,
-            Intent::Add { .. } => "",
+            Intent::Add { .. } | Intent::InstallSkill { .. } => "",
         }
     }
 }
@@ -968,11 +977,18 @@ fn prepare_raw(
             url,
             env,
         } => prep_add(home, scan, (to, name, command, args, url, env)),
+        Intent::InstallSkill { .. } => Err(crate::tr!(
+            "установка скила не входит в пакет",
+            "skill installation is not part of a batch"
+        )),
     }
 }
 
 /// Предпросмотр: ничего не пишет.
 pub fn plan(home: &Path, store: Option<&Path>, i: &Intent) -> Result<Plan, String> {
+    if let Intent::InstallSkill { stage, sub, name } = i {
+        return skill::plan(home, store, stage, sub, name);
+    }
     let scan = crate::scan_with(home, store);
     prepare(home, store, &scan, i).map(|p| p.plan)
 }
@@ -1225,6 +1241,7 @@ fn op_name(i: &Intent) -> &'static str {
         Intent::Edit { .. } => "edit",
         Intent::Copy { .. } => "copy",
         Intent::Add { .. } => "add",
+        Intent::InstallSkill { .. } => "installSkill",
     }
 }
 
@@ -1257,6 +1274,9 @@ fn apply_one(
     batch: Option<&str>,
     max_level: &str,
 ) -> Result<Applied, String> {
+    if let Intent::InstallSkill { stage, sub, name } = i {
+        return skill::apply(home, store, stage, sub, name, base_sha, max_level);
+    }
     let scan = crate::scan_with(home, Some(store));
     let p = prepare(home, Some(store), &scan, i)?;
     need_level(&p.plan.level, max_level)?;
@@ -1302,7 +1322,7 @@ pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchP
     let scan = crate::scan_with(home, store);
     let (mut plans, mut skipped) = (Vec::new(), Vec::new());
     for i in items {
-        if matches!(i, Intent::Add { .. }) {
+        if matches!(i, Intent::Add { .. } | Intent::InstallSkill { .. }) {
             skipped.push(crate::tr!(
                 "добавление не входит в пакет",
                 "adding is not part of a batch"
@@ -1452,7 +1472,8 @@ fn resolve_entity<'a>(scan: &'a ScanResult, m: &Manifest) -> Option<&'a Entity> 
 
 /// Слова, которыми ядро пишет `from`/`to` в манифест (на языке операции). Запись, сделанная до смены языка, показывается
 /// на текущем: стандартные слова и префиксы переводятся, введённая пользователем команда после префикса остаётся как есть.
-const CANNED: [(&str, &str); 6] = [
+const CANNED: [(&str, &str); 7] = [
+    ("установлен", "installed"),
     ("включено", "enabled"),
     ("выключено", "disabled"),
     ("не задан", "not set"),
@@ -1486,24 +1507,6 @@ fn relang(s: &str) -> String {
     s.to_owned()
 }
 
-#[cfg(test)]
-mod relang_tests {
-    use super::relang;
-
-    /// Язык процесса в тестах русский: английские слова из манифеста, записанного при `--lang en`, показываются по-русски,
-    /// а введённая команда после префикса и неизвестный текст не меняются.
-    #[test]
-    fn manifest_words_follow_the_process_language() {
-        assert_eq!(relang("enabled"), "включено");
-        assert_eq!(relang("in Loadout trash"), "в корзине Loadout");
-        assert_eq!(relang("no entry"), "нет записи");
-        assert_eq!(relang("add: npx -y pkg"), "добавить: npx -y pkg");
-        assert_eq!(relang("copy: tool"), "копия: tool");
-        assert_eq!(relang("включено"), "включено");
-        assert_eq!(relang("npx -y custom"), "npx -y custom");
-    }
-}
-
 /// Журнал наших операций, новые первыми. Изменения клиентов извне в него не попадают.
 pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
     let all = manifests(store);
@@ -1522,6 +1525,7 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
             let can_rollback = m.op != "rollback"
                 && !rolled_back
                 && match m.inverse_enable {
+                    None if m.op == "installSkill" => skill::can_rollback(home, m),
                     // вынос и возврат откатываются обратной операцией, пока запись в том состоянии, которое оставила операция
                     Some(inv) => scan
                         .as_ref()
@@ -1570,6 +1574,9 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
             "операция уже откатана",
             "the operation has already been rolled back"
         ));
+    }
+    if m.op == "installSkill" {
+        return skill::rollback(home, store, op, &m);
     }
     // Обратная операция — когда в деле корзина или файл с тех пор менялся. Возврат из стэша владельца при неизменном
     // файле откатывается возвратом файла из бэкапа: запись снова оказывается в стэше, а не в корзине Loadout.
@@ -1684,4 +1691,23 @@ pub fn rollback_batch(
         ));
     }
     Ok(done)
+}
+
+#[cfg(test)]
+mod relang_tests {
+    use super::relang;
+
+    /// Язык процесса в тестах русский: английские слова из манифеста, записанного при `--lang en`, показываются по-русски,
+    /// а введённая команда после префикса и неизвестный текст не меняются.
+    #[test]
+    fn manifest_words_follow_the_process_language() {
+        assert_eq!(relang("enabled"), "включено");
+        assert_eq!(relang("in Loadout trash"), "в корзине Loadout");
+        assert_eq!(relang("no entry"), "нет записи");
+        assert_eq!(relang("installed"), "установлен");
+        assert_eq!(relang("add: npx -y pkg"), "добавить: npx -y pkg");
+        assert_eq!(relang("copy: tool"), "копия: tool");
+        assert_eq!(relang("включено"), "включено");
+        assert_eq!(relang("npx -y custom"), "npx -y custom");
+    }
 }

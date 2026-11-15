@@ -1,7 +1,8 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { getLang, isLang, langFromLocale, setLang, t } from '../shared/i18n'
@@ -9,6 +10,7 @@ import type { Lang } from '../shared/i18n'
 import { CLIENTS, LEVEL_RANK } from '../shared/model'
 import type { ChangedEvent, ClientId, Intent, Result, ScanResponse, WriteLevel } from '../shared/model'
 import * as ctxkit from './ctxkit'
+import { cloneArgs, findSkills, localMarketplaceOk, parseMarketplaceSource, parseSkillSource, readCatalog, skillNameOk } from './install'
 import { Sidecar } from './sidecar'
 import {
   validateApplied,
@@ -278,6 +280,14 @@ function validateIntent(raw: unknown): Intent {
   if (typeof raw !== 'object' || raw === null) throw new Error(t('неверные параметры', 'invalid parameters'))
   const r = raw as Record<string, unknown>
   if (r['op'] === 'add') return validateAdd(r)
+  if (r['op'] === 'installSkill') {
+    // каталог подготовки ядро находит само по номеру; путь внутри и имя оно проверяет ещё раз
+    const { stage, sub, name } = r
+    if (typeof stage !== 'string' || !/^[0-9a-f]{32}$/.test(stage) || typeof sub !== 'string' || !/^([A-Za-z0-9._-]{1,100}(\/[A-Za-z0-9._-]{1,100})*)?$/.test(sub) || typeof name !== 'string' || !skillNameOk(name)) {
+      throw new Error(t('неверные параметры', 'invalid parameters'))
+    }
+    return { op: 'installSkill', stage, sub, name }
+  }
   const entity = r['entity']
   if (typeof entity !== 'string' || !ENTITY_RE.test(entity)) throw new Error(t('неверные параметры', 'invalid parameters'))
   if (r['op'] === 'toggle' && typeof r['enable'] === 'boolean') return { op: 'toggle', entity, enable: r['enable'] }
@@ -366,7 +376,7 @@ void app.whenReady().then(() => {
     if (!isLang(lang)) throw new Error('invalid language')
     if (lang !== getLang()) {
       // остановка ядра посреди записи (пакет профиля) оставила бы пакет применённым наполовину
-      if (coreInFlight > 0 || setupBusy || pluginBusy) {
+      if (coreInFlight > 0 || setupBusy || claudeBusy || fetchBusy) {
         throw new Error(t('идёт запись или установка: дождитесь окончания и повторите', 'a write or an install is in progress: wait for it to finish and try again'))
       }
       setLang(lang)
@@ -411,7 +421,8 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => {
       const plan = validatePlan(await core('plan', validateIntent(raw)))
-      return { ...plan, running: await runningOf(plan.client) }
+      // новый каталог скила клиент своим состоянием не перезапишет: предупреждение о запущенном клиенте ни к чему
+      return { ...plan, running: plan.op === 'installSkill' ? [] : await runningOf(plan.client) }
     })
   })
   ipcMain.handle('apply', (e, raw: unknown, baseSha: unknown) => {
@@ -540,33 +551,107 @@ void app.whenReady().then(() => {
   })
   // ---- установка плагина Claude Code его собственным CLI: это сеть и чужой код, поэтому R2, предпросмотр и без `-y` ----
   const SPEC_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
-  let lastPluginPreview: string | undefined
-  let pluginBusy = false
+  // Один предпросмотр — один запуск: ключ — точная команда, расходуется до запуска. Общий для установки и маркетплейсов.
+  let lastClaudePreview: string | undefined
+  let claudeBusy = false
+  const quoteArg = (a: string): string => (/[\s"]/.test(a) ? `"${a}"` : a)
+  /** `claude <args>` по шагам «предпросмотр → R2 → запуск». `args` уже собраны из проверенного ввода, оболочки нет. */
+  const claudeStep = async (args: string[], dryRun: boolean, what: string) => {
+    const shown = `claude ${args.map(quoteArg).join(' ')}`
+    if (dryRun) {
+      lastClaudePreview = shown
+      return { dryRun, code: 0, output: shown }
+    }
+    if (readWriteLevel() !== 'R2') throw new Error(t(`для этого действия (${what}) нужен уровень R2: включите его в шапке окна`, `this action (${what}) requires level R2: enable it in the window header`))
+    if (lastClaudePreview !== shown) throw new Error(t('сначала выполните предпросмотр с тем же вводом', 'run a preview with the same input first'))
+    if (claudeBusy) throw new Error(t('команда Claude Code уже выполняется', 'a Claude Code command is already running'))
+    lastClaudePreview = undefined
+    claudeBusy = true
+    try {
+      // стандартный запуск CLI из PATH; в разработке и проверках `LOADOUT_CLAUDE` (+ `LOADOUT_CLAUDE_ARGS`, JSON) подменяет его
+      const extra = envOf('LOADOUT_CLAUDE_ARGS')
+      const prefix: string[] = extra ? (JSON.parse(extra) as string[]) : []
+      const home = ctxHome()
+      const r = await ctxkit.run(envOf('LOADOUT_CLAUDE') ?? 'claude', [...prefix, ...args], 180_000, home ? { USERPROFILE: home, HOME: home } : undefined)
+      return { dryRun, code: r.code, output: tidy(`${r.stdout}${r.stderr}`).slice(0, 20_000) }
+    } finally {
+      claudeBusy = false
+    }
+  }
   ipcMain.handle('plugin:install', (e, spec: unknown, dryRun: unknown) => {
     guard(e)
     return guarded(async () => {
       if (typeof spec !== 'string' || !SPEC_RE.test(spec) || typeof dryRun !== 'boolean') {
         throw new Error(t('имя плагина: имя@маркетплейс, буквы, цифры, `.`, `_`, `-`', 'plugin name: name@marketplace, letters, digits, `.`, `_`, `-`'))
       }
-      const args = ['plugin', 'install', spec, '--scope', 'user']
-      if (dryRun) {
-        lastPluginPreview = spec
-        return { dryRun, code: 0, output: `claude ${args.join(' ')}` }
+      return claudeStep(['plugin', 'install', spec, '--scope', 'user'], dryRun, t('установка плагина', 'plugin installation'))
+    })
+  })
+  // ---- маркетплейсы Claude Code: добавление его CLI (сеть, R2) и чтение каталогов (только чтение) ----
+  ipcMain.handle('marketplace:add', (e, raw: unknown, dryRun: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (typeof dryRun !== 'boolean') throw new Error(t('неверные параметры', 'invalid parameters'))
+      const src = parseMarketplaceSource(raw)
+      if (src.kind === 'path' && !localMarketplaceOk(src.value)) {
+        throw new Error(t('в папке нет .claude-plugin/marketplace.json', 'the folder has no .claude-plugin/marketplace.json'))
       }
-      if (readWriteLevel() !== 'R2') throw new Error(t('для установки плагина нужен уровень R2: включите его в шапке окна', 'installing a plugin requires level R2: enable it in the window header'))
-      if (lastPluginPreview !== spec) throw new Error(t('сначала выполните предпросмотр с тем же именем', 'run a preview with the same name first'))
-      if (pluginBusy) throw new Error(t('установка уже идёт', 'an installation is already in progress'))
-      lastPluginPreview = undefined
-      pluginBusy = true
+      return claudeStep(['plugin', 'marketplace', 'add', '--scope', 'user', src.value], dryRun, t('добавление маркетплейса', 'adding a marketplace'))
+    })
+  })
+  ipcMain.handle('marketplace:catalog', (e) => {
+    guard(e)
+    return guarded(async () => readCatalog(userHome(), tidy))
+  })
+  // ---- скил из GitHub или папки: источник кладётся в каталог подготовки ядра, ставит его ядро (план, журнал, откат) ----
+  const stagingRoot = (): string => join(app.getPath('userData'), 'backups', 'staging')
+  let lastFetchPreview: string | undefined
+  let fetchBusy = false
+  // прошлые подготовки после перезапуска не нужны: начинаем с пустого каталога
+  rmSync(stagingRoot(), { recursive: true, force: true })
+  ipcMain.handle('skill:fetch', (e, raw: unknown, dryRun: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (typeof dryRun !== 'boolean') throw new Error(t('неверные параметры', 'invalid parameters'))
+      const src = parseSkillSource(raw)
+      const ghBase = envOf('LOADOUT_GITHUB_BASE') ?? 'https://github.com/'
+      const shownDest = tidy(join(stagingRoot(), '…'))
+      const command =
+        src.kind === 'github'
+          ? `git ${cloneArgs(src, ghBase, shownDest).map(quoteArg).join(' ')}`
+          : t(`копия ${tidy(src.path)} → ${shownDest}`, `copy ${tidy(src.path)} → ${shownDest}`)
+      const key = JSON.stringify(src)
+      if (dryRun) {
+        lastFetchPreview = key
+        return { dryRun, command, stage: '', skills: [] }
+      }
+      if (lastFetchPreview !== key) throw new Error(t('сначала посмотрите, что будет скачано', 'first review what will be downloaded'))
+      if (fetchBusy) throw new Error(t('загрузка уже идёт', 'a download is already in progress'))
+      lastFetchPreview = undefined
+      fetchBusy = true
+      // одна подготовка за раз: прежняя убирается
+      rmSync(stagingRoot(), { recursive: true, force: true })
+      const stage = randomBytes(16).toString('hex')
+      const dest = join(stagingRoot(), stage)
+      mkdirSync(stagingRoot(), { recursive: true })
       try {
-        // стандартный запуск CLI из PATH; в разработке и проверках `LOADOUT_CLAUDE` (+ `LOADOUT_CLAUDE_ARGS`, JSON) подменяет его
-        const extra = envOf('LOADOUT_CLAUDE_ARGS')
-        const prefix: string[] = extra ? (JSON.parse(extra) as string[]) : []
-        const home = ctxHome()
-        const r = await ctxkit.run(envOf('LOADOUT_CLAUDE') ?? 'claude', [...prefix, ...args], 180_000, home ? { USERPROFILE: home, HOME: home } : undefined)
-        return { dryRun, code: r.code, output: tidy(`${r.stdout}${r.stderr}`).slice(0, 20_000) }
+        if (src.kind === 'github') {
+          // без окна входа и вопросов в консоли: на закрытом или несуществующем репозитории git сразу выходит с ошибкой
+          const r = await ctxkit.run('git', cloneArgs(src, ghBase, dest), 120_000, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' })
+          if (r.code !== 0) throw new Error(t(`git clone не удался: ${tidy(r.stderr).slice(-400)}`, `git clone failed: ${tidy(r.stderr).slice(-400)}`))
+        } else {
+          if (!statSync(src.path, { throwIfNoEntry: false })?.isDirectory()) throw new Error(t('папка не найдена', 'folder not found'))
+          // ссылки не разыменовываются: ядро откажет на дереве со ссылками
+          cpSync(src.path, dest, { recursive: true, dereference: false, verbatimSymlinks: true, filter: (s) => !/[\\/](\.git|node_modules)$/.test(s) })
+        }
+        const skills = findSkills(dest, src.kind === 'github' ? src.sub : '')
+        if (skills.length === 0) throw new Error(t('в источнике нет каталога со SKILL.md', 'the source has no directory with SKILL.md'))
+        return { dryRun, command: '', stage, skills }
+      } catch (err) {
+        rmSync(dest, { recursive: true, force: true })
+        throw err
       } finally {
-        pluginBusy = false
+        fetchBusy = false
       }
     })
   })

@@ -69,6 +69,7 @@ export function run(bin: string, args: string[], timeoutMs: number, env?: Record
     execFile(bin, args, opts, (err, stdout, stderr) => {
       const isCtxkit = bin.toLowerCase().includes('ctxkit')
       if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (bin === 'git') return reject(new Error(t('git не найден в PATH: установите Git for Windows', 'git not found in PATH: install Git for Windows')))
         return reject(new Error(isCtxkit ? t('ctxkit не найден в составе приложения', 'ctxkit not found in the app bundle') : t('Claude Code CLI (`claude`) не найден в PATH', 'Claude Code CLI (`claude`) not found in PATH')))
       }
       const e = err as (Error & { code?: number | string; killed?: boolean }) | null
