@@ -590,10 +590,12 @@ fn first_words(cmd: &str, n: usize) -> Vec<String> {
 /// `ctxkit` / `claude-guard` / `no-inline-backslash` (any case, .exe/.js/.mjs/.cmd or none).
 /// A foreign command that merely has "ctxkit" somewhere in its path is not ours.
 pub(crate) fn command_is_ours(cmd: &str, current: Option<&str>) -> bool {
-    if current.is_some_and(|c| c.trim() == cmd.trim()) {
-        return true;
-    }
-    first_words(cmd, 2).iter().any(|w| {
+    current.is_some_and(|c| c.trim() == cmd.trim()) || our_name(cmd).is_some()
+}
+
+/// Which of our names (`ctxkit` or a legacy one) the command's first two words carry.
+pub(crate) fn our_name(cmd: &str) -> Option<&'static str> {
+    first_words(cmd, 2).iter().find_map(|w| {
         let base = w
             .rsplit(['/', '\\'])
             .next()
@@ -603,7 +605,9 @@ pub(crate) fn command_is_ours(cmd: &str, current: Option<&str>) -> bool {
             .iter()
             .find_map(|e| base.strip_suffix(e))
             .unwrap_or(&base);
-        matches!(stem, "ctxkit" | "claude-guard" | "no-inline-backslash")
+        ["ctxkit", "claude-guard", "no-inline-backslash"]
+            .into_iter()
+            .find(|n| *n == stem)
     })
 }
 

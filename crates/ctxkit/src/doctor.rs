@@ -50,7 +50,7 @@ fn hook_command(settings: &Value) -> Option<String> {
         .find_map(|h| {
             h["command"]
                 .as_str()
-                .filter(|c| crate::setup::command_is_ours(c, None))
+                .filter(|c| crate::setup::our_name(c) == Some("ctxkit"))
         })?
         .trim();
     Some(
@@ -396,6 +396,7 @@ mod tests {
     fn hook_command_forms_and_lang_values() {
         let hook = |c: &str| {
             json!({"hooks": {"PreToolUse": [
+                {"hooks": [{"command": "claude-guard"}]},
                 {"hooks": [{"command": "node C:/tools/ctxkit-helper/stop.js"}]},
                 {"hooks": [{"command": c}]}
             ]}})
