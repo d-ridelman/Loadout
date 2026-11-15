@@ -25,7 +25,7 @@ pub fn scan(c: &mut Ctx) {
             .flatten()
             .filter(|e| e.path().is_dir())
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n != "node_modules")
+            .filter(|n| n != "node_modules" && mask::safe_name(n).is_some())
             .collect();
         names.sort();
         for n in names {
@@ -44,6 +44,10 @@ fn patch(c: &mut Ctx, path: &Path, scope: &str) {
         return;
     };
     let file = c.tilde(path);
+    if let Some(why) = yaml_guard(&text) {
+        c.warnings.push(format!("{file}: пропущен ({why})"));
+        return;
+    }
     let docs = match YamlLoader::load_from_str(&text) {
         Ok(d) => d,
         Err(e) => {
@@ -91,7 +95,12 @@ fn insert_entry(c: &mut Ctx, file: &str, ptr: &str, scope: &str, entry: &Yaml) {
             .note("запись плагина dsh-mcp-client; признака «выключено» у записи нет (убрать запись = выключить)");
         c.push(e);
     } else if let Some(kind) = plugin.strip_prefix(HOOKS_PREFIX) {
-        hooks_file(c, kind, config.get("configPath").and_then(Value::as_str));
+        hooks_file(
+            c,
+            kind,
+            scope,
+            config.get("configPath").and_then(Value::as_str),
+        );
     } else if !plugin.is_empty() {
         let e = Entity::new(
             CLIENT,
@@ -108,20 +117,66 @@ fn insert_entry(c: &mut Ctx, file: &str, ptr: &str, scope: &str, entry: &Yaml) {
 }
 
 /// Файл хуков, на который указывает запись `dsh-hooks-*`. Читаем только внутри домашнего каталога.
-fn hooks_file(c: &mut Ctx, _flavor: &str, config_path: Option<&str>) {
+fn hooks_file(c: &mut Ctx, _flavor: &str, scope: &str, config_path: Option<&str>) {
     let Some(raw) = config_path else { return };
     let path = PathBuf::from(raw);
     let shown = c.tilde(&path);
+    // Только абсолютный путь без `..`, лежащий в домашнем каталоге, причём и после раскрытия ссылок и junction'ов.
     let escapes = path.components().any(|p| matches!(p, Component::ParentDir));
-    if !shown.starts_with('~') || escapes {
+    let outside_real = match (std::fs::canonicalize(&path), std::fs::canonicalize(&c.home)) {
+        (Ok(real), Ok(home)) => !real.starts_with(home),
+        _ => false, // файла нет: читать нечего
+    };
+    if !path.is_absolute() || !shown.starts_with('~') || escapes || outside_real {
         c.warnings
             .push("файл хуков dsh вне домашнего каталога не читается".to_owned());
         return;
     }
     if let Some(v) = c.read_json(&path) {
         let (hooks, ptr) = v.get("hooks").map_or((&v, ""), |h| (h, "/hooks"));
-        scan_hooks(c, CLIENT, &shown, ptr, hooks);
+        scan_hooks(c, CLIENT, &shown, ptr, scope, hooks);
     }
+}
+
+/// Защита разбора YAML: якоря и алиасы (`&x`, `*x`, `<<:`) растут экспоненциально при разворачивании, очень глубокая
+/// вложенность валит стек. Файл конфигурации dsh ничего из этого не использует, поэтому такой файл не читаем.
+fn yaml_guard(text: &str) -> Option<&'static str> {
+    let (mut depth, mut max_depth) = (0usize, 0usize);
+    for c in text.chars() {
+        match c {
+            '[' | '{' => {
+                depth += 1;
+                max_depth = max_depth.max(depth);
+            }
+            ']' | '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    if max_depth > 64 {
+        return Some("слишком глубокая вложенность");
+    }
+    for line in text.lines() {
+        let indent = line.len() - line.trim_start().len();
+        if indent > 200 {
+            return Some("слишком глубокая вложенность");
+        }
+        // значение: после `- ` и после `ключ: `; якорь `&имя` или алиас `*имя` стоит в самом начале значения
+        let t = line.trim_start().trim_start_matches("- ").trim_start();
+        let value = t.split_once(": ").map_or(t, |(_, v)| v.trim_start());
+        let marked = |s: &str| {
+            s.strip_prefix(['*', '&'])
+                .and_then(|r| r.chars().next())
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        };
+        if t.starts_with("<<:")
+            || marked(t)
+            || marked(value)
+            || value.contains(" *") && value.contains('[')
+        {
+            return Some("якоря и алиасы YAML не поддерживаются");
+        }
+    }
+    None
 }
 
 fn yaml_to_json(y: &Yaml) -> Value {

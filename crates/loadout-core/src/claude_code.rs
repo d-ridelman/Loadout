@@ -38,7 +38,7 @@ pub fn scan(c: &mut Ctx) {
     md_dir(c, "agents", Kind::Agent);
     md_dir(c, "commands", Kind::Command);
     if let Some(h) = settings.as_ref().and_then(|s| s.get("hooks")) {
-        scan_hooks(c, CLIENT, "~/.claude/settings.json", "/hooks", h);
+        scan_hooks(c, CLIENT, "~/.claude/settings.json", "/hooks", "user", h);
     }
 }
 
@@ -322,7 +322,11 @@ fn md_dir(c: &mut Ctx, dir: &str, kind: Kind) {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let fm = frontmatter::read(&p).unwrap_or_default();
-        let name = fm.get("name").cloned().unwrap_or(stem);
+        // имя из frontmatter проходит тот же фильтр, что у скилов
+        let name = fm
+            .get("name")
+            .and_then(|n| mask::safe_name(n))
+            .map_or(stem, str::to_owned);
         let e = Entity::new(
             CLIENT,
             kind,

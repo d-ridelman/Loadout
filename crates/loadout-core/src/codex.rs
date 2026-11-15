@@ -25,7 +25,7 @@ pub fn scan(c: &mut Ctx) {
     config(c);
     if let Some(v) = c.read_json(&c.home.join(".codex/hooks.json")) {
         if let Some(h) = v.get("hooks") {
-            scan_hooks(c, CLIENT, "~/.codex/hooks.json", "/hooks", h);
+            scan_hooks(c, CLIENT, "~/.codex/hooks.json", "/hooks", "user", h);
         }
     }
     let skills = c.home.join(".codex/skills");

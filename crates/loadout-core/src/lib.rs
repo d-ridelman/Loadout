@@ -20,6 +20,9 @@ pub struct Ctx {
     pub warnings: Vec<String>,
 }
 
+/// Предел размера читаемого файла.
+const MAX_FILE_BYTES: u64 = 16 << 20;
+
 fn norm(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
@@ -43,6 +46,16 @@ impl Ctx {
 
     /// Отсутствие файла — норма (клиент не установлен), остальное — предупреждение.
     pub fn read_text(&mut self, p: &Path) -> Option<String> {
+        // Файлы клиентов бывают большими (`.claude.json` с кешами), но не гигабайтными: лимит защищает от зависания.
+        if std::fs::metadata(p).is_ok_and(|m| m.len() > MAX_FILE_BYTES) {
+            let w = format!(
+                "{}: файл больше {} МБ, пропущен",
+                self.tilde(p),
+                MAX_FILE_BYTES >> 20
+            );
+            self.warnings.push(w);
+            return None;
+        }
         match std::fs::read_to_string(p) {
             Ok(t) => Some(t),
             Err(e) if e.kind() == ErrorKind::NotFound => None,
@@ -147,7 +160,14 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
 }
 
 /// Хуки в общем формате Claude Code / Codex: `{Событие: [{matcher?, hooks: [{type, command, timeout}]}]}`.
-pub(crate) fn scan_hooks(c: &mut Ctx, client: Client, file: &str, root_ptr: &str, hooks: &Value) {
+pub(crate) fn scan_hooks(
+    c: &mut Ctx,
+    client: Client,
+    file: &str,
+    root_ptr: &str,
+    scope: &str,
+    hooks: &Value,
+) {
     let Some(events) = hooks.as_object() else {
         return;
     };
@@ -174,13 +194,20 @@ pub(crate) fn scan_hooks(c: &mut Ctx, client: Client, file: &str, root_ptr: &str
                 let e = Entity::new(
                     client,
                     Kind::Hook,
-                    "user",
+                    scope,
                     format!("{ev}: {label}"),
                     State::On,
                     file,
                     format!("{root_ptr}/{}/{gi}/hooks/{hi}", esc_ptr(event)),
                 )
-                .logical(agent_hooks_group(&tokens).unwrap_or(label))
+                // Хук без опознанной метки не склеивается с такими же хуками других клиентов в одну строку.
+                .logical(agent_hooks_group(&tokens).unwrap_or_else(|| {
+                    if label == "hook" {
+                        format!("hook:{}", client.slug())
+                    } else {
+                        label
+                    }
+                }))
                 .detail(json!({
                     "event": ev,
                     "matcher": matcher.and_then(mask::safe_matcher),
@@ -275,32 +302,34 @@ fn expand_nested(tokens: &[String], depth: usize) -> Vec<String> {
     out
 }
 
-/// Заменяет `pat` на `~` без учёта регистра ASCII.
+fn chars_eq_ci(a: char, b: char) -> bool {
+    a == b || a.to_lowercase().eq(b.to_lowercase())
+}
+
+/// Заменяет `pat` на `~` без учёта регистра (в том числе кириллицы). Работает по символам, а не по байтам:
+/// срез строки внутри многобайтной буквы невозможен.
 fn replace_ci(s: &str, pat: &str) -> String {
-    let (sb, pb) = (s.as_bytes(), pat.as_bytes());
-    if pb.is_empty() {
+    let pc: Vec<char> = pat.chars().collect();
+    if pc.is_empty() {
         return s.to_owned();
     }
+    let sc: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
-    while i < s.len() {
-        let end = i + pb.len();
+    while i < sc.len() {
+        let end = i + pc.len();
         // Совпадение не должно обрывать имя: домой `C:\Users\al` не принадлежит `C:\Users\alice`.
-        // Границу символа проверяем до любого среза: `end` может попасть внутрь кириллической буквы.
-        let hit = end <= sb.len()
-            && s.is_char_boundary(end)
-            && sb[i..end].eq_ignore_ascii_case(pb)
-            && !s[end..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let hit = end <= sc.len()
+            && sc[i..end].iter().zip(&pc).all(|(a, b)| chars_eq_ci(*a, *b))
+            && !sc
+                .get(end)
+                .is_some_and(|c| c.is_alphanumeric() || *c == '_');
         if hit {
             out.push('~');
             i = end;
         } else {
-            let ch = s[i..].chars().next().expect("i на границе символа");
-            out.push(ch);
-            i += ch.len_utf8();
+            out.push(sc[i]);
+            i += 1;
         }
     }
     out
@@ -390,6 +419,7 @@ pub fn scan(home: &Path) -> ScanResult {
 
     // Последний рубеж: путь домашнего каталога не должен остаться ни в одном строковом поле.
     let forms = home_forms(home);
+    let mut seen_ids: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for e in &mut c.entities {
         for s in [
             &mut e.name,
@@ -399,14 +429,23 @@ pub fn scan(home: &Path) -> ScanResult {
             &mut e.origin.pointer,
         ] {
             scrub_str(s, &forms);
+            // Строки из файлов в именах, областях и указателях: слова, похожие на токен, скрываются.
+            *s = mask::scrub_words(s);
         }
         if let Some(s) = e.note.as_mut() {
             scrub_str(s, &forms);
+            *s = mask::scrub_words(s);
         }
         if let Some(s) = e.version.as_mut() {
             scrub_str(s, &forms);
         }
         scrub(&mut e.detail, &forms);
+        // id однозначен в пределах одного скана, даже если одна запись прочитана из двух мест (патч и профиль dsh).
+        let n = seen_ids.entry(e.id.clone()).or_insert(0);
+        *n += 1;
+        if *n > 1 {
+            e.id = format!("{}-{n}", e.id);
+        }
     }
     for w in &mut c.warnings {
         scrub_str(w, &forms);
@@ -513,6 +552,14 @@ mod tests {
             scrub_str(&mut s, &forms);
             assert_eq!(s, want, "{input}");
         }
+    }
+
+    #[test]
+    fn scrub_ignores_case_of_non_ascii_names() {
+        let forms = home_forms(Path::new("C:\\Users\\Пётр"));
+        let mut s = "C:/Users/ПЁТР/a.js и c:\\users\\пётр\\b".to_owned();
+        scrub_str(&mut s, &forms);
+        assert_eq!(s, "~/a.js и ~\\b");
     }
 
     #[test]

@@ -41,6 +41,7 @@ fn hooks(c: &mut Ctx) {
             CLIENT,
             &file,
             &format!("/{}", crate::esc_ptr(group)),
+            "user",
             events,
         );
     }

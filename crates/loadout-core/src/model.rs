@@ -133,6 +133,12 @@ impl Entity {
             .filter(|i| *i > 0)
             .map_or(name.as_str(), |i| &name[..i])
             .to_lowercase();
+        // пустой ключ склеил бы все такие записи в одну строку матрицы
+        let logical_key = if logical_key.is_empty() {
+            "?".to_owned()
+        } else {
+            logical_key
+        };
         Self {
             id,
             logical_key,

@@ -13,13 +13,14 @@ export interface Finding {
 }
 
 const clientName = (id: ClientId): string => CLIENTS.find((c) => c.id === id)?.name ?? id
-const SECRETISH = /token|secret|passw|credential|cookie|auth|key$/i
+const SECRETISH = /token|secret|passw|credential|cookie|auth|key$|^pat$|_pat$|pwd|oauth/i
 
 /** Автоматические находки Доктора. Чистая функция над результатом скана: проверяется без окна. */
 export function diagnose(entities: readonly Entity[], warnings: readonly string[]): Finding[] {
   const out: Finding[] = []
 
-  // Несколько записей одного плагина в одной области дают одну находку, а не по одной на запись.
+  // Несколько записей с одним именем в одном клиенте и одном состоянии (две версии плагина, десять хуков) дают
+  // одну находку: подробности и остальные записи видны в инспекторе.
   const seen = new Set<string>()
   for (const e of entities) {
     if (e.state !== 'broken' && e.state !== 'stale') continue

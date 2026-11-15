@@ -353,6 +353,93 @@ fn deepseek_hook_path_outside_home_is_refused() {
 }
 
 #[test]
+fn deepseek_yaml_guard_refuses_alias_bombs_and_deep_nesting() {
+    for (yaml, why) in [
+        ("a: &a [x, x]\nb: &b [*a, *a]\nc: [*b, *b]\n", "алиасы"),
+        (
+            &format!("k: {}{}\n", "[".repeat(100), "]".repeat(100)),
+            "вложенность",
+        ),
+        (&format!("{}k: 1\n", " ".repeat(300)), "вложенность"),
+    ] {
+        let h = fixture_home();
+        fs::write(h.0.join(".dsh/cordis.patch.yml"), yaml).unwrap();
+        let r = loadout_core::scan(&h.0);
+        assert!(
+            r.warnings.iter().any(|w| w.contains(why)),
+            "{why}: {:?}",
+            r.warnings
+        );
+        assert_eq!(count(&r, Client::DeepSeek, Kind::Mcp, State::On), 0);
+    }
+}
+
+#[test]
+fn deepseek_relative_config_path_is_refused() {
+    let h = fixture_home();
+    let cfg = h.0.join(".dsh/cordis.patch.yml");
+    let text = fs::read_to_string(&cfg).unwrap();
+    fs::write(
+        &cfg,
+        text.replace("{HOME}", "~")
+            .replace(&h.0.to_string_lossy().replace('\\', "/"), "~"),
+    )
+    .unwrap();
+    let r = loadout_core::scan(&h.0);
+    assert_eq!(
+        count(&r, Client::DeepSeek, Kind::Hook, State::On),
+        0,
+        "`~/…` читалось бы относительно рабочего каталога процесса"
+    );
+    assert!(r.warnings.iter().any(|w| w.contains("вне домашнего")));
+}
+
+#[test]
+fn same_hooks_file_in_user_and_profile_patch_gets_distinct_ids_and_scopes() {
+    let h = fixture_home();
+    let user = fs::read_to_string(h.0.join(".dsh/cordis.patch.yml")).unwrap();
+    fs::write(h.0.join(".dsh/profiles/default/cordis.patch.yml"), user).unwrap();
+    let r = loadout_core::scan(&h.0);
+    let hooks: Vec<_> = r
+        .entities
+        .iter()
+        .filter(|e| e.client == Client::DeepSeek && e.kind == Kind::Hook)
+        .collect();
+    assert_eq!(hooks.len(), 4, "две области по два хука");
+    let ids: HashSet<_> = hooks.iter().map(|e| &e.id).collect();
+    assert_eq!(ids.len(), 4, "id уникальны");
+    assert!(hooks.iter().any(|e| e.scope == "profile:default"));
+    let all: HashSet<_> = r.entities.iter().map(|e| &e.id).collect();
+    assert_eq!(all.len(), r.entities.len());
+}
+
+#[test]
+fn secret_looking_names_from_files_do_not_reach_output() {
+    let h = fixture_home();
+    let token = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+    fs::write(
+        h.0.join(".claude/agents/leaky.md"),
+        format!("---\nname: {token}\n---\n"),
+    )
+    .unwrap();
+    // ключ группы хуков Antigravity и идентификатор приложения Codex тоже строки из файлов
+    let hooks = fs::read_to_string(h.0.join(".gemini/config/hooks.json")).unwrap();
+    fs::write(
+        h.0.join(".gemini/config/hooks.json"),
+        hooks.replace("\"ctxkit\"", &format!("\"{token}\"")),
+    )
+    .unwrap();
+    let cfg = fs::read_to_string(h.0.join(".codex/config.toml")).unwrap();
+    fs::write(
+        h.0.join(".codex/config.toml"),
+        cfg.replace("demo-app", token),
+    )
+    .unwrap();
+    let json = serde_json::to_string(&loadout_core::scan(&h.0)).unwrap();
+    assert!(!json.contains(token), "токен из имени попал в вывод");
+}
+
+#[test]
 fn missing_home_is_not_an_error() {
     let r = loadout_core::scan(Path::new("Z:/definitely/not/here"));
     assert!(r.entities.is_empty() && r.warnings.is_empty());

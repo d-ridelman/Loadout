@@ -33,6 +33,7 @@ export function groupOf(kind: Kind): Group {
 export function scopeRank(scope: string): number {
   if (scope === 'user') return 0
   if (scope === 'local') return 1
+  if (scope === 'managed' || scope === 'enterprise') return 1.5
   if (scope.startsWith('plugin:')) return 2
   if (scope.startsWith('profile:')) return 3
   if (scope === 'builtin') return 4

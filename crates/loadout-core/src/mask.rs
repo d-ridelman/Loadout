@@ -29,8 +29,9 @@ const SECRET_PARTS: [&str; 12] = [
     "oauth",
 ];
 /// Слова, которые считаем только целыми (`pat` в `GH_PAT`, но не в `path`).
-const SECRET_WORDS: [&str; 10] = [
-    "pat", "auth", "pass", "pwd", "pw", "sid", "jwt", "cred", "session", "private",
+const SECRET_WORDS: [&str; 14] = [
+    "pat", "auth", "pass", "pwd", "pw", "sid", "jwt", "cred", "session", "private", "pin", "otp",
+    "passcode", "code",
 ];
 
 /// Слова, которые можно показать без опаски: интерпретаторы, обёртки, типичные подкоманды и значения.
@@ -161,11 +162,40 @@ fn high_entropy(s: &str) -> bool {
 /// Фрагмент пути или слово, в котором, скорее всего, лежит секрет.
 fn seg_secret(seg: &str) -> bool {
     let stem = seg.rsplit_once('.').map_or(seg, |(s, _)| s);
+    // шестнадцатеричная строка от 20 знаков (ключи API, хеши) и длинное слово из одних букв и цифр от 32 знаков
+    let hex = |s: &str| s.len() >= 20 && s.chars().all(|c| c.is_ascii_hexdigit());
+    let long_plain = |s: &str| s.len() >= 32 && s.chars().all(|c| c.is_ascii_alphanumeric());
     looks_like_token(seg)
         || high_entropy(seg)
         || seg.contains("eyJ")
         || looks_like_token(stem)
         || high_entropy(stem)
+        || hex(seg)
+        || hex(stem)
+        || long_plain(seg)
+        || long_plain(stem)
+}
+
+/// Версия пакета: `1.2`, `6.8.0`, `1.0.0-rc.1` или тег выпуска. Короткие числа без точки (`123`) и случайные
+/// строки версией не считаются: так `admin@123` и `имя@токен` не сойдут за `пакет@версия`.
+fn is_version(v: &str) -> bool {
+    if matches!(
+        v,
+        "latest" | "next" | "beta" | "alpha" | "canary" | "rc" | "stable"
+    ) {
+        return true;
+    }
+    let (core, pre) = v.split_once(['-', '+']).map_or((v, ""), |(c, p)| (c, p));
+    let parts: Vec<&str> = core.split('.').collect();
+    (2..=4).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.len() <= 6 && p.chars().all(|c| c.is_ascii_digit()))
+        && pre.len() <= 20
+        && pre
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+        && !seg_secret(pre)
 }
 
 fn is_identifier(s: &str) -> bool {
@@ -229,6 +259,14 @@ fn is_path_like(s: &str) -> bool {
         && segs
             .iter()
             .all(|seg| seg.chars().count() <= 80 && !seg_secret(seg))
+        && !scrambled(s)
+}
+
+/// Путь целиком похож на base64, разрезанный слэшами (`/K7MDENG/bPxRfiCYEXAMPLEKEY`): смесь регистров и цифр,
+/// длинный, без точек. Настоящие пути с точкой в имени файла сюда не попадают.
+fn scrambled(s: &str) -> bool {
+    let flat: String = s.chars().filter(|c| !matches!(c, '/' | '\\')).collect();
+    !s.contains('.') && high_entropy(&flat) && flat.chars().count() >= 20
 }
 
 /// Имя пакета с версией: `rea-agents@6.8.0`, `@scope/name@1.2`.
@@ -241,11 +279,7 @@ fn is_pkg_version(s: &str) -> bool {
         && name.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.' | '/')
         })
-        && ver.starts_with(|c: char| c.is_ascii_digit())
-        && ver.len() <= 24
-        && ver
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+        && is_version(ver)
 }
 
 /// Имя пакета после `npx`/`uvx`: `firecrawl-mcp`, `@upstash/context7-mcp@latest`, `mcp-server-fetch`.
@@ -261,11 +295,7 @@ fn is_package_name(s: &str) -> bool {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.' | '/')
         })
         && path.matches('/').count() <= 1
-        && version.is_none_or(|v| {
-            v.len() <= 24
-                && v.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
-        })
+        && version.is_none_or(is_version)
 }
 
 /// Значение (не флаг): показываем, только если опознали как безвредное.
@@ -324,12 +354,18 @@ fn mask_token(a: &str, pos: Pos, next: Option<&str>) -> (String, bool) {
         let letters = !short.is_empty() && short.chars().all(|c| c.is_ascii_alphabetic());
         if letters && (short.len() <= 2 || PS_FLAGS.contains(&short)) {
             // `-p значение`, `-a значение`: однобуквенные флаги паролей и ключей; значение прячем, если оно не флаг и не URL
-            let secret_letter = short.len() == 1 && "pPaAwWkK".contains(short);
+            let secret_letter =
+                (short.len() == 1 && "pPaAwWkK".contains(short)) || is_secret_key(short);
             let hide =
                 secret_letter && next.is_some_and(|n| !n.starts_with('-') && !n.contains("://"));
             return (a.to_owned(), hide);
         }
-        return (MASK.to_owned(), false); // `-pПАРОЛЬ`, `-ubob:pw`, неизвестные параметры
+        // `-pПАРОЛЬ`, `-ubob:pw`, `-pw значение`, `-Password значение`: имя флага неизвестно, значит и значение после него
+        return (MASK.to_owned(), true);
+    }
+    // `X-Token:` — имя заголовка отдельным токеном: значение следующим
+    if a.len() > 2 && a.ends_with(':') {
+        return (MASK.to_owned(), true);
     }
     if let Some((name, _)) = a.split_once('=') {
         if is_identifier(name) {
@@ -605,6 +641,31 @@ pub fn safe_name(s: &str) -> Option<&str> {
     .then_some(s)
 }
 
+/// Строка из файла в поле, где секретов быть не должно (имя, область, указатель, примечание): куски между
+/// разделителями (`/ \ : @ , = ;` и пробел), похожие на токен, заменяются. Разделители сохраняются.
+pub fn scrub_words(s: &str) -> String {
+    let is_delim =
+        |c: char| c.is_whitespace() || matches!(c, '/' | '\\' | ':' | '@' | ',' | '=' | ';');
+    let mut out = String::with_capacity(s.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if !word.is_empty() {
+            out.push_str(if seg_secret(word) { MASK } else { word });
+            word.clear();
+        }
+    };
+    for c in s.chars() {
+        if is_delim(c) {
+            flush(&mut word, &mut out);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
 /// Свободный текст (описание скила): слова, похожие на токен или ключ известного вида, заменяются.
 pub fn mask_prose(s: &str) -> String {
     const PREFIXES: [&str; 8] = ["sk-", "sk_", "ghp_", "gho_", "xox", "AKIA", "eyJ", "glpat"];
@@ -707,6 +768,54 @@ mod tests {
         ] {
             assert!(!is_secret_key(k), "{k}");
         }
+    }
+
+    /// Находки итогового аудита M1: ни одно значение не должно пройти.
+    #[test]
+    fn m1_audit_forms_do_not_leak() {
+        let cases: Vec<(&str, &str)> = vec![
+            ("tool --login bot@7a9F2kLmQ8xZ3vB1nC4dE6", "7a9F"),
+            ("plink -pw admin@123 host", "admin@123"),
+            ("plink -pw 4821 host", "4821"),
+            ("tool -Password 48213", "48213"),
+            ("openssl -pass 4821", "4821"),
+            ("tool --pin 48213", "48213"),
+            (r#"curl -H "X-Token: 48213" https://x"#, "48213"),
+            (r#"tool -pw "correct horse battery""#, "correct"),
+            (
+                "aws configure set aws_secret_access_key /K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "K7MDENG",
+            ),
+            ("curl https://h/mcp/a1b2c3d4e5f6a7b8c9d0/sse", "a1b2c3d4"),
+            (
+                "curl https://h/mcp/qwErtyuiopAsdfghjklZxcvbnmQwertyuiop/sse",
+                "qwErty",
+            ),
+            ("npx mypkg@a3f9c2e8b1d4f6a7c9e2b5d8", "a3f9c2e8"),
+            ("npx -y a3f9c2e8b1d4f6a7c9e2", "a3f9c2e8"),
+        ];
+        for (line, secret) in cases {
+            let out = mask_line(line);
+            assert!(!out.contains(secret), "{line} -> {out}");
+        }
+        // и безвредное по-прежнему видно
+        assert_eq!(
+            mask_line("npx -y firecrawl-mcp@1.2.3"),
+            "npx -y firecrawl-mcp@1.2.3"
+        );
+        // пользователь@адрес не секрет и по виду совпадает с пакет@версия: показываем сознательно
+        assert_eq!(mask_line("ssh admin@10.0.0.5"), "ssh admin@10.0.0.5");
+    }
+
+    #[test]
+    fn scrub_words_hides_token_like_pieces_and_keeps_delimiters() {
+        assert_eq!(
+            scrub_words("/mcpServers/ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/x"),
+            "/mcpServers/<masked>/x"
+        );
+        assert_eq!(scrub_words("claude.ai Github"), "claude.ai Github");
+        assert_eq!(scrub_words("project:~/work/proj"), "project:~/work/proj");
+        assert_eq!(scrub_words("harnio@harnio"), "harnio@harnio");
     }
 
     #[test]
