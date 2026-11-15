@@ -23,6 +23,8 @@ const SIZES = [
 const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Добавить|Применить|Установить$)/
 
 const log = (...a) => console.log(...a)
+/** Путь так, как его показывает окно: домашний каталог свёрнут в `~`. */
+const tilde = (p) => p.split(homedir()).join('~')
 const must = (cond, msg) => {
   if (!cond) throw new Error(msg)
 }
@@ -644,9 +646,9 @@ try {
   await dialog.getByRole('button', { name: 'Добавить маркетплейс…' }).click()
   await dialog.getByLabel('Источник маркетплейса').fill(marketDir)
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
-  await dialog.getByText(`claude plugin marketplace add --scope user ${marketDir}`).waitFor({ timeout: 8000 })
+  // в предпросмотре домашний каталог свёрнут в `~`; снимка этого шага нет: в поле ввода полный путь с именем пользователя
+  await dialog.getByText(`claude plugin marketplace add --scope user ${tilde(marketDir)}`).waitFor({ timeout: 8000 })
   must(!existsSync(claudeCalls), 'предпросмотр не должен запускать claude')
-  await shot(page, 'm6-marketplace-add-1280')
   await dialog.getByRole('button', { name: 'Добавить маркетплейс', exact: true }).click()
   const catalog = dialog.getByRole('list', { name: 'Каталог e2e-market' })
   await catalog.waitFor({ timeout: 8000 })
@@ -968,7 +970,7 @@ try {
     await enDialog.getByRole('button', { name: 'Add marketplace…' }).click()
     await enDialog.getByLabel('Marketplace source').fill(enMarket)
     await enDialog.getByRole('button', { name: 'Preview' }).click()
-    await enDialog.getByText(`claude plugin marketplace add --scope user ${enMarket}`).waitFor({ timeout: 8000 })
+    await enDialog.getByText(`claude plugin marketplace add --scope user ${tilde(enMarket)}`).waitFor({ timeout: 8000 })
     await enOk('marketplace add')
     await enDialog.getByRole('button', { name: 'Add marketplace', exact: true }).click()
     await enDialog.getByRole('list', { name: 'Catalog e2e-market' }).getByRole('button', { name: /^hello-plugin/ }).click()

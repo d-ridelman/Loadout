@@ -560,7 +560,7 @@ void app.whenReady().then(() => {
     const shown = `claude ${args.map(quoteArg).join(' ')}`
     if (dryRun) {
       lastClaudePreview = shown
-      return { dryRun, code: 0, output: shown }
+      return { dryRun, code: 0, output: tidy(shown) }
     }
     if (readWriteLevel() !== 'R2') throw new Error(t(`для этого действия (${what}) нужен уровень R2: включите его в шапке окна`, `this action (${what}) requires level R2: enable it in the window header`))
     if (lastClaudePreview !== shown) throw new Error(t('сначала выполните предпросмотр с тем же вводом', 'run a preview with the same input first'))

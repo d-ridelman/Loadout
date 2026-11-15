@@ -188,7 +188,8 @@ fn check(home: &Path, store: &Path, stage: &str, sub: &str, name: &str) -> Resul
     };
     // SKILL.md сам может запускать команды (`` !`…` ``) и снимать запросы разрешений (`allowed-tools`)
     let md = std::fs::read_to_string(src.join("SKILL.md")).unwrap_or_default();
-    if md.contains("!`") || md.contains("allowed-tools") {
+    // по документации skills: строка `` !`команда` `` и блок ```` ```! ```` выполняются при вызове скила без запроса
+    if md.contains("!`") || md.contains("```!") || md.contains("allowed-tools") {
         notes.push(bad(
             "SKILL.md запускает команды или разрешает инструменты без запроса (!`…`, allowed-tools): прочитайте его до установки",
             "SKILL.md runs commands or allows tools without asking (!`…`, allowed-tools): read it before installing",
