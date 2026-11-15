@@ -10,7 +10,7 @@ This note combines three inputs: the routing setup shared on X (`@0xCodila`, Nov
 
 ## Findings from X (`@0xCodila`) and Anthropic Docs
 
-Posts by `@0xCodila` and Anthropic documentation (`advisor`, `sub-agents`, `model-config`) describe a 4-model team that cuts token burn by roughly `~3.4x` compared to running a flagship model on every turn.
+Posts by `@0xCodila` describe a 4-model team and claim token burn drops by up to `~3.4x` compared to running a flagship model on every turn. The roles match Anthropic documentation (`advisor`, `advisor-tool`, `sub-agents`, `model-config`), but the `~3.4x` figure is not on any of those pages (checked 2026-11-15): treat it as the author's claim, not a measurement. The docs say only that a faster main model with a stronger advisor "typically costs less" than the stronger model throughout.
 
 | Role | Model | Scope | Purpose |
 |---|---|---|---|
@@ -21,12 +21,12 @@ Posts by `@0xCodila` and Anthropic documentation (`advisor`, `sub-agents`, `mode
 
 Four implementation details decide whether this routing holds in practice:
 
-1. Without explicit triggers in `CLAUDE.md` (consult the advisor before locking a non-trivial plan, when the same error repeats twice, and before declaring work done), Anthropic reported Sonnet calling the advisor `0 out of 198` times.
-2. Lowering `effortLevel` on the main model sharply reduces advisor calls, so keep `effortLevel` at `high` when using `/advisor`.
+1. The author claims that without explicit triggers in `CLAUDE.md` (consult the advisor before locking a non-trivial plan, when the same error repeats twice, and before declaring work done) Sonnet called the advisor `0 out of 198` times in Anthropic tests. That number is not on the Anthropic pages (checked 2026-11-15). What the advisor-tool page does say is that without system-prompt steering the executor "tends to under-call the advisor", particularly on coding tasks, and the advisor timing is model-driven: there is no setting to force or cap calls. Hence the `CLAUDE.md` block and the Stop gate.
+2. The author claims that lowering `effortLevel` sharply reduces advisor calls. The docs do not confirm this. They say Sonnet 5.5 defaults to `medium`, that Sonnet at `medium` plus an advisor is comparable to Sonnet at default effort at lower cost, and that for maximum intelligence the executor should stay at default effort. `effortLevel: high` in `ctxkit setup` is therefore our choice, not a documented requirement: compare `medium` and `high` with `ctxkit report` (advisor calls per day, share of Sonnet turns).
 3. Built-in `Explore` ignores `CLAUDE_CODE_SUBAGENT_MODEL` and stays on the main model unless overridden by an explicit `Explore.md` agent file (`name: Explore`, `model: haiku`) under `~/.claude/agents/`.
-4. Keep the root `CLAUDE.md` under ~200 lines (~4-6 KB) and scope directory rules into `.claude/rules/*.md` using `paths:`. Placing exceptions in the same sentence as a prohibition raised rule compliance from `~1/10` to `~9/10` in Anthropic tests.
+4. Keep the root `CLAUDE.md` under ~200 lines (~4-6 KB) and scope directory rules into `.claude/rules/*.md` using `paths:`. Placing exceptions in the same sentence as a prohibition raised rule compliance from `~1/10` to `~9/10` (a claim from the same write-ups; the source was not checked).
 
-To justify advisor cost, the `@0xCodila` write-up cited `Fable 5.2` benchmarks: `Remote Labor Index` `41.3%` vs `21.3%` (`Opus 5.5`), `20.8%` (`GPT-6 Astra`), and `17.9%` (`Fable 5.1`); `BenchCAD 2.1` `83.5` vs `65.3`; `OSWorld 2.1` `89.3%`. At `$8` / `$40` per 1M input/output tokens, running that tier for grep and config reads wastes budget, whereas three targeted consultations per task pay back cleanly.
+To justify advisor cost, the `@0xCodila` write-up cited `Fable 5.2` benchmarks: `Remote Labor Index` `41.3%` vs `21.3%` (`Opus 5.5`), `20.8%` (`GPT-6 Astra`), and `17.9%` (`Fable 5.1`); `BenchCAD 2.1` `83.5` vs `65.3`; `OSWorld 2.1` `89.3%`. The benchmarks and the `$8` / `$40` per 1M input/output tokens price come from that write-up and were not checked against Anthropic pages. At that price, running that tier for grep and config reads wastes budget, whereas three targeted consultations per task pay back cleanly.
 
 ## Critique of the "Rust MCP + PostToolUse Daemon" Proposal
 
