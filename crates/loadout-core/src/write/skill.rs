@@ -98,17 +98,60 @@ fn walk(root: &Path) -> Result<Vec<(String, PathBuf, u64)>, String> {
     Ok(out)
 }
 
-/// Хеш дерева: пути и содержимое по порядку.
-fn tree_sha(files: &[(String, PathBuf, u64)]) -> Result<String, String> {
+/// Хеш дерева: пути и содержимое по порядку. `digest` даёт хеш одного файла (путь, размер).
+fn tree_sha_by(
+    files: &[(String, PathBuf, u64)],
+    digest: impl Fn(&Path, u64) -> Result<String, String>,
+) -> Result<String, String> {
     let mut buf = Vec::new();
-    for (rel, path, _) in files {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    for (rel, path, len) in files {
         buf.extend_from_slice(rel.as_bytes());
         buf.push(0);
-        buf.extend_from_slice(sha(&bytes).as_bytes());
+        buf.extend_from_slice(digest(path, *len)?.as_bytes());
         buf.push(b'\n');
     }
     Ok(sha(&buf))
+}
+
+fn tree_sha(files: &[(String, PathBuf, u64)]) -> Result<String, String> {
+    tree_sha_by(files, |path, _| {
+        std::fs::read(path)
+            .map(|b| sha(&b))
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Хеши файлов, уже посчитанные этим процессом: ключ — путь, значение — (время изменения, размер, хеш).
+/// Нужен только показу журнала (`can_rollback` на каждой из 200 строк); установка и откат хешируют заново.
+/// shortcut: правка файла с тем же размером в пределах точности mtime журнал не заметит, а откат всё равно пересчитает.
+static FILE_SHA: std::sync::Mutex<Option<ShaCache>> = std::sync::Mutex::new(None);
+type ShaCache = std::collections::HashMap<PathBuf, (std::time::SystemTime, u64, String)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Сколько файлов `cached_digest` реально прочитал в этом потоке (тест «второй показ не читает файлы»).
+    pub(super) static DISK_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn cached_digest(path: &Path, len: u64) -> Result<String, String> {
+    let mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    let mut guard = FILE_SHA.lock().unwrap_or_else(|p| p.into_inner());
+    let cache = guard.get_or_insert_with(Default::default);
+    if let Some((t, l, h)) = cache.get(path) {
+        if *t == mtime && *l == len {
+            return Ok(h.clone());
+        }
+    }
+    #[cfg(test)]
+    DISK_READS.with(|c| c.set(c.get() + 1));
+    let h = sha(&std::fs::read(path).map_err(|e| e.to_string())?);
+    if cache.len() >= 20_000 {
+        cache.clear();
+    }
+    cache.insert(path.to_path_buf(), (mtime, len, h.clone()));
+    Ok(h)
 }
 
 pub(super) fn dir_sha(dir: &Path) -> Option<String> {
@@ -352,7 +395,11 @@ pub fn apply(
 
 /// Можно ли откатить установку: скил на месте и не менялся. Путь берётся из имени, а не из манифеста.
 pub(super) fn can_rollback(home: &Path, m: &Manifest) -> bool {
-    target(home, &m.name).and_then(|t| dir_sha(&t)).as_deref() == Some(m.sha_after.as_str())
+    target(home, &m.name)
+        .and_then(|t| walk(&t).ok())
+        .and_then(|f| tree_sha_by(&f, cached_digest).ok())
+        .as_deref()
+        == Some(m.sha_after.as_str())
 }
 
 pub(super) fn rollback(
@@ -462,6 +509,68 @@ pub(super) fn rollback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("loadout-skill-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Манифест установленного скила: нужны только имя и хеш «после».
+    pub(super) fn manifest(name: &str, sha_after: String) -> Manifest {
+        Manifest {
+            version: 2,
+            id: "1731700000000-00".into(),
+            time: 0,
+            op: "installSkill".into(),
+            of: None,
+            batch: None,
+            level: "R2".into(),
+            entity: String::new(),
+            inverse_enable: None,
+            trash_id: None,
+            trash_before: None,
+            path: String::new(),
+            sha_before: String::new(),
+            sha_after,
+            client: "claude-code".into(),
+            kind: "skill".into(),
+            name: name.into(),
+            pointer: String::new(),
+            file: String::new(),
+            from: String::new(),
+            to: String::new(),
+        }
+    }
+
+    /// Дом со скилом `demo` из двух файлов.
+    pub(super) fn home_with_skill(tag: &str) -> (PathBuf, PathBuf) {
+        let home = tmp(tag);
+        let dir = home.join(".claude").join("skills").join("demo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\nname: demo\n---\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "один").unwrap();
+        (home, dir)
+    }
+
+    #[test]
+    fn journal_hashes_each_skill_file_once_until_it_changes() {
+        let (home, dir) = home_with_skill("cache");
+        let m = manifest("demo", dir_sha(&dir).unwrap());
+        let reads = || DISK_READS.with(std::cell::Cell::get);
+        assert!(can_rollback(&home, &m));
+        assert_eq!(reads(), 2, "первый показ читает оба файла");
+        for _ in 0..3 {
+            assert!(can_rollback(&home, &m));
+        }
+        assert_eq!(reads(), 2, "повторный показ файлы не читает");
+        // правка одного файла (другой размер и время): показ замечает и перечитывает только его
+        std::fs::write(dir.join("a.txt"), "изменён").unwrap();
+        assert!(!can_rollback(&home, &m));
+        assert_eq!(reads(), 3);
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn names_and_paths_are_checked() {
