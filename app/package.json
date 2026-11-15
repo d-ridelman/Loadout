@@ -9,21 +9,51 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "e2e": "electron-vite build && node e2e/run.mjs"
+    "e2e": "electron-vite build && node e2e/run.mjs",
+    "pack": "electron-vite build && electron-builder --win --dir",
+    "pack:check": "node e2e/pack-check.mjs",
+    "dist": "electron-vite build && electron-builder --win"
   },
-  "dependencies": {
+  "author": "Loadout",
+  "build": {
+    "appId": "local.loadout.app",
+    "productName": "Loadout",
+    "directories": { "output": "dist" },
+    "files": ["out/**", "package.json"],
+    "extraResources": [{ "from": "../target/release/loadout.exe", "to": "loadout.exe" }],
+    "asar": true,
+    "publish": null,
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    }
+  },
+  "devDependencies": {
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
-  },
-  "devDependencies": {
+    "react-dom": "^19.3.1",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
     "axe-core": "^4.14.0",
     "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
     "electron-vite": "^6.0.0",
     "playwright-core": "^1.65.1",
     "typescript": "^7.0.2",

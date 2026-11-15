@@ -4,3 +4,4 @@
 /state/real-*.png
 node_modules/
 /app/out/
+/app/dist/

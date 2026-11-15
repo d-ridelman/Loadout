@@ -49,6 +49,8 @@ const INDEX_URL = pathToFileURL(join(__dirname, '../renderer/index.html')).href
 
 /** Путь к ядру фиксированный, не из PATH. `LOADOUT_BIN` нужен тестам и разработке. */
 function sidecarPath(): string {
+  // установленная сборка: ядро лежит рядом с приложением (extraResources), путь зашит и env не читается
+  if (app.isPackaged) return join(process.resourcesPath, 'loadout.exe')
   return envOf('LOADOUT_BIN') ?? resolve(app.getAppPath(), '..', 'target', 'release', 'loadout.exe')
 }
 
