@@ -1,58 +1,86 @@
+<div align="center">
+
 # Loadout
 
-Один экран вместо пяти конфигов. Loadout показывает и меняет плагины, MCP-серверы, скилы, агентов, хуки и команды сразу у пяти клиентов: Claude Code, Claude Desktop, Codex, Antigravity и DeepSeek Harness. Запись точечная и безопасная: предпросмотр, хеш-блокировка, бэкап, журнал, откат.
+**One screen for the plugins, MCP servers, skills and hooks of all your AI coding clients.**
 
-![Матрица: записи по клиентам](state/m1-matrix-1920.png)
+[English](README.md) · [Русский](README.ru.md)
 
-*Снимки сделаны на тестовых данных из `fixtures/`, не на настоящем профиле.*
+![Platform](https://img.shields.io/badge/platform-Windows-blue)
+![Core](https://img.shields.io/badge/core-Rust-orange)
+![App](https://img.shields.io/badge/app-Electron%20%2B%20React-47848f)
+![Status](https://img.shields.io/badge/status-pre--release-yellow)
 
-## Что умеет
+</div>
 
-- **Матрица** всех записей по пяти клиентам: включено, выключено, сломано, расхождение версий. Плагины и MCP в отдельных группах. Инспектор записи справа.
-- **Включить и выключить** запись (R1); **вынести MCP в корзину, править команду, копировать в другой клиент** (R2). Формат JSON ⇄ TOML ⇄ YAML переводится сам.
-- **Добавить MCP-сервер** и **установить плагин Claude Code** прямо из окна. Значения env в окне и журнале не показываются.
-- **Профили**: снимок набора включённых записей, применение пакетом, откат пакета целиком.
-- **Журнал** каждой записи с откатом. Перед любой записью копия файла уходит в бэкап.
-- **Доктор** находит сломанные ссылки, расхождения, дубли, копии конфигов.
-- **ctxkit** внутри: установка, применение и счётчики эффективности (см. ниже).
-- По умолчанию окно ничего не пишет (R0). Уровень записи повышается в шапке и подтверждается окном системы.
+![Matrix of entries by client](docs/screenshots/matrix.png)
 
-| Добавить MCP | Установить плагин |
+*Screenshots show test data from `fixtures/`, not a real profile.*
+
+## Why
+
+Claude Code, Claude Desktop, Codex, Antigravity and DeepSeek Harness each keep plugins, MCP servers, skills, agents, hooks and commands in their own files and formats (JSON, TOML, YAML). Finding out what is enabled where, or moving a server from one client to another, means editing config files by hand.
+
+Loadout reads all five clients, shows everything in one matrix and changes it **surgically and safely**.
+
+## Features
+
+- **Matrix** of every entry across the five clients: enabled, disabled, broken, version drift. Plugins and MCP servers are separate groups. Inspector on the right.
+- **Toggle** an entry (level R1). **Trash an MCP server, edit its command, copy it to another client** (level R2); JSON ⇄ TOML ⇄ YAML is translated for you.
+- **Add an MCP server** and **install a Claude Code plugin** from the window. Environment values are never shown in the window, the preview or the journal.
+- **Profiles**: snapshot a set of enabled entries, apply it as one batch, roll the whole batch back.
+- **Journal** of every write with one-click rollback. Before any write the file is copied to a backup.
+- **Doctor** finds broken links, drift, duplicates and stray backups.
+- **ctxkit** built in: install, apply and see its effect (see below).
+- Read-only by default (R0). Raising the write level needs an OS confirmation dialog.
+
+### Safe write pipeline
+
+plan → preview → hash lock (`base_sha`) → backup + manifest → temp file + rename → re-read and verify → journal / rollback. If a file changed after the preview, the write is refused. Details: [docs/CONCEPT.md](docs/CONCEPT.md) §5 (Russian).
+
+| Add an MCP server | Install a plugin |
 |---|---|
-| ![Добавить MCP](state/m4-add-dialog-1280.png) | ![Установить плагин](state/m4-plugin-dialog-1280.png) |
+| ![Add MCP](docs/screenshots/add-mcp.png) | ![Install plugin](docs/screenshots/install-plugin.png) |
 
-| Журнал и откат | Доктор |
+| Journal and rollback | Doctor |
 |---|---|
-| ![Журнал](state/m3-journal-1920.png) | ![Доктор](state/m1-doctor-1920.png) |
+| ![Journal](docs/screenshots/journal.png) | ![Doctor](docs/screenshots/doctor.png) |
 
 ## ctxkit
 
-`crates/ctxkit` — набор хуков и диагностики, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок, переключает рутину на дешёвые модели. Встроен в приложение (раздел «ctxkit»), но ставится и отдельно. Подробности: [crates/ctxkit/README.md](crates/ctxkit/README.md).
+[`crates/ctxkit`](crates/ctxkit/README.md) is a toolkit of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and routes routine work to cheaper models. It is built into the app (the **ctxkit** section) and can also be installed on its own.
 
-![ctxkit в приложении](state/m5-ctxkit-1920.png)
+![ctxkit in the app](docs/screenshots/ctxkit.png)
 
-## Устройство
+## Repository layout
 
-| Каталог | Что это |
+| Path | What it is |
 |---|---|
-| `app/` | Приложение (Electron + React, Windows) |
-| `crates/loadout-core`, `crates/loadoutd` | Ядро на Rust: скан, запись, сторож файлов, процесс-ядро для окна |
-| `crates/ctxkit` | ctxkit (MIT), собирается в том же воркспейсе |
-| `docs/CONCEPT.md` | Концепция, решения, итоги этапов и аудитов |
-| `fixtures/`, `state/` | Тестовые данные и снимки окна из сценариев e2e |
+| `app/` | Desktop app (Electron + React, Windows) |
+| `crates/loadout-core`, `crates/loadoutd` | Rust core: scan, write pipeline, file watcher, sidecar process for the window |
+| `crates/ctxkit` | ctxkit (MIT), built in the same Cargo workspace |
+| `docs/CONCEPT.md` | Design, decisions, milestone and audit notes (Russian) |
+| `docs/screenshots/` | Screenshots used in this README |
+| `fixtures/`, `state/` | Test data and window snapshots produced by the e2e scenarios |
 
-## Сборка и проверки
+## Build and test
+
+Requirements: Rust (MSVC toolchain), Node.js, Windows 10/11.
 
 ```bash
-cargo build --release          # ядро и ctxkit (бинари в target/release)
-cargo test                     # тесты Rust
+cargo build --release          # core and ctxkit (binaries in target/release)
+cargo test                     # Rust tests
 cd app && npm install
-npm run e2e                    # сборка и сценарии в окне
-npm run dist                   # установщик (NSIS, без подписи)
+npm run e2e                    # build and drive the real window
+npm run dist                   # installer (NSIS, unsigned)
 ```
 
-`ctxkit.exe` для приложения берётся из `crates/ctxkit` (`npm run bundle:ctxkit`). Подпись установщика и автообновление пока не сделаны: нужны сертификат подписи кода и адрес публикации.
+`ctxkit.exe` for the app is built from `crates/ctxkit` (`npm run bundle:ctxkit`).
 
-## Лицензии
+## Status
 
-`crates/ctxkit` — MIT (см. `crates/ctxkit/LICENSE`). Остальное — пока без лицензии (все права сохранены).
+Pre-release. Milestones M0–M5 are done (see [docs/CONCEPT.md](docs/CONCEPT.md) §10). Code signing and auto-update are intentionally not done: they need a code-signing certificate and a publishing address, and the app works fully offline.
+
+## License
+
+`crates/ctxkit` is MIT ([LICENSE](crates/ctxkit/LICENSE)). The rest of the repository has no license yet (all rights reserved).
