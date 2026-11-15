@@ -844,6 +844,52 @@ const cases = [
     }
     return true;
   }],
+  // Antigravity wants a JSON answer every time (`decision` is required): in --agy mode a failure or the off switch
+  // answers {"decision":"ask"} (PostToolUse: {}), never an empty stdout; Claude Code and DSH stay silent
+  [true, () => {
+    const raw = (input, args = [], env = {}) => {
+      const r = spawnSync(exe, args, { input, env: { ...process.env, ...env }, maxBuffer: 1 << 20 });
+      return { status: r.status, out: r.stdout?.toString() ?? '' };
+    };
+    const ASK = '{"decision":"ask"}';
+    for (const input of ['', ' ', '{', 'null', '[]', Buffer.from([0xff, 0xfe, 0x00, 0x7b, 0x80]), '{"toolCall":5}', '{"toolCall":{"name":7}}']) {
+      const r = raw(input, ['--agy']);
+      if (r.status !== 0 || r.out !== ASK) return `--agy ${JSON.stringify(String(input).slice(0, 20))}: ${r.status} ${JSON.stringify(r.out)}`;
+      const lang = raw(input, ['--agy', '--lang', 'ru']);
+      if (lang.out !== ASK) return `--agy --lang ru ${JSON.stringify(String(input).slice(0, 20))}: ${JSON.stringify(lang.out)}`;
+    }
+    for (const input of ['', '{', Buffer.from([0xff, 0x80])]) {
+      const r = raw(input, ['--agy', '--post']);
+      if (r.out !== '{}') return `--agy --post ${JSON.stringify(String(input).slice(0, 20))}: ${JSON.stringify(r.out)}`;
+      const plain = raw(input);
+      if (plain.status !== 0 || plain.out !== '') return `no client flag must stay silent: ${JSON.stringify(plain.out)}`;
+    }
+    // the off switch: a read the guard would deny becomes "ask", with and without the flag (the payload names Antigravity)
+    const read = JSON.stringify({ toolCall: { name: 'read_file', args: { Path: bigFile } }, stepIdx: 1 });
+    if (!raw(read).out.includes('"deny"')) return 'the guard does not deny without the switch';
+    for (const args of [[], ['--agy']]) {
+      const off = raw(read, args, { CTXKIT_GUARD: 'off' });
+      if (off.out !== ASK) return `CTXKIT_GUARD=off ${args}: ${JSON.stringify(off.out)}`;
+    }
+    const post = JSON.stringify({ toolCall: { name: 'run_command', args: {} }, error: 'exit status 1' });
+    if (raw(post, [], { CTXKIT_GUARD: '0' }).out !== '{}') return 'post answer with the switch';
+    // Claude Code stays silent with the switch
+    const claude = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } });
+    return raw(claude, [], { CTXKIT_GUARD: '0' }).out === '';
+  }],
+  // The command setup writes for Antigravity carries the flag
+  [true, () => {
+    const root = join(dir, 'agy-cmd-test');
+    mkdirSync(root, { recursive: true });
+    const agyFile = join(root, 'hooks.json');
+    const cj = join(root, 'c.json');
+    writeFileSync(cj, '{}');
+    const profile = join(root, 'p');
+    mkdirSync(profile);
+    const r = spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--skip-version-check', '--no-agents', '--antigravity', '--agy-file', agyFile], { encoding: 'utf8' });
+    const cmd = JSON.parse(readFileSync(agyFile, 'utf8')).ctxkit?.PreToolUse?.[0]?.hooks?.[0]?.command ?? '';
+    return r.status === 0 && cmd.endsWith(' --agy') || `command: ${cmd} ${r.stderr}`;
+  }],
   // CTXKIT_GUARD=0 mutes PreToolUse/PostToolUse (and only them)
   [true, () => {
     const bad = join(dir, 'guard-off.json');

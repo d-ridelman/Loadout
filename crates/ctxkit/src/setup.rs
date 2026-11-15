@@ -1194,9 +1194,11 @@ fn format_antigravity_command(hook_bin_path: &Path, lang: Lang) -> String {
     } else {
         raw.replace('\\', "/")
     };
+    // `--agy`: when the payload cannot be read (or the off switch is set) only this flag tells the hook that
+    // Antigravity is waiting, and that it wants `{"decision":"ask"}` and not an empty answer.
     match lang {
-        Lang::Ru => format!("{base} --lang ru"),
-        Lang::En => base,
+        Lang::Ru => format!("{base} --agy --lang ru"),
+        Lang::En => format!("{base} --agy"),
     }
 }
 
@@ -2521,15 +2523,16 @@ mod tests {
         let plain = Path::new(r"C:\Users\alice\.claude\hooks\ctxkit.exe");
         assert_eq!(
             format_antigravity_command(plain, Lang::En),
-            "C:/Users/alice/.claude/hooks/ctxkit.exe"
+            "C:/Users/alice/.claude/hooks/ctxkit.exe --agy"
         );
         assert_eq!(
             format_antigravity_command(plain, Lang::Ru),
-            "C:/Users/alice/.claude/hooks/ctxkit.exe --lang ru"
+            "C:/Users/alice/.claude/hooks/ctxkit.exe --agy --lang ru"
         );
         let spaced = Path::new("/Users/Alice Smith/.claude/hooks/ctxkit");
         let cmd_ru = format_antigravity_command(spaced, Lang::Ru);
-        assert!(cmd_ru.starts_with('"') && cmd_ru.ends_with(" --lang ru"));
+        assert!(cmd_ru.starts_with('"') && cmd_ru.ends_with(" --agy --lang ru"));
+        assert!(format_antigravity_command(spaced, Lang::En).ends_with("\" --agy"));
     }
 
     #[test]
