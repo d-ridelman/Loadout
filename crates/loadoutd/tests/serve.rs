@@ -43,8 +43,17 @@ impl Server {
         Server::start_with(|_| {})
     }
 
+    /// Ядро с каталогом бэкапов рядом с копией фикстуры: методы записи включены.
+    fn start_writable() -> Server {
+        Server::launch(|_| {}, true)
+    }
+
     /// `prep` правит копию фикстуры до запуска ядра (например, убирает каталог клиента).
     fn start_with(prep: impl FnOnce(&Path)) -> Server {
+        Server::launch(prep, false)
+    }
+
+    fn launch(prep: impl FnOnce(&Path), writable: bool) -> Server {
         // имя без случайных букв и цифр: ядро скрывает токеноподобные сегменты путей
         let home = std::env::temp_dir().join(format!(
             "loadout-serve-{}-{}",
@@ -56,9 +65,12 @@ impl Server {
         copy_tree(&root, &home, &home.to_string_lossy().replace('\\', "/"));
         prep(&home);
 
-        let mut child = Command::new(env!("CARGO_BIN_EXE_loadout"))
-            .args(["serve", "--home"])
-            .arg(&home)
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_loadout"));
+        cmd.args(["serve", "--home"]).arg(&home);
+        if writable {
+            cmd.arg("--backups").arg(home.with_extension("backups"));
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -132,9 +144,13 @@ impl Server {
     }
 
     fn call(&mut self, method: &str) -> Value {
+        self.call_with(method, Value::Null)
+    }
+
+    fn call_with(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
-        let line = json!({ "id": id, "method": method }).to_string();
+        let line = json!({ "id": id, "method": method, "params": params }).to_string();
         let stdin = self.stdin.as_mut().expect("stdin открыт");
         writeln!(stdin, "{line}").unwrap();
         stdin.flush().unwrap();
@@ -158,6 +174,7 @@ impl Drop for Server {
         }
         let _ = self.child.wait();
         let _ = fs::remove_dir_all(&self.home);
+        let _ = fs::remove_dir_all(self.home.with_extension("backups"));
     }
 }
 
@@ -424,4 +441,115 @@ fn closing_stdin_stops_the_process() {
         assert!(Instant::now() < end, "процесс пережил закрытие stdin");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn entity_id(snap: &Value, client: &str, name: &str) -> String {
+    snap["result"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["client"] == client && e["name"] == name)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn write_methods_refuse_without_backups_but_plan_works() {
+    let mut s = Server::start();
+    let id = entity_id(&s.call("snapshot"), "codex", "p1@bundled");
+    let plan = s.call_with("plan", json!({ "entity": id, "enable": false }));
+    assert_eq!(plan["result"]["to"], "false", "{plan}");
+    for (m, p) in [
+        (
+            "apply",
+            json!({ "entity": id, "enable": false, "baseSha": plan["result"]["baseSha"] }),
+        ),
+        ("journal", json!({})),
+        ("rollback", json!({ "op": "0" })),
+    ] {
+        let r = s.call_with(m, p);
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("запись выключена"),
+            "{m}: {r}"
+        );
+    }
+    assert_eq!(s.call("status")["result"]["writable"], false);
+}
+
+#[test]
+fn toggle_and_rollback_over_jsonrpc_announce_changes_without_paths() {
+    let mut s = Server::start_writable();
+    assert_eq!(s.call("status")["result"]["writable"], true);
+    let id = entity_id(&s.call("snapshot"), "codex", "p1@bundled");
+    let cfg = s.home.join(".codex/config.toml");
+    let original = fs::read_to_string(&cfg).unwrap();
+
+    let plan = s.call_with("plan", json!({ "entity": id, "enable": false }));
+    let base = plan["result"]["baseSha"].clone();
+    let done = s.call_with(
+        "apply",
+        json!({ "entity": id, "enable": false, "baseSha": base }),
+    );
+    assert!(done["result"]["op"].is_string(), "{done}");
+    // `changed` приходит сразу после записи, не дожидаясь сторожа
+    let ev = s
+        .wait_method("changed", Duration::from_secs(5))
+        .expect("changed после записи");
+    assert!(
+        ev["params"]["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| *x == json!(id)),
+        "{ev}"
+    );
+    assert_eq!(
+        fs::read_to_string(&cfg)
+            .unwrap()
+            .matches("enabled = false")
+            .count(),
+        original.matches("enabled = false").count() + 1
+    );
+
+    let journal = s.call("journal");
+    let rows = journal["result"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{journal}");
+    assert_eq!(rows[0]["canRollback"], true);
+    let back = s.call_with("rollback", json!({ "op": done["result"]["op"] }));
+    assert!(back["result"]["op"].is_string(), "{back}");
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), original);
+
+    let home = s.home.to_string_lossy().replace('\\', "/");
+    let all = format!("{plan}{done}{journal}{back}");
+    assert!(
+        !all.contains(&home) && !all.contains("FAKE-SECRET"),
+        "{all}"
+    );
+}
+
+#[test]
+fn write_methods_validate_params() {
+    let mut s = Server::start_writable();
+    let id = entity_id(&s.call("snapshot"), "codex", "p1@bundled");
+    for (m, p) in [
+        ("plan", json!({ "enable": true })),
+        ("plan", json!({ "entity": id })),
+        ("plan", json!({ "entity": "нет-такого", "enable": true })),
+        ("apply", json!({ "entity": id, "enable": false })),
+        (
+            "apply",
+            json!({ "entity": id, "enable": false, "baseSha": "00" }),
+        ),
+        ("rollback", json!({ "op": "../x" })),
+        ("rollback", json!({})),
+    ] {
+        let r = s.call_with(m, p.clone());
+        assert!(r["error"]["message"].is_string(), "{m} {p}: {r}");
+    }
+    assert!(s.call("snapshot")["result"].is_object(), "процесс жив");
 }

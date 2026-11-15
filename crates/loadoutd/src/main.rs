@@ -15,13 +15,15 @@ fn home_or_default(home: Option<PathBuf>) -> Option<PathBuf> {
     })
 }
 
-/// `loadout serve [--home ПУТЬ]`: постоянный процесс для окна (JSON-RPC по stdio и сторож файлов).
+/// `loadout serve [--home ПУТЬ] [--backups КАТАЛОГ]`: постоянный процесс для окна (JSON-RPC по stdio и сторож файлов).
+/// Без `--backups` методы записи (R1) отказывают.
 fn serve_main(args: &[String]) -> ExitCode {
-    let mut home = None;
+    let (mut home, mut backups) = (None, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--home" => home = it.next().map(PathBuf::from),
+            "--backups" => backups = it.next().map(PathBuf::from),
             other => {
                 eprintln!("неизвестный аргумент: {other}");
                 return ExitCode::from(2);
@@ -32,7 +34,7 @@ fn serve_main(args: &[String]) -> ExitCode {
         eprintln!("не удалось определить домашний каталог, укажите --home");
         return ExitCode::from(2);
     };
-    serve::run(&home);
+    serve::run(&home, backups);
     ExitCode::SUCCESS
 }
 
@@ -43,7 +45,7 @@ fn main() -> ExitCode {
     }
     if args.first().map(String::as_str) != Some("scan") {
         eprintln!("использование: loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek]");
-        eprintln!("             loadout serve [--home ПУТЬ]");
+        eprintln!("             loadout serve [--home ПУТЬ] [--backups КАТАЛОГ]");
         return ExitCode::from(2);
     }
     let (mut json, mut pretty) = (false, false);

@@ -1,7 +1,8 @@
 //! `loadout serve`: постоянный процесс для окна. JSON-RPC по stdio, по одному сообщению в строке, и сторож файлов.
 //!
 //! Протокол (stdout только под JSON, всё остальное в stderr):
-//! - запрос `{"id":N,"method":"scan"|"snapshot"|"status"}`; ответ `{"id":N,"result":…}` или `{"id":N,"error":{"message":…}}`;
+//! - запрос `{"id":N,"method":"scan"|"snapshot"|"status"}`, а для записи R1 `plan`/`apply`/`journal`/`rollback`
+//!   (только id записи и желаемое состояние, см. `loadout_core::write`; без `--backups` запись выключена); ответ `{"id":N,"result":…}` или `{"id":N,"error":{"message":…}}`;
 //! - уведомление `ready` после запуска сторожа и `changed` при смысловом изменении скана; в `changed` только id записей.
 //!
 //! Методов с путями от страницы нет. EOF на stdin завершает процесс, иначе на Windows он пережил бы окно.
@@ -9,6 +10,7 @@
 use loadout_core::diff::diff;
 use loadout_core::model::ScanResult;
 use loadout_core::watch::Targets;
+use loadout_core::write;
 use notify::event::ModifyKind;
 use notify::{recommended_watcher, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::{json, Value};
@@ -45,10 +47,12 @@ struct Server {
     watcher: Option<RecommendedWatcher>,
     watched: BTreeMap<PathBuf, RecursiveMode>,
     seq: u64,
+    /// Каталог бэкапов и журнала; без него запись выключена.
+    backups: Option<PathBuf>,
 }
 
 impl Server {
-    fn new(home: &Path, watcher: Option<RecommendedWatcher>) -> Self {
+    fn new(home: &Path, backups: Option<PathBuf>, watcher: Option<RecommendedWatcher>) -> Self {
         let last = loadout_core::scan(home);
         let targets = Targets::from_scan(home, &last);
         let mut s = Server {
@@ -58,6 +62,7 @@ impl Server {
             watcher,
             watched: BTreeMap::new(),
             seq: 0,
+            backups,
         };
         s.sync_watches(false);
         s
@@ -144,6 +149,46 @@ impl Server {
         }
     }
 
+    /// Методы записи (R1). Принимают только id записи и желаемое состояние: путей от страницы нет, цель ядро находит само.
+    /// Без `--backups` изменять файлы нельзя: окно передаёт каталог бэкапов только при включённом уровне R1.
+    fn write_method(&mut self, method: &str, p: &Value) -> Result<Value, String> {
+        let str_of = |k: &str| {
+            p.get(k)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("нет параметра {k}"))
+        };
+        let enable = || {
+            p.get("enable")
+                .and_then(Value::as_bool)
+                .ok_or("нет параметра enable")
+        };
+        let store = || {
+            self.backups
+                .clone()
+                .ok_or("запись выключена: ядро запущено без каталога бэкапов")
+        };
+        fn json<T: serde::Serialize>(v: &T) -> Result<Value, String> {
+            serde_json::to_value(v).map_err(|e| e.to_string())
+        }
+        let out = match method {
+            "plan" => json(&write::plan(&self.home, str_of("entity")?, enable()?)?)?,
+            "journal" => json(&write::journal(&self.home, &store()?))?,
+            "apply" => json(&write::apply(
+                &self.home,
+                &store()?,
+                str_of("entity")?,
+                enable()?,
+                str_of("baseSha")?,
+            )?)?,
+            _ => json(&write::rollback(&self.home, &store()?, str_of("op")?)?)?,
+        };
+        if matches!(method, "apply" | "rollback") {
+            // окно узнаёт об изменении сразу, а не после срабатывания сторожа
+            self.rescan(true, false);
+        }
+        Ok(out)
+    }
+
     fn handle(&mut self, line: &str) {
         let Ok(req) = serde_json::from_str::<Value>(line) else {
             send(&json!({ "jsonrpc": "2.0", "id": null, "error": { "message": "не JSON" } }));
@@ -158,7 +203,13 @@ impl Server {
             }
             Some("snapshot") => json!({ "result": &self.last }),
             Some("status") => {
-                json!({ "result": { "watching": self.watched.len(), "seq": self.seq } })
+                json!({ "result": { "watching": self.watched.len(), "seq": self.seq, "writable": self.backups.is_some() } })
+            }
+            Some(m @ ("plan" | "apply" | "journal" | "rollback")) => {
+                match self.write_method(m, req.get("params").unwrap_or(&Value::Null)) {
+                    Ok(v) => json!({ "result": v }),
+                    Err(e) => json!({ "error": { "message": e } }),
+                }
             }
             Some(other) => {
                 json!({ "error": { "message": format!("неизвестный метод: {other:.40}") } })
@@ -189,7 +240,7 @@ fn spawn_stdin_reader(tx: Sender<Msg>) {
     });
 }
 
-pub fn run(home: &Path) {
+pub fn run(home: &Path, backups: Option<PathBuf>) {
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = mpsc::channel();
     let tx_fs = tx.clone();
     let watcher = recommended_watcher(move |res| {
@@ -199,7 +250,7 @@ pub fn run(home: &Path) {
     .ok();
     spawn_stdin_reader(tx);
 
-    let mut server = Server::new(home, watcher);
+    let mut server = Server::new(home, backups, watcher);
     send(
         &json!({ "jsonrpc": "2.0", "method": "ready", "params": { "watching": server.watched.len() } }),
     );
