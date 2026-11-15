@@ -723,7 +723,7 @@ try {
   must(v4.length === 0, `axe: ctxkit: ${v4.map((x) => x.id).join(', ')}`)
   await noSecretOnPage('ctxkit')
   // шлюз Stop: по умолчанию ставится (хук + находка stop_gate «ok»), со снятой галочкой хук убирается (находка «нет шлюза»)
-  const ourStop = () => (JSON.parse(readFileSync(settingsFile, 'utf8')).hooks?.Stop ?? []).filter((g) => JSON.stringify(g).includes('ctxkit')).length
+  const ourStop = () => (JSON.parse(readFileSync(settingsFile, 'utf8')).hooks?.Stop ?? []).filter((g) => (g.hooks ?? []).some((h) => /(^|[\\/"])ctxkit(\.exe)?("|\s|$)/i.test(h.command ?? ''))).length
   const findings = () => page.locator('ul[aria-label="Находки диагностики"]').innerText()
   must(ourStop() === 1, `после применения нет хука Stop ctxkit (${ourStop()})`)
   await waitFor(async () => (await findings()).includes('шлюз Stop установлен'), 'доктор: шлюз Stop установлен')

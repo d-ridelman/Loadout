@@ -47,7 +47,11 @@ fn hook_command(settings: &Value) -> Option<String> {
         .as_array()?
         .iter()
         .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
-        .find_map(|h| h["command"].as_str().filter(|c| c.contains("ctxkit")))?
+        .find_map(|h| {
+            h["command"]
+                .as_str()
+                .filter(|c| crate::setup::command_is_ours(c, None))
+        })?
         .trim();
     Some(
         match cmd.chars().next().filter(|c| matches!(c, '"' | '\'')) {
@@ -113,7 +117,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
 
     let has_gate = settings["hooks"]["Stop"]
         .as_array()
-        .is_some_and(|a| a.iter().any(crate::setup::is_our_hook_group));
+        .is_some_and(|a| a.iter().any(|g| crate::setup::is_our_hook_group(g, None)));
     out.push(if has_gate {
         f("stop_gate", "ok", t(lang, "Stop gate installed", "шлюз Stop установлен"), None, None)
     } else {
@@ -392,7 +396,7 @@ mod tests {
     fn hook_command_forms_and_lang_values() {
         let hook = |c: &str| {
             json!({"hooks": {"PreToolUse": [
-                {"hooks": [{"command": "claude-guard"}]},
+                {"hooks": [{"command": "node C:/tools/ctxkit-helper/stop.js"}]},
                 {"hooks": [{"command": c}]}
             ]}})
         };

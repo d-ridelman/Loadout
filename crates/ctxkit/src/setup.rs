@@ -515,7 +515,7 @@ fn update_claude_settings(
     );
     // Stop takes no matcher. The gate fires once per turn (see gate.rs); --no-stop-gate removes our group.
     if opts.no_stop_gate {
-        remove_our_hook_event(hooks_obj, "Stop");
+        remove_our_hook_event(hooks_obj, "Stop", Some(hook_cmd));
         println!("  Stop gate: off (--no-stop-gate); our Stop hook is removed if present");
     } else {
         upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd);
@@ -561,16 +561,78 @@ fn ensure_object<'a>(
         .ok_or_else(|| format!("'{key}' is not a JSON object"))
 }
 
-pub(crate) fn is_our_hook_group(group: &Value) -> bool {
-    let Some(arr) = group.get("hooks").and_then(|h| h.as_array()) else {
-        return false;
-    };
-    arr.iter().any(|h| {
-        let cmd = h.get("command").and_then(|c| c.as_str()).unwrap_or("");
-        cmd.contains("ctxkit")
-            || cmd.contains("claude-guard")
-            || cmd.contains("no-inline-backslash")
+/// Splits the first `n` words of a command line; quotes (" or ') keep a path with spaces in one word.
+fn first_words(cmd: &str, n: usize) -> Vec<String> {
+    let (mut words, mut cur, mut quote) = (Vec::new(), String::new(), None::<char>);
+    for c in cmd.trim().chars() {
+        match c {
+            '"' | '\'' if quote.is_none() => quote = Some(c),
+            c if quote == Some(c) => quote = None,
+            c if c.is_whitespace() && quote.is_none() => {
+                if !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                    if words.len() == n {
+                        return words;
+                    }
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
+}
+
+/// The one rule for "this hook command is ctxkit's": it equals the command being installed
+/// (`--hook-cmd`), or one of its first two words (the exe, or `node <script>`) is a file named
+/// `ctxkit` / `claude-guard` / `no-inline-backslash` (any case, .exe/.js/.mjs/.cmd or none).
+/// A foreign command that merely has "ctxkit" somewhere in its path is not ours.
+pub(crate) fn command_is_ours(cmd: &str, current: Option<&str>) -> bool {
+    if current.is_some_and(|c| c.trim() == cmd.trim()) {
+        return true;
+    }
+    first_words(cmd, 2).iter().any(|w| {
+        let base = w
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let stem = [".exe", ".js", ".mjs", ".cmd"]
+            .iter()
+            .find_map(|e| base.strip_suffix(e))
+            .unwrap_or(&base);
+        matches!(stem, "ctxkit" | "claude-guard" | "no-inline-backslash")
     })
+}
+
+fn hook_is_ours(h: &Value, current: Option<&str>) -> bool {
+    h.get("command")
+        .and_then(|c| c.as_str())
+        .is_some_and(|c| command_is_ours(c, current))
+}
+
+pub(crate) fn is_our_hook_group(group: &Value, current: Option<&str>) -> bool {
+    group
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .is_some_and(|a| a.iter().any(|h| hook_is_ours(h, current)))
+}
+
+/// Removes only our elements from `hooks[]` of every group; a group is dropped only when it ends up
+/// empty, so foreign elements (and their matcher) survive even when they shared a group with ours.
+fn strip_our_hooks(list: Vec<Value>, current: Option<&str>) -> Vec<Value> {
+    list.into_iter()
+        .filter_map(|mut g| {
+            if !is_our_hook_group(&g, current) {
+                return Some(g);
+            }
+            let arr = g.get_mut("hooks")?.as_array_mut()?;
+            arr.retain(|h| !hook_is_ours(h, current));
+            (!arr.is_empty()).then_some(g)
+        })
+        .collect()
 }
 
 fn upsert_claude_hook_event(
@@ -579,12 +641,12 @@ fn upsert_claude_hook_event(
     matcher: Option<&str>,
     command: &str,
 ) {
-    let mut list = hooks
+    let list = hooks
         .get(event)
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    list.retain(|item| !is_our_hook_group(item));
+    let mut list = strip_our_hooks(list, Some(command));
     let mut group = json!({
         "hooks": [{
             "type": "command",
@@ -599,16 +661,12 @@ fn upsert_claude_hook_event(
     hooks.insert(event.to_string(), Value::Array(list));
 }
 
-/// Drops our group from `event`, keeps foreign ones, and removes the key when nothing is left.
-fn remove_our_hook_event(hooks: &mut Map<String, Value>, event: &str) {
+/// Drops our hook elements from `event`, keeps foreign ones, and removes the key when nothing is left.
+fn remove_our_hook_event(hooks: &mut Map<String, Value>, event: &str, current: Option<&str>) {
     let Some(list) = hooks.get(event).and_then(|v| v.as_array()) else {
         return;
     };
-    let kept: Vec<Value> = list
-        .iter()
-        .filter(|g| !is_our_hook_group(g))
-        .cloned()
-        .collect();
+    let kept = strip_our_hooks(list.clone(), current);
     if kept.is_empty() {
         hooks.remove(event);
     } else {
@@ -1735,12 +1793,69 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("ctxkit"));
-        remove_our_hook_event(&mut hooks, "Stop");
+        remove_our_hook_event(&mut hooks, "Stop", None);
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(hooks["Stop"][0]["hooks"][0]["command"], "notify-me.exe");
         hooks.insert("Stop".to_string(), json!([ours]));
-        remove_our_hook_event(&mut hooks, "Stop");
+        remove_our_hook_event(&mut hooks, "Stop", None);
         assert!(hooks.get("Stop").is_none());
+    }
+
+    #[test]
+    fn recognises_our_command_by_file_name_not_substring() {
+        for ours in [
+            "\"C:/h/ctxkit.exe\"",
+            "C:\\x\\CTXKIT.EXE --lang ru",
+            "\"C:/Program Files/a/ctxkit.exe\" --dsh",
+            "ctxkit",
+            "node C:/x/no-inline-backslash.mjs",
+            "\"C:/h/claude-guard.exe\"",
+            "node \"C:/my dir/claude-guard.js\"",
+        ] {
+            assert!(command_is_ours(ours, None), "{ours}");
+        }
+        for foreign in [
+            "node C:/tools/ctxkit-helper/stop.js",
+            "D:/x/crates/ctxkit/notify.js",
+            "\"C:/Program Files/ctxkit/other.exe\"",
+            "custom-other-hook",
+            "node x.js ctxkit",
+            "",
+        ] {
+            assert!(!command_is_ours(foreign, None), "{foreign}");
+        }
+        assert!(command_is_ours("test-ctxkit", Some("test-ctxkit")));
+        assert!(!command_is_ours("test-ctxkit", None));
+    }
+
+    #[test]
+    fn foreign_hook_with_ctxkit_in_path_survives_upsert_and_remove() {
+        let foreign_a =
+            json!({ "type": "command", "command": "node C:/tools/ctxkit-helper/stop.js" });
+        let foreign_b = json!({ "type": "command", "command": "D:/x/crates/ctxkit/notify.js" });
+        let ours = "\"C:/h/ctxkit.exe\"";
+        let mut hooks = Map::new();
+        hooks.insert(
+            "Stop".to_string(),
+            json!([
+                { "hooks": [foreign_a.clone()] },
+                // foreign and ours in one group: only ours must go
+                { "matcher": "Bash", "hooks": [{ "type": "command", "command": "\"C:/old/ctxkit.exe\"" }, foreign_b.clone()] }
+            ]),
+        );
+        for _ in 0..2 {
+            upsert_claude_hook_event(&mut hooks, "Stop", None, ours);
+        }
+        let list = hooks["Stop"].as_array().unwrap();
+        assert_eq!(list.len(), 3, "ours + two foreign groups");
+        assert_eq!(list[0]["hooks"][0]["command"], ours);
+        assert_eq!(list[1]["hooks"], json!([foreign_a]));
+        assert_eq!(list[2]["matcher"], "Bash");
+        assert_eq!(list[2]["hooks"], json!([foreign_b]));
+        remove_our_hook_event(&mut hooks, "Stop", Some(ours));
+        assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2);
+        remove_our_hook_event(&mut hooks, "Stop", Some(ours));
+        assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2, "idempotent");
     }
 
     #[test]
