@@ -115,7 +115,7 @@ A hook must never get in the way of your work. In hook mode `ctxkit` exits `0` w
 
 Emergency switches: `CTXKIT_GUARD=0` makes the `PreToolUse` / `PostToolUse` hooks exit at once without output; `CTXKIT_GATE=0` does the same for the Stop gate. Set it in the environment of the session (for example `CTXKIT_GUARD=0 claude`). To remove the hooks altogether see "How to roll back".
 
-What Claude Code itself does when a hook misbehaves (hooks reference, https://code.claude.com/docs/en/hooks, read on 2026-11-16; this is the documentation, not a run of our own — see the note below the table):
+What Claude Code itself does when a hook misbehaves (hooks reference, https://code.claude.com/docs/en/hooks, read on 2026-11-16; the table is the documentation, our own live run is in the second table below):
 
 | Scenario | Does it block the tool call? | Claude Code docs |
 |---|---|---|
@@ -126,9 +126,25 @@ What Claude Code itself does when a hook misbehaves (hooks reference, https://co
 | Any failure with `"onFailure": "block"` on the hook (v2.1.295+, opt-in) | Yes | "With "block" set, a failure does what exit code 2 does on that event" |
 | Windows without Git Bash, shell-form `PreToolUse` hook, `onFailure` unset | Can block | "On Windows without Git Bash, a shell-form PreToolUse or PermissionRequest command hook that fails with onFailure unset can instead block the tool call." |
 
-Two findings. First, a broken hook path does not stop work (the `doctor` finding `hooks` with severity `error` shows it: "the hook points to a missing binary"); the cost is that the guards silently stop working. Second, the Windows-without-Git-Bash row: the hook command `ctxkit setup` writes (`"C:/…/ctxkit.exe"`) is a command that is only a quoted string, which the docs say PowerShell prints instead of running ("PowerShell started no program", fix: `"shell": "powershell"` with `& ` before the quoted path, or exec form). On such a machine the guards do not run and a failing hook can block calls. `ctxkit setup` does not change the command form for this yet; install Git for Windows (the usual setup for Claude Code on Windows) or follow the docs' fix by hand.
+Two findings. First, a broken hook path does not stop work (the `doctor` finding `hooks` with severity `error` shows it: "the hook points to a missing binary"); the cost is that the guards silently stop working. Second, the Windows-without-Git-Bash row (documentation only, not run live): the hook command `ctxkit setup` writes (`"C:/…/ctxkit.exe"`) is a command that is only a quoted string, which the docs say PowerShell prints instead of running ("PowerShell started no program", fix: `"shell": "powershell"` with `& ` before the quoted path, or exec form). On such a machine the guards do not run and a failing hook can block calls. `ctxkit setup` does not change the command form for this yet; install Git for Windows (the usual setup for Claude Code on Windows) or follow the docs' fix by hand.
 
-Note on verification: the planned live run of the scenarios through `claude -p --settings <file>` (missing exe, a hook that sleeps past `timeout: 2`, exit 1, exit 2) could not be done on the authoring machine because the `claude` CLI there had an expired OAuth session. The table follows the documentation; repeat the run on a logged-in machine before relying on a row.
+Checked live on `claude` 2.1.325, Windows 11 with Git for Windows, 2026-11-16. Each run: `claude -p "Run with Bash exactly: echo marker-sN" --model haiku --max-turns 3 --settings <file> --allowedTools Bash --output-format stream-json --verbose`, where the file holds one `PreToolUse` hook (`matcher: Bash`) and the result is read from the `tool_result` in the stream. `claude` exited `0` in every run; wall time 9-11 s is the model round trips, not the hook. The owner's own profile hooks (ctxkit, ponytail) were active as well.
+
+| # | Hook command | Tool call ran? | What the model saw | Matches the docs |
+|---|---|---|---|---|
+| 0 | `exit 0` (control) | Yes, `marker-s0` | Nothing extra | n/a |
+| 1 | `"C:/no/such/ctxkit.exe"` (missing exe) | Yes, `marker-s1` | No error, nothing in stderr | Yes |
+| 2 | `node -e "process.exit(1)"` (exit 1) | Yes, `marker-s2` | No error | Yes |
+| 3 | `node -e "console.error('stop-test');process.exit(2)"` (exit 2, control for blocking) | **No** | `tool_result` with `is_error`: `PreToolUse:Bash hook error: [...]: stop-test`; the model reported the call as blocked | Yes |
+| 4 | `node -e "setTimeout(()=>{},8000)"` with `timeout: 2` | Yes, `marker-s4` | No error; the run took 10.6 s against 9.0 s for the control, so the hook was cut off at about 2 s, not waited out for 8 s | Yes |
+| 5 | The form `ctxkit setup` writes: `"<worktree>/target/release/ctxkit.exe"` (one quoted string, hook mode) | Yes, `marker-s5` | Nothing extra; the guard did not interfere | Yes |
+| 6 | The same hook with `CTXKIT_GUARD=0` | Yes, `marker-s6` | Nothing extra | n/a |
+
+Row 3 proves that hooks from `--settings` do load, so rows 1, 2 and 4 are real "does not block" results. Rows 5 and 6 on `echo` alone do not show that our hook ran, so two more runs used a command the guard denies (a heredoc with a backslash) and the user-level settings were switched off with `--setting-sources project` (otherwise the profile's hook gives the same denial): with the `ctxkit.exe` form the call was blocked with the guard's own message ("Heredoc contains backslashes..."), with `CTXKIT_GUARD=0` the same call ran. So the one-quoted-string command form does run under Claude Code on this machine, and the switch works.
+
+Not checked: the "Windows without Git Bash" row (this machine has Git Bash) and `"onFailure": "block"`.
+
+No row of the table diverges from the documentation. One side finding of the run: the `ctxkit.exe` installed in the profile (`~/.claude/hooks/ctxkit.exe`, dated 2026-11-15) does not contain the string `CTXKIT_GUARD`, and with the switch set its guard kept blocking; the switch needs a build that has it (`ctxkit setup` copies the current one).
 
 ## Diagnostics and report (`doctor`, `report`)
 
