@@ -14,7 +14,6 @@
 - [ ] Нет `requestSingleInstanceLock` (`app/src/main/index.ts:350`).
 - [ ] `ctxkit check` запускает команду через `cmd.exe /d /c` и ломает аргументы с `&`, `|`, `%`, `^`: `crates/ctxkit/src/check.rs:30-35`.
 - [ ] `install.ps1` перезаписывает пользовательский `PATH` раскрытыми значениями: `crates/ctxkit/scripts/install.ps1:27-31`.
-- [ ] Нет тестов на IPC-ворота главного процесса (`validateIntent`, `trusted`): `app/src/main/index.ts:260-310`.
 - [ ] Дубли: разворот `~` (`crates/loadout-core/src/write.rs:107-118` и `crates/loadout-core/src/lib.rs:42-54`) и поиск домашнего каталога (`crates/loadoutd/src/main.rs`).
 - [ ] Логи `last-check-*.log` в TEMP не чистятся: `crates/ctxkit/src/check.rs:240-252`.
 - [ ] `PostToolUse` блокирует `.json` с комментариями (`turbo.json`, `biome.json`): `crates/ctxkit/src/backslash.rs:412-430`.

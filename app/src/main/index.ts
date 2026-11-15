@@ -8,10 +8,11 @@ import { pathToFileURL } from 'node:url'
 import { backupNotice } from '../shared/backups'
 import { getLang, isLang, langFromLocale, setLang, t } from '../shared/i18n'
 import type { Lang } from '../shared/i18n'
-import { CLIENTS, LEVEL_RANK } from '../shared/model'
-import type { ChangedEvent, ClientId, Intent, Result, ScanResponse, WriteLevel } from '../shared/model'
+import { LEVEL_RANK } from '../shared/model'
+import type { ChangedEvent, ClientId, Result, ScanResponse, WriteLevel } from '../shared/model'
 import * as ctxkit from './ctxkit'
-import { checkTreeSize, cloneArgs, findSkills, localMarketplaceOk, parseMarketplaceSource, parseSkillSource, readCatalog, skillNameOk } from './install'
+import { assertTrusted, grantedOf, parseBatch, parseLevel, parseOp, parseSha, trustedSender, validateIntent, validateName } from './gate'
+import { checkTreeSize, cloneArgs, findSkills, localMarketplaceOk, parseMarketplaceSource, parseSkillSource, readCatalog } from './install'
 import { Sidecar } from './sidecar'
 import {
   validateApplied,
@@ -206,10 +207,6 @@ async function guarded<T>(fn: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-const ENTITY_RE = /^[0-9a-f]{16}(-\d{1,4})?$/
-const SHA_RE = /^[0-9a-f]{64}$/
-const OP_RE = /^[0-9]{13}-[0-9]{2}$/
-
 function writeCore(): Sidecar {
   const s = ensureSidecar()
   if (typeof s === 'string') throw new Error(s)
@@ -252,77 +249,10 @@ async function core(method: string, params?: Record<string, unknown>): Promise<u
  * (`maxLevel`), и ядро отказывает, если операции нужен выше: схема «спросили план, проверили, потом применили»
  * поддавалась гонке (между вызовами можно вклинить `profileSave`).
  */
-function grantedLevel(): 'R1' | 'R2' {
-  const have = readWriteLevel()
-  if (have === 'R0') throw new Error(t('запись выключена (R0): включите уровень записи в шапке окна', 'writing is off (R0): enable a write level in the window header'))
-  return have
-}
+const grantedLevel = (): 'R1' | 'R2' => grantedOf(readWriteLevel())
 
-const CLIENT_IDS: readonly string[] = CLIENTS.map((c) => c.id)
-const BATCH_RE = /^[0-9]{13}$/
-const NAME_RE = /^[\p{L}\p{N} _.-]{1,40}$/u
-const isShort = (v: unknown): v is string => typeof v === 'string' && v.length <= 500 && !/\p{Cc}/u.test(v)
-
-/** Новый MCP: поля пересобираются, окончательные правила имени, адреса и env проверяет ядро. */
-function validateAdd(r: Record<string, unknown>): Intent {
-  const { to, name, command, args, url, env } = r
-  if (typeof to !== 'string' || !CLIENT_IDS.includes(to) || !isShort(name) || !isShort(command) || !isShort(url)) {
-    throw new Error(t('неверные параметры', 'invalid parameters'))
-  }
-  if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error(t('неверные аргументы', 'invalid arguments'))
-  if (!Array.isArray(env) || env.length > 30) throw new Error(t('неверные переменные окружения', 'invalid environment variables'))
-  const pairs = env.map((p: unknown) => {
-    const k = (p as Record<string, unknown> | null)?.['key']
-    const v = (p as Record<string, unknown> | null)?.['value']
-    if (!isShort(k) || !isShort(v) || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(k)) throw new Error(t('неверные переменные окружения', 'invalid environment variables'))
-    return { key: k, value: v }
-  })
-  return { op: 'add', to: to as ClientId, name, command, args: args as string[], url, env: pairs }
-}
-
-/** Разбор намерения от страницы: только id записи и то, что с ней сделать. Всё остальное отбрасывается. */
-function validateIntent(raw: unknown): Intent {
-  if (typeof raw !== 'object' || raw === null) throw new Error(t('неверные параметры', 'invalid parameters'))
-  const r = raw as Record<string, unknown>
-  if (r['op'] === 'add') return validateAdd(r)
-  if (r['op'] === 'installSkill') {
-    // каталог подготовки ядро находит само по номеру; путь внутри и имя оно проверяет ещё раз
-    const { stage, sub, name } = r
-    if (typeof stage !== 'string' || !/^[0-9a-f]{32}$/.test(stage) || typeof sub !== 'string' || !/^([A-Za-z0-9._-]{1,100}(\/[A-Za-z0-9._-]{1,100})*)?$/.test(sub) || typeof name !== 'string' || !skillNameOk(name)) {
-      throw new Error(t('неверные параметры', 'invalid parameters'))
-    }
-    return { op: 'installSkill', stage, sub, name }
-  }
-  const entity = r['entity']
-  if (typeof entity !== 'string' || !ENTITY_RE.test(entity)) throw new Error(t('неверные параметры', 'invalid parameters'))
-  if (r['op'] === 'toggle' && typeof r['enable'] === 'boolean') return { op: 'toggle', entity, enable: r['enable'] }
-  if (r['op'] === 'edit' && isShort(r['command']) && r['command'].trim() !== '') {
-    const args = r['args']
-    if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error(t('неверные аргументы', 'invalid arguments'))
-    return { op: 'edit', entity, command: r['command'], args: args as string[] }
-  }
-  if (r['op'] === 'copy' && typeof r['to'] === 'string' && CLIENT_IDS.includes(r['to'])) {
-    return { op: 'copy', entity, to: r['to'] as ClientId }
-  }
-  throw new Error(t('неверные параметры', 'invalid parameters'))
-}
-
-function validateName(v: unknown): string {
-  if (typeof v !== 'string' || !NAME_RE.test(v) || v.trim() !== v) throw new Error(t('имя профиля: 1–40 знаков (буквы, цифры, пробел, _ - .)', 'profile name: 1-40 characters (letters, digits, space, _ - .)'))
-  return v
-}
-
-/** Принимаем вызовы только от нашей страницы: файл из сборки или адрес dev-сервера. */
-function trusted(e: IpcMainInvokeEvent): boolean {
-  const url = e.senderFrame?.url ?? ''
-  if (url.split('#')[0] === INDEX_URL) return true
-  // dev-сервер: тот же источник целиком, а не префикс строки (`http://localhost:5173.evil.test` не подходит)
-  try {
-    return DEV_URL !== undefined && new URL(url).origin === new URL(DEV_URL).origin
-  } catch {
-    return false
-  }
-}
+/** Принимаем вызовы только от нашей страницы (см. gate.ts). */
+const trusted = (e: IpcMainInvokeEvent): boolean => trustedSender(e, INDEX_URL, DEV_URL)
 
 /** Окно проверок не мешает владельцу: за экраном, без кнопки на панели задач (`LOADOUT_QA_VISIBLE=1` возвращает на экран). */
 const qaHidden = qa && process.env.LOADOUT_QA_VISIBLE !== '1'
@@ -372,9 +302,7 @@ void app.whenReady().then(() => {
     clipboard.writeText(text.slice(0, 10_000))
   })
   // Каналы записи: страница передаёт только id записи, желаемое состояние, хеш из предпросмотра и номер операции.
-  const guard = (e: IpcMainInvokeEvent): void => {
-    if (!trusted(e)) throw new Error('untrusted sender')
-  }
+  const guard = (e: IpcMainInvokeEvent): void => assertTrusted(e, INDEX_URL, DEV_URL)
   ipcMain.handle('lang:get', (e) => (guard(e), getLang()))
   ipcMain.handle('lang:set', (e, lang: unknown) => {
     guard(e)
@@ -395,9 +323,9 @@ void app.whenReady().then(() => {
     return lang
   })
   ipcMain.handle('writeLevel:get', (e) => (guard(e), readWriteLevel()))
-  ipcMain.handle('writeLevel:set', async (e, level: unknown) => {
+  ipcMain.handle('writeLevel:set', async (e, raw: unknown) => {
     guard(e)
-    if (level !== 'R0' && level !== 'R1' && level !== 'R2') throw new Error(t('неизвестный уровень', 'unknown level'))
+    const level = parseLevel(raw)
     // Повышение уровня подтверждает человек в окне самой ОС, которое страница не может нажать за него:
     // иначе скомпрометированная страница включила бы запись и тут же вызвала `apply`. Понижение подтверждения не требует.
     // Проверки окна подменяют `dialog.showMessageBox` в main-процессе, и согласие, и отказ.
@@ -437,9 +365,9 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => {
       const intent = validateIntent(raw)
-      if (typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) throw new Error(t('неверные параметры', 'invalid parameters'))
+      const sha = parseSha(baseSha)
       // нужный операции уровень (флаг — R1, корзина, правка, копирование — R2) знает и проверяет ядро
-      return validateApplied(await core('apply', { ...intent, baseSha, maxLevel: grantedLevel() }))
+      return validateApplied(await core('apply', { ...intent, baseSha: sha, maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('journal', (e) => {
@@ -467,15 +395,13 @@ void app.whenReady().then(() => {
   ipcMain.handle('rollback', (e, op: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof op !== 'string' || !OP_RE.test(op)) throw new Error(t('неверный номер операции', 'invalid operation number'))
-      return validateApplied(await core('rollback', { op, maxLevel: grantedLevel() }))
+      return validateApplied(await core('rollback', { op: parseOp(op), maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('rollbackBatch', (e, batch: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof batch !== 'string' || !BATCH_RE.test(batch)) throw new Error(t('неверный номер пакета', 'invalid batch number'))
-      const done: unknown = await core('rollbackBatch', { batch, maxLevel: grantedLevel() })
+      const done: unknown = await core('rollbackBatch', { batch: parseBatch(batch), maxLevel: grantedLevel() })
       if (!Array.isArray(done)) throw new Error(t('ядро вернуло ответ неожиданной формы', 'the core returned a response of an unexpected shape'))
       return done.map(validateApplied)
     })
@@ -520,9 +446,9 @@ void app.whenReady().then(() => {
   ipcMain.handle('applyProfile', (e, name: unknown, batchSha: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof batchSha !== 'string' || !SHA_RE.test(batchSha)) throw new Error(t('неверные параметры', 'invalid parameters'))
+      const sha = parseSha(batchSha)
       const n = validateName(name)
-      return validateBatchApplied(await core('applyProfile', { name: n, batchSha, maxLevel: grantedLevel() }))
+      return validateBatchApplied(await core('applyProfile', { name: n, batchSha: sha, maxLevel: grantedLevel() }))
     })
   })
   // ---- встроенный ctxkit (CONCEPT.md §13): бинарь лежит в составе приложения, путь зашит ----
