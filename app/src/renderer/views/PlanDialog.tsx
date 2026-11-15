@@ -23,6 +23,15 @@ function title(p: Plan | undefined, intent: Intent): string {
   return intent.op === 'toggle' && intent.enable ? 'Включить' : 'Выключить'
 }
 
+/** Название главной кнопки по операции, а не общее «Применить»: видно, что именно произойдёт. */
+function applyLabel(p: Plan | undefined, intent: Intent): string {
+  if (intent.op === 'edit') return 'Записать команду'
+  if (intent.op === 'copy') return 'Скопировать'
+  if (p?.from.includes('корзин')) return 'Вернуть из корзины'
+  if (!intent.enable && p?.to.includes('корзин')) return 'Вынести в корзину'
+  return intent.enable ? 'Включить' : 'Выключить'
+}
+
 /** Предпросмотр любой записи (CONCEPT.md §5, шаги 1–2): что именно поменяется, и только после подтверждения запись. */
 export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
   const [state, setState] = useState<PlanState>({ status: 'loading' })
@@ -115,7 +124,7 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
       {applyError ? <p className="s-broken" role="alert">{applyError}</p> : null}
       <div className="actions">
         <button ref={applyRef} disabled={state.status !== 'ready' || state.plan.noop || busy} onClick={() => void apply()}>
-          {busy ? 'Записываю…' : 'Применить'}
+          {busy ? 'Записываю…' : applyLabel(plan, intent)}
         </button>
         {applyError ? <button onClick={() => void build()}>Обновить предпросмотр</button> : null}
         <button ref={cancelRef} onClick={onClose}>Отмена</button>

@@ -106,7 +106,8 @@ body.paused * { animation-play-state: paused !important; }
 
 /* матрица */
 .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
-.bar .chip[aria-pressed='true'] { border-color: var(--pink); background: rgba(255, 121, 198, 0.12); }
+/* один акцент «выбрано» во всём окне: фиолетовый, как у раздела в сайдбаре */
+.bar .chip[aria-pressed='true'] { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
 .check { display: inline-flex; gap: 6px; align-items: center; color: var(--mute); }
 /* `clip`, а не `auto`: у `auto` прокручиваемым предком становилась обёртка и шапка таблицы (sticky) не залипала при прокрутке страницы */
 .tablewrap { padding: 2px 8px 8px; overflow-x: clip; }
@@ -153,7 +154,7 @@ html[data-fx='off'] .beam { display: none; }
 .strip { display: flex; gap: 8px; margin: 6px 0; }
 .instances { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .instances button { width: 100%; text-align: left; }
-.instances button[aria-pressed='true'] { border-color: var(--pink); background: rgba(255, 121, 198, 0.12); }
+.instances button[aria-pressed='true'] { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 
 /* хуки */

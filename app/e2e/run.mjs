@@ -19,6 +19,9 @@ const SIZES = [
   [1280, 800],
 ]
 
+/** Главная кнопка диалога называется по операции (или «Применить» у пакета профиля). */
+const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Применить)/
+
 const log = (...a) => console.log(...a)
 const must = (cond, msg) => {
   if (!cond) throw new Error(msg)
@@ -412,11 +415,11 @@ try {
   // файл изменился между предпросмотром и записью: запись отказывает, чужая правка цела
   await page.locator('#grid').focus()
   await page.keyboard.press('Space')
-  await dialog.getByRole('button', { name: 'Применить' }).waitFor({ timeout: 8000 })
+  await dialog.getByRole('button', { name: APPLY }).waitFor({ timeout: 8000 })
   await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
   const touched = `${original}\n# дописал клиент\n`
   writeFileSync(cfg, touched)
-  await dialog.getByRole('button', { name: 'Применить' }).click()
+  await dialog.getByRole('button', { name: APPLY }).click()
   await dialog.locator('[role=alert]').waitFor({ timeout: 8000 })
   must((await dialog.locator('[role=alert]').innerText()).includes('изменился'), 'устаревший план должен быть отвергнут')
   must(readFileSync(cfg, 'utf8') === touched, 'отказ не должен трогать файл')
@@ -427,9 +430,9 @@ try {
   // обычная запись
   await page.locator('#grid').focus()
   await page.keyboard.press('Space')
-  await dialog.getByRole('button', { name: 'Применить' }).waitFor({ timeout: 8000 })
+  await dialog.getByRole('button', { name: APPLY }).waitFor({ timeout: 8000 })
   await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
-  await dialog.getByRole('button', { name: 'Применить' }).click()
+  await dialog.getByRole('button', { name: APPLY }).click()
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'после записи глиф p1 «выключено»')
   must(readFileSync(cfg, 'utf8') === asOff, 'записан не только enabled у p1')
   must((await dialog.count()) === 0, 'предпросмотр не закрылся после записи')
@@ -462,7 +465,7 @@ try {
   const agFile = join(home, '.gemini', 'config', 'mcp_config.json')
   const agOrig = readFileSync(agFile, 'utf8')
   const agJson = () => JSON.parse(readFileSync(agFile, 'utf8'))
-  const applyDialog = async (label = 'Применить') => {
+  const applyDialog = async (label = APPLY) => {
     await dialog.getByRole('button', { name: label }).waitFor({ timeout: 8000 })
     await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
     await dialog.getByRole('button', { name: label }).click()
