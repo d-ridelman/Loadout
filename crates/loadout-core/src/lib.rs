@@ -141,10 +141,10 @@ pub(crate) fn scan_hooks(c: &mut Ctx, client: Client, file: &str, root_ptr: &str
                 .logical(label)
                 .detail(json!({
                     "event": event,
-                    "matcher": matcher,
-                    "type": h.get("type"),
+                    "matcher": matcher.and_then(mask::safe_matcher),
+                    "type": h.get("type").and_then(Value::as_str).and_then(mask::safe_version),
                     "command": mask::join_line(&tokens),
-                    "timeout": h.get("timeout"),
+                    "timeout": h.get("timeout").filter(|t| t.is_number()),
                 }));
                 c.push(e);
             }
@@ -224,7 +224,16 @@ fn replace_ci(s: &str, pat: &str) -> String {
     let mut i = 0;
     while i < s.len() {
         let end = i + pb.len();
-        if end <= sb.len() && sb[i..end].eq_ignore_ascii_case(pb) && s.is_char_boundary(end) {
+        // Совпадение не должно обрывать имя: домой `C:\Users\al` не принадлежит `C:\Users\alice`.
+        // Границу символа проверяем до любого среза: `end` может попасть внутрь кириллической буквы.
+        let hit = end <= sb.len()
+            && s.is_char_boundary(end)
+            && sb[i..end].eq_ignore_ascii_case(pb)
+            && !s[end..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if hit {
             out.push('~');
             i = end;
         } else {
@@ -256,12 +265,19 @@ fn scrub(v: &mut Value, forms: &[String]) {
 fn home_forms(home: &Path) -> Vec<String> {
     let raw = home.to_string_lossy().into_owned();
     let fwd = raw.replace('\\', "/");
-    let mut forms = vec![raw, fwd.clone()];
+    // `C:\\Users\\x` — так путь выглядит внутри JSON-строки и экранированных аргументов.
+    let doubled = raw.replace('\\', "\\\\");
+    let mut forms = vec![raw, fwd.clone(), doubled];
     let b = fwd.as_bytes();
     if b.len() > 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
         let drive = (b[0] as char).to_ascii_lowercase();
-        forms.push(format!("/{drive}{}", &fwd[2..]));
-        forms.push(format!("/mnt/{drive}{}", &fwd[2..]));
+        let rest = &fwd[2..];
+        forms.push(format!("/{drive}{rest}"));
+        forms.push(format!("/mnt/{drive}{rest}"));
+        // административная UNC-шара: `\\localhost\c$\Users\x`
+        let unc = format!("\\\\localhost\\{drive}${}", rest.replace('/', "\\"));
+        forms.push(unc.replace('\\', "/"));
+        forms.push(unc);
     }
     // Домашний каталог WSL/Linux/macOS с тем же именем пользователя (в конфигах Codex встречается `/home/<имя>/…`).
     if let Some(user) = home.file_name().and_then(|n| n.to_str()) {
@@ -372,6 +388,22 @@ mod tests {
             ("/c/Users/Alice/x", "~/x"),
             ("/mnt/c/Users/Alice/x", "~/x"),
             ("/home/alice/proj", "~/proj"),
+        ] {
+            let mut s = input.to_owned();
+            scrub_str(&mut s, &forms);
+            assert_eq!(s, want, "{input}");
+        }
+    }
+
+    #[test]
+    fn scrub_handles_non_ascii_text_and_word_boundaries() {
+        let forms = home_forms(Path::new("C:\\Users\\al"));
+        for (input, want) in [
+            ("Путь C:\\Users\\al\\проект", "Путь ~\\проект"),
+            ("C:\\Users\\alice\\x", "C:\\Users\\alice\\x"), // другой пользователь: не трогаем
+            ("😀 C:/Users/al/x 日本語", "😀 ~/x 日本語"),
+            ("C:\\\\Users\\\\al\\\\x", "~\\\\x"), // путь внутри JSON-строки
+            ("\\\\localhost\\c$\\Users\\al\\p", "~\\p"),
         ] {
             let mut s = input.to_owned();
             scrub_str(&mut s, &forms);

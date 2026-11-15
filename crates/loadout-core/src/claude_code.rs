@@ -1,6 +1,6 @@
 //! Адаптер Claude Code (CLI и вкладка Code в Claude Desktop). Источники — таблица §2 CONCEPT.md.
 
-use crate::mask::mcp_detail;
+use crate::mask::{self, mcp_detail};
 use crate::model::{Client, Entity, Kind, State};
 use crate::{esc_ptr, frontmatter, scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Value};
@@ -119,8 +119,12 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                 file,
                 format!("/plugins/{}/{i}", esc_ptr(key)),
             )
-            .version(r.get("version").and_then(Value::as_str))
-            .detail(json!({ "sha": r.get("gitCommitSha") }));
+            .version(
+                r.get("version")
+                    .and_then(Value::as_str)
+                    .and_then(mask::safe_version),
+            )
+            .detail(json!({ "sha": r.get("gitCommitSha").and_then(Value::as_str).and_then(mask::safe_version) }));
             if let Some(n) = note {
                 e = e.note(n);
             }
@@ -168,7 +172,7 @@ fn marketplaces(c: &mut Ctx) {
             "~/.claude/plugins/known_marketplaces.json",
             format!("/{}", esc_ptr(name)),
         )
-        .detail(json!({ "sourceType": src }));
+        .detail(json!({ "sourceType": src.and_then(mask::safe_version) }));
         c.push(e);
     }
 }
@@ -273,7 +277,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool) {
                     name.clone(),
                     State::On,
                     file,
-                    format!("/projects/{shown}/mcpServers/{}", esc_ptr(name)),
+                    format!("/projects/{}/mcpServers/{}", esc_ptr(&shown), esc_ptr(name)),
                 )
                 .detail(mcp_detail(cfg)),
             );
@@ -311,7 +315,9 @@ fn md_dir(c: &mut Ctx, dir: &str, kind: Kind) {
             c.tilde(&p),
             "frontmatter",
         )
-        .detail(json!({ "model": fm.get("model") }));
+        .detail(
+            json!({ "model": fm.get("model").map(String::as_str).and_then(mask::safe_version) }),
+        );
         c.push(e);
     }
 }

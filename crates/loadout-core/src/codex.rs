@@ -1,6 +1,6 @@
 //! Адаптер ChatGPT / Codex (приложение `OpenAI.Codex`, конфиг `~/.codex`). Источники — таблица §2 CONCEPT.md.
 
-use crate::mask::mcp_detail;
+use crate::mask::{self, mcp_detail};
 use crate::model::{Client, Entity, Kind, State};
 use crate::{scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Value};
@@ -90,7 +90,7 @@ fn config(c: &mut Ctx) {
             CONFIG,
             format!("marketplaces.{}", toml_key(name)),
         )
-        .detail(json!({ "sourceType": m.get("source_type") }));
+        .detail(json!({ "sourceType": m.get("source_type").and_then(Value::as_str).and_then(mask::safe_version) }));
         c.push(e);
     }
     for (name, m) in root
