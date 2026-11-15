@@ -31,6 +31,9 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
   if (o.antigravity) a.push('--antigravity')
   if (o.dsh) a.push('--dsh')
   a.push('--lang', o.lang, '--advisor', o.advisor)
+  // версию claude ctxkit проверяет в самом конце, уже после записи, и зависший `claude` оставил бы окно с ошибкой при
+  // изменённых файлах; предпросмотр проверку оставляет (она нужна диагностике)
+  if (!dryRun) a.push('--skip-version-check')
   if (home) a.push(...homeArgs(home))
   return a
 }

@@ -175,6 +175,7 @@ let session
 try {
   must(existsSync(electronExe), `нет ${electronExe}: выполните npm install в app/`)
   must(existsSync(loadoutBin), `нет ${loadoutBin}: cargo build --release`)
+  must(existsSync(join(appDir, 'build', 'ctxkit.exe')), 'нет app/build/ctxkit.exe: npm run bundle:ctxkit')
   mkdirSync(stateDir, { recursive: true })
   // чистый проверочный профиль каждый раз: настройки окна (FX) не должны переходить между прогонами
   rmSync(profile, { recursive: true, force: true })

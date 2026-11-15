@@ -85,7 +85,6 @@ function ensureSidecar(): Sidecar | string {
       else if (method === 'ready') {
         // Повторный `ready` значит, что ядро перезапустилось: за время паузы файлы могли измениться, окно догоняем.
         // То же, если первый запрос не удался (ядро упало до первого `ready`): окно тогда показывает ошибку.
-        coreProtocolOk = undefined // после перезапуска ядра версию сверяем заново
         if (readySeen || needCatchUp) void pushChanged(undefined)
         readySeen = true
         needCatchUp = false
@@ -189,20 +188,25 @@ function writeCore(): Sidecar {
 
 /** Версия протокола ядра, с которой работает это окно (crates/loadoutd: `PROTOCOL`). */
 const CORE_PROTOCOL = 1
-let coreProtocolOk: boolean | undefined
+/** Поколение процесса ядра, чей протокол уже сверен. */
+let verifiedGeneration: number | undefined
 
 /**
- * Запрос к ядру для записи. Перед первым такая версия протокола сверяется: старое ядро (несобранный `target/release`,
- * подсунутый `LOADOUT_BIN`) не знает `maxLevel` и пропустило бы запись R2 при уровне R1.
+ * Запрос к ядру для записи. Версия протокола сверяется для каждого процесса ядра: старое ядро (несобранный
+ * `target/release`, подсунутый `LOADOUT_BIN`) не знает `maxLevel` и пропустило бы запись R2 при уровне R1. Сама запись
+ * привязана к поколению сверенного процесса: если ядро перезапустилось (в том числе пока запрос стоял в очереди),
+ * новому процессу она не уходит.
  */
 async function core(method: string, params?: Record<string, unknown>): Promise<unknown> {
   const s = writeCore()
-  if (coreProtocolOk !== true) {
-    const st = await s.request('status')
-    coreProtocolOk = typeof st === 'object' && st !== null && (st as Record<string, unknown>)['protocol'] === CORE_PROTOCOL
-    if (!coreProtocolOk) throw new Error('ядро другой версии: запись отключена. Пересоберите ядро (cargo build --release)')
+  if (verifiedGeneration !== s.generation) {
+    const g = s.generation
+    const st = await s.request('status', undefined, g)
+    const ok = typeof st === 'object' && st !== null && (st as Record<string, unknown>)['protocol'] === CORE_PROTOCOL
+    if (!ok) throw new Error('ядро другой версии: запись отключена. Пересоберите ядро (cargo build --release)')
+    verifiedGeneration = g
   }
-  return s.request(method, params)
+  return s.request(method, params, verifiedGeneration)
 }
 
 /**
@@ -414,6 +418,7 @@ void app.whenReady().then(() => {
   const ctxHome = (): string | undefined => envOf('LOADOUT_HOME')
   const userHome = (): string => ctxHome() ?? app.getPath('home')
   let lastSetupPreview: string | undefined
+  let setupBusy = false
 
   ipcMain.handle('ctxkit:status', (e) => {
     guard(e)
@@ -426,7 +431,10 @@ void app.whenReady().then(() => {
     return guarded(async () => {
       // `doctor` выходит с кодом 1, когда есть находка уровня error: это нормальный ответ, разбираем stdout
       const r = await ctxkit.run(ctxBin(), ['doctor', '--json', ...ctxkit.profileArgs(ctxHome())], 20_000)
-      return ctxkit.parseDoctor(r.stdout)
+      const d = ctxkit.parseDoctor(r.stdout)
+      // в находках бывают полные пути (ошибка разбора settings.json, команда хука): путь домашнего каталога заменяем на `~`
+      const t = (s: string | null): string | null => (s === null ? null : tidy(s))
+      return { ...d, findings: d.findings.map((f) => ({ ...f, message: tidy(f.message), detail: t(f.detail), fix: t(f.fix) })) }
     })
   })
   ipcMain.handle('ctxkit:report', (e, days: unknown) => {
@@ -443,15 +451,22 @@ void app.whenReady().then(() => {
       if (typeof dryRun !== 'boolean') throw new Error('неверные параметры')
       const options = ctxkit.parseSetupOptions(raw)
       const key = JSON.stringify(options)
+      if (setupBusy) throw new Error('ctxkit уже работает: дождитесь окончания')
       if (!dryRun) {
         // применение пишет в конфиги клиентов: нужен R2 и предпросмотр с точно такими же настройками
         if (readWriteLevel() !== 'R2') throw new Error('для применения ctxkit нужен уровень R2: включите его в шапке окна')
         if (lastSetupPreview !== key) throw new Error('сначала выполните предпросмотр с теми же настройками')
+        // предпросмотр расходуется до запуска: один предпросмотр — одно применение, даже если запуск закончится ошибкой
+        lastSetupPreview = undefined
       }
-      const r = await ctxkit.run(ctxBin(), ctxkit.setupArgs(options, dryRun, ctxHome()), 120_000)
-      if (dryRun && r.code === 0) lastSetupPreview = key
-      if (!dryRun) lastSetupPreview = undefined
-      return { dryRun, code: r.code, output: tidy(`${r.stdout}${r.stderr}`).slice(0, 20_000) }
+      setupBusy = true
+      try {
+        const r = await ctxkit.run(ctxBin(), ctxkit.setupArgs(options, dryRun, ctxHome()), 120_000)
+        if (dryRun && r.code === 0) lastSetupPreview = key
+        return { dryRun, code: r.code, output: tidy(`${r.stdout}${r.stderr}`).slice(0, 20_000) }
+      } finally {
+        setupBusy = false
+      }
     })
   })
   createWindow()

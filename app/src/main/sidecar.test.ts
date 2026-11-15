@@ -126,6 +126,22 @@ describe('Sidecar', () => {
     await expect(s.request('silent')).rejects.toThrow('нет ответа')
   })
 
+  it('запрос, привязанный к поколению, не уходит перезапущенному процессу (сверка версии ядра не обходится)', async () => {
+    const { s } = setup({ baseDelayMs: 300 })
+    s.start()
+    await s.request('snapshot')
+    const verified = s.generation
+    await expect(s.request('crash')).rejects.toThrow('ядро не ответило')
+    // процесс упал, новый ещё не поднят: запись, сверенная на старом поколении, встаёт в очередь
+    const queued = s.request('apply', { x: 1 }, verified)
+    await expect(queued).rejects.toThrow('перезапустилось')
+    expect(s.generation).toBeGreaterThan(verified)
+    // обычный запрос без привязки работает на новом процессе, а старое поколение отвергается сразу
+    expect(await s.request('snapshot')).toEqual({ echo: 'snapshot' })
+    await expect(s.request('apply', undefined, verified)).rejects.toThrow('перезапустилось')
+    expect(await s.request('apply', undefined, s.generation)).toEqual({ echo: 'apply' })
+  })
+
   it('запросы, отправленные до запуска процесса, не теряются', async () => {
     const { s } = setup()
     s.start()

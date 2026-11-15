@@ -28,7 +28,8 @@ interface Pending {
 export class Sidecar {
   private child: ChildProcess | undefined
   private pending = new Map<number, Pending>()
-  private queue: string[] = []
+  private queue: { line: string; id: number | undefined; gen: number | undefined }[] = []
+  private gen = 0
   private nextId = 1
   private attempts = 0
   private startedAt = 0
@@ -48,12 +49,16 @@ export class Sidecar {
   }
 
   /** Параметры собирает main-процесс из проверенных значений (id, флаг, хеш): у страницы нет способа передать ядру путь. */
-  request(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  request(method: string, params?: Record<string, unknown>, onlyGeneration?: number): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error('ядро остановлено'))
+    if (onlyGeneration !== undefined && onlyGeneration !== this.gen) {
+      return Promise.reject(new Error('ядро перезапустилось: повторите операцию'))
+    }
     if (this.dead || (!this.child && !this.restartTimer)) {
       // исчерпанные или не начатые попытки: повторный запрос (кнопка «Повторить») начинает заново
       this.attempts = 0
       this.start()
+      if (onlyGeneration !== undefined) return Promise.reject(new Error('ядро перезапустилось: повторите операцию'))
     }
     const id = this.nextId++
     return new Promise((resolve, reject) => {
@@ -62,8 +67,13 @@ export class Sidecar {
         reject(new Error(`ядро не ответило: нет ответа на ${method} за ${(this.o.requestTimeoutMs ?? 20_000) / 1000} с`))
       }, this.o.requestTimeoutMs ?? 20_000)
       this.pending.set(id, { resolve, reject, timer })
-      this.write(JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }))
+      this.write(JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }), id, onlyGeneration)
     })
+  }
+
+  /** Номер запущенного процесса ядра: растёт при каждом (пере)запуске. */
+  get generation(): number {
+    return this.gen
   }
 
   /** Закрывает stdin (по EOF ядро выходит само) и добивает процесс, если он завис. */
@@ -80,10 +90,14 @@ export class Sidecar {
     child.once('exit', () => clearTimeout(killer))
   }
 
-  private write(line: string): void {
+  /**
+   * `onlyGeneration`: запрос годится только процессу этого поколения (запись, чей протокол уже сверен). Если процесс
+   * перезапустился, пока запрос ждал в очереди, новому процессу он не уходит: тот мог оказаться другой версии.
+   */
+  private write(line: string, id?: number, onlyGeneration?: number): void {
     const stdin = this.child?.stdin
     if (stdin && !stdin.destroyed && stdin.writable) stdin.write(`${line}\n`)
-    else this.queue.push(line) // процесс ещё поднимается или перезапускается
+    else this.queue.push({ line, id, gen: onlyGeneration }) // процесс ещё поднимается или перезапускается
   }
 
   private spawnChild(): void {
@@ -96,12 +110,24 @@ export class Sidecar {
       return
     }
     this.child = child
+    this.gen++
     createInterface({ input: child.stdout! }).on('line', (line) => this.onLine(line))
     child.stdin?.on('error', () => undefined) // запись в закрытый канал: процесс уже выходит, разберёт `exit`
     // `error` и `exit` могут прийти оба: учитываем только того процесса, который ещё текущий
     child.once('error', (e) => this.onGone(e.message, child))
     child.once('exit', (code, signal) => this.onGone(`процесс завершился (${code ?? signal})`, child))
-    for (const line of this.queue.splice(0)) this.write(line)
+    for (const q of this.queue.splice(0)) {
+      if (q.gen !== undefined && q.gen !== this.gen) {
+        const p = q.id === undefined ? undefined : this.pending.get(q.id)
+        if (p && q.id !== undefined) {
+          this.pending.delete(q.id)
+          clearTimeout(p.timer)
+          p.reject(new Error('ядро перезапустилось: повторите операцию'))
+        }
+        continue
+      }
+      this.write(q.line, q.id, q.gen)
+    }
   }
 
   private onLine(line: string): void {
