@@ -155,7 +155,8 @@ pub(crate) fn scan_hooks(c: &mut Ctx, client: Client, file: &str, root_ptr: &str
 /// Короткое имя хука: имя исполняемого файла первой команды (`& 'C:/x/ctxkit.exe' --lang ru` → `ctxkit`).
 /// Токены уже замаскированы: замаскированные, `ИМЯ=значение`, флаги и ключи вида `/c` пропускаем.
 fn hook_label(tokens: &[String]) -> String {
-    const RUNNERS: [&str; 8] = [
+    // Интерпретаторы и обёртки, за которыми стоит настоящая команда.
+    const RUNNERS: [&str; 15] = [
         "node",
         "python",
         "python3",
@@ -164,6 +165,13 @@ fn hook_label(tokens: &[String]) -> String {
         "bash",
         "sh",
         "cmd",
+        "nohup",
+        "disown",
+        "exec",
+        "env",
+        "sudo",
+        "time",
+        "start",
     ];
     let stem = |t: &str| {
         let base = t.rsplit(['/', '\\']).next().unwrap_or(t).to_owned();
@@ -171,11 +179,12 @@ fn hook_label(tokens: &[String]) -> String {
             .map_or(base.clone(), |(s, _)| s.to_owned())
     };
     let is_switch = |t: &str| t.len() == 2 && t.starts_with('/');
-    tokens
+    expand_nested(tokens, 0)
         .iter()
         .map(|t| t.trim_matches(|c| c == '&' || c == ';'))
         .filter(|t| {
             !t.is_empty()
+                && !t.contains('>') // перенаправления `>/dev/null`, `2>&1`
                 && !t.starts_with('-')
                 && !t.contains('=')
                 && !t.contains(mask::MASK)
@@ -184,6 +193,25 @@ fn hook_label(tokens: &[String]) -> String {
         .map(stem)
         .find(|s| !RUNNERS.contains(&s.to_ascii_lowercase().as_str()))
         .unwrap_or_else(|| "hook".to_owned())
+}
+
+/// Вложенная командная строка (`bash -c "tool --x"`) приходит одним токеном с пробелами:
+/// для метки раскрываем её в токены. Токен, у которого первое слово — путь, считаем одним путём с пробелами.
+fn expand_nested(tokens: &[String], depth: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for t in tokens {
+        let mut words = t.split_whitespace();
+        let first = words.next().unwrap_or("");
+        // Путь с пробелами: первое слово с разделителем и дальше ни одного флага (`-x`).
+        let looks_like_path = first.contains(['/', '\\']) && !words.any(|w| w.starts_with('-'));
+        let nested = t.contains(char::is_whitespace) && !looks_like_path;
+        if nested && depth < 3 {
+            out.extend(expand_nested(&mask::split_shell(t), depth + 1));
+        } else {
+            out.push(t.clone());
+        }
+    }
+    out
 }
 
 /// Заменяет `pat` на `~` без учёта регистра ASCII.
@@ -307,6 +335,25 @@ mod tests {
         );
         assert_eq!(label("cmd /c notify.cmd"), "notify");
         assert_eq!(label(""), "hook");
+    }
+
+    #[test]
+    fn label_skips_wrappers_and_redirects() {
+        // реальная форма хука SessionStart у владельца
+        assert_eq!(
+            label(
+                r#""C:/Program Files/Git/usr/bin/bash.exe" -lc "nohup bash $HOME/.claude/skill-sources/pull-skills.sh >/dev/null 2>&1 & disown""#
+            ),
+            "pull-skills"
+        );
+    }
+
+    #[test]
+    fn label_from_nested_command_lines() {
+        assert_eq!(label(r#"bash -c "tool --token N01""#), "tool");
+        assert_eq!(label(r#"sh -c "bash -c 'guard --api-key N02'""#), "guard");
+        assert_eq!(label(r#"node "C:/Program Files/x/hook.js""#), "hook");
+        assert_eq!(label(r#"bash -c "/usr/bin/tool --token N03""#), "tool");
     }
 
     #[test]

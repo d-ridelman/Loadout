@@ -124,6 +124,22 @@ fn mask_whole_arg(a: &str) -> Option<String> {
 
 /// Аргументы командной строки.
 pub fn mask_args(args: &[String]) -> Vec<String> {
+    mask_args_at(args, 0)
+}
+
+/// Глубже этого вложенность (`sh -c "bash -c '…'"`) не разбираем, а прячем целиком.
+const MAX_DEPTH: usize = 3;
+
+/// Аргумент с пробелом, который не поймали правила формы, — чаще всего вложенная командная строка
+/// (`bash -c "tool --token X"`). Разбираем его так же, как верхнюю.
+fn mask_nested(arg: &str, depth: usize) -> String {
+    if depth >= MAX_DEPTH {
+        return MASK.to_owned();
+    }
+    join_line(&mask_args_at(&split_shell(arg), depth + 1))
+}
+
+fn mask_args_at(args: &[String], depth: usize) -> Vec<String> {
     let mut out = Vec::with_capacity(args.len());
     let mut mask_next = false;
     for (i, a) in args.iter().enumerate() {
@@ -132,6 +148,8 @@ pub fn mask_args(args: &[String]) -> Vec<String> {
             mask_next = false;
         } else if let Some(m) = mask_whole_arg(a) {
             out.push(m);
+        } else if a.contains(char::is_whitespace) {
+            out.push(mask_nested(a, depth));
         } else if let Some((k, v)) = a.split_once('=') {
             out.push(if is_secret_key(k) || looks_like_token(v) {
                 format!("{k}={MASK}")
@@ -370,6 +388,28 @@ mod tests {
         assert_eq!(
             mask_line("& 'C:/Program Files/x/tool.exe' --lang ru"),
             "& \"C:/Program Files/x/tool.exe\" --lang ru"
+        );
+    }
+
+    /// Вложенная командная строка одним аргументом (`bash -c "…"`): бывший обход аудита №2.
+    #[test]
+    fn nested_command_lines() {
+        for (line, secret) in [
+            (r#"bash -c "tool --token N01""#, "N01"),
+            (r#"pwsh -Command "tool --api-key=N02 --user=bob""#, "N02"),
+            (r#"cmd /c "tool -H 'X-Api-Key: N03'""#, "N03"),
+            (r#"sh -c "bash -c 'tool --token N04'""#, "N04"),
+            (r#"sh -c "sh -c \"sh -c 'sh -c tool --token N05'\"""#, "N05"),
+        ] {
+            let out = mask_line(line);
+            assert!(!out.contains(secret), "{line} -> {out}");
+        }
+        let args = a(&["-c", "srv --api-key X1 --port 80"]);
+        assert!(!mask_args(&args).join(" ").contains("X1"));
+        // путь с пробелами не портится
+        assert_eq!(
+            mask_args(&a(&["C:/Program Files/x/tool.exe"])),
+            a(&["C:/Program Files/x/tool.exe"])
         );
     }
 
