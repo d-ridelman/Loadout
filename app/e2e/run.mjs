@@ -70,6 +70,25 @@ async function shot(page, name) {
   await page.screenshot({ path: join(stateDir, `${name}.png`) })
 }
 
+/** Шапка: каждый элемент в одну строку (не выше 36 px) и по центру строки (±2 px); справа не заходят под кнопки окна. */
+async function headerLayout(page, label) {
+  const m = await page.evaluate(() => {
+    const h = document.querySelector('header')
+    const hr = h.getBoundingClientRect()
+    const kids = [...h.children].filter((c) => !c.classList.contains('sp') && c.getClientRects().length > 0).map((c) => ({ c, r: c.getBoundingClientRect() }))
+    const area = navigator.windowControlsOverlay?.getTitlebarAreaRect()
+    const name = (c) => c.textContent.trim().slice(0, 20)
+    return {
+      tall: kids.filter(({ r }) => r.height > 36).map(({ c }) => name(c)),
+      off: kids.filter(({ r }) => Math.abs(r.top + r.height / 2 - (hr.top + hr.height / 2)) > 2).map(({ c }) => name(c)),
+      over: area ? Math.round(Math.max(...kids.map(({ r }) => r.right)) - (area.x + area.width)) : 0,
+    }
+  })
+  log(`  шапка ${label}:`, JSON.stringify(m))
+  must(m.tall.length === 0 && m.off.length === 0, `${label}: шапка: перенос строк ${JSON.stringify(m.tall)}, не по центру ${JSON.stringify(m.off)}`)
+  must(m.over <= 0, `${label}: шапка заходит под кнопки окна на ${m.over}px`)
+}
+
 /** Замер, а не «на глаз»: нет горизонтальной прокрутки страницы, нет обрезанных имён, колонки шапки и ячеек выровнены. */
 async function layout(page, label) {
   const m = await page.evaluate(() => {
@@ -81,19 +100,10 @@ async function layout(page, label) {
     const misaligned = ths.length && cells.length === ths.length
       ? ths.filter((th, i) => Math.abs(th.getBoundingClientRect().left - cells[i].getBoundingClientRect().left) > 1.5).length
       : 0
-    // шапка: каждый элемент в одну строку (не выше 36 px) и по центру строки (±2 px); справа не заходят под кнопки окна
-    const h = document.querySelector('header')
-    const hr = h.getBoundingClientRect()
-    const kids = [...h.children].filter((c) => !c.classList.contains('sp')).map((c) => ({ c, r: c.getBoundingClientRect() }))
-    const area = navigator.windowControlsOverlay?.getTitlebarAreaRect()
-    const headerTall = kids.filter(({ r }) => r.height > 36).map(({ c }) => c.textContent.trim().slice(0, 20))
-    const headerOff = kids.filter(({ r }) => Math.abs(r.top + r.height / 2 - (hr.top + hr.height / 2)) > 2).map(({ c }) => c.textContent.trim().slice(0, 20))
-    const headerOver = area ? Math.round(Math.max(...kids.map(({ r }) => r.right)) - (area.x + area.width)) : 0
-    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length, headerTall, headerOff, headerOver }
+    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length }
   })
   log(`  замер ${label}:`, JSON.stringify(m))
-  must(m.headerTall.length === 0 && m.headerOff.length === 0, `${label}: шапка: перенос строк ${JSON.stringify(m.headerTall)}, не по центру ${JSON.stringify(m.headerOff)}`)
-  must(m.headerOver <= 0, `${label}: шапка заходит под кнопки окна на ${m.headerOver}px`)
+  await headerLayout(page, label)
   must(m.hscroll <= 0, `${label}: горизонтальная прокрутка страницы (${m.hscroll}px)`)
   must(m.clipped === 0, `${label}: обрезанных имён: ${m.clipped}`)
   must(m.misaligned === 0, `${label}: колонки шапки и ячеек смещены`)
@@ -328,6 +338,10 @@ try {
   }
 
   // ---- живое обновление: правка конфига на диске меняет матрицу без кнопки «Скан» и без экрана «загрузка» ----
+  await resize(app, 1100, 700) // минимальный размер окна: шапка по-прежнему в одну строку
+  await page.waitForTimeout(250)
+  await headerLayout(page, 'ru@1100')
+  await shot(page, 'm1-matrix-1100')
   await resize(app, 1280, 800)
   await page.keyboard.press('1')
   await page.getByLabel('Поиск').fill('')
@@ -808,6 +822,10 @@ try {
     }
     await enOk('matrix')
     await layout(en, 'en-matrix@1280')
+    await resize(enApp, 1100, 700)
+    await en.waitForTimeout(250)
+    await headerLayout(en, 'en@1100')
+    await resize(enApp, 1280, 800)
     await shot(en, 'en-matrix-1280')
     for (const [key, name] of [['2', 'radar'], ['3', 'hooks'], ['4', 'doctor'], ['5', 'journal'], ['6', 'profiles'], ['7', 'ctxkit']]) {
       await en.keyboard.press(key)

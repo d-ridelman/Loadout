@@ -45,6 +45,13 @@ header button, header select, header label, header input { -webkit-app-region: n
 header { white-space: nowrap; }
 header > * { flex: none; }
 header label { display: inline-flex; align-items: center; gap: 6px; }
+/* узкое окно (минимум 1100): время скана пропадает (оно не нужно для работы; на 1280 и шире видно), промежутки и кнопки плотнее; «скан…» и «скан не удался» остаются и сжимаются с многоточием */
+header > #scanInfo { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1279px) {
+  header { gap: 8px; }
+  header button { padding: 4px 8px; }
+  header > #scanInfo[data-ready] { display: none; }
+}
 /* подложка диалога и палитры перекрывает верхние 48 px: клик по ней закрывает диалог, а не тянет окно */
 .modal, .palette { -webkit-app-region: no-drag; }
 .brand { display: inline-flex; align-items: center; gap: 10px; }

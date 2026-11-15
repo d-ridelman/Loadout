@@ -324,6 +324,8 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
   )
 
   const problems = findings.filter((f) => f.severity === 'error').length
+  const scanText =
+    scan.status === 'ready' ? t(`скан: ${scan.ms} мс`, `scan: ${scan.ms} ms`) : scan.status === 'loading' ? t('скан…', 'scan…') : t('скан не удался', 'scan failed')
 
   return (
     <div id="app" className={view === 'matrix' ? undefined : 'noaside'}>
@@ -334,13 +336,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
             LOAD<i>/</i>OUT
           </span>
         </span>
-        <span className="mute mono" id="scanInfo">
-          {scan.status === 'ready'
-            ? t(`скан: ${scan.ms} мс`, `scan: ${scan.ms} ms`)
-            : scan.status === 'loading'
-              ? t('скан…', 'scan…')
-              : t('скан не удался', 'scan failed')}
-        </span>
+        <span className="mute mono" id="scanInfo" title={scanText} data-ready={scan.status === 'ready' || undefined}>{scanText}</span>
         <span className="sp" />
         <label className="mute">
           FX{' '}
