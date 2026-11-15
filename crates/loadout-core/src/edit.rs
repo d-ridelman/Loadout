@@ -16,11 +16,13 @@ pub fn get_bool(format: Format, text: &str, path: &[String]) -> Result<Option<bo
     match format {
         Format::Json => with_json(text, path, |_, found| match found {
             Found::Value(Value::BooleanLit(b)) => Ok(Some(b.value)),
-            Found::Value(_) => Err("значение не булево".to_owned()),
+            Found::Value(_) => Err(crate::tr!("значение не булево", "value is not a boolean")),
             Found::Missing { .. } => Ok(None),
         }),
         Format::Toml => {
-            let doc: DocumentMut = text.parse().map_err(|_| "не TOML".to_owned())?;
+            let doc: DocumentMut = text
+                .parse()
+                .map_err(|_| crate::tr!("не TOML", "not TOML"))?;
             let mut item = doc.as_item();
             for k in path {
                 match item.as_table_like().and_then(|t| t.get(k)) {
@@ -30,12 +32,12 @@ pub fn get_bool(format: Format, text: &str, path: &[String]) -> Result<Option<bo
             }
             item.as_bool()
                 .map(Some)
-                .ok_or_else(|| "значение не булево".to_owned())
+                .ok_or_else(|| crate::tr!("значение не булево", "value is not a boolean"))
         }
-        Format::Yaml => Err(
-            "для YAML правка значений не поддержана: только вынос и возврат записи (yaml_edit)"
-                .to_owned(),
-        ),
+        Format::Yaml => Err(crate::tr!(
+            "для YAML правка значений не поддержана: только вынос и возврат записи (yaml_edit)",
+            "editing values in YAML is not supported: only moving an entry out and back (yaml_edit)"
+        )),
     }
 }
 
@@ -57,14 +59,21 @@ pub fn set_bool(
                     let r = b.range;
                     format!("{}{value}{}", &obj_text[..r.start], &obj_text[r.end..])
                 }
-                Found::Value(_) => return Err("значение не булево".to_owned()),
+                Found::Value(_) => {
+                    return Err(crate::tr!("значение не булево", "value is not a boolean"))
+                }
                 Found::Missing { obj, depth } => {
                     insert_json(obj_text, obj, &path[depth..], &value.to_string())?
                 }
             })
         })?,
         Format::Toml => set_toml(body, path, Leaf::Bool(value))?,
-        Format::Yaml => return Err("для YAML булевы флаги не поддержаны".to_owned()),
+        Format::Yaml => {
+            return Err(crate::tr!(
+                "для YAML булевы флаги не поддержаны",
+                "boolean flags are not supported for YAML"
+            ))
+        }
     };
     Ok(format!("{bom}{out}"))
 }
@@ -92,15 +101,20 @@ pub fn get_value(
     match format {
         Format::Json => {
             let v: serde_json::Value =
-                serde_json::from_str(text).map_err(|_| "не JSON".to_owned())?;
+                serde_json::from_str(text).map_err(|_| crate::tr!("не JSON", "not JSON"))?;
             Ok(path.iter().try_fold(&v, |cur, k| cur.get(k)).cloned())
         }
         Format::Toml => {
-            let t: toml::Table = text.parse().map_err(|_| "не TOML".to_owned())?;
+            let t: toml::Table = text
+                .parse()
+                .map_err(|_| crate::tr!("не TOML", "not TOML"))?;
             let v = serde_json::to_value(&t).map_err(|e| e.to_string())?;
             Ok(path.iter().try_fold(&v, |cur, k| cur.get(k)).cloned())
         }
-        Format::Yaml => Err("для YAML чтение значений по пути не поддержано".to_owned()),
+        Format::Yaml => Err(crate::tr!(
+            "для YAML чтение значений по пути не поддержано",
+            "reading values by path is not supported for YAML"
+        )),
     }
 }
 
@@ -122,18 +136,23 @@ pub fn put_value(
         )?,
         Format::Toml => {
             if !replace && get_value(Format::Toml, body, path)?.is_some() {
-                return Err("такой ключ уже есть".to_owned());
+                return Err(crate::tr!("такой ключ уже есть", "key already exists"));
             }
             set_toml(body, path, Leaf::Json(value))?
         }
-        Format::Yaml => return Err("для YAML запись значений не поддержана".to_owned()),
+        Format::Yaml => {
+            return Err(crate::tr!(
+                "для YAML запись значений не поддержана",
+                "writing values is not supported for YAML"
+            ))
+        }
     };
     Ok(format!("{bom}{out}"))
 }
 
 fn put_json_text(body: &str, path: &[String], raw: &str, replace: bool) -> Result<String, String> {
     with_json(body, path, |t, found| match found {
-        Found::Value(_) if !replace => Err("такой ключ уже есть".to_owned()),
+        Found::Value(_) if !replace => Err(crate::tr!("такой ключ уже есть", "key already exists")),
         Found::Value(v) => {
             let r = v.range();
             // многострочное значение встаёт с отступом строки, на которой начинается заменяемое
@@ -158,7 +177,8 @@ pub fn put_raw_json(
     raw: &str,
     replace: bool,
 ) -> Result<String, String> {
-    serde_json::from_str::<serde_json::Value>(raw).map_err(|_| "значение не JSON".to_owned())?;
+    serde_json::from_str::<serde_json::Value>(raw)
+        .map_err(|_| crate::tr!("значение не JSON", "value is not JSON"))?;
     let (bom, body) = split_bom(text);
     Ok(format!("{bom}{}", put_json_text(body, path, raw, replace)?))
 }
@@ -167,17 +187,22 @@ pub fn put_raw_json(
 /// Запятые соседей, остальные байты и CRLF не трогаются. Комментарии между свойствами и повтор ключа — отказ.
 pub fn cut_json(text: &str, path: &[String]) -> Result<(String, String), String> {
     let (bom, body) = split_bom(text);
-    let (key, parents) = path.split_last().ok_or_else(|| "пустой путь".to_owned())?;
+    let (key, parents) = path
+        .split_last()
+        .ok_or_else(|| crate::tr!("пустой путь", "empty path"))?;
     let parsed = parse_to_ast(body, &CollectOptions::default(), &ParseOptions::default())
-        .map_err(|_| "не JSON".to_owned())?;
+        .map_err(|_| crate::tr!("не JSON", "not JSON"))?;
     let Some(Value::Object(root)) = parsed.value else {
-        return Err("корень JSON не объект".to_owned());
+        return Err(crate::tr!(
+            "корень JSON не объект",
+            "JSON root is not an object"
+        ));
     };
     let mut obj = &root;
     for k in parents {
         match find(obj, k).map(|p| &p.value) {
             Some(Value::Object(o)) => obj = o,
-            _ => return Err("нет такого пути".to_owned()),
+            _ => return Err(crate::tr!("нет такого пути", "no such path")),
         }
     }
     let props = &obj.properties;
@@ -186,11 +211,10 @@ pub fn cut_json(text: &str, path: &[String]) -> Result<(String, String), String>
         .collect();
     let [i] = hits[..] else {
         return Err(if hits.is_empty() {
-            "нет такого ключа"
+            crate::tr!("нет такого ключа", "no such key")
         } else {
-            "ключ повторяется в файле"
-        }
-        .to_owned());
+            crate::tr!("ключ повторяется в файле", "key is repeated in the file")
+        });
     };
     let p = &props[i];
     let (ps, pe) = (p.range.start, p.range.end);
@@ -198,19 +222,28 @@ pub fn cut_json(text: &str, path: &[String]) -> Result<(String, String), String>
     let (from, to) = if props.len() == 1 {
         let (os, oe) = (obj.range().start, obj.range().end);
         if !(junk(&body[os + 1..ps]) && junk(&body[pe..oe - 1])) {
-            return Err("рядом с записью комментарий".to_owned());
+            return Err(crate::tr!(
+                "рядом с записью комментарий",
+                "a comment sits next to the entry"
+            ));
         }
         (os + 1, oe - 1)
     } else if i + 1 < props.len() {
         let next = props[i + 1].range.start;
         if !junk(&body[pe..next]) {
-            return Err("рядом с записью комментарий".to_owned());
+            return Err(crate::tr!(
+                "рядом с записью комментарий",
+                "a comment sits next to the entry"
+            ));
         }
         (ps, next)
     } else {
         let prev = props[i - 1].range.end;
         if !junk(&body[prev..ps]) {
-            return Err("рядом с записью комментарий".to_owned());
+            return Err(crate::tr!(
+                "рядом с записью комментарий",
+                "a comment sits next to the entry"
+            ));
         }
         (prev, pe)
     };
@@ -287,12 +320,15 @@ fn with_json<T>(
     f: impl FnOnce(&str, Found<'_, '_>) -> Result<T, String>,
 ) -> Result<T, String> {
     if path.is_empty() {
-        return Err("пустой путь".to_owned());
+        return Err(crate::tr!("пустой путь", "empty path"));
     }
     let parsed = parse_to_ast(text, &CollectOptions::default(), &ParseOptions::default())
-        .map_err(|_| "не JSON".to_owned())?;
+        .map_err(|_| crate::tr!("не JSON", "not JSON"))?;
     let Some(Value::Object(root)) = parsed.value else {
-        return Err("корень JSON не объект".to_owned());
+        return Err(crate::tr!(
+            "корень JSON не объект",
+            "JSON root is not an object"
+        ));
     };
     let mut obj = &root;
     for (depth, key) in path.iter().enumerate() {
@@ -302,7 +338,12 @@ fn with_json<T>(
             (Some(p), true) => return f(text, Found::Value(&p.value)),
             (Some(p), false) => match &p.value {
                 Value::Object(o) => obj = o,
-                _ => return Err("на пути лежит не объект".to_owned()),
+                _ => {
+                    return Err(crate::tr!(
+                        "на пути лежит не объект",
+                        "a non-object lies on the path"
+                    ))
+                }
             },
         }
     }
@@ -363,7 +404,10 @@ fn insert_json(
             // `{}` или `{ }`: комментарий внутри потерять нельзя, такой файл не трогаем
             let inner = &text[start + 1..end - 1];
             if !inner.trim().is_empty() {
-                return Err("в пустом объекте есть комментарий".to_owned());
+                return Err(crate::tr!(
+                    "в пустом объекте есть комментарий",
+                    "an empty object contains a comment"
+                ));
             }
             let base = line_indent(text, start);
             let indent = format!("{base}  ");
@@ -386,14 +430,24 @@ fn to_item(v: &serde_json::Value) -> Result<Item, String> {
         J::Number(n) => match (n.as_i64(), n.as_f64()) {
             (Some(i), _) => toml_edit::value(i),
             (None, Some(f)) => toml_edit::value(f),
-            _ => return Err("число не помещается в TOML".to_owned()),
+            _ => {
+                return Err(crate::tr!(
+                    "число не помещается в TOML",
+                    "number does not fit in TOML"
+                ))
+            }
         },
         J::Array(a) => {
             let mut arr = toml_edit::Array::new();
             for x in a {
                 match to_item(x)? {
                     Item::Value(v) => arr.push(v),
-                    _ => return Err("таблица внутри массива не переносится".to_owned()),
+                    _ => {
+                        return Err(crate::tr!(
+                            "таблица внутри массива не переносится",
+                            "a table inside an array cannot be moved"
+                        ))
+                    }
                 }
             }
             Item::Value(toml_edit::Value::Array(arr))
@@ -405,19 +459,31 @@ fn to_item(v: &serde_json::Value) -> Result<Item, String> {
             }
             Item::Table(t)
         }
-        J::Null => return Err("null не переносится в TOML".to_owned()),
+        J::Null => {
+            return Err(crate::tr!(
+                "null не переносится в TOML",
+                "null cannot be moved to TOML"
+            ))
+        }
     })
 }
 
 fn set_toml(text: &str, path: &[String], leaf: Leaf<'_>) -> Result<String, String> {
-    let (last, parents) = path.split_last().ok_or_else(|| "пустой путь".to_owned())?;
+    let (last, parents) = path
+        .split_last()
+        .ok_or_else(|| crate::tr!("пустой путь", "empty path"))?;
     let crlf = text.contains("\r\n");
     let only_crlf = crlf && !text.replace("\r\n", "").contains('\n');
     if crlf && !only_crlf {
         // toml_edit пишет новые и перенесённые строки через `\n`: в смешанном файле поменялись бы байты вне правки
-        return Err("в файле смешанные переводы строк (CRLF и LF): правка отказана".to_owned());
+        return Err(crate::tr!(
+            "в файле смешанные переводы строк (CRLF и LF): правка отказана",
+            "the file has mixed line endings (CRLF and LF): edit refused"
+        ));
     }
-    let mut doc: DocumentMut = text.parse().map_err(|_| "не TOML".to_owned())?;
+    let mut doc: DocumentMut = text
+        .parse()
+        .map_err(|_| crate::tr!("не TOML", "not TOML"))?;
     let mut t: &mut dyn TableLike = doc.as_table_mut();
     for (i, k) in parents.iter().enumerate() {
         if !t.contains_key(k) {
@@ -429,14 +495,16 @@ fn set_toml(text: &str, path: &[String], leaf: Leaf<'_>) -> Result<String, Strin
         t = t
             .get_mut(k)
             .and_then(Item::as_table_like_mut)
-            .ok_or_else(|| "на пути лежит не таблица".to_owned())?;
+            .ok_or_else(|| {
+                crate::tr!("на пути лежит не таблица", "a non-table lies on the path")
+            })?;
     }
     match (t.get_mut(last), leaf) {
         (Some(item), Leaf::Bool(b)) => {
             let v = item
                 .as_value_mut()
                 .filter(|v| v.is_bool())
-                .ok_or_else(|| "значение не булево".to_owned())?;
+                .ok_or_else(|| crate::tr!("значение не булево", "value is not a boolean"))?;
             let decor = v.decor().clone(); // пробелы и комментарий в конце строки
             *v = toml_edit::Value::from(b);
             *v.decor_mut() = decor;
@@ -453,7 +521,12 @@ fn set_toml(text: &str, path: &[String], leaf: Leaf<'_>) -> Result<String, Strin
                     *v = nv;
                     *v.decor_mut() = decor;
                 }
-                _ => return Err("заменять таблицу целиком нельзя".to_owned()),
+                _ => {
+                    return Err(crate::tr!(
+                        "заменять таблицу целиком нельзя",
+                        "a table cannot be replaced as a whole"
+                    ))
+                }
             }
         }
         (None, Leaf::Json(j)) => {

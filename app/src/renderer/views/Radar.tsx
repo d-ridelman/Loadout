@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n'
 import { CLIENTS } from '../../shared/model'
 import type { ClientId, Entity } from '../../shared/model'
 import type { Finding } from '../doctor'
@@ -27,13 +28,13 @@ export function Radar({ entities, findings, activeClient, onClient, onDoctor }: 
   }
   return (
     <div className="radar">
-      <Panel title="Радар клиентов">
+      <Panel title={t('Радар клиентов', 'Client radar')}>
         <div className="rwrap">
           <div className="rcirc" />
           <div className="beam fx" />
           <div className="rcenter">
             <div className="mono big">{entities.length}</div>
-            <div className="mute mono small">записей</div>
+            <div className="mute mono small">{t('записей', 'entries')}</div>
           </div>
           {CLIENTS.map((c, i) => {
             const s = stat(c.id)
@@ -44,7 +45,7 @@ export function Radar({ entities, findings, activeClient, onClient, onDoctor }: 
                 className="node"
                 style={{ left: `${POS[i]?.[0] ?? 50}%`, top: `${POS[i]?.[1] ?? 50}%` }}
                 aria-pressed={activeClient === c.id}
-                aria-label={`${c.name}: записей ${s.n}, проблем ${s.bad + s.warn}`}
+                aria-label={t(`${c.name}: записей ${s.n}, проблем ${s.bad + s.warn}`, `${c.name}: ${s.n} entries, ${s.bad + s.warn} issues`)}
                 onClick={() => onClient(c.id)}
               >
                 <b>{c.name}</b>
@@ -58,7 +59,7 @@ export function Radar({ entities, findings, activeClient, onClient, onDoctor }: 
         </div>
       </Panel>
       <div>
-        <Panel title="По типам">
+        <Panel title={t('По типам', 'By type')}>
           <dl className="kv">
             {KINDS.map((k) => (
               <div key={k} className="kvrow">
@@ -68,7 +69,7 @@ export function Radar({ entities, findings, activeClient, onClient, onDoctor }: 
             ))}
           </dl>
         </Panel>
-        <Panel title={`Проблемы (${findings.filter((f) => f.severity !== 'info').length})`}>
+        <Panel title={t(`Проблемы (${findings.filter((f) => f.severity !== 'info').length})`, `Issues (${findings.filter((f) => f.severity !== 'info').length})`)}>
           {findings
             .filter((f) => f.severity !== 'info')
             .slice(0, 5)
@@ -80,8 +81,8 @@ export function Radar({ entities, findings, activeClient, onClient, onDoctor }: 
                 {f.title}
               </div>
             ))}
-          {findings.every((f) => f.severity === 'info') ? <p className="mute">Проблем не найдено.</p> : null}
-          <button onClick={onDoctor}>Открыть Доктора</button>
+          {findings.every((f) => f.severity === 'info') ? <p className="mute">{t('Проблем не найдено.', 'No issues found.')}</p> : null}
+          <button onClick={onDoctor}>{t('Открыть Доктора', 'Open Doctor')}</button>
         </Panel>
       </div>
     </div>

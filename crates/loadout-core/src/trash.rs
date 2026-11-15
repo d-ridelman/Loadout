@@ -64,12 +64,16 @@ pub fn read(store: &Path, id: &str) -> Option<Item> {
 
 pub fn write(store: &Path, item: &Item) -> Result<(), String> {
     if !valid_id(&item.id) {
-        return Err("неверный id записи корзины".into());
+        return Err(crate::tr!(
+            "неверный id записи корзины",
+            "invalid trash entry id"
+        ));
     }
-    std::fs::create_dir_all(store.join("trash")).map_err(|e| format!("корзина недоступна: {e}"))?;
+    std::fs::create_dir_all(store.join("trash"))
+        .map_err(|e| crate::tr!("корзина недоступна: {e}", "trash is unavailable: {e}"))?;
     let json = serde_json::to_vec_pretty(item).map_err(|e| e.to_string())?;
     crate::write::write_synced(&file_of(store, &item.id), &json)
-        .map_err(|e| format!("корзина не записана: {e}"))
+        .map_err(|e| crate::tr!("корзина не записана: {e}", "trash was not written: {e}"))
 }
 
 pub fn remove(store: &Path, id: &str) {
@@ -118,7 +122,10 @@ pub fn inject(c: &mut Ctx, store: &Path) {
             it.file.clone(),
             it.pointer.clone(),
         )
-        .note("в корзине Loadout: запись вырезана из файла клиента и вернётся при включении")
+        .note(crate::tr!(
+            "в корзине Loadout: запись вырезана из файла клиента и вернётся при включении",
+            "in the Loadout trash: the entry was cut out of the client file and will return when turned on"
+        ))
         .detail(detail)
         .target(Target {
             file: PathBuf::from(&it.path),

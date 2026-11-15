@@ -18,25 +18,46 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Почему запись нельзя переключить (показывается в инспекторе).
-pub fn why_not(e: &Entity) -> &'static str {
+pub fn why_not(e: &Entity) -> String {
     match (e.client, e.kind) {
         (Client::ClaudeCode, Kind::Plugin) if e.state == State::Broken => {
-            "плагин не установлен: переключать нечего"
+            crate::tr!(
+                "плагин не установлен: переключать нечего",
+                "plugin is not installed: nothing to toggle"
+            )
         }
         (Client::ClaudeCode, Kind::Plugin) => {
-            "флаг включения лежит в настройках проекта, а проекты Loadout не читает"
+            crate::tr!(
+                "флаг включения лежит в настройках проекта, а проекты Loadout не читает",
+                "the enable flag is in project settings, and Loadout does not read projects"
+            )
         }
         (Client::Codex, Kind::Connector) => {
-            "запись кеша каталога удалённых плагинов, а не подключение"
+            crate::tr!(
+                "запись кеша каталога удалённых плагинов, а не подключение",
+                "an entry of the remote plugin catalog cache, not a connection"
+            )
         }
         (Client::ClaudeCode, Kind::Connector) => {
-            "запрещён в deniedMcpServers по имени: ключ disableClaudeAiConnectors этого не снимает"
+            crate::tr!(
+                "запрещён в deniedMcpServers по имени: ключ disableClaudeAiConnectors этого не снимает",
+                "denied by name in deniedMcpServers: the disableClaudeAiConnectors key does not lift this"
+            )
         }
         (Client::DeepSeek, Kind::Mcp) => {
-            "запись не определилась как блок `- id: …` в cordis.patch.yml: вынос по строкам для неё не поддержан"
+            crate::tr!(
+                "запись не определилась как блок `- id: …` в cordis.patch.yml: вынос по строкам для неё не поддержан",
+                "the entry was not recognized as a `- id: …` block in cordis.patch.yml: line-based removal is not supported for it"
+            )
         }
-        (_, Kind::Mcp) => "запись лежит в проекте или в плагине: их файлы Loadout не правит",
-        _ => "правка записей этого типа не поддержана",
+        (_, Kind::Mcp) => crate::tr!(
+            "запись лежит в проекте или в плагине: их файлы Loadout не правит",
+            "the entry is in a project or a plugin: Loadout does not edit their files"
+        ),
+        _ => crate::tr!(
+            "правка записей этого типа не поддержана",
+            "editing entries of this type is not supported"
+        ),
     }
 }
 
@@ -192,28 +213,36 @@ struct Prepared {
 }
 
 fn find<'a>(scan: &'a ScanResult, id: &str) -> Result<&'a Entity, String> {
-    scan.entities
-        .iter()
-        .find(|e| e.id == id)
-        .ok_or_else(|| "запись не найдена: обновите список".to_owned())
+    scan.entities.iter().find(|e| e.id == id).ok_or_else(|| {
+        crate::tr!(
+            "запись не найдена: обновите список",
+            "entry not found: refresh the list"
+        )
+    })
 }
 
 /// Файл клиента: из списка разрешённых и не символьная ссылка (запись заменила бы ссылку, а не файл за ней).
 fn guard_file(home: &Path, file: &Path) -> Result<(), String> {
     if !allowed(home, file) {
-        return Err("файл не входит в список разрешённых для записи".into());
+        return Err(crate::tr!(
+            "файл не входит в список разрешённых для записи",
+            "the file is not on the list of files allowed for writing"
+        ));
     }
     match std::fs::symlink_metadata(file) {
-        Ok(m) if m.file_type().is_symlink() => {
-            Err("файл клиента — символьная ссылка: запись заменила бы ссылку, а не файл".into())
-        }
+        Ok(m) if m.file_type().is_symlink() => Err(crate::tr!(
+            "файл клиента — символьная ссылка: запись заменила бы ссылку, а не файл",
+            "the client file is a symbolic link: writing would replace the link, not the file"
+        )),
         _ => Ok(()),
     }
 }
 
 fn read_text(file: &Path) -> Result<(Vec<u8>, String), String> {
-    let old = std::fs::read(file).map_err(|_| "файл клиента не прочитан".to_owned())?;
-    let text = String::from_utf8(old.clone()).map_err(|_| "файл клиента не в UTF-8".to_owned())?;
+    let old = std::fs::read(file)
+        .map_err(|_| crate::tr!("файл клиента не прочитан", "could not read the client file"))?;
+    let text = String::from_utf8(old.clone())
+        .map_err(|_| crate::tr!("файл клиента не в UTF-8", "the client file is not UTF-8"))?;
     Ok((old, text))
 }
 
@@ -255,16 +284,40 @@ fn plan_for(e: &Entity, op: &str, level: &str, file: String, old: &[u8]) -> Plan
     }
 }
 
+fn empty_path() -> String {
+    crate::tr!("пустой путь", "empty path")
+}
+
+fn cannot_restore(e: impl std::fmt::Display) -> String {
+    crate::tr!(
+        "вернуть запись нельзя: {e}",
+        "cannot restore the entry: {e}"
+    )
+}
+
+fn target_file_missing() -> String {
+    crate::tr!(
+        "файл клиента-получателя не найден: клиент не установлен",
+        "the target client file was not found: the client is not installed"
+    )
+}
+
+fn entry_missing() -> String {
+    crate::tr!("записи нет в файле", "the entry is not in the file")
+}
+
+fn bad_yaml_path() -> String {
+    crate::tr!("неверный путь записи YAML", "invalid YAML entry path")
+}
+
 /// Номер операции и номер записи из пути цели DeepSeek (`[oi, "insert", ei]`).
 fn yaml_pos(path: &[String]) -> Result<(usize, usize), String> {
     match path {
         [oi, k, ei] if k == "insert" => Ok((
-            oi.parse()
-                .map_err(|_| "неверный путь записи YAML".to_owned())?,
-            ei.parse()
-                .map_err(|_| "неверный путь записи YAML".to_owned())?,
+            oi.parse().map_err(|_| bad_yaml_path())?,
+            ei.parse().map_err(|_| bad_yaml_path())?,
         )),
-        _ => Err("неверный путь записи YAML".into()),
+        _ => Err(bad_yaml_path()),
     }
 }
 
@@ -276,7 +329,7 @@ fn prep_toggle(
     enable: bool,
 ) -> Result<Prepared, String> {
     let e = find(scan, id)?;
-    let t = e.target.clone().ok_or_else(|| why_not(e).to_owned())?;
+    let t = e.target.clone().ok_or_else(|| why_not(e))?;
     guard_file(home, &t.file)?;
     let (old, text) = read_text(&t.file)?;
     let mut plan = plan_for(e, "toggle", "R1", e.origin.file.clone(), &old);
@@ -292,16 +345,16 @@ fn prep_toggle(
             // Словами «включено/выключено», а не значением ключа: у `disableClaudeAiConnectors` `true` значит «выключено».
             let word = |on: bool| {
                 if on {
-                    "включено"
+                    crate::tr!("включено", "enabled")
                 } else {
-                    "выключено"
+                    crate::tr!("выключено", "disabled")
                 }
             };
             plan.from = cur.map_or_else(
-                || "не задан".to_owned(),
-                |b| word(b != t.inverted).to_owned(),
+                || crate::tr!("не задан", "not set"),
+                |b| word(b != t.inverted),
             );
-            plan.to = word(enable).to_owned();
+            plan.to = word(enable);
             if !plan.noop {
                 new = edit::set_bool(t.format, &text, &t.path, want)?.into_bytes();
             }
@@ -320,16 +373,15 @@ fn prep_toggle(
         TargetKind::Cut => {
             plan.level = "R2".into();
             plan.noop = enable;
-            plan.from = "включено".into();
+            plan.from = crate::tr!("включено", "enabled");
             plan.to = if enable {
-                "включено"
+                crate::tr!("включено", "enabled")
             } else {
-                "в корзине Loadout"
-            }
-            .into();
+                crate::tr!("в корзине Loadout", "in Loadout trash")
+            };
             if !enable {
                 plan.trash = "out".into();
-                let (key, parent) = t.path.split_last().ok_or("пустой путь")?;
+                let (key, parent) = t.path.split_last().ok_or_else(empty_path)?;
                 let stale = store.and_then(|s| trash::read(s, &e.id));
                 let mut anchor = None;
                 let (nt, raw) = match t.format {
@@ -343,7 +395,10 @@ fn prep_toggle(
                 // Копия с этим id в корзине, пока запись жива в файле, — след прежнего выноса (запись вернули руками).
                 // Тот же текст можно перезаписать (прежняя копия остаётся в манифесте), другой — нельзя: он пропал бы.
                 if stale.as_ref().is_some_and(|s| s.value != raw) {
-                    return Err("в корзине уже лежит другая запись с этим id: верните её (включите) или разберитесь вручную, иначе она потеряется".into());
+                    return Err(crate::tr!(
+                        "в корзине уже лежит другая запись с этим id: верните её (включите) или разберитесь вручную, иначе она потеряется",
+                        "Loadout trash already holds a different entry with this id: restore it (enable) or sort it out manually, otherwise it will be lost"
+                    ));
                 }
                 new = nt.into_bytes();
                 trash = Some(TrashChange {
@@ -371,9 +426,10 @@ fn prep_toggle(
                     }),
                 });
                 inverse = Some(true);
-                plan.notes.push(
-                    "Запись вырезается из файла клиента и лежит в корзине Loadout; клиент её больше не запускает. Включение вернёт её на то же место.".into(),
-                );
+                plan.notes.push(crate::tr!(
+                    "Запись вырезается из файла клиента и лежит в корзине Loadout; клиент её больше не запускает. Включение вернёт её на то же место.",
+                    "The entry is cut out of the client file and kept in Loadout trash; the client no longer launches it. Enabling puts it back in the same place."
+                ));
             }
         }
         TargetKind::Restore(src) => {
@@ -383,23 +439,31 @@ fn prep_toggle(
                 plan.trash = "in".into();
             }
             plan.from = match src {
-                Source::Trash(_) => "в корзине Loadout",
-                Source::Stash(_) => "в стэше владельца",
-            }
-            .into();
+                Source::Trash(_) => crate::tr!("в корзине Loadout", "in Loadout trash"),
+                Source::Stash(_) => crate::tr!("в стэше владельца", "in the owner's stash"),
+            };
             plan.to = if enable {
-                "включено".to_owned()
+                crate::tr!("включено", "enabled")
             } else {
                 plan.from.clone()
             };
             if enable {
                 let (base, raw, live) = match src {
                     Source::Trash(tid) => {
-                        let s = store
-                            .ok_or("корзина недоступна: ядро запущено без каталога бэкапов")?;
-                        let it = trash::read(s, tid).ok_or("запись корзины не найдена")?;
+                        let s = store.ok_or_else(|| {
+                            crate::tr!(
+                                "корзина недоступна: ядро запущено без каталога бэкапов",
+                                "trash is unavailable: the core runs without a backup directory"
+                            )
+                        })?;
+                        let it = trash::read(s, tid).ok_or_else(|| {
+                            crate::tr!("запись корзины не найдена", "trash entry not found")
+                        })?;
                         if Path::new(&it.path) != t.file {
-                            return Err("запись корзины относится к другому файлу".into());
+                            return Err(crate::tr!(
+                                "запись корзины относится к другому файлу",
+                                "the trash entry belongs to a different file"
+                            ));
                         }
                         let mut live = it.parent.clone();
                         live.push(it.key.clone());
@@ -408,9 +472,9 @@ fn prep_toggle(
                             // возврат строк DeepSeek на прежнее место списка (`yaml_edit::put` сверяет результат)
                             let (oi, ei) = yaml_pos(&t.path)?;
                             yaml_edit::check_anchor(&text, oi, it.anchor.as_deref())
-                                .map_err(|e| format!("вернуть запись нельзя: {e}"))?;
-                            let put = yaml_edit::put(&text, oi, ei, &raw)
-                                .map_err(|e| format!("вернуть запись нельзя: {e}"))?;
+                                .map_err(cannot_restore)?;
+                            let put =
+                                yaml_edit::put(&text, oi, ei, &raw).map_err(cannot_restore)?;
                             trash = Some(TrashChange {
                                 id: tid.clone(),
                                 before: Some(it),
@@ -435,12 +499,12 @@ fn prep_toggle(
                     }
                     Source::Stash(_) => {
                         let (nt, raw) = edit::cut_json(&text, &t.path)?;
-                        let key = t.path.last().ok_or("пустой путь")?.clone();
+                        let key = t.path.last().ok_or_else(empty_path)?.clone();
                         (nt, raw, vec!["mcpServers".to_owned(), key])
                     }
                 };
                 new = edit::put_raw_json(&base, &live, &raw, false)
-                    .map_err(|e| format!("вернуть запись нельзя: {e}"))?
+                    .map_err(cannot_restore)?
                     .into_bytes();
                 inverse = Some(false);
             }
@@ -469,21 +533,32 @@ fn prep_edit(
     args: &[String],
 ) -> Result<Prepared, String> {
     let e = find(scan, id)?;
-    let s = e
-        .src
-        .clone()
-        .ok_or("запись нельзя править: она не в файле клиента")?;
+    let s = e.src.clone().ok_or_else(|| {
+        crate::tr!(
+            "запись нельзя править: она не в файле клиента",
+            "the entry cannot be edited: it is not in a client file"
+        )
+    })?;
     guard_file(home, &s.file)?;
     if command.trim().is_empty() || !clean_arg(command) {
-        return Err("команда пустая, слишком длинная или с управляющими символами".into());
+        return Err(crate::tr!(
+            "команда пустая, слишком длинная или с управляющими символами",
+            "the command is empty, too long, or contains control characters"
+        ));
     }
     if args.len() > 64 || !args.iter().all(|a| clean_arg(a)) {
-        return Err("аргументы: не больше 64, до 500 знаков, без управляющих символов".into());
+        return Err(crate::tr!(
+            "аргументы: не больше 64, до 500 знаков, без управляющих символов",
+            "arguments: at most 64, up to 500 characters each, no control characters"
+        ));
     }
     let (old, text) = read_text(&s.file)?;
-    let entry = edit::get_value(s.format, &text, &s.path)?.ok_or("записи нет в файле")?;
+    let entry = edit::get_value(s.format, &text, &s.path)?.ok_or_else(entry_missing)?;
     if entry.get("command").and_then(Value::as_str).is_none() {
-        return Err("у записи нет command: это не локальный сервер (адрес править нельзя)".into());
+        return Err(crate::tr!(
+            "у записи нет command: это не локальный сервер (адрес править нельзя)",
+            "the entry has no command: it is not a local server (the address cannot be edited)"
+        ));
     }
     let key = |k: &str| {
         let mut p = s.path.clone();
@@ -500,8 +575,10 @@ fn prep_edit(
     now.extend(args.iter().cloned());
     plan.to = masked_line(&now);
     plan.noop = new_text.as_bytes() == old.as_slice();
-    plan.notes
-        .push("Заменяются только command и args; env и заголовки не меняются. Секретные на вид значения в предпросмотре и журнале скрыты.".into());
+    plan.notes.push(crate::tr!(
+        "Заменяются только command и args; env и заголовки не меняются. Секретные на вид значения в предпросмотре и журнале скрыты.",
+        "Only command and args are replaced; env and headers are unchanged. Secret-looking values are hidden in the preview and the journal."
+    ));
     Ok(Prepared {
         plan,
         entity: e.id.clone(),
@@ -534,7 +611,9 @@ fn client_target(home: &Path, c: Client) -> Option<(PathBuf, Format, &'static st
 
 /// Запись MCP в формате получателя. Что не переносится, возвращается именами ключей.
 fn translate(v: &Value, to: Client) -> Result<(Value, Vec<String>), String> {
-    let obj = v.as_object().ok_or("запись не объект")?;
+    let obj = v
+        .as_object()
+        .ok_or_else(|| crate::tr!("запись не объект", "the entry is not an object"))?;
     let mut out = serde_json::Map::new();
     let mut skipped = Vec::new();
     for (k, val) in obj {
@@ -563,33 +642,48 @@ fn translate(v: &Value, to: Client) -> Result<(Value, Vec<String>), String> {
 
 fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepared, String> {
     let e = find(scan, id)?;
-    let s = e
-        .src
-        .clone()
-        .ok_or("запись нельзя копировать: она не в файле клиента")?;
+    let s = e.src.clone().ok_or_else(|| {
+        crate::tr!(
+            "запись нельзя копировать: она не в файле клиента",
+            "the entry cannot be copied: it is not in a client file"
+        )
+    })?;
     guard_file(home, &s.file)?;
-    let dest = Client::from_slug(to).ok_or("неизвестный клиент-получатель")?;
+    let dest = Client::from_slug(to)
+        .ok_or_else(|| crate::tr!("неизвестный клиент-получатель", "unknown target client"))?;
     if dest == e.client {
-        return Err("получатель совпадает с источником".into());
+        return Err(crate::tr!(
+            "получатель совпадает с источником",
+            "the target is the same as the source"
+        ));
     }
-    let (file, format, root) = client_target(home, dest)
-        .ok_or("в этого клиента копировать нельзя: формат файла не поддержан")?;
+    let (file, format, root) = client_target(home, dest).ok_or_else(|| {
+        crate::tr!(
+            "в этого клиента копировать нельзя: формат файла не поддержан",
+            "copying into this client is not possible: the file format is not supported"
+        )
+    })?;
     guard_file(home, &file)?;
-    let key = s.path.last().ok_or("пустой путь")?.clone();
+    let key = s.path.last().ok_or_else(empty_path)?.clone();
     if mask::safe_name(&key).is_none() {
-        return Err("имя записи недопустимо для копирования".into());
+        return Err(crate::tr!(
+            "имя записи недопустимо для копирования",
+            "the entry name is not valid for copying"
+        ));
     }
     let (_, src_text) = read_text(&s.file)?;
-    let entry = edit::get_value(s.format, &src_text, &s.path)?.ok_or("записи нет в файле")?;
-    let (old, text) = read_text(&file)
-        .map_err(|_| "файл клиента-получателя не найден: клиент не установлен".to_owned())?;
+    let entry = edit::get_value(s.format, &src_text, &s.path)?.ok_or_else(entry_missing)?;
+    let (old, text) = read_text(&file).map_err(|_| target_file_missing())?;
     let path = vec![root.to_owned(), key.clone()];
     if edit::get_value(format, &text, &path)?.is_some()
         || scan.entities.iter().any(|o| {
             o.client == dest && o.kind == Kind::Mcp && o.scope == "user" && o.name == e.name
         })
     {
-        return Err("в клиенте-получателе уже есть запись с таким именем".into());
+        return Err(crate::tr!(
+            "в клиенте-получателе уже есть запись с таким именем",
+            "the target client already has an entry with this name"
+        ));
     }
     let (value, skipped) = translate(&entry, dest)?;
     // Запись без command и url у получателя мертва: так бывает, когда адрес лежит в другом ключе (`serverUrl`),
@@ -601,13 +695,18 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
             .is_some_and(|s| !s.is_empty())
     };
     if !has("command") && !has("url") {
-        return Err(format!(
-            "запись не переносится: после перевода у неё нет ни command, ни url{}",
-            if skipped.is_empty() {
-                String::new()
-            } else {
-                format!(" (не распознаны ключи: {})", skipped.join(", "))
-            }
+        let hint = if skipped.is_empty() {
+            String::new()
+        } else {
+            crate::tr!(
+                " (не распознаны ключи: {})",
+                " (unrecognized keys: {})",
+                skipped.join(", ")
+            )
+        };
+        return Err(crate::tr!(
+            "запись не переносится: после перевода у неё нет ни command, ни url{hint}",
+            "the entry is not copied: after translation it has neither command nor url{hint}"
         ));
     }
     let new_text = edit::put_value(format, &text, &path, &value, false)?;
@@ -619,8 +718,8 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
         Format::Toml if key.contains('.') => format!("{root}.\"{key}\""),
         Format::Toml => format!("{root}.{key}"),
     };
-    plan.from = "нет записи".into();
-    plan.to = format!("копия: {}", {
+    plan.from = crate::tr!("нет записи", "no entry");
+    let shown = {
         let t = tokens_of(&value);
         if t.is_empty() {
             value
@@ -630,7 +729,8 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
         } else {
             masked_line(&t)
         }
-    });
+    };
+    plan.to = crate::tr!("копия: {shown}", "copy: {shown}");
     let env_keys = mask::mcp_detail(&entry)
         .get("envKeys")
         .and_then(Value::as_array)
@@ -642,13 +742,17 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
         })
         .unwrap_or_default();
     if !env_keys.is_empty() {
-        plan.notes.push(format!(
-            "Копируются ключи env: {env_keys}. Значения (в том числе секреты) переносятся как есть и в окне не показываются."
+        plan.notes.push(crate::tr!(
+            "Копируются ключи env: {env_keys}. Значения (в том числе секреты) переносятся как есть и в окне не показываются.",
+            "env keys are copied: {env_keys}. Values (including secrets) are copied as is and are not shown in the window."
         ));
     }
     if !skipped.is_empty() {
-        plan.notes
-            .push(format!("Не переносятся: {}.", skipped.join(", ")));
+        plan.notes.push(crate::tr!(
+            "Не переносятся: {}.",
+            "Not copied: {}.",
+            skipped.join(", ")
+        ));
     }
     Ok(Prepared {
         plan,
@@ -667,9 +771,14 @@ fn prep_add(
     a: (&str, &str, &str, &[String], &str, &[EnvPair]),
 ) -> Result<Prepared, String> {
     let (to, name, command, args, url, env) = a;
-    let dest = Client::from_slug(to).ok_or("неизвестный клиент")?;
-    let (file, format, root) = client_target(home, dest)
-        .ok_or("в этого клиента добавлять нельзя: формат файла не поддержан")?;
+    let dest =
+        Client::from_slug(to).ok_or_else(|| crate::tr!("неизвестный клиент", "unknown client"))?;
+    let (file, format, root) = client_target(home, dest).ok_or_else(|| {
+        crate::tr!(
+            "в этого клиента добавлять нельзя: формат файла не поддержан",
+            "adding to this client is not possible: the file format is not supported"
+        )
+    })?;
     guard_file(home, &file)?;
     if name.is_empty()
         || name.len() > 64
@@ -678,27 +787,37 @@ fn prep_add(
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
         || mask::safe_name(name).is_none()
     {
-        return Err("имя: до 64 знаков из букв, цифр, `-`, `_` и `.`".into());
+        return Err(crate::tr!(
+            "имя: до 64 знаков из букв, цифр, `-`, `_` и `.`",
+            "name: up to 64 characters: letters, digits, `-`, `_` and `.`"
+        ));
     }
     let remote = !url.trim().is_empty();
     let local = !command.trim().is_empty();
     if remote == local {
-        return Err(
-            "нужен либо command (локальный сервер), либо url (удалённый), но не оба сразу".into(),
-        );
+        return Err(crate::tr!(
+            "нужен либо command (локальный сервер), либо url (удалённый), но не оба сразу",
+            "either command (local server) or url (remote) is required, but not both"
+        ));
     }
     let mut value = serde_json::Map::new();
     let mut shown: Vec<String>;
     if local {
         if !clean_arg(command) || args.len() > 64 || !args.iter().all(|a| clean_arg(a)) {
-            return Err("команда и аргументы: до 500 знаков, без управляющих символов, аргументов не больше 64".into());
+            return Err(crate::tr!(
+                "команда и аргументы: до 500 знаков, без управляющих символов, аргументов не больше 64",
+                "command and arguments: up to 500 characters, no control characters, at most 64 arguments"
+            ));
         }
         value.insert("command".into(), json!(command.trim()));
         if !args.is_empty() {
             value.insert("args".into(), json!(args));
         }
         if env.len() > 30 {
-            return Err("слишком много переменных окружения".into());
+            return Err(crate::tr!(
+                "слишком много переменных окружения",
+                "too many environment variables"
+            ));
         }
         let mut envm = serde_json::Map::new();
         for p in env {
@@ -709,7 +828,10 @@ fn prep_add(
                 });
             if !ok || !clean_arg(&p.value) || envm.contains_key(&p.key) {
                 // имя в сообщение не выводим: туда мог попасть вставленный секрет
-                return Err("переменная окружения: имя из букв, цифр и `_` (до 64), значение без управляющих символов, без повторов".into());
+                return Err(crate::tr!(
+                    "переменная окружения: имя из букв, цифр и `_` (до 64), значение без управляющих символов, без повторов",
+                    "environment variable: name of letters, digits and `_` (up to 64), value without control characters, no duplicates"
+                ));
             }
             envm.insert(p.key.clone(), json!(p.value));
         }
@@ -723,7 +845,10 @@ fn prep_add(
         // Форма удалённого сервера сверена только для Claude Code (`type: http` + `url`) и Codex (`url`);
         // shortcut: Desktop и Antigravity — после сверки с их документацией
         if !matches!(dest, Client::ClaudeCode | Client::Codex) {
-            return Err("удалённый сервер можно добавить только в Claude Code и Codex: форма записи у остальных клиентов не проверена".into());
+            return Err(crate::tr!(
+                "удалённый сервер можно добавить только в Claude Code и Codex: форма записи у остальных клиентов не проверена",
+                "a remote server can only be added to Claude Code and Codex: the entry format for other clients has not been verified"
+            ));
         }
         let host = u.split_once("://").map_or("", |(_, rest)| {
             rest.split(['/', '?', '#']).next().unwrap_or("")
@@ -734,10 +859,10 @@ fn prep_add(
             && u.len() <= 500
             && !u.chars().any(|c| c.is_control() || c.is_whitespace());
         if !valid || !env.is_empty() {
-            return Err(
-                "адрес: http:// или https:// без пробелов, для удалённого сервера env не задаётся"
-                    .into(),
-            );
+            return Err(crate::tr!(
+                "адрес: http:// или https:// без пробелов, для удалённого сервера env не задаётся",
+                "address: http:// or https:// without spaces; env is not set for a remote server"
+            ));
         }
         value.insert("url".into(), json!(u));
         if dest == Client::ClaudeCode {
@@ -745,8 +870,7 @@ fn prep_add(
         }
         shown = vec![u.to_owned()];
     }
-    let (old, text) = read_text(&file)
-        .map_err(|_| "файл клиента-получателя не найден: клиент не установлен".to_owned())?;
+    let (old, text) = read_text(&file).map_err(|_| target_file_missing())?;
     let path = vec![root.to_owned(), name.to_owned()];
     if edit::get_value(format, &text, &path)?.is_some()
         || scan
@@ -754,17 +878,21 @@ fn prep_add(
             .iter()
             .any(|o| o.client == dest && o.kind == Kind::Mcp && o.scope == "user" && o.name == name)
     {
-        return Err("у этого клиента уже есть запись с таким именем".into());
+        return Err(crate::tr!(
+            "у этого клиента уже есть запись с таким именем",
+            "this client already has an entry with this name"
+        ));
     }
     let new_text = edit::put_value(format, &text, &path, &Value::Object(value.clone()), false)?;
     let env_keys: Vec<String> = env.iter().map(|p| mask::scrub_words(&p.key)).collect();
-    let mut notes = vec![
-        "Новая запись добавляется в конфиг клиента; клиент подхватит её при следующем запуске."
-            .to_owned(),
-    ];
+    let mut notes = vec![crate::tr!(
+        "Новая запись добавляется в конфиг клиента; клиент подхватит её при следующем запуске.",
+        "The new entry is added to the client config; the client picks it up on its next launch."
+    )];
     if !env_keys.is_empty() {
-        notes.push(format!(
+        notes.push(crate::tr!(
             "Переменные окружения: {}. Значения записываются как введены и в окне больше не показываются.",
+            "Environment variables: {}. Values are written as entered and are no longer shown in the window.",
             env_keys.join(", ")
         ));
     }
@@ -782,8 +910,8 @@ fn prep_add(
             Format::Toml => format!("{root}.{name}"),
         },
         enable: true,
-        from: "нет записи".into(),
-        to: format!("добавить: {}", masked_line(&shown)),
+        from: crate::tr!("нет записи", "no entry"),
+        to: crate::tr!("добавить: {}", "add: {}", masked_line(&shown)),
         noop: false,
         affects: Vec::new(),
         notes,
@@ -926,19 +1054,32 @@ fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0))
 }
 
+fn backup_not_written(e: std::io::Error) -> String {
+    crate::tr!("бэкап не записан: {e}", "backup not written: {e}")
+}
+
 /// Новый каталог операции: имя из времени и счётчика, сортируется как строка.
 fn new_op_dir(store: &Path) -> Result<(String, PathBuf), String> {
-    std::fs::create_dir_all(store).map_err(|e| format!("каталог бэкапов недоступен: {e}"))?;
+    let unavailable = |e: std::io::Error| {
+        crate::tr!(
+            "каталог бэкапов недоступен: {e}",
+            "backup directory is unavailable: {e}"
+        )
+    };
+    std::fs::create_dir_all(store).map_err(unavailable)?;
     let ms = now_ms();
     for n in 0..100 {
         let id = format!("{ms:013}-{n:02}");
         match std::fs::create_dir(store.join(&id)) {
             Ok(()) => return Ok((id.clone(), store.join(id))),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(format!("каталог бэкапов недоступен: {e}")),
+            Err(e) => return Err(unavailable(e)),
         }
     }
-    Err("не удалось выбрать имя каталога бэкапа".into())
+    Err(crate::tr!(
+        "не удалось выбрать имя каталога бэкапа",
+        "could not pick a name for the backup directory"
+    ))
 }
 
 /// Временный файл рядом: тот же том, значит `rename` атомарен. Имя оканчивается на `.tmp`, сторож его не видит.
@@ -966,7 +1107,7 @@ fn atomic_write(file: &Path, bytes: &[u8]) -> Result<(), String> {
     if res.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    res.map_err(|e| format!("запись не удалась: {e}"))
+    res.map_err(|e| crate::tr!("запись не удалась: {e}", "write failed: {e}"))
 }
 
 /// Запись с `sync_all`: бэкап и манифест должны дойти до диска раньше, чем меняется файл клиента.
@@ -979,7 +1120,8 @@ pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 fn write_manifest(dir: &Path, m: &Manifest) -> Result<(), String> {
     let json = serde_json::to_vec_pretty(m).map_err(|e| e.to_string())?;
-    write_synced(&dir.join("manifest.json"), &json).map_err(|e| format!("манифест не записан: {e}"))
+    write_synced(&dir.join("manifest.json"), &json)
+        .map_err(|e| crate::tr!("манифест не записан: {e}", "manifest not written: {e}"))
 }
 
 /// Короткое имя типа (`mcp`, `plugin`…), как в JSON.
@@ -1004,11 +1146,14 @@ fn commit(
         Err(e)
     };
     if let Err(e) = write_synced(&dir.join("before"), &p.old) {
-        return fail(format!("бэкап не записан: {e}"));
+        return fail(backup_not_written(e));
     }
     // второй раз перед самой записью: между планом и бэкапом клиент мог переписать файл
     if std::fs::read(&p.file).ok().as_deref() != Some(p.old.as_slice()) {
-        return fail("файл изменился во время записи бэкапа: повторите".into());
+        return fail(crate::tr!(
+            "файл изменился во время записи бэкапа: повторите",
+            "the file changed while the backup was being written: try again"
+        ));
     }
     let m = Manifest {
         version: 2,
@@ -1061,7 +1206,10 @@ fn commit(
     // Проверка: перечитали и получили ровно «исходник + план». Несовпадение значит, что клиент записал файл сразу после нас:
     // возвращать исходный нельзя (затёрли бы его свежую запись), поэтому операция остаётся в журнале, а бэкап цел.
     if std::fs::read(&p.file).ok().as_deref() != Some(p.new.as_slice()) {
-        return Err("файл изменён другим процессом сразу после записи: проверьте результат, бэкап и строка журнала сохранены".into());
+        return Err(crate::tr!(
+            "файл изменён другим процессом сразу после записи: проверьте результат, бэкап и строка журнала сохранены",
+            "the file was changed by another process right after writing: check the result; the backup and the journal entry are kept"
+        ));
     }
     Ok(Applied {
         op: id,
@@ -1093,7 +1241,10 @@ fn rank(level: &str) -> u8 {
 /// такой гонке поддавалась).
 fn need_level(need: &str, max_level: &str) -> Result<(), String> {
     if rank(need) > rank(max_level) {
-        return Err(format!("для этой операции нужен уровень {need}"));
+        return Err(crate::tr!(
+            "для этой операции нужен уровень {need}",
+            "this operation requires level {need}"
+        ));
     }
     Ok(())
 }
@@ -1110,10 +1261,16 @@ fn apply_one(
     let p = prepare(home, Some(store), &scan, i)?;
     need_level(&p.plan.level, max_level)?;
     if base_sha.is_some_and(|b| b != p.plan.base_sha) {
-        return Err("файл изменился после предпросмотра: постройте план заново".into());
+        return Err(crate::tr!(
+            "файл изменился после предпросмотра: постройте план заново",
+            "the file changed after the preview: build the plan again"
+        ));
     }
     if p.plan.noop {
-        return Err("запись уже в нужном состоянии".into());
+        return Err(crate::tr!(
+            "запись уже в нужном состоянии",
+            "the entry is already in the desired state"
+        ));
     }
     commit(store, p, op_name(i), None, batch)
 }
@@ -1146,7 +1303,10 @@ pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchP
     let (mut plans, mut skipped) = (Vec::new(), Vec::new());
     for i in items {
         if matches!(i, Intent::Add { .. }) {
-            skipped.push("добавление не входит в пакет".to_owned());
+            skipped.push(crate::tr!(
+                "добавление не входит в пакет",
+                "adding is not part of a batch"
+            ));
             continue;
         }
         match prepare(home, store, &scan, i) {
@@ -1155,7 +1315,10 @@ pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchP
                 scan.entities
                     .iter()
                     .find(|e| e.id == i.entity())
-                    .map_or_else(|| "запись исчезла".to_owned(), |e| e.name.clone()),
+                    .map_or_else(
+                        || crate::tr!("запись исчезла", "the entry is gone"),
+                        |e| e.name.clone(),
+                    ),
             ),
         }
     }
@@ -1188,11 +1351,17 @@ pub fn apply_batch(
 ) -> Result<(String, Vec<Applied>), String> {
     // у добавления нет записи, по которой пакет сверяет шаги: оно выполняется только по одному
     if items.iter().any(|i| matches!(i, Intent::Add { .. })) {
-        return Err("добавление нового сервера не входит в пакет".into());
+        return Err(crate::tr!(
+            "добавление нового сервера не входит в пакет",
+            "adding a new server is not part of a batch"
+        ));
     }
     let bp = plan_batch(home, Some(store), items);
     if bp.batch_sha != batch_sha {
-        return Err("состояние изменилось после предпросмотра: постройте план заново".into());
+        return Err(crate::tr!(
+            "состояние изменилось после предпросмотра: постройте план заново",
+            "the state changed after the preview: build the plan again"
+        ));
     }
     need_level(&bp.level, max_level)?;
     let batch = format!("{:013}", now_ms());
@@ -1207,8 +1376,9 @@ pub fn apply_batch(
             // пакета, молча пропускать нельзя: пакет остановится с ошибкой
             Err(_) if !bp.plans.iter().any(|p| p.entity == i.entity()) => continue,
             Err(e) => {
-                return Err(format!(
+                return Err(crate::tr!(
                     "{e} (выполнено {} записей; сделанное можно откатить в журнале)",
+                    "{e} (done: {} entries; what was done can be rolled back in the journal)",
                     done.len()
                 ))
             }
@@ -1216,8 +1386,9 @@ pub fn apply_batch(
         match apply_one(home, store, i, None, Some(&batch), max_level) {
             Ok(a) => done.push(a),
             Err(e) => {
-                return Err(format!(
+                return Err(crate::tr!(
                     "{e} (выполнено {} из {}; сделанное можно откатить в журнале)",
+                    "{e} (done: {} of {}; what was done can be rolled back in the journal)",
                     done.len(),
                     items.len() - n + done.len()
                 ))
@@ -1230,11 +1401,15 @@ pub fn apply_batch(
 fn read_manifest(store: &Path, id: &str) -> Result<Manifest, String> {
     // id — имя каталога: только цифры и дефис, иначе в него можно было бы вписать путь
     if id.is_empty() || id.len() > 40 || !id.bytes().all(|c| c.is_ascii_digit() || c == b'-') {
-        return Err("неверный номер операции".into());
+        return Err(crate::tr!(
+            "неверный номер операции",
+            "invalid operation number"
+        ));
     }
     let text = std::fs::read_to_string(store.join(id).join("manifest.json"))
-        .map_err(|_| "операция не найдена".to_owned())?;
-    serde_json::from_str(&text).map_err(|_| "манифест повреждён".to_owned())
+        .map_err(|_| crate::tr!("операция не найдена", "operation not found"))?;
+    serde_json::from_str(&text)
+        .map_err(|_| crate::tr!("манифест повреждён", "the manifest is corrupted"))
 }
 
 fn file_sha(path: &Path) -> Option<String> {
@@ -1331,10 +1506,16 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     let m = read_manifest(store, op)?;
     need_level(&m.level, max_level)?;
     if m.op == "rollback" {
-        return Err("откатывать можно только саму операцию, а не откат".into());
+        return Err(crate::tr!(
+            "откатывать можно только саму операцию, а не откат",
+            "only the operation itself can be rolled back, not a rollback"
+        ));
     }
     if manifests(store).iter().any(|x| x.of.as_deref() == Some(op)) {
-        return Err("операция уже откатана".into());
+        return Err(crate::tr!(
+            "операция уже откатана",
+            "the operation has already been rolled back"
+        ));
     }
     // Обратная операция — когда в деле корзина или файл с тех пор менялся. Возврат из стэша владельца при неизменном
     // файле откатывается возвратом файла из бэкапа: запись снова оказывается в стэше, а не в корзине Loadout.
@@ -1345,26 +1526,38 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     if let Some(enable) = inverse {
         let scan = crate::scan_with(home, Some(store));
         let id = resolve_entity(&scan, &m)
-            .ok_or("запись не найдена: возможно, её изменили вручную")?
+            .ok_or_else(|| {
+                crate::tr!(
+                    "запись не найдена: возможно, её изменили вручную",
+                    "entry not found: it may have been changed manually"
+                )
+            })?
             .id
             .clone();
         let p = prep_toggle(home, Some(store), &scan, &id, enable)?;
         if p.plan.noop {
-            return Err("запись уже в нужном состоянии: откатывать нечего".into());
+            return Err(crate::tr!(
+                "запись уже в нужном состоянии: откатывать нечего",
+                "the entry is already in the desired state: nothing to roll back"
+            ));
         }
         return commit(store, p, "rollback", Some(op.to_owned()), None);
     }
     let file = PathBuf::from(&m.path);
     // манифест лежит в каталоге пользователя: его путь не доверенный, проверяем по списку так же, как при записи
     guard_file(home, &file)?;
-    let current = std::fs::read(&file).map_err(|_| "файл клиента не прочитан".to_owned())?;
+    let current = std::fs::read(&file)
+        .map_err(|_| crate::tr!("файл клиента не прочитан", "could not read the client file"))?;
     if sha(&current) != m.sha_after {
-        return Err("файл изменился после операции: откат затёр бы чужие правки".into());
+        return Err(crate::tr!(
+            "файл изменился после операции: откат затёр бы чужие правки",
+            "the file changed after the operation: the rollback would overwrite someone else's edits"
+        ));
     }
-    let before =
-        std::fs::read(store.join(op).join("before")).map_err(|_| "бэкап не найден".to_owned())?;
+    let before = std::fs::read(store.join(op).join("before"))
+        .map_err(|_| crate::tr!("бэкап не найден", "backup not found"))?;
     if sha(&before) != m.sha_before {
-        return Err("бэкап повреждён".into());
+        return Err(crate::tr!("бэкап повреждён", "the backup is corrupted"));
     }
     let (id, dir) = new_op_dir(store)?;
     let fail = |e: String| {
@@ -1372,7 +1565,7 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
         Err(e)
     };
     if let Err(e) = write_synced(&dir.join("before"), &current) {
-        return fail(format!("бэкап не записан: {e}"));
+        return fail(backup_not_written(e));
     }
     let r = Manifest {
         id: id.clone(),
@@ -1393,7 +1586,10 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     }
     // как и после записи: чужую свежую запись не затираем, запись об откате остаётся
     if file_sha(&file).as_deref() != Some(m.sha_before.as_str()) {
-        return Err("файл изменён другим процессом сразу после отката: проверьте результат".into());
+        return Err(crate::tr!(
+            "файл изменён другим процессом сразу после отката: проверьте результат",
+            "the file was changed by another process right after the rollback: check the result"
+        ));
     }
     Ok(Applied {
         op: id,
@@ -1428,7 +1624,10 @@ pub fn rollback_batch(
         done.push(rollback(home, store, &id, max_level)?);
     }
     if done.is_empty() {
-        return Err("в пакете нечего откатывать".into());
+        return Err(crate::tr!(
+            "в пакете нечего откатывать",
+            "nothing to roll back in the batch"
+        ));
     }
     Ok(done)
 }

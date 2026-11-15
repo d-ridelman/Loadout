@@ -13,7 +13,7 @@
 
 </div>
 
-![Matrix of entries by client](docs/screenshots/matrix.png)
+![Matrix of entries by client](docs/screenshots/en-matrix.png)
 
 *Screenshots show test data from `fixtures/`, not a real profile.*
 
@@ -32,6 +32,7 @@ Loadout reads all five clients, shows everything in one matrix and changes it **
 - **Journal** of every write with one-click rollback. Before any write the file is copied to a backup.
 - **Doctor** finds broken links, drift, duplicates and stray backups.
 - **ctxkit** built in: install, apply and see its effect (see below).
+- **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; messages of the core follow the choice too.
 - Read-only by default (R0). Raising the write level needs an OS confirmation dialog.
 
 ### Safe write pipeline
@@ -40,17 +41,17 @@ plan → preview → hash lock (`base_sha`) → backup + manifest → temp file 
 
 | Add an MCP server | Install a plugin |
 |---|---|
-| ![Add MCP](docs/screenshots/add-mcp.png) | ![Install plugin](docs/screenshots/install-plugin.png) |
+| ![Add MCP](docs/screenshots/en-add-mcp.png) | ![Install plugin](docs/screenshots/en-install-plugin.png) |
 
 | Journal and rollback | Doctor |
 |---|---|
-| ![Journal](docs/screenshots/journal.png) | ![Doctor](docs/screenshots/doctor.png) |
+| ![Journal](docs/screenshots/en-journal.png) | ![Doctor](docs/screenshots/en-doctor.png) |
 
 ## ctxkit
 
 [`crates/ctxkit`](crates/ctxkit/README.md) is a toolkit of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and routes routine work to cheaper models. It is built into the app (the **ctxkit** section) and can also be installed on its own.
 
-![ctxkit in the app](docs/screenshots/ctxkit.png)
+![ctxkit in the app](docs/screenshots/en-ctxkit.png)
 
 ## Repository layout
 

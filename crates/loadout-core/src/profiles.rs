@@ -49,17 +49,27 @@ pub fn valid_name(n: &str) -> bool {
 }
 
 fn store_all(store: &Path, profiles: Vec<Profile>) -> Result<(), String> {
-    std::fs::create_dir_all(store).map_err(|e| format!("каталог профилей недоступен: {e}"))?;
+    std::fs::create_dir_all(store).map_err(|e| {
+        crate::tr!(
+            "каталог профилей недоступен: {e}",
+            "profiles directory is unavailable: {e}"
+        )
+    })?;
     let json = serde_json::to_vec_pretty(&File { profiles }).map_err(|e| e.to_string())?;
     let tmp = store.join("profiles.json.tmp");
-    crate::write::write_synced(&tmp, &json).map_err(|e| format!("профили не записаны: {e}"))?;
-    std::fs::rename(&tmp, path(store)).map_err(|e| format!("профили не записаны: {e}"))
+    crate::write::write_synced(&tmp, &json)
+        .map_err(|e| crate::tr!("профили не записаны: {e}", "profiles were not written: {e}"))?;
+    std::fs::rename(&tmp, path(store))
+        .map_err(|e| crate::tr!("профили не записаны: {e}", "profiles were not written: {e}"))
 }
 
 /// Создаёт профиль или заменяет одноимённый.
 pub fn save(store: &Path, p: Profile) -> Result<(), String> {
     if !valid_name(&p.name) {
-        return Err("имя профиля: 1–40 знаков (буквы, цифры, пробел, _ - .)".into());
+        return Err(crate::tr!(
+            "имя профиля: 1–40 знаков (буквы, цифры, пробел, _ - .)",
+            "profile name: 1–40 characters (letters, digits, space, _ - .)"
+        ));
     }
     let ok = |s: &str| !s.is_empty() && s.len() <= 300 && !s.chars().any(char::is_control);
     if p.items.len() > 2000
@@ -68,7 +78,10 @@ pub fn save(store: &Path, p: Profile) -> Result<(), String> {
             .iter()
             .all(|i| ok(&i.client) && ok(&i.kind) && ok(&i.scope) && ok(&i.name))
     {
-        return Err("в профиле слишком много записей или в них недопустимые строки".into());
+        return Err(crate::tr!(
+            "в профиле слишком много записей или в них недопустимые строки",
+            "the profile has too many entries or they contain invalid strings"
+        ));
     }
     let mut all = list(store);
     match all.iter_mut().find(|x| x.name == p.name) {
@@ -83,7 +96,7 @@ pub fn delete(store: &Path, name: &str) -> Result<(), String> {
     let before = all.len();
     all.retain(|p| p.name != name);
     if all.len() == before {
-        return Err("профиль не найден".into());
+        return Err(crate::tr!("профиль не найден", "profile not found"));
     }
     store_all(store, all)
 }
@@ -126,7 +139,7 @@ pub fn intents(
     let p = list(store)
         .into_iter()
         .find(|p| p.name == name)
-        .ok_or("профиль не найден")?;
+        .ok_or_else(|| crate::tr!("профиль не найден", "profile not found"))?;
     let scan = crate::scan_with(home, Some(store));
     let (mut out, mut missing) = (Vec::new(), Vec::new());
     for it in &p.items {

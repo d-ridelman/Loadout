@@ -54,7 +54,8 @@ async function launch(env) {
   const app = await electron.launch({
     executablePath: electronExe,
     args: [appDir],
-    env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, ...env },
+    // язык по умолчанию — русский (сценарии ищут русские подписи); английский проход задаёт LOADOUT_LANG=en сам
+    env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', ...env },
   })
   const page = await app.firstWindow()
   const pid = app.process().pid
@@ -720,6 +721,117 @@ try {
   must((await session.page.locator('td.empty').innerText()).includes('не найдено'), 'пустое состояние')
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-empty-1280')
+  await close(session)
+  session = undefined
+
+  // ---- английский интерфейс: ни одной кириллической буквы ни в тексте, ни в атрибутах, ни в ответах ядра ----
+  const enHome = materialize(() => {})
+  homes.push(enHome)
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ writeLevel: 'R2' }))
+  // журнал прежних сценариев (русский) не нужен: тексты откатов хранятся на языке операции, это известный предел
+  rmSync(join(profile, 'backups'), { recursive: true, force: true })
+  session = await launch({ LOADOUT_HOME: enHome, LOADOUT_LANG: 'en', LOADOUT_CLAUDE: process.execPath, LOADOUT_CLAUDE_ARGS: JSON.stringify([fakeClaude]) })
+  {
+    const { app: enApp, page: en } = session
+    const enErrors = []
+    en.on('pageerror', (e) => enErrors.push(`pageerror: ${e.message.slice(0, 200)}`))
+    await en.waitForSelector('#grid', { timeout: 20000 })
+    await resize(enApp, 1280, 800)
+    must((await en.evaluate(() => document.documentElement.lang)) === 'en', 'html lang не en')
+    // текст страницы, подписи, подсказки и плейсхолдеры: всё, что видит пользователь или экранный диктор
+    const cyrillic = (where) =>
+      en.evaluate((w) => {
+        const bad = []
+        const re = /[А-Яа-яЁё]/
+        const text = document.body.innerText
+        for (const line of text.split('\n')) if (re.test(line)) bad.push(`text: ${line.trim().slice(0, 90)}`)
+        for (const el of document.querySelectorAll('[aria-label],[title],[placeholder],[alt]'))
+          for (const a of ['aria-label', 'title', 'placeholder', 'alt']) {
+            const v = el.getAttribute(a)
+            if (v && re.test(v)) bad.push(`${a}: ${v.slice(0, 90)}`)
+          }
+        return bad.map((b) => `${w}: ${b}`)
+      }, where)
+    const enOk = async (where) => {
+      const bad = await cyrillic(where)
+      must(bad.length === 0, `кириллица в английском интерфейсе:\n${bad.slice(0, 12).join('\n')}`)
+    }
+    await enOk('matrix')
+    await shot(en, 'en-matrix-1280')
+    for (const [key, name] of [['2', 'radar'], ['3', 'hooks'], ['4', 'doctor'], ['5', 'journal'], ['6', 'profiles'], ['7', 'ctxkit']]) {
+      await en.keyboard.press(key)
+      await en.waitForTimeout(700)
+      await enOk(name)
+      await shot(en, `en-${name}-1280`)
+    }
+    await en.keyboard.press('1')
+    // палитра
+    await en.keyboard.press('Control+k')
+    await en.waitForTimeout(300)
+    await enOk('palette')
+    await en.keyboard.press('Escape')
+    // добавление: ошибка ядра (имя занято) и план ядра — оба на английском
+    const enDialog = en.locator('[role=dialog][aria-modal=true]')
+    await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
+    await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
+    await enDialog.getByLabel('Name', { exact: true }).fill('tool-a')
+    await enDialog.getByLabel('Command', { exact: true }).fill('npx')
+    await enDialog.getByRole('button', { name: 'Preview' }).click()
+    await enDialog.locator('[role=alert]').waitFor({ timeout: 8000 })
+    await enOk('add: core error')
+    await shot(en, 'en-add-error-1280')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
+    await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
+    await enDialog.getByLabel('Name', { exact: true }).fill('en-added')
+    await enDialog.getByLabel('Command', { exact: true }).fill('npx')
+    await enDialog.getByRole('button', { name: 'Preview' }).click()
+    await enDialog.getByText('~/.gemini/config/mcp_config.json').waitFor({ timeout: 8000 })
+    await enOk('add: core plan')
+    await shot(en, 'en-add-plan-1280')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    // установка плагина: предпросмотр
+    await en.getByRole('button', { name: 'Install plugin', exact: true }).click()
+    await enDialog.getByLabel(/Plugin/).fill('demo@market')
+    await enDialog.getByRole('button', { name: 'Preview' }).click()
+    await enDialog.getByText('claude plugin install demo@market --scope user').waitFor({ timeout: 8000 })
+    await enOk('plugin dialog')
+    await shot(en, 'en-plugin-1280')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    // запись из матрицы: корзина, правка и копирование (диалоги и планы ядра)
+    const enCell = (row, idx) =>
+      en.locator('tbody tr', { has: en.locator('td.name b', { hasText: new RegExp(`^${row}$`) }) }).locator('td').nth(idx + 1).click()
+    await enCell('tool-a', 3)
+    await enOk('inspector')
+    await shot(en, 'en-inspector-1280')
+    await en.getByRole('button', { name: 'Disable (move to trash)' }).click()
+    await enDialog.getByText('Loadout trash').first().waitFor({ timeout: 8000 })
+    await enOk('trash plan')
+    await shot(en, 'en-trash-plan-1280')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    await en.getByRole('button', { name: 'Edit command…' }).click()
+    await enOk('edit dialog')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    await en.getByRole('button', { name: 'Copy to client…' }).click()
+    await enOk('copy dialog')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    // журнал после записи на английском: сама запись и откат
+    await enCell('tool-a', 3)
+    await en.getByRole('button', { name: 'Disable (move to trash)' }).click()
+    await enDialog.getByRole('button', { name: 'Move to trash' }).click()
+    await enDialog.waitFor({ state: 'detached', timeout: 8000 })
+    await en.keyboard.press('5')
+    await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().waitFor({ timeout: 8000 })
+    await enOk('journal row')
+    await shot(en, 'en-journal-1280')
+    // переключатель языка: на русский и обратно
+    await en.getByLabel('Language').selectOption('ru')
+    await en.getByRole('button', { name: 'Матрица' }).waitFor({ timeout: 10000 })
+    must((await en.evaluate(() => document.documentElement.lang)) === 'ru', 'после переключения на RU lang не ru')
+    await en.getByLabel('Язык').selectOption('en')
+    await en.getByRole('button', { name: 'Matrix' }).waitFor({ timeout: 10000 })
+    must(enErrors.length === 0, `ошибки страницы (EN): ${enErrors.join(' | ')}`)
+  }
   await close(session)
   session = undefined
 

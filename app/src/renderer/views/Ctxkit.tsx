@@ -1,19 +1,26 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
+import { t } from '../../shared/i18n'
 import { chars, daysDesc, pct, segments, summarize } from '../ctxkit-stats'
 
-const SEV: Record<FindingSeverity, { ch: string; label: string; cls: string }> = {
-  ok: { ch: '●', label: 'в порядке', cls: 's-on' },
-  info: { ch: '○', label: 'к сведению', cls: 's-off' },
-  warn: { ch: '◐', label: 'внимание', cls: 's-stale' },
-  error: { ch: '✕', label: 'ошибка', cls: 's-broken' },
-}
+// t() только во время рендера: язык выбирается до первой отрисовки, а не при импорте модуля
+const sev = (s: FindingSeverity): { ch: string; label: string; cls: string } =>
+  ({
+    ok: { ch: '●', label: t('в порядке', 'ok'), cls: 's-on' },
+    info: { ch: '○', label: t('к сведению', 'info'), cls: 's-off' },
+    warn: { ch: '◐', label: t('внимание', 'warning'), cls: 's-stale' },
+    error: { ch: '✕', label: t('ошибка', 'error'), cls: 's-broken' },
+  })[s]
 
-const COPY: Record<CtxkitStatus['hook'], string> = {
-  same: '● совпадает со встроенным',
-  different: '◐ отличается от встроенной: «Применить» заменит её встроенной (это может быть и откат на более старую)',
-  missing: '✕ нет: «Применить» установит',
-}
+const copyText = (k: CtxkitStatus['hook']): string =>
+  ({
+    same: t('● совпадает со встроенным', '● matches the bundled one'),
+    different: t(
+      '◐ отличается от встроенной: «Применить» заменит её встроенной (это может быть и откат на более старую)',
+      '◐ differs from the bundled one: “Apply” will replace it with the bundled one (this may be a downgrade)',
+    ),
+    missing: t('✕ нет: «Применить» установит', '✕ missing: “Apply” will install it'),
+  })[k]
 
 const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'var(--orange)', other: 'var(--deco)' } as const
 
@@ -29,7 +36,7 @@ function useLoaded<T>(load: () => Promise<{ ok: true; data: T } | { ok: false; e
     setS((p) => (p.status === 'ready' ? p : { status: 'loading' }))
     load().then(
       (r) => alive && setS(r.ok ? { status: 'ready', data: r.data } : { status: 'error', error: r.error }),
-      (e: unknown) => alive && setS({ status: 'error', error: e instanceof Error ? e.message : 'не удалось' }),
+      (e: unknown) => alive && setS({ status: 'error', error: e instanceof Error ? e.message : t('не удалось', 'failed') }),
     )
     return () => {
       alive = false
@@ -66,15 +73,15 @@ export function Ctxkit({ level, onNotice }: Props) {
     async (dryRun: boolean) => {
       setBusy(true)
       setError(null)
-      const r = await window.loadout.ctxkitSetup(opts, dryRun).catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : 'не удалось' }))
+      const r = await window.loadout.ctxkitSetup(opts, dryRun).catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('не удалось', 'failed') }))
       setBusy(false)
       if (!r.ok) return setError(r.error)
       setResult(r.data)
-      if (r.data.code !== 0) return setError(`ctxkit вышел с кодом ${r.data.code}: подробности в выводе ниже`)
+      if (r.data.code !== 0) return setError(t(`ctxkit вышел с кодом ${r.data.code}: подробности в выводе ниже`, `ctxkit exited with code ${r.data.code}: see the output below`))
       if (dryRun) setPreviewKey(key)
       else {
         setPreviewKey(null)
-        onNotice('ctxkit применён: хуки и настройки записаны, бэкапы ctxkit лежат в ~/.claude/backups')
+        onNotice(t('ctxkit применён: хуки и настройки записаны, бэкапы ctxkit лежат в ~/.claude/backups', 'ctxkit applied: hooks and settings written, ctxkit backups are in ~/.claude/backups'))
         reloadStatus()
         reloadDoctor()
       }
@@ -89,28 +96,31 @@ export function Ctxkit({ level, onNotice }: Props) {
     <div className="page">
       <h2>ctxkit</h2>
       <p className="mute small">
-        Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и переключает рутину на дешёвые модели. Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.
+        {t(
+          'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и переключает рутину на дешёвые модели. Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.',
+          'A bundled toolkit that keeps agent context in check: limits whole-file reads, catches broken escaping, compresses build output and moves routine work to cheaper models. Hooks are written into client settings, so applying requires level R2.',
+        )}
       </p>
 
-      <section className="hud card" aria-label="Установка">
-        <h3>Установка</h3>
+      <section className="hud card" aria-label={t('Установка', 'Installation')}>
+        <h3>{t('Установка', 'Installation')}</h3>
         {status.status === 'loading' ? (
-          <p className="mute" role="status">Проверяю…</p>
+          <p className="mute" role="status">{t('Проверяю…', 'Checking…')}</p>
         ) : status.status === 'error' ? (
           <p className="s-broken" role="alert">{status.error}</p>
         ) : !status.data.available ? (
-          <p className="s-broken">ctxkit не входит в эту сборку приложения.</p>
+          <p className="s-broken">{t('ctxkit не входит в эту сборку приложения.', 'ctxkit is not included in this build of the app.')}</p>
         ) : (
           <dl className="kv">
-            <dt>встроенный</dt><dd>ctxkit {status.data.version ?? '?'}</dd>
-            <dt>хуки</dt><dd className={status.data.hook === 'same' ? 's-on' : status.data.hook === 'different' ? 's-stale' : 's-broken'}>~/.claude/hooks/ctxkit.exe: {COPY[status.data.hook]}</dd>
-            <dt>в PATH</dt><dd className={status.data.bin === 'same' ? 's-on' : 's-stale'}>~/.local/bin/ctxkit.exe: {COPY[status.data.bin]}</dd>
+            <dt>{t('встроенный', 'bundled')}</dt><dd>ctxkit {status.data.version ?? '?'}</dd>
+            <dt>{t('хуки', 'hooks')}</dt><dd className={status.data.hook === 'same' ? 's-on' : status.data.hook === 'different' ? 's-stale' : 's-broken'}>~/.claude/hooks/ctxkit.exe: {copyText(status.data.hook)}</dd>
+            <dt>{t('в PATH', 'in PATH')}</dt><dd className={status.data.bin === 'same' ? 's-on' : 's-stale'}>~/.local/bin/ctxkit.exe: {copyText(status.data.bin)}</dd>
           </dl>
         )}
       </section>
 
-      <section className="hud card" aria-label="Применение">
-        <h3>Применить</h3>
+      <section className="hud card" aria-label={t('Применение', 'Apply')}>
+        <h3>{t('Применить', 'Apply')}</h3>
         <form
           className="form"
           onSubmit={(e) => {
@@ -119,62 +129,62 @@ export function Ctxkit({ level, onNotice }: Props) {
           }}
         >
           <fieldset className="choices">
-            <legend className="mute small">Что настроить</legend>
-            <label><input type="checkbox" checked disabled /> Claude Code: хуки, модели, агенты Explore и checker (всегда)</label>
-            <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> Блок правил в CLAUDE.md</label>
-            <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> Claude Desktop (пресеты; закройте его перед применением)</label>
+            <legend className="mute small">{t('Что настроить', 'What to configure')}</legend>
+            <label><input type="checkbox" checked disabled /> {t('Claude Code: хуки, модели, агенты Explore и checker (всегда)', 'Claude Code: hooks, models, Explore and checker agents (always)')}</label>
+            <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил в CLAUDE.md', 'Rules block in CLAUDE.md')}</label>
+            <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> {t('Claude Desktop (пресеты; закройте его перед применением)', 'Claude Desktop (presets; close it before applying)')}</label>
             <label><input type="checkbox" checked={opts.antigravity} onChange={(e) => change({ antigravity: e.target.checked })} /> Antigravity</label>
             <label><input type="checkbox" checked={opts.dsh} onChange={(e) => change({ dsh: e.target.checked })} /> DeepSeek Harness</label>
           </fieldset>
           <label>
-            Язык подсказок и хуков
+            {t('Язык подсказок и хуков', 'Language of prompts and hooks')}
             <select value={opts.lang} onChange={(e) => change({ lang: e.target.value as SetupOptions['lang'] })}>
-              <option value="ru">русский</option>
-              <option value="en">английский</option>
+              <option value="ru">{t('русский', 'Russian')}</option>
+              <option value="en">{t('английский', 'English')}</option>
             </select>
           </label>
           <label>
-            Модель-советник
+            {t('Модель-советник', 'Advisor model')}
             <select value={opts.advisor} onChange={(e) => change({ advisor: e.target.value as SetupOptions['advisor'] })}>
-              <option value="fable">Fable (по умолчанию)</option>
+              <option value="fable">{t('Fable (по умолчанию)', 'Fable (default)')}</option>
               <option value="opus">Opus</option>
-              <option value="none">без советника</option>
+              <option value="none">{t('без советника', 'no advisor')}</option>
             </select>
           </label>
           <div className="actions col">
-            <button type="submit" disabled={busy}>{busy && !previewKey ? 'Считаю…' : 'Предпросмотр (ничего не пишет)'}</button>
+            <button type="submit" disabled={busy}>{busy && !previewKey ? t('Считаю…', 'Working…') : t('Предпросмотр (ничего не пишет)', 'Preview (writes nothing)')}</button>
             <button
               type="button"
               disabled={!canApply}
-              title={level !== 'R2' ? 'Включите уровень R2 в шапке окна' : previewKey !== key ? 'Сначала предпросмотр с этими настройками' : 'Установить бинарь, прописать хуки и настройки'}
+              title={level !== 'R2' ? t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header') : previewKey !== key ? t('Сначала предпросмотр с этими настройками', 'Preview these settings first') : t('Установить бинарь, прописать хуки и настройки', 'Install the binary, register hooks and settings')}
               onClick={() => void run(false)}
             >
-              Применить: установить или обновить
+              {t('Применить: установить или обновить', 'Apply: install or update')}
             </button>
           </div>
         </form>
         {error ? <p className="s-broken" role="alert">{error}</p> : null}
         {result ? (
           <>
-            <p className="mute small">{result.dryRun ? 'Предпросмотр: файлы не менялись.' : 'Применено.'} Вывод ctxkit:</p>
-            <pre className="out" aria-label="Вывод ctxkit" tabIndex={0}>{result.output || '(пусто)'}</pre>
+            <p className="mute small">{result.dryRun ? t('Предпросмотр: файлы не менялись.', 'Preview: no files were changed.') : t('Применено.', 'Applied.')} {t('Вывод ctxkit:', 'ctxkit output:')}</p>
+            <pre className="out" aria-label={t('Вывод ctxkit', 'ctxkit output')} tabIndex={0}>{result.output || t('(пусто)', '(empty)')}</pre>
           </>
         ) : null}
-        <p className="mute small">Перед записью ctxkit сам делает копии изменяемых файлов в каталог backups рядом с ними. Применение повторяемо: уже настроенное он не трогает.</p>
+        <p className="mute small">{t('Перед записью ctxkit сам делает копии изменяемых файлов в каталог backups рядом с ними. Применение повторяемо: уже настроенное он не трогает.', 'Before writing, ctxkit copies the files it changes into a backups folder next to them. Applying is repeatable: anything already configured is left alone.')}</p>
       </section>
 
-      <section className="hud card" aria-label="Диагностика">
-        <h3>Диагностика</h3>
+      <section className="hud card" aria-label={t('Диагностика', 'Diagnostics')}>
+        <h3>{t('Диагностика', 'Diagnostics')}</h3>
         {doctor.status === 'loading' ? (
-          <p className="mute" role="status">Спрашиваю ctxkit…</p>
+          <p className="mute" role="status">{t('Спрашиваю ctxkit…', 'Asking ctxkit…')}</p>
         ) : doctor.status === 'error' ? (
           <p className="s-broken" role="alert">{doctor.error}</p>
         ) : (
-          <ul className="plist" aria-label="Находки диагностики">
+          <ul className="plist" aria-label={t('Находки диагностики', 'Diagnostic findings')}>
             {doctor.data.findings.map((f) => (
               <li key={f.id} className="pitem">
                 <span>
-                  <span className={SEV[f.severity].cls}>{SEV[f.severity].ch} {SEV[f.severity].label}</span> · {f.message}
+                  <span className={sev(f.severity).cls}>{sev(f.severity).ch} {sev(f.severity).label}</span> · {f.message}
                   {f.detail ? <span className="mute"> ({f.detail})</span> : null}
                   {f.fix ? <span className="s-stale"> → {f.fix}</span> : null}
                 </span>
@@ -182,47 +192,47 @@ export function Ctxkit({ level, onNotice }: Props) {
             ))}
           </ul>
         )}
-        <div className="actions col"><button onClick={reloadDoctor}>Обновить диагностику</button></div>
+        <div className="actions col"><button onClick={reloadDoctor}>{t('Обновить диагностику', 'Refresh diagnostics')}</button></div>
       </section>
 
-      <section className="hud card" aria-label="Эффективность">
-        <h3>Эффективность</h3>
+      <section className="hud card" aria-label={t('Эффективность', 'Efficiency')}>
+        <h3>{t('Эффективность', 'Efficiency')}</h3>
         <label className="form">
-          Период
-          <select value={days} onChange={(e) => setDays(Number(e.target.value) as 7 | 14 | 30)} aria-label="Период отчёта">
-            <option value={7}>7 дней</option>
-            <option value={14}>14 дней</option>
-            <option value={30}>30 дней</option>
+          {t('Период', 'Period')}
+          <select value={days} onChange={(e) => setDays(Number(e.target.value) as 7 | 14 | 30)} aria-label={t('Период отчёта', 'Report period')}>
+            <option value={7}>{t('7 дней', '7 days')}</option>
+            <option value={14}>{t('14 дней', '14 days')}</option>
+            <option value={30}>{t('30 дней', '30 days')}</option>
           </select>
         </label>
         {report.status === 'loading' ? (
-          <p className="mute" role="status">Считаю по транскриптам…</p>
+          <p className="mute" role="status">{t('Считаю по транскриптам…', 'Counting from transcripts…')}</p>
         ) : report.status === 'error' ? (
           <p className="s-broken" role="alert">{report.error}</p>
         ) : sum && sum.days === 0 ? (
-          <p className="mute">За этот период транскриптов Claude Code нет: считать нечего.</p>
+          <p className="mute">{t('За этот период транскриптов Claude Code нет: считать нечего.', 'No Claude Code transcripts for this period: nothing to count.')}</p>
         ) : sum ? (
           <>
             <dl className="kv">
-              <dt>ходов основной сессии</dt><dd>{sum.mainTurns}</dd>
-              <dt>на Sonnet и Haiku</dt><dd className="s-on">{pct(sum.cheapShare)}</dd>
-              <dt>на Opus и Fable</dt><dd className={sum.expensiveShare !== null && sum.expensiveShare > 0.5 ? 's-stale' : ''}>{pct(sum.expensiveShare)}</dd>
-              <dt>ходов субагентов</dt><dd>{sum.subTurns} ({pct(sum.subShare)} от всех)</dd>
-              <dt>вызовов советника</dt><dd>{sum.advisorCalls}</dd>
-              <dt>результатов инструментов</dt><dd>{chars(sum.toolResultChars)} знаков, из них чтения файлов {chars(sum.readChars)}, осмотр оболочкой {chars(sum.shellInspectChars)}</dd>
-              <dt>чтений остановлено</dt><dd>{sum.readBlocked}</dd>
-              <dt>сжатых проверок (check)</dt><dd>{sum.checkCalls} вызовов, в контекст ушло {chars(sum.checkChars)} знаков</dd>
+              <dt>{t('ходов основной сессии', 'main session turns')}</dt><dd>{sum.mainTurns}</dd>
+              <dt>{t('на Sonnet и Haiku', 'on Sonnet and Haiku')}</dt><dd className="s-on">{pct(sum.cheapShare)}</dd>
+              <dt>{t('на Opus и Fable', 'on Opus and Fable')}</dt><dd className={sum.expensiveShare !== null && sum.expensiveShare > 0.5 ? 's-stale' : ''}>{pct(sum.expensiveShare)}</dd>
+              <dt>{t('ходов субагентов', 'subagent turns')}</dt><dd>{sum.subTurns} ({t(`${pct(sum.subShare)} от всех`, `${pct(sum.subShare)} of all`)})</dd>
+              <dt>{t('вызовов советника', 'advisor calls')}</dt><dd>{sum.advisorCalls}</dd>
+              <dt>{t('результатов инструментов', 'tool results')}</dt><dd>{t(`${chars(sum.toolResultChars)} знаков, из них чтения файлов ${chars(sum.readChars)}, осмотр оболочкой ${chars(sum.shellInspectChars)}`, `${chars(sum.toolResultChars)} chars, of which file reads ${chars(sum.readChars)}, shell inspection ${chars(sum.shellInspectChars)}`)}</dd>
+              <dt>{t('чтений остановлено', 'reads blocked')}</dt><dd>{sum.readBlocked}</dd>
+              <dt>{t('сжатых проверок (check)', 'compressed checks (check)')}</dt><dd>{t(`${sum.checkCalls} вызовов, в контекст ушло ${chars(sum.checkChars)} знаков`, `${sum.checkCalls} calls, ${chars(sum.checkChars)} chars went into context`)}</dd>
             </dl>
             <p className="mute small">
-              Вызовы по агентам: {sum.agents.length ? sum.agents.map(([k, n]) => `${k} ×${n}`).join(', ') : 'нет'}.
+              {t('Вызовы по агентам:', 'Calls by agent:')} {sum.agents.length ? sum.agents.map(([k, n]) => `${k} ×${n}`).join(', ') : t('нет', 'none')}.
             </p>
-            <table className="left" aria-label="Ходы по дням">
+            <table className="left" aria-label={t('Ходы по дням', 'Turns by day')}>
               <thead>
                 <tr>
-                  <th scope="col">ДЕНЬ</th>
-                  <th scope="col">ХОДЫ ОСНОВНОЙ СЕССИИ ПО МОДЕЛЯМ</th>
-                  <th scope="col">СОВЕТНИК</th>
-                  <th scope="col">ОСТАНОВЛЕНО</th>
+                  <th scope="col">{t('ДЕНЬ', 'DAY')}</th>
+                  <th scope="col">{t('ХОДЫ ОСНОВНОЙ СЕССИИ ПО МОДЕЛЯМ', 'MAIN SESSION TURNS BY MODEL')}</th>
+                  <th scope="col">{t('СОВЕТНИК', 'ADVISOR')}</th>
+                  <th scope="col">{t('ОСТАНОВЛЕНО', 'BLOCKED')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -230,7 +240,7 @@ export function Ctxkit({ level, onNotice }: Props) {
                   <tr key={day}>
                     <td className="mono nw">{day}</td>
                     <td className="vcell">
-                      <div className="stack" role="img" aria-label={segments(d).map((s) => `${s.label} ${s.n}`).join(', ') || 'ходов не было'}>
+                      <div className="stack" role="img" aria-label={segments(d).map((s) => `${s.label} ${s.n}`).join(', ') || t('ходов не было', 'no turns')}>
                         {segments(d).map((s) => (
                           <span key={s.key} style={{ width: `${(s.w * 100).toFixed(1)}%`, background: SEG_COLOR[s.key] }} />
                         ))}
@@ -244,11 +254,14 @@ export function Ctxkit({ level, onNotice }: Props) {
               </tbody>
             </table>
             <p className="mute small">
-              Это счётчики из транскриптов Claude Code (только числа, без текста и путей; дни по UTC). Базовой линии «до ctxkit» у отчёта нет, поэтому «сэкономлено» не считается: смотрите, как доля дешёвых моделей и остановленных чтений меняется по дням после применения.
+              {t(
+                'Это счётчики из транскриптов Claude Code (только числа, без текста и путей; дни по UTC). Базовой линии «до ctxkit» у отчёта нет, поэтому «сэкономлено» не считается: смотрите, как доля дешёвых моделей и остановленных чтений меняется по дням после применения.',
+                'These are counters from Claude Code transcripts (numbers only, no text or paths; days are in UTC). The report has no “before ctxkit” baseline, so “saved” is not computed: watch how the share of cheap models and blocked reads changes day by day after applying.',
+              )}
             </p>
           </>
         ) : null}
-        <div className="actions col"><button onClick={reloadReport}>Пересчитать</button></div>
+        <div className="actions col"><button onClick={reloadReport}>{t('Пересчитать', 'Recalculate')}</button></div>
       </section>
     </div>
   )

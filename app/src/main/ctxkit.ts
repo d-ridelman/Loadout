@@ -2,20 +2,22 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { t } from '../shared/i18n'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, DayStats, DoctorFinding, FindingSeverity, SetupOptions } from '../shared/model'
 
 /** Разбор настроек `setup` от страницы: только булевы флаги и перечисления, всё остальное — отказ. */
 export function parseSetupOptions(raw: unknown): SetupOptions {
-  if (typeof raw !== 'object' || raw === null) throw new Error('неверные параметры ctxkit')
+  const invalid = (): Error => new Error(t('неверные параметры ctxkit', 'invalid ctxkit parameters'))
+  if (typeof raw !== 'object' || raw === null) throw invalid()
   const r = raw as Record<string, unknown>
   const flag = (k: string): boolean => {
-    if (typeof r[k] !== 'boolean') throw new Error('неверные параметры ctxkit')
+    if (typeof r[k] !== 'boolean') throw invalid()
     return r[k] as boolean
   }
   const lang = r['lang']
   const advisor = r['advisor']
-  if (lang !== 'en' && lang !== 'ru') throw new Error('неверный язык ctxkit')
-  if (advisor !== 'fable' && advisor !== 'opus' && advisor !== 'none') throw new Error('неверный советник ctxkit')
+  if (lang !== 'en' && lang !== 'ru') throw new Error(t('неверный язык ctxkit', 'invalid ctxkit language'))
+  if (advisor !== 'fable' && advisor !== 'opus' && advisor !== 'none') throw new Error(t('неверный советник ctxkit', 'invalid ctxkit advisor'))
   return { withRules: flag('withRules'), desktop: flag('desktop'), antigravity: flag('antigravity'), dsh: flag('dsh'), lang, advisor }
 }
 
@@ -63,12 +65,12 @@ export function run(bin: string, args: string[], timeoutMs: number, env?: Record
   return new Promise((resolve, reject) => {
     const opts = { windowsHide: true, timeout: timeoutMs, maxBuffer: 8 << 20, encoding: 'utf8' as const, ...(env ? { env: { ...process.env, ...env } } : {}) }
     execFile(bin, args, opts, (err, stdout, stderr) => {
-      const what = bin.toLowerCase().includes('ctxkit') ? 'ctxkit' : 'программа'
+      const isCtxkit = bin.toLowerCase().includes('ctxkit')
       if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return reject(new Error(what === 'ctxkit' ? 'ctxkit не найден в составе приложения' : 'Claude Code CLI (`claude`) не найден в PATH'))
+        return reject(new Error(isCtxkit ? t('ctxkit не найден в составе приложения', 'ctxkit not found in the app bundle') : t('Claude Code CLI (`claude`) не найден в PATH', 'Claude Code CLI (`claude`) not found in PATH')))
       }
       const e = err as (Error & { code?: number | string; killed?: boolean }) | null
-      if (e?.killed) return reject(new Error(`${what === 'ctxkit' ? 'ctxkit' : 'команда'} не ответила вовремя`))
+      if (e?.killed) return reject(new Error(isCtxkit ? t('ctxkit не ответила вовремя', 'ctxkit did not respond in time') : t('команда не ответила вовремя', 'the command did not respond in time')))
       resolve({ code: e ? (typeof e.code === 'number' ? e.code : 1) : 0, stdout, stderr })
     })
   })
@@ -99,10 +101,10 @@ function parseJson(text: string, what: string): Record<string, unknown> {
   try {
     v = JSON.parse(text)
   } catch {
-    throw new Error(`ctxkit вернул не JSON (${what})`)
+    throw new Error(t(`ctxkit вернул не JSON (${what})`, `ctxkit returned non-JSON output (${what})`))
   }
   // контракт ctxkit: `schema: 1`; другую версию не разбираем, а честно сообщаем
-  if (!isObj(v) || v['tool'] !== 'ctxkit' || v['schema'] !== 1) throw new Error(`ctxkit ${what}: неподдерживаемая версия контракта (нужна schema 1)`)
+  if (!isObj(v) || v['tool'] !== 'ctxkit' || v['schema'] !== 1) throw new Error(t(`ctxkit ${what}: неподдерживаемая версия контракта (нужна schema 1)`, `ctxkit ${what}: unsupported contract version (schema 1 required)`))
   return v
 }
 
@@ -110,10 +112,10 @@ function parseJson(text: string, what: string): Record<string, unknown> {
 export function parseDoctor(text: string): CtxkitDoctor {
   const v = parseJson(text, 'doctor')
   const list = v['findings']
-  if (!Array.isArray(list) || list.length > 200) throw new Error('ctxkit doctor: неожиданная форма')
+  if (!Array.isArray(list) || list.length > 200) throw new Error(t('ctxkit doctor: неожиданная форма', 'ctxkit doctor: unexpected shape'))
   const findings: DoctorFinding[] = list.map((f: unknown) => {
     if (!isObj(f) || typeof f['id'] !== 'string' || typeof f['message'] !== 'string' || typeof f['severity'] !== 'string' || !SEVERITIES.includes(f['severity'])) {
-      throw new Error('ctxkit doctor: неожиданная находка')
+      throw new Error(t('ctxkit doctor: неожиданная находка', 'ctxkit doctor: unexpected finding'))
     }
     const s = (x: unknown): string | null => (typeof x === 'string' ? x.slice(0, 500) : null)
     return { id: f['id'].slice(0, 60), severity: f['severity'] as FindingSeverity, message: f['message'].slice(0, 300), detail: s(f['detail']), fix: s(f['fix']) }
@@ -125,10 +127,10 @@ export function parseDoctor(text: string): CtxkitDoctor {
 export function parseReport(text: string): CtxkitReport {
   const v = parseJson(text, 'report')
   const days = v['days']
-  if (!isObj(days) || Object.keys(days).length > 400) throw new Error('ctxkit report: неожиданная форма')
+  if (!isObj(days) || Object.keys(days).length > 400) throw new Error(t('ctxkit report: неожиданная форма', 'ctxkit report: unexpected shape'))
   const out: Record<string, DayStats> = {}
   for (const [day, raw] of Object.entries(days)) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !isObj(raw)) throw new Error('ctxkit report: неожиданный день')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !isObj(raw)) throw new Error(t('ctxkit report: неожиданный день', 'ctxkit report: unexpected day'))
     const mt = isObj(raw['main_turns']) ? raw['main_turns'] : {}
     const calls: Record<string, number> = {}
     if (isObj(raw['agent_calls'])) {

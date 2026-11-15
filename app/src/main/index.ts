@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { getLang, isLang, langFromLocale, setLang } from '../shared/i18n'
+import { getLang, isLang, langFromLocale, setLang, t } from '../shared/i18n'
 import type { Lang } from '../shared/i18n'
 import { CLIENTS, LEVEL_RANK } from '../shared/model'
 import type { ChangedEvent, ClientId, Intent, Result, ScanResponse, WriteLevel } from '../shared/model'
@@ -76,7 +76,7 @@ function ensureSidecar(): Sidecar | string {
   if (sidecar) return sidecar
   const bin = sidecarPath()
   if (!existsSync(bin) || !basename(bin).toLowerCase().startsWith('loadout')) {
-    return tidy(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`)
+    return tidy(t(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`, `core not found: ${bin}. Build it with "cargo build --release" in the project root.`))
   }
   // Каталог бэкапов передаём всегда, а право писать проверяет main (уровень R1) перед каждым `apply` и `rollback`.
   const args = ['serve', '--backups', join(app.getPath('userData'), 'backups'), '--lang', getLang()]
@@ -112,7 +112,7 @@ async function runScan(): Promise<ScanResponse> {
     return { ok: true, data: validateScan(await s.request('scan')), ms: Date.now() - started }
   } catch (e) {
     needCatchUp = true
-    return { ok: false, error: tidy(e instanceof Error ? e.message : 'не удалось разобрать ответ ядра') }
+    return { ok: false, error: tidy(e instanceof Error ? e.message : t('не удалось разобрать ответ ядра', 'failed to parse the core response')) }
   }
 }
 
@@ -195,7 +195,7 @@ async function guarded<T>(fn: () => Promise<T>): Promise<Result<T>> {
   try {
     return { ok: true, data: await fn() }
   } catch (e) {
-    return { ok: false, error: tidy(e instanceof Error ? e.message : 'не удалось выполнить операцию') }
+    return { ok: false, error: tidy(e instanceof Error ? e.message : t('не удалось выполнить операцию', 'the operation failed')) }
   }
 }
 
@@ -226,7 +226,7 @@ async function core(method: string, params?: Record<string, unknown>): Promise<u
     const g = s.generation
     const st = await s.request('status', undefined, g)
     const ok = typeof st === 'object' && st !== null && (st as Record<string, unknown>)['protocol'] === CORE_PROTOCOL
-    if (!ok) throw new Error('ядро другой версии: запись отключена. Пересоберите ядро (cargo build --release)')
+    if (!ok) throw new Error(t('ядро другой версии: запись отключена. Пересоберите ядро (cargo build --release)', 'the core is a different version: writing is disabled. Rebuild the core (cargo build --release)'))
     verifiedGeneration = g
   }
   return s.request(method, params, verifiedGeneration)
@@ -239,7 +239,7 @@ async function core(method: string, params?: Record<string, unknown>): Promise<u
  */
 function grantedLevel(): 'R1' | 'R2' {
   const have = readWriteLevel()
-  if (have === 'R0') throw new Error('запись выключена (R0): включите уровень записи в шапке окна')
+  if (have === 'R0') throw new Error(t('запись выключена (R0): включите уровень записи в шапке окна', 'writing is off (R0): enable a write level in the window header'))
   return have
 }
 
@@ -252,14 +252,14 @@ const isShort = (v: unknown): v is string => typeof v === 'string' && v.length <
 function validateAdd(r: Record<string, unknown>): Intent {
   const { to, name, command, args, url, env } = r
   if (typeof to !== 'string' || !CLIENT_IDS.includes(to) || !isShort(name) || !isShort(command) || !isShort(url)) {
-    throw new Error('неверные параметры')
+    throw new Error(t('неверные параметры', 'invalid parameters'))
   }
-  if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error('неверные аргументы')
-  if (!Array.isArray(env) || env.length > 30) throw new Error('неверные переменные окружения')
+  if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error(t('неверные аргументы', 'invalid arguments'))
+  if (!Array.isArray(env) || env.length > 30) throw new Error(t('неверные переменные окружения', 'invalid environment variables'))
   const pairs = env.map((p: unknown) => {
     const k = (p as Record<string, unknown> | null)?.['key']
     const v = (p as Record<string, unknown> | null)?.['value']
-    if (!isShort(k) || !isShort(v) || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(k)) throw new Error('неверные переменные окружения')
+    if (!isShort(k) || !isShort(v) || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(k)) throw new Error(t('неверные переменные окружения', 'invalid environment variables'))
     return { key: k, value: v }
   })
   return { op: 'add', to: to as ClientId, name, command, args: args as string[], url, env: pairs }
@@ -267,25 +267,25 @@ function validateAdd(r: Record<string, unknown>): Intent {
 
 /** Разбор намерения от страницы: только id записи и то, что с ней сделать. Всё остальное отбрасывается. */
 function validateIntent(raw: unknown): Intent {
-  if (typeof raw !== 'object' || raw === null) throw new Error('неверные параметры')
+  if (typeof raw !== 'object' || raw === null) throw new Error(t('неверные параметры', 'invalid parameters'))
   const r = raw as Record<string, unknown>
   if (r['op'] === 'add') return validateAdd(r)
   const entity = r['entity']
-  if (typeof entity !== 'string' || !ENTITY_RE.test(entity)) throw new Error('неверные параметры')
+  if (typeof entity !== 'string' || !ENTITY_RE.test(entity)) throw new Error(t('неверные параметры', 'invalid parameters'))
   if (r['op'] === 'toggle' && typeof r['enable'] === 'boolean') return { op: 'toggle', entity, enable: r['enable'] }
   if (r['op'] === 'edit' && isShort(r['command']) && r['command'].trim() !== '') {
     const args = r['args']
-    if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error('неверные аргументы')
+    if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error(t('неверные аргументы', 'invalid arguments'))
     return { op: 'edit', entity, command: r['command'], args: args as string[] }
   }
   if (r['op'] === 'copy' && typeof r['to'] === 'string' && CLIENT_IDS.includes(r['to'])) {
     return { op: 'copy', entity, to: r['to'] as ClientId }
   }
-  throw new Error('неверные параметры')
+  throw new Error(t('неверные параметры', 'invalid parameters'))
 }
 
 function validateName(v: unknown): string {
-  if (typeof v !== 'string' || !NAME_RE.test(v) || v.trim() !== v) throw new Error('имя профиля: 1–40 знаков (буквы, цифры, пробел, _ - .)')
+  if (typeof v !== 'string' || !NAME_RE.test(v) || v.trim() !== v) throw new Error(t('имя профиля: 1–40 знаков (буквы, цифры, пробел, _ - .)', 'profile name: 1-40 characters (letters, digits, space, _ - .)'))
   return v
 }
 
@@ -368,7 +368,7 @@ void app.whenReady().then(() => {
   ipcMain.handle('writeLevel:get', (e) => (guard(e), readWriteLevel()))
   ipcMain.handle('writeLevel:set', async (e, level: unknown) => {
     guard(e)
-    if (level !== 'R0' && level !== 'R1' && level !== 'R2') throw new Error('неизвестный уровень')
+    if (level !== 'R0' && level !== 'R1' && level !== 'R2') throw new Error(t('неизвестный уровень', 'unknown level'))
     // Повышение уровня подтверждает человек в окне самой ОС, которое страница не может нажать за него:
     // иначе скомпрометированная страница включила бы запись и тут же вызвала `apply`. Понижение подтверждения не требует.
     // Проверки окна подменяют `dialog.showMessageBox` в main-процессе, и согласие, и отказ.
@@ -376,12 +376,12 @@ void app.whenReady().then(() => {
       const r2 = level === 'R2'
       const opts = {
         type: 'warning' as const,
-        title: `Loadout: включить уровень ${level}?`,
+        title: t(`Loadout: включить уровень ${level}?`, `Loadout: enable level ${level}?`),
         message: r2
-          ? 'Разрешить Loadout выносить записи в корзину, править команды MCP, копировать записи между клиентами и применять профили?'
-          : 'Разрешить Loadout включать и выключать записи в конфигах клиентов?',
-        detail: 'Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.',
-        buttons: ['Отмена', r2 ? 'Включить R2' : 'Включить запись'],
+          ? t('Разрешить Loadout выносить записи в корзину, править команды MCP, копировать записи между клиентами и применять профили?', 'Allow Loadout to move entries to the trash, edit MCP commands, copy entries between clients and apply profiles?')
+          : t('Разрешить Loadout включать и выключать записи в конфигах клиентов?', 'Allow Loadout to turn entries on and off in client configs?'),
+        detail: t('Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.', 'A preview is shown and a backup is made before every change, and every change can be rolled back from the journal. Close Claude Code and Codex if they are running: they may overwrite the file.'),
+        buttons: [t('Отмена', 'Cancel'), r2 ? t('Включить R2', 'Enable R2') : t('Включить запись', 'Enable writing')],
         defaultId: 0,
         cancelId: 0,
         noLink: true,
@@ -404,7 +404,7 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => {
       const intent = validateIntent(raw)
-      if (typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) throw new Error('неверные параметры')
+      if (typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) throw new Error(t('неверные параметры', 'invalid parameters'))
       // нужный операции уровень (флаг — R1, корзина, правка, копирование — R2) знает и проверяет ядро
       return validateApplied(await core('apply', { ...intent, baseSha, maxLevel: grantedLevel() }))
     })
@@ -416,16 +416,16 @@ void app.whenReady().then(() => {
   ipcMain.handle('rollback', (e, op: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof op !== 'string' || !OP_RE.test(op)) throw new Error('неверный номер операции')
+      if (typeof op !== 'string' || !OP_RE.test(op)) throw new Error(t('неверный номер операции', 'invalid operation number'))
       return validateApplied(await core('rollback', { op, maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('rollbackBatch', (e, batch: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof batch !== 'string' || !BATCH_RE.test(batch)) throw new Error('неверный номер пакета')
+      if (typeof batch !== 'string' || !BATCH_RE.test(batch)) throw new Error(t('неверный номер пакета', 'invalid batch number'))
       const done: unknown = await core('rollbackBatch', { batch, maxLevel: grantedLevel() })
-      if (!Array.isArray(done)) throw new Error('ядро вернуло ответ неожиданной формы')
+      if (!Array.isArray(done)) throw new Error(t('ядро вернуло ответ неожиданной формы', 'the core returned a response of an unexpected shape'))
       return done.map(validateApplied)
     })
   })
@@ -461,7 +461,7 @@ void app.whenReady().then(() => {
   ipcMain.handle('applyProfile', (e, name: unknown, batchSha: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof batchSha !== 'string' || !SHA_RE.test(batchSha)) throw new Error('неверные параметры')
+      if (typeof batchSha !== 'string' || !SHA_RE.test(batchSha)) throw new Error(t('неверные параметры', 'invalid parameters'))
       const n = validateName(name)
       return validateBatchApplied(await core('applyProfile', { name: n, batchSha, maxLevel: grantedLevel() }))
     })
@@ -485,17 +485,17 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => {
       // `doctor` выходит с кодом 1, когда есть находка уровня error: это нормальный ответ, разбираем stdout
-      const r = await ctxkit.run(ctxBin(), ['doctor', '--json', ...ctxkit.profileArgs(ctxHome())], 20_000)
+      const r = await ctxkit.run(ctxBin(), ['doctor', '--json', '--lang', getLang(), ...ctxkit.profileArgs(ctxHome())], 20_000)
       const d = ctxkit.parseDoctor(r.stdout)
       // в находках бывают полные пути (ошибка разбора settings.json, команда хука): путь домашнего каталога заменяем на `~`
-      const t = (s: string | null): string | null => (s === null ? null : tidy(s))
-      return { ...d, findings: d.findings.map((f) => ({ ...f, message: tidy(f.message), detail: t(f.detail), fix: t(f.fix) })) }
+      const tidyOpt = (s: string | null): string | null => (s === null ? null : tidy(s))
+      return { ...d, findings: d.findings.map((f) => ({ ...f, message: tidy(f.message), detail: tidyOpt(f.detail), fix: tidyOpt(f.fix) })) }
     })
   })
   ipcMain.handle('ctxkit:report', (e, days: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (days !== 7 && days !== 14 && days !== 30) throw new Error('неверный период')
+      if (days !== 7 && days !== 14 && days !== 30) throw new Error(t('неверный период', 'invalid period'))
       const r = await ctxkit.run(ctxBin(), ['report', '--json', '--days', String(days), ...ctxkit.profileArgs(ctxHome())], 90_000)
       return ctxkit.parseReport(r.stdout)
     })
@@ -503,14 +503,14 @@ void app.whenReady().then(() => {
   ipcMain.handle('ctxkit:setup', (e, raw: unknown, dryRun: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof dryRun !== 'boolean') throw new Error('неверные параметры')
+      if (typeof dryRun !== 'boolean') throw new Error(t('неверные параметры', 'invalid parameters'))
       const options = ctxkit.parseSetupOptions(raw)
       const key = JSON.stringify(options)
-      if (setupBusy) throw new Error('ctxkit уже работает: дождитесь окончания')
+      if (setupBusy) throw new Error(t('ctxkit уже работает: дождитесь окончания', 'ctxkit is already running: wait for it to finish'))
       if (!dryRun) {
         // применение пишет в конфиги клиентов: нужен R2 и предпросмотр с точно такими же настройками
-        if (readWriteLevel() !== 'R2') throw new Error('для применения ctxkit нужен уровень R2: включите его в шапке окна')
-        if (lastSetupPreview !== key) throw new Error('сначала выполните предпросмотр с теми же настройками')
+        if (readWriteLevel() !== 'R2') throw new Error(t('для применения ctxkit нужен уровень R2: включите его в шапке окна', 'applying ctxkit requires level R2: enable it in the window header'))
+        if (lastSetupPreview !== key) throw new Error(t('сначала выполните предпросмотр с теми же настройками', 'run a preview with the same settings first'))
         // предпросмотр расходуется до запуска: один предпросмотр — одно применение, даже если запуск закончится ошибкой
         lastSetupPreview = undefined
       }
@@ -532,16 +532,16 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => {
       if (typeof spec !== 'string' || !SPEC_RE.test(spec) || typeof dryRun !== 'boolean') {
-        throw new Error('имя плагина: имя@маркетплейс, буквы, цифры, `.`, `_`, `-`')
+        throw new Error(t('имя плагина: имя@маркетплейс, буквы, цифры, `.`, `_`, `-`', 'plugin name: name@marketplace, letters, digits, `.`, `_`, `-`'))
       }
       const args = ['plugin', 'install', spec, '--scope', 'user']
       if (dryRun) {
         lastPluginPreview = spec
         return { dryRun, code: 0, output: `claude ${args.join(' ')}` }
       }
-      if (readWriteLevel() !== 'R2') throw new Error('для установки плагина нужен уровень R2: включите его в шапке окна')
-      if (lastPluginPreview !== spec) throw new Error('сначала выполните предпросмотр с тем же именем')
-      if (pluginBusy) throw new Error('установка уже идёт')
+      if (readWriteLevel() !== 'R2') throw new Error(t('для установки плагина нужен уровень R2: включите его в шапке окна', 'installing a plugin requires level R2: enable it in the window header'))
+      if (lastPluginPreview !== spec) throw new Error(t('сначала выполните предпросмотр с тем же именем', 'run a preview with the same name first'))
+      if (pluginBusy) throw new Error(t('установка уже идёт', 'an installation is already in progress'))
       lastPluginPreview = undefined
       pluginBusy = true
       try {

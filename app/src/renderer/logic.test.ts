@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Entity } from '../shared/model'
 import { buildRows, onlyUnknown, scopeRank } from './aggregate'
-import { diagnose, plural } from './doctor'
+import { plural } from '../shared/i18n'
+import { diagnose } from './doctor'
 
 let n = 0
 const ent = (over: Partial<Entity>): Entity => ({
@@ -89,7 +90,7 @@ describe('doctor', () => {
   it('две записи одного плагина с расхождением дают одну находку; склонение числа', () => {
     const f = diagnose([ent({ name: 'dup@mp', state: 'stale' }), ent({ name: 'dup@mp', state: 'stale' })], [])
     expect(f).toHaveLength(1)
-    expect([1, 2, 5, 11, 21, 22].map((n) => plural(n, 'плагина', 'плагина', 'плагинов'))).toEqual([
+    expect([1, 2, 5, 11, 21, 22].map((n) => plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins']))).toEqual([
       'плагина', 'плагина', 'плагинов', 'плагинов', 'плагина', 'плагина',
     ])
   })

@@ -57,8 +57,9 @@ impl Ctx {
     pub fn read_text(&mut self, p: &Path) -> Option<String> {
         // Файлы клиентов бывают большими (`.claude.json` с кешами), но не гигабайтными: лимит защищает от зависания.
         if std::fs::metadata(p).is_ok_and(|m| m.len() > MAX_FILE_BYTES) {
-            let w = format!(
+            let w = crate::tr!(
                 "{}: файл больше {} МБ, пропущен",
+                "{}: file is larger than {} MB, skipped",
                 self.tilde(p),
                 MAX_FILE_BYTES >> 20
             );
@@ -81,7 +82,7 @@ impl Ctx {
         match serde_json::from_str(&text) {
             Ok(v) => Some(v),
             Err(e) => {
-                let w = format!("{}: не JSON ({})", self.tilde(p), e);
+                let w = crate::tr!("{}: не JSON ({})", "{}: not JSON ({})", self.tilde(p), e);
                 self.warnings.push(w);
                 None
             }
@@ -111,8 +112,10 @@ pub(crate) fn scan_mcp_servers(
 ) {
     for (name, cfg) in servers.and_then(Value::as_object).into_iter().flatten() {
         let Some(shown) = mask::safe_name(name) else {
-            c.warnings
-                .push(format!("{file}: MCP-сервер с недопустимым именем пропущен"));
+            c.warnings.push(crate::tr!(
+                "{file}: MCP-сервер с недопустимым именем пропущен",
+                "{file}: MCP server with an invalid name skipped"
+            ));
             continue;
         };
         let mut e = Entity::new(
@@ -185,8 +188,9 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
         .detail(json!({ "description": desc }))
         .fs_named(); // имя уже прошло safe_name, а запасное — имя каталога
         if name != dir_name {
-            e = e.note(format!(
-                "имя в frontmatter «{name}» не совпадает с каталогом «{dir_name}»"
+            e = e.note(crate::tr!(
+                "имя в frontmatter «{name}» не совпадает с каталогом «{dir_name}»",
+                "name in frontmatter “{name}” does not match the directory “{dir_name}”"
             ));
         }
         c.push(e);
@@ -207,8 +211,9 @@ pub(crate) fn scan_hooks(
     };
     for (event, groups) in events {
         let Some(ev) = mask::safe_name(event) else {
-            c.warnings.push(format!(
-                "{file}: событие хука с недопустимым именем пропущено"
+            c.warnings.push(crate::tr!(
+                "{file}: событие хука с недопустимым именем пропущено",
+                "{file}: hook event with an invalid name skipped"
             ));
             continue;
         };
@@ -481,7 +486,7 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
             .to_owned()
         });
         if !e.can_toggle {
-            e.toggle_why = Some(write::why_not(e).to_owned());
+            e.toggle_why = Some(write::why_not(e));
         }
         for s in [
             &mut e.name,

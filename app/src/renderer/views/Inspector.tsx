@@ -1,5 +1,6 @@
 import { CLIENTS, LEVEL_RANK } from '../../shared/model'
 import type { Entity, Level, WriteLevel } from '../../shared/model'
+import { t } from '../../shared/i18n'
 import { GLYPH } from '../aggregate'
 import type { Row } from '../aggregate'
 import { Glyph, KindBadge, Panel } from '../ui'
@@ -16,24 +17,28 @@ function show(v: unknown): string | null {
   return String(v)
 }
 
-const DETAIL_LABELS: Record<string, string> = {
-  transport: 'транспорт',
-  command: 'команда',
-  args: 'аргументы',
-  url: 'адрес',
-  envKeys: 'ключи env',
-  headerKeys: 'ключи заголовков',
-  event: 'событие',
-  matcher: 'matcher',
-  type: 'тип',
-  timeout: 'таймаут',
-  description: 'описание',
-  displayName: 'название',
-  sha: 'коммит',
-  sourceType: 'источник',
-  model: 'модель',
-  id: 'id записи',
-}
+// t() только во время рендера, не при импорте модуля
+const detailLabel = (k: string): string =>
+  (
+    ({
+      transport: t('транспорт', 'transport'),
+      command: t('команда', 'command'),
+      args: t('аргументы', 'arguments'),
+      url: t('адрес', 'URL'),
+      envKeys: t('ключи env', 'env keys'),
+      headerKeys: t('ключи заголовков', 'header keys'),
+      event: t('событие', 'event'),
+      matcher: 'matcher',
+      type: t('тип', 'type'),
+      timeout: t('таймаут', 'timeout'),
+      description: t('описание', 'description'),
+      displayName: t('название', 'name'),
+      sha: t('коммит', 'commit'),
+      sourceType: t('источник', 'source'),
+      model: t('модель', 'model'),
+      id: t('id записи', 'entry id'),
+    }) as Record<string, string>
+  )[k] ?? k
 
 interface Props {
   row: Row | undefined
@@ -49,15 +54,15 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
   if (!row || !sel) {
     return (
       <>
-        <h2>Инспектор</h2>
-        <p className="mute">Выберите ячейку матрицы.</p>
+        <h2>{t('Инспектор', 'Inspector')}</h2>
+        <p className="mute">{t('Выберите ячейку матрицы.', 'Select a matrix cell.')}</p>
       </>
     )
   }
   const client = CLIENTS.find((c) => c.id === sel.client)
   const cell = row.cells[sel.client]
   const strip = (
-    <div className="strip" aria-label="Состояние по клиентам">
+    <div className="strip" aria-label={t('Состояние по клиентам', 'State by client')}>
       {CLIENTS.map((c) => (
         <span key={c.id} title={`${c.name}: ${GLYPH[row.cells[c.id]?.state ?? 'none'].label}`}>
           <Glyph state={row.cells[c.id]?.state ?? 'none'} />
@@ -68,11 +73,11 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
   if (!cell) {
     return (
       <>
-        <h2>Инспектор</h2>
+        <h2>{t('Инспектор', 'Inspector')}</h2>
         <Panel>
           <KindBadge kinds={row.kinds} /> <b>{row.name}</b>
           {strip}
-          <p className="mute">В {client?.name} этой сущности нет. Копирование между клиентами — этап M4.</p>
+          <p className="mute">{t(`В ${client?.name} этой сущности нет. Копирование между клиентами — этап M4.`, `This entity is not in ${client?.name}. Copying between clients is milestone M4.`)}</p>
         </Panel>
       </>
     )
@@ -85,25 +90,25 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
 
   return (
     <>
-      <h2>Инспектор</h2>
+      <h2>{t('Инспектор', 'Inspector')}</h2>
       <Panel>
         <div>
           <KindBadge kinds={[e.kind]} /> <b>{row.name}</b>
         </div>
         {strip}
         <dl className="kv">
-          <dt>клиент</dt><dd>{client?.name}</dd>
-          <dt>состояние</dt><dd className={`s-${e.state}`}>{GLYPH[e.state].ch} {GLYPH[e.state].label}</dd>
-          <dt>область</dt><dd>{e.scope}</dd>
-          {e.version ? (<><dt>версия</dt><dd>{e.version}</dd></>) : null}
-          <dt>файл</dt><dd className="wrap">{e.origin.file}</dd>
-          <dt>указатель</dt><dd className="wrap">{e.origin.pointer}</dd>
+          <dt>{t('клиент', 'client')}</dt><dd>{client?.name}</dd>
+          <dt>{t('состояние', 'state')}</dt><dd className={`s-${e.state}`}>{GLYPH[e.state].ch} {GLYPH[e.state].label}</dd>
+          <dt>{t('область', 'scope')}</dt><dd>{e.scope}</dd>
+          {e.version ? (<><dt>{t('версия', 'version')}</dt><dd>{e.version}</dd></>) : null}
+          <dt>{t('файл', 'file')}</dt><dd className="wrap">{e.origin.file}</dd>
+          <dt>{t('указатель', 'pointer')}</dt><dd className="wrap">{e.origin.pointer}</dd>
         </dl>
       </Panel>
 
       {cell.instances.length > 1 ? (
         <>
-          <h2>Записи ({cell.instances.length})</h2>
+          <h2>{t('Записи', 'Entries')} ({cell.instances.length})</h2>
           <ul className="instances">
             {cell.instances.map((x) => (
               <li key={x.id}>
@@ -119,54 +124,60 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
 
       {e.note ? (
         <Panel className="note">
-          <b className="s-stale">Замечание</b>
+          <b className="s-stale">{t('Замечание', 'Note')}</b>
           <p>{e.note}</p>
         </Panel>
       ) : null}
 
       {details.length > 0 ? (
         <>
-          <h2>Содержимое</h2>
+          <h2>{t('Содержимое', 'Contents')}</h2>
           <dl className="kv detail">
             {details.map(([k, v]) => (
               <div key={k} className="kvrow">
-                <dt>{DETAIL_LABELS[k] ?? k}</dt>
+                <dt>{detailLabel(k)}</dt>
                 <dd className="wrap">{v}</dd>
               </div>
             ))}
           </dl>
-          <p className="mute small">Значения env и заголовков не показываются: только имена ключей. Команды показаны без секретов.</p>
+          <p className="mute small">{t('Значения env и заголовков не показываются: только имена ключей. Команды показаны без секретов.', 'Env and header values are not shown, only key names. Commands are shown without secrets.')}</p>
         </>
       ) : null}
 
       <div className="actions col">
-        <button onClick={() => void window.loadout.copyText(e.origin.file)}>Копировать путь</button>
+        <button onClick={() => void window.loadout.copyText(e.origin.file)}>{t('Копировать путь', 'Copy path')}</button>
         <button
           disabled={!e.canToggle || !levelOk(level, e.toggleLevel ?? 'R1')}
-          title={!e.canToggle ? e.toggleWhy : !levelOk(level, e.toggleLevel ?? 'R1') ? `Включите уровень ${e.toggleLevel ?? 'R1'} в шапке окна` : 'Предпросмотр, затем запись (Space)'}
+          title={
+            !e.canToggle
+              ? e.toggleWhy
+              : !levelOk(level, e.toggleLevel ?? 'R1')
+                ? t(`Включите уровень ${e.toggleLevel ?? 'R1'} в шапке окна`, `Enable level ${e.toggleLevel ?? 'R1'} in the window header`)
+                : t('Предпросмотр, затем запись (Space)', 'Preview, then write (Space)')
+          }
           onClick={() => onToggle(e, e.state === 'off' || e.state === 'unknown')}
         >
-          {e.state === 'off' || e.state === 'unknown' ? 'Включить' : e.toggleLevel === 'R2' ? 'Выключить (в корзину)' : 'Выключить'}
+          {e.state === 'off' || e.state === 'unknown' ? t('Включить', 'Enable') : e.toggleLevel === 'R2' ? t('Выключить (в корзину)', 'Disable (move to trash)') : t('Выключить', 'Disable')}
         </button>
         {e.canEdit ? (
           <>
-            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? 'Заменить команду и аргументы' : 'Включите уровень R2 в шапке окна'} onClick={() => onEdit(e)}>
-              Править команду…
+            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? t('Заменить команду и аргументы', 'Replace the command and arguments') : t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header')} onClick={() => onEdit(e)}>
+              {t('Править команду…', 'Edit command…')}
             </button>
-            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? 'Скопировать запись в другой клиент' : 'Включите уровень R2 в шапке окна'} onClick={() => onCopy(e)}>
-              Копировать в клиент…
+            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? t('Скопировать запись в другой клиент', 'Copy the entry to another client') : t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header')} onClick={() => onCopy(e)}>
+              {t('Копировать в клиент…', 'Copy to client…')}
             </button>
           </>
         ) : null}
       </div>
       <p className="mute small">
         {!e.canToggle
-          ? `Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}.`
+          ? t(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}.`, `Cannot toggle: ${e.toggleWhy ?? 'not supported'}.`)
           : level === 'R0'
-            ? 'Запись выключена (R0). Уровень включается в шапке окна.'
+            ? t('Запись выключена (R0). Уровень включается в шапке окна.', 'Writing is off (R0). Set the level in the window header.')
             : !levelOk(level, e.toggleLevel ?? 'R1')
-              ? `Для этой записи нужен уровень ${e.toggleLevel}: у неё нет флага, выключение выносит её в корзину Loadout.`
-              : 'Запись пойдёт через предпросмотр, бэкап и проверку; откат — в журнале.'}
+              ? t(`Для этой записи нужен уровень ${e.toggleLevel}: у неё нет флага, выключение выносит её в корзину Loadout.`, `This entry needs level ${e.toggleLevel}: it has no flag, so disabling moves it to the Loadout trash.`)
+              : t('Запись пойдёт через предпросмотр, бэкап и проверку; откат — в журнале.', 'The write goes through preview, backup and verification; rollback is in the journal.')}
       </p>
     </>
   )

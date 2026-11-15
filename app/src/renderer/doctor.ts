@@ -1,3 +1,4 @@
+import { plural, t } from '../shared/i18n'
 import type { ClientId, Entity, Facts } from '../shared/model'
 import { CLIENTS } from '../shared/model'
 
@@ -29,8 +30,14 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     out.push({
       id: `backups:${b.client}:${b.dir}`,
       severity: 'info',
-      title: `${clientName(b.client)}: ${b.count} ${plural(b.count, 'резервная копия', 'резервные копии', 'резервных копий')} в ${b.dir}`,
-      detail: 'Их оставляют установщики сторонних инструментов при правке конфигов. Loadout копий не создаёт и не трогает; свои бэкапы будет хранить отдельно (M3).',
+      title: t(
+        `${clientName(b.client)}: ${b.count} ${plural(b.count, ['резервная копия', 'резервные копии', 'резервных копий'], ['backup', 'backups'])} в ${b.dir}`,
+        `${clientName(b.client)}: ${b.count} ${plural(b.count, ['резервная копия', 'резервные копии', 'резервных копий'], ['backup', 'backups'])} in ${b.dir}`,
+      ),
+      detail: t(
+        'Их оставляют установщики сторонних инструментов при правке конфигов. Loadout копий не создаёт и не трогает; свои бэкапы будет хранить отдельно (M3).',
+        'Third-party installers leave these when they edit configs. Loadout neither creates nor touches them; it will keep its own backups separately (M3).',
+      ),
     })
   }
 
@@ -40,8 +47,14 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     out.push({
       id: `links:${l.client}:${l.dir}`,
       severity: l.broken === l.total ? 'error' : 'warn',
-      title: `${clientName(l.client)}: ${l.broken} из ${l.total} ссылок на пакеты ведут в никуда`,
-      detail: `Каталог ${l.dir}. Цель ссылок (кеш npx) удалена; пакеты, пока их не скачают заново, не запустятся.`,
+      title: t(
+        `${clientName(l.client)}: ${l.broken} из ${l.total} ссылок на пакеты ведут в никуда`,
+        `${clientName(l.client)}: ${l.broken} of ${l.total} package links point to nothing`,
+      ),
+      detail: t(
+        `Каталог ${l.dir}. Цель ссылок (кеш npx) удалена; пакеты, пока их не скачают заново, не запустятся.`,
+        `Directory ${l.dir}. The link target (npx cache) was deleted; the packages will not start until they are downloaded again.`,
+      ),
     })
   }
 
@@ -55,8 +68,11 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     out.push({
       id: `orphan:${e.id}`,
       severity: 'info',
-      title: `${e.name}: маркетплейс без плагинов (${clientName(e.client)})`,
-      detail: 'Ни один найденный плагин этого клиента не установлен из этого маркетплейса.',
+      title: t(`${e.name}: маркетплейс без плагинов (${clientName(e.client)})`, `${e.name}: marketplace without plugins (${clientName(e.client)})`),
+      detail: t(
+        'Ни один найденный плагин этого клиента не установлен из этого маркетплейса.',
+        'None of the plugins found for this client were installed from this marketplace.',
+      ),
       entity: e,
     })
   }
@@ -73,8 +89,15 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     out.push({
       id: `${e.state}:${e.id}`,
       severity: broken ? 'error' : 'warn',
-      title: `${e.name}: ${broken ? 'сломано' : 'расхождение'} в ${clientName(e.client)}`,
-      detail: e.note ?? (broken ? 'запись есть, но указывает на отсутствующее' : 'версии расходятся'),
+      title: t(
+        `${e.name}: ${broken ? 'сломано' : 'расхождение'} в ${clientName(e.client)}`,
+        `${e.name}: ${broken ? 'broken' : 'mismatch'} in ${clientName(e.client)}`,
+      ),
+      detail:
+        e.note ??
+        (broken
+          ? t('запись есть, но указывает на отсутствующее', 'the entry exists but points to something missing')
+          : t('версии расходятся', 'versions differ')),
       entity: e,
     })
   }
@@ -93,8 +116,14 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       out.push({
         id: `dup:${k}`,
         severity: 'warn',
-        title: `${first.logicalKey}: есть в нескольких областях (${clientName(first.client)})`,
-        detail: `области: ${scopes.join(', ')}. Какая запись действует, зависит от клиента.`,
+        title: t(
+          `${first.logicalKey}: есть в нескольких областях (${clientName(first.client)})`,
+          `${first.logicalKey}: present in several scopes (${clientName(first.client)})`,
+        ),
+        detail: t(
+          `области: ${scopes.join(', ')}. Какая запись действует, зависит от клиента.`,
+          `scopes: ${scopes.join(', ')}. Which entry applies depends on the client.`,
+        ),
         entity: first,
       })
     }
@@ -109,8 +138,14 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     out.push({
       id: `unknown:${client}`,
       severity: 'info',
-      title: `${clientName(client)}: у ${n} ${plural(n, 'плагина', 'плагина', 'плагинов')} состояние не определено`,
-      detail: 'Флаг включения лежит в настройках проекта (project/local), а их Loadout пока не читает.',
+      title: t(
+        `${clientName(client)}: у ${n} ${plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins'])} состояние не определено`,
+        `${clientName(client)}: state unknown for ${n} ${plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins'])}`,
+      ),
+      detail: t(
+        'Флаг включения лежит в настройках проекта (project/local), а их Loadout пока не читает.',
+        'The enabled flag lives in the project settings (project/local), which Loadout does not read yet.',
+      ),
     })
   }
 
@@ -122,28 +157,22 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       out.push({
         id: `secret:${e.id}`,
         severity: 'info',
-        title: `${e.name} (${clientName(e.client)}): в конфиге есть ключи секретов`,
-        detail: `Ключи: ${keys.slice(0, 5).join(', ')}. Значения лежат в файле клиента, Loadout их не читает и не показывает.`,
+        title: t(`${e.name} (${clientName(e.client)}): в конфиге есть ключи секретов`, `${e.name} (${clientName(e.client)}): the config has secret keys`),
+        detail: t(
+          `Ключи: ${keys.slice(0, 5).join(', ')}. Значения лежат в файле клиента, Loadout их не читает и не показывает.`,
+          `Keys: ${keys.slice(0, 5).join(', ')}. The values sit in the client's file; Loadout neither reads nor shows them.`,
+        ),
         entity: e,
       })
     }
   }
 
   warnings.forEach((w, i) =>
-    out.push({ id: `warn:${i}`, severity: 'warn', title: 'Предупреждение сканера', detail: w }),
+    out.push({ id: `warn:${i}`, severity: 'warn', title: t('Предупреждение сканера', 'Scanner warning'), detail: w }),
   )
 
   const rank: Record<Severity, number> = { error: 0, warn: 1, info: 2 }
   return out.sort((a, b) => rank[a.severity] - rank[b.severity])
-}
-
-/** Русское число: 1 плагина, 2–4 плагина (родительный), 5+ плагинов (после «у»). */
-export function plural(n: number, one: string, few: string, many: string): string {
-  const m10 = n % 10
-  const m100 = n % 100
-  if (m10 === 1 && m100 !== 11) return one
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few
-  return many
 }
 
 export function asStrings(v: unknown): string[] {

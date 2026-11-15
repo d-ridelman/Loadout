@@ -1,3 +1,4 @@
+import { getLang, t } from '../shared/i18n'
 import type { ClientId, Entity, EntityState, Kind } from '../shared/model'
 
 /**
@@ -6,15 +7,16 @@ import type { ClientId, Entity, EntityState, Kind } from '../shared/model'
  */
 export type Group = 'plugin' | 'mcp' | 'connector' | 'skill' | 'agent' | 'command' | 'hook' | 'marketplace'
 
+/** Подписи — геттеры: `t()` вычисляется при обращении (во время рендера), а не при импорте модуля. */
 export const GROUPS: readonly { id: Group; label: string }[] = [
-  { id: 'plugin', label: 'плагины' },
+  { id: 'plugin', get label() { return t('плагины', 'plugins') } },
   { id: 'mcp', label: 'MCP' },
-  { id: 'connector', label: 'коннекторы' },
-  { id: 'skill', label: 'скилы' },
-  { id: 'agent', label: 'агенты' },
-  { id: 'command', label: 'команды' },
-  { id: 'hook', label: 'хуки' },
-  { id: 'marketplace', label: 'маркетплейсы' },
+  { id: 'connector', get label() { return t('коннекторы', 'connectors') } },
+  { id: 'skill', get label() { return t('скилы', 'skills') } },
+  { id: 'agent', get label() { return t('агенты', 'agents') } },
+  { id: 'command', get label() { return t('команды', 'commands') } },
+  { id: 'hook', get label() { return t('хуки', 'hooks') } },
+  { id: 'marketplace', get label() { return t('маркетплейсы', 'marketplaces') } },
 ]
 
 export function groupOf(kind: Kind): Group {
@@ -82,7 +84,7 @@ export function buildRows(entities: readonly Entity[]): Row[] {
     }
   }
   return [...rows.values()].sort(
-    (a, b) => order.indexOf(a.group) - order.indexOf(b.group) || a.name.localeCompare(b.name, 'ru'),
+    (a, b) => order.indexOf(a.group) - order.indexOf(b.group) || a.name.localeCompare(b.name, getLang()),
   )
 }
 
@@ -92,12 +94,13 @@ export function onlyUnknown(row: Row): boolean {
   return cells.length > 0 && cells.every((c) => c.state === 'unknown')
 }
 
+/** Подписи — геттеры по той же причине, что и у `GROUPS`. */
 export const GLYPH: Record<EntityState | 'none', { ch: string; label: string }> = {
-  on: { ch: '●', label: 'включено' },
-  off: { ch: '○', label: 'выключено' },
-  broken: { ch: '✕', label: 'сломано' },
-  stale: { ch: '◐', label: 'расхождение версий' },
-  cloud: { ch: '☁', label: 'только в приложении' },
-  unknown: { ch: '◌', label: 'не определено' },
-  none: { ch: '–', label: 'нет' },
+  on: { ch: '●', get label() { return t('включено', 'enabled') } },
+  off: { ch: '○', get label() { return t('выключено', 'disabled') } },
+  broken: { ch: '✕', get label() { return t('сломано', 'broken') } },
+  stale: { ch: '◐', get label() { return t('расхождение версий', 'version mismatch') } },
+  cloud: { ch: '☁', get label() { return t('только в приложении', 'app only') } },
+  unknown: { ch: '◌', get label() { return t('не определено', 'unknown') } },
+  none: { ch: '–', get label() { return t('нет', 'none') } },
 }

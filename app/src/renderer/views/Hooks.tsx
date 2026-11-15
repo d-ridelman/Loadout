@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n'
 import { CLIENTS } from '../../shared/model'
 import type { Entity } from '../../shared/model'
 
@@ -13,12 +14,12 @@ export function Hooks({ hooks, onShow }: { hooks: Entity[]; onShow: (e: Entity) 
     const [ia, ib] = [ORDER.indexOf(a), ORDER.indexOf(b)]
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b)
   })
-  if (hooks.length === 0) return <p className="mute">Хуков не найдено.</p>
+  if (hooks.length === 0) return <p className="mute">{t('Хуков не найдено.', 'No hooks found.')}</p>
   return (
     <>
-      <h2>Конвейер хуков · события слева направо в порядке жизненного цикла</h2>
+      <h2>{t('Конвейер хуков · события слева направо в порядке жизненного цикла', 'Hook pipeline · events left to right in lifecycle order')}</h2>
       <div className="hud tablewrap">
-        <div className="pipe" role="group" aria-label="Хуки по событиям и клиентам" style={{ gridTemplateColumns: `130px repeat(${events.length}, minmax(150px, 1fr))` }}>
+        <div className="pipe" role="group" aria-label={t('Хуки по событиям и клиентам', 'Hooks by event and client')} style={{ gridTemplateColumns: `130px repeat(${events.length}, minmax(150px, 1fr))` }}>
           <div />
           {events.map((ev) => (
             <div key={ev} className="h">{ev}</div>
@@ -29,8 +30,10 @@ export function Hooks({ hooks, onShow }: { hooks: Entity[]; onShow: (e: Entity) 
         </div>
       </div>
       <p className="mute small">
-        Показаны только события, которые есть в найденных файлах. Пустая ячейка значит «хука нет», а не «клиент не поддерживает событие»:
-        набор событий каждого клиента ядро не проверяет. Хуки-обёртки одной программы (например, `orca-agent-hooks`) собраны под общим ключом.
+        {t(
+          'Показаны только события, которые есть в найденных файлах. Пустая ячейка значит «хука нет», а не «клиент не поддерживает событие»: набор событий каждого клиента ядро не проверяет. Хуки-обёртки одной программы (например, `orca-agent-hooks`) собраны под общим ключом.',
+          'Only events present in the files found are shown. An empty cell means "no hook", not "the client does not support the event": the core does not check which events each client supports. Wrapper hooks of one program (for example, `orca-agent-hooks`) are grouped under a shared key.',
+        )}
       </p>
     </>
   )

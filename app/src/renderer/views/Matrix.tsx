@@ -1,4 +1,5 @@
 import type { KeyboardEvent, RefObject } from 'react'
+import { t } from '../../shared/i18n'
 import { CLIENTS } from '../../shared/model'
 import type { ClientId, EntityState } from '../../shared/model'
 import { GLYPH, GROUPS } from '../aggregate'
@@ -76,13 +77,13 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
         <input
           ref={searchRef}
           type="search"
-          placeholder="Поиск ( / )"
-          aria-label="Поиск"
+          placeholder={t('Поиск ( / )', 'Search ( / )')}
+          aria-label={t('Поиск', 'Search')}
           value={filters.q}
           onChange={(e) => setFilters({ ...filters, q: e.target.value })}
         />
         <button className="chip" aria-pressed={filters.group === 'all'} onClick={() => setFilters({ ...filters, group: 'all' })}>
-          все типы
+          {t('все типы', 'all types')}
         </button>
         {GROUPS.map((g) => (
           <button key={g.id} className="chip" aria-pressed={filters.group === g.id} onClick={() => setFilters({ ...filters, group: g.id })}>
@@ -90,11 +91,11 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
           </button>
         ))}
         <select
-          aria-label="Фильтр по состоянию"
+          aria-label={t('Фильтр по состоянию', 'Filter by state')}
           value={filters.state}
           onChange={(e) => setFilters({ ...filters, state: e.target.value as Filters['state'] })}
         >
-          <option value="all">любое состояние</option>
+          <option value="all">{t('любое состояние', 'any state')}</option>
           {STATES.map((s) => (
             <option key={s} value={s}>{`${GLYPH[s].ch} ${GLYPH[s].label}`}</option>
           ))}
@@ -105,11 +106,11 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
             checked={filters.hideUnknown}
             onChange={(e) => setFilters({ ...filters, hideUnknown: e.target.checked })}
           />
-          скрыть «не определено»
+          {t('скрыть «не определено»', 'hide "unknown"')}
         </label>
         {filters.client ? (
           <button onClick={() => setFilters({ ...filters, client: null })}>
-            клиент: {CLIENTS.find((c) => c.id === filters.client)?.name} ✕
+            {t('клиент', 'client')}: {CLIENTS.find((c) => c.id === filters.client)?.name} ✕
           </button>
         ) : null}
       </div>
@@ -119,14 +120,14 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
           role="grid"
           id="grid"
           tabIndex={0}
-          aria-label="Матрица сущностей по клиентам"
+          aria-label={t('Матрица сущностей по клиентам', 'Entity matrix by client')}
           aria-rowcount={rows.length + 1}
           aria-activedescendant={foundRow >= 0 ? `cell-${curRow}-${curCol}` : undefined}
           onKeyDown={onKeyDown}
         >
           <thead>
             <tr>
-              <th scope="col">СУЩНОСТЬ</th>
+              <th scope="col">{t('СУЩНОСТЬ', 'ENTITY')}</th>
               {CLIENTS.map((c) => (
                 <th key={c.id} scope="col">{c.name.toUpperCase()}</th>
               ))}
@@ -152,7 +153,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
                       role="gridcell"
                       className={`c${active ? ' cur' : ''}${isFresh ? ' fresh' : ''}`}
                       aria-selected={active}
-                      aria-label={`${r.name}, ${c.name}: ${GLYPH[state].label}${more > 0 ? `, ещё записей: ${more}` : ''}${isFresh ? ', изменено только что' : ''}`}
+                      aria-label={`${r.name}, ${c.name}: ${GLYPH[state].label}${more > 0 ? t(`, ещё записей: ${more}`, `, ${more} more entries`) : ''}${isFresh ? t(', изменено только что', ', just changed') : ''}`}
                       onClick={() => {
                         pick(ri, ci)
                         document.getElementById('grid')?.focus()
@@ -169,7 +170,9 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={CLIENTS.length + 1} className="empty">
-                  {total === 0 ? 'Сущностей не найдено: клиенты не установлены или их конфиги пусты.' : 'Ничего не найдено по фильтрам'}
+                  {total === 0
+                    ? t('Сущностей не найдено: клиенты не установлены или их конфиги пусты.', 'No entities found: the clients are not installed or their configs are empty.')
+                    : t('Ничего не найдено по фильтрам', 'Nothing matches the filters')}
                 </td>
               </tr>
             ) : null}
@@ -183,7 +186,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
             <Glyph state={k} /> {GLYPH[k].label}
           </span>
         ))}
-        <span>+N — ещё записей в других областях</span>
+        <span>{t('+N — ещё записей в других областях', '+N — more entries in other scopes')}</span>
       </div>
     </>
   )
