@@ -179,13 +179,21 @@ fn check(home: &Path, store: &Path, stage: &str, sub: &str, name: &str) -> Resul
             total.div_ceil(1024)
         ),
     )];
+    // текст — только по расширению имени файла; без расширения (скрипт с шебангом) считается кодом
     let text = |r: &str| {
-        let l = r.to_ascii_lowercase();
+        let l = r.rsplit('/').next().unwrap_or(r).to_ascii_lowercase();
         [".md", ".txt", ".json", ".yaml", ".yml", ".csv"]
             .iter()
             .any(|x| l.ends_with(x))
-            || !l.contains('.')
     };
+    // SKILL.md сам может запускать команды (`` !`…` ``) и снимать запросы разрешений (`allowed-tools`)
+    let md = std::fs::read_to_string(src.join("SKILL.md")).unwrap_or_default();
+    if md.contains("!`") || md.contains("allowed-tools") {
+        notes.push(bad(
+            "SKILL.md запускает команды или разрешает инструменты без запроса (!`…`, allowed-tools): прочитайте его до установки",
+            "SKILL.md runs commands or allows tools without asking (!`…`, allowed-tools): read it before installing",
+        ));
+    }
     let code: Vec<&str> = files
         .iter()
         .map(|f| f.0.as_str())
@@ -309,10 +317,16 @@ pub fn apply(
                     "a skill with this name appeared during installation",
                 ));
             }
-            std::fs::rename(&tmp, &c.target).map_err(|e| e.to_string())
+            if std::fs::rename(&tmp, &c.target).is_ok() {
+                return Ok(());
+            }
+            // `skills` — ссылка на другой том: `rename` не пройдёт, копируем на место; каталог создали мы, при сбое убираем
+            copy_files(&c.files, &c.target).inspect_err(|_| {
+                let _ = std::fs::remove_dir_all(&c.target);
+            })
         });
+    let _ = std::fs::remove_dir_all(&tmp);
     if let Err(e) = placed {
-        let _ = std::fs::remove_dir_all(&tmp);
         return fail(bad(
             &format!("скил не установлен: {e}"),
             &format!("the skill was not installed: {e}"),
@@ -368,6 +382,29 @@ pub(super) fn rollback(
     if let Err(e) = copy_files(&files, &dir.join("removed")) {
         return fail(e);
     }
+    // Сначала каталог уходит с места (одним `rename`, если тот же том), и только потом пишется строка журнала:
+    // недоделанное удаление не должно выглядеть откатом. Сорвалось удаление — возвращаем удалённое из копии.
+    let gone = home
+        .join(".claude")
+        .join(format!(".{}.loadout.removed", m.name));
+    let _ = std::fs::remove_dir_all(&gone);
+    let moved = std::fs::rename(&target, &gone).is_ok();
+    let restore = || {
+        if moved {
+            let _ = std::fs::rename(&gone, &target);
+        } else if let Ok(back) = walk(&dir.join("removed")) {
+            let _ = copy_files(&back, &target);
+        }
+    };
+    if !moved {
+        if let Err(e) = std::fs::remove_dir_all(&target) {
+            restore();
+            return fail(bad(
+                &format!("каталог скила не убран: {e}; скил возвращён на место"),
+                &format!("the skill directory was not removed: {e}; the skill was put back"),
+            ));
+        }
+    }
     let r = Manifest {
         id: id.clone(),
         time: now_ms(),
@@ -381,14 +418,11 @@ pub(super) fn rollback(
         ..m.clone()
     };
     if let Err(e) = write_manifest(&dir, &r) {
+        restore();
         return fail(e);
     }
-    std::fs::remove_dir_all(&target).map_err(|e| {
-        bad(
-            &format!("каталог скила не убран: {e}; копия лежит в бэкапе операции"),
-            &format!("the skill directory was not removed: {e}; a copy is in the operation backup"),
-        )
-    })?;
+    // копия уже в бэкапе операции: не удалившийся до конца временный каталог ничего не портит
+    let _ = std::fs::remove_dir_all(&gone);
     Ok(Applied {
         op: id,
         entity: String::new(),

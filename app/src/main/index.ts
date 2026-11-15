@@ -10,7 +10,7 @@ import type { Lang } from '../shared/i18n'
 import { CLIENTS, LEVEL_RANK } from '../shared/model'
 import type { ChangedEvent, ClientId, Intent, Result, ScanResponse, WriteLevel } from '../shared/model'
 import * as ctxkit from './ctxkit'
-import { cloneArgs, findSkills, localMarketplaceOk, parseMarketplaceSource, parseSkillSource, readCatalog, skillNameOk } from './install'
+import { checkTreeSize, cloneArgs, findSkills, localMarketplaceOk, parseMarketplaceSource, parseSkillSource, readCatalog, skillNameOk } from './install'
 import { Sidecar } from './sidecar'
 import {
   validateApplied,
@@ -625,6 +625,8 @@ void app.whenReady().then(() => {
         lastFetchPreview = key
         return { dryRun, command, stage: '', skills: [] }
       }
+      // сеть и чужой код на диске — только на R2, как и у установки плагина
+      if (readWriteLevel() !== 'R2') throw new Error(t('для загрузки скила нужен уровень R2: включите его в шапке окна', 'downloading a skill requires level R2: enable it in the window header'))
       if (lastFetchPreview !== key) throw new Error(t('сначала посмотрите, что будет скачано', 'first review what will be downloaded'))
       if (fetchBusy) throw new Error(t('загрузка уже идёт', 'a download is already in progress'))
       lastFetchPreview = undefined
@@ -637,18 +639,25 @@ void app.whenReady().then(() => {
       try {
         if (src.kind === 'github') {
           // без окна входа и вопросов в консоли: на закрытом или несуществующем репозитории git сразу выходит с ошибкой
-          const r = await ctxkit.run('git', cloneArgs(src, ghBase, dest), 120_000, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' })
+          // LFS-смазка не идёт: она обратилась бы к хосту из `.lfsconfig` репозитория
+          const r = await ctxkit.run('git', cloneArgs(src, ghBase, dest), 120_000, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_LFS_SKIP_SMUDGE: '1' })
           if (r.code !== 0) throw new Error(t(`git clone не удался: ${tidy(r.stderr).slice(-400)}`, `git clone failed: ${tidy(r.stderr).slice(-400)}`))
         } else {
           if (!statSync(src.path, { throwIfNoEntry: false })?.isDirectory()) throw new Error(t('папка не найдена', 'folder not found'))
+          checkTreeSize(src.path)
           // ссылки не разыменовываются: ядро откажет на дереве со ссылками
           cpSync(src.path, dest, { recursive: true, dereference: false, verbatimSymlinks: true, filter: (s) => !/[\\/](\.git|node_modules)$/.test(s) })
         }
-        const skills = findSkills(dest, src.kind === 'github' ? src.sub : '')
+        const skills = src.kind === 'github' ? findSkills(dest, src.sub, src.repo) : findSkills(dest, '', basename(src.path))
         if (skills.length === 0) throw new Error(t('в источнике нет каталога со SKILL.md', 'the source has no directory with SKILL.md'))
         return { dryRun, command: '', stage, skills }
       } catch (err) {
-        rmSync(dest, { recursive: true, force: true })
+        // уборка не должна заслонять настоящую ошибку (каталог может держать ещё не вышедший дочерний процесс git)
+        try {
+          rmSync(dest, { recursive: true, force: true })
+        } catch {
+          // остаток уберёт следующая подготовка или запуск
+        }
         throw err
       } finally {
         fetchBusy = false

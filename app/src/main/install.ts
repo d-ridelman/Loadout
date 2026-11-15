@@ -100,6 +100,7 @@ export function parseSkillSource(raw: unknown): SkillSource {
   } else {
     if (s.includes('\\') || s.includes(':')) return fail()
     rest = s.split('/')
+    if (rest[1]?.endsWith('.git')) rest[1] = rest[1].slice(0, -4)
   }
   const [owner, repo, ...sub] = rest
   if (owner === undefined || repo === undefined || !repoOk(owner, repo)) return fail()
@@ -139,14 +140,39 @@ function frontmatter(file: string): Record<string, string> {
   return out
 }
 
+/**
+ * Сколько файлов и байт в папке (без ссылок, `.git` и `node_modules`); на превышении лимита ядра — отказ сразу,
+ * до копирования: иначе ввод `C:\` скопировал бы весь диск в каталог подготовки.
+ */
+export function checkTreeSize(dir: string, maxFiles = 1000, maxBytes = 50 << 20): void {
+  let files = 0
+  let bytes = 0
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.isSymbolicLink() || e.name === '.git' || e.name === 'node_modules') continue
+      const p = join(d, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (e.isFile()) {
+        files++
+        bytes += statSync(p).size
+        if (files > maxFiles || bytes > maxBytes) {
+          throw new Error(t('папка слишком большая для скила: больше 1000 файлов или 50 МБ', 'the folder is too large for a skill: more than 1000 files or 50 MB'))
+        }
+      }
+    }
+  }
+  walk(dir)
+}
+
 /** Скилы в подготовленном источнике: корень или каталоги со `SKILL.md` до трёх уровней вглубь. Ссылки не обходим. */
-export function findSkills(root: string, only = ''): SkillCandidate[] {
+export function findSkills(root: string, only = '', rootName = ''): SkillCandidate[] {
   const out: SkillCandidate[] = []
   const visit = (sub: string, depth: number) => {
     const dir = sub ? join(root, ...sub.split('/')) : root
     if (existsSync(join(dir, 'SKILL.md'))) {
       const fm = frontmatter(join(dir, 'SKILL.md'))
-      const leaf = sub.split('/').at(-1) || ''
+      // у скила в корне источника имя каталога — имя репозитория или папки
+      const leaf = sub.split('/').at(-1) || rootName
       const name = [fm['name'], leaf].find((n): n is string => n !== undefined && skillNameOk(n)) ?? ''
       out.push({ sub, name, description: clean(fm['description'], 300) })
       return

@@ -1318,6 +1318,7 @@ fn skill_install_is_journaled_and_rolls_back_into_a_backup() {
                 "---\nname: web\ndescription: d\n---\n",
             ),
             ("skills/web/run.py", "print(1)"),
+            ("skills/web/bin/tool", "#!/bin/sh"),
             ("skills/web/.git/config", "x"),
         ],
     );
@@ -1333,8 +1334,10 @@ fn skill_install_is_journaled_and_rolls_back_into_a_backup() {
         p.file
     );
     assert!(
-        p.notes.iter().any(|n| n.contains("run.py")),
-        "{:?}",
+        p.notes
+            .iter()
+            .any(|n| n.contains("файлы кода") && n.contains("run.py") && n.contains("bin/tool")),
+        "файл без расширения — тоже код: {:?}",
         p.notes
     );
     // уровень проверяет ядро
@@ -1393,7 +1396,18 @@ fn skill_install_refuses_bad_input_and_a_changed_skill() {
         );
     }
     let i = skill(id, "", "plain");
+    // SKILL.md без других файлов, но с командой и разрешениями: предупреждение всё равно есть
+    stage(
+        &e,
+        id,
+        &[("SKILL.md", "---\nallowed-tools: Bash(*)\n---\n!`curl x`\n")],
+    );
     let p = write::plan(&e.home, Some(&e.store), &i).unwrap();
+    assert!(
+        p.notes.iter().any(|n| n.contains("allowed-tools")),
+        "{:?}",
+        p.notes
+    );
     let a = wapply(&e.home, &e.store, &i, &p.base_sha).unwrap();
     fs::write(e.home.join(".claude/skills/plain/SKILL.md"), "edited").unwrap();
     assert!(!journal(&e.home, &e.store)[0].can_rollback);

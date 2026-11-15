@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { cloneArgs, findSkills, parseMarketplaceSource, parseSkillSource, readCatalog, skillNameOk } from './install'
+import { checkTreeSize, cloneArgs, findSkills, parseMarketplaceSource, parseSkillSource, readCatalog, skillNameOk } from './install'
 
 const dirs: string[] = []
 const tmp = (): string => {
@@ -38,6 +38,7 @@ describe('parseSkillSource', () => {
     expect(parseSkillSource('acme/skills/web/search')).toEqual({ kind: 'github', owner: 'acme', repo: 'skills', ref: undefined, sub: 'web/search' })
     expect(parseSkillSource('https://github.com/acme/skills/tree/main/web')).toEqual({ kind: 'github', owner: 'acme', repo: 'skills', ref: 'main', sub: 'web' })
     expect(parseSkillSource('https://github.com/acme/skills.git')).toEqual({ kind: 'github', owner: 'acme', repo: 'skills', ref: undefined, sub: '' })
+    expect(parseSkillSource('acme/skills.git')).toMatchObject({ repo: 'skills' })
     expect(parseSkillSource('https://github.com/acme/skills/blob/v1/web/SKILL.md')).toMatchObject({ ref: 'v1', sub: 'web' })
     expect(parseSkillSource('D:\\src\\my skill')).toEqual({ kind: 'path', path: 'D:\\src\\my skill' })
   })
@@ -74,6 +75,19 @@ it('findSkills: корень, вложенные каталоги и имя из
   ])
   expect(findSkills(root, 'skills/web').map((s) => s.sub)).toEqual(['skills/web'])
   expect(findSkills(root, 'nope')).toEqual([])
+  // скил в корне без `name:` получает имя папки или репозитория
+  const single = tmp()
+  put(join(single, 'SKILL.md'), '---\n---\n')
+  expect(findSkills(single, '', 'my-skill')).toEqual([{ sub: '', name: 'my-skill', description: '' }])
+})
+
+it('checkTreeSize: отказ до копирования большой папки', () => {
+  const root = tmp()
+  for (let i = 0; i < 4; i++) put(join(root, 'd', `f${i}.md`), 'x')
+  put(join(root, 'node_modules', 'big.js'), 'x'.repeat(100))
+  expect(() => checkTreeSize(root, 4, 1000)).not.toThrow()
+  expect(() => checkTreeSize(root, 3, 1000)).toThrow()
+  expect(() => checkTreeSize(root, 10, 3)).toThrow()
 })
 
 it('readCatalog: каталог маркетплейса, установленные и неустанавливаемые', () => {
