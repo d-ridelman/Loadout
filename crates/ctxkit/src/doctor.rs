@@ -149,7 +149,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                 "основная сессия не закреплена на дешёвой модели (рутина может идти на Opus/Fable)",
             ),
             model,
-            Some("ctxkit setup"),
+            Some("ctxkit setup --main-model sonnet"),
         ));
     } else {
         out.push(f(

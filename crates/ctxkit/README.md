@@ -78,7 +78,7 @@ Before changing `settings.json`, `CLAUDE.md`, `ccd-session-presets.json`, or `ho
 
 ## Setup Flags
 
-`setup` does not change your model choices on its own: `model`, `advisorModel` and the effort are written only when you pass the flag, otherwise they stay as they are (a key that is absent stays absent) and the output says `model: opus (kept; pass --main-model sonnet to set)`. For the workflow ctxkit was tuned for (`fable` advisor + `claude-sonnet-5-5` main model) run `ctxkit setup --main-model sonnet --advisor fable --effort high`. The Loadout window always passes `--advisor` (its form field) and never `--main-model` or `--effort`.
+`setup` does not change your model choices on its own: `model`, `advisorModel` and the effort are written only when you pass the flag, otherwise they stay as they are (a key that is absent stays absent) and the output says `model: opus (kept; pass --main-model sonnet to set)`. For the workflow ctxkit was tuned for (`fable` advisor + `claude-sonnet-5-5` main model) run `ctxkit setup --main-model sonnet --advisor fable --effort high`. The Loadout window passes `--advisor` only when an advisor is picked in its form (the default is "keep as is") and never passes `--main-model` or `--effort`.
 
 | Flag | Purpose |
 |---|---|

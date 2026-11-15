@@ -49,7 +49,7 @@ plan → preview → hash lock (`base_sha`) → backup + manifest → temp file 
 
 ## ctxkit
 
-[`crates/ctxkit`](crates/ctxkit/README.md) is a toolkit of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and routes routine work to cheaper models. It is built into the app (the **ctxkit** section) and can also be installed on its own.
+[`crates/ctxkit`](crates/ctxkit/README.md) is a toolkit of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review (model, advisor and effort change only on explicit flags or an explicit choice in the form). It is built into the app (the **ctxkit** section) and can also be installed on its own.
 
 ![ctxkit in the app](docs/screenshots/en-ctxkit.png)
 
