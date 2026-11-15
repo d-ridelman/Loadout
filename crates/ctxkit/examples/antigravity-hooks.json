@@ -1,0 +1,16 @@
+{
+  "ctxkit": {
+    "PreToolUse": [
+      {
+        "matcher": "read_file|write_file|run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/.claude/hooks/ctxkit",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

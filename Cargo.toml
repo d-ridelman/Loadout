@@ -1,6 +1,12 @@
 [workspace]
-members = ["crates/loadout-core", "crates/loadoutd"]
+members = ["crates/loadout-core", "crates/loadoutd", "crates/ctxkit"]
 resolver = "2"
+
+# Профиль относится к воркспейсу: прежний [profile.release] ctxkit (быстрый старт хука, маленький бинарь) перенесён сюда
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
 
 [workspace.package]
 version = "0.0.1"
