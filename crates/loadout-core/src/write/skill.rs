@@ -401,8 +401,12 @@ pub(super) fn rollback(
             walk(&dir.join("removed")).is_ok_and(|back| {
                 back.iter().fold(true, |ok, (rel, path, _)| {
                     let dest = target.join(rel);
-                    let done = dest.is_file()
-                        && std::fs::read(&dest).ok() == std::fs::read(path).ok()
+                    // совпавшим считается только файл, который прочитался с обеих сторон
+                    let same = matches!(
+                        (std::fs::read(&dest), std::fs::read(path)),
+                        (Ok(a), Ok(b)) if a == b
+                    );
+                    let done = same
                         || dest
                             .parent()
                             .is_some_and(|p| std::fs::create_dir_all(p).is_ok())
@@ -417,6 +421,8 @@ pub(super) fn rollback(
                 &format!("the rollback did not happen: {why}; the skill is in place"),
             ));
         }
+        // манифест мог успеть записаться: без него операция не выглядит откатом в журнале, копия остаётся
+        let _ = std::fs::remove_file(dir.join("manifest.json"));
         let copy = tilde(home, &dir.join("removed"));
         Err(bad(
             &format!("откат не выполнен: {why}; скил вернулся не полностью, полная копия: {copy}"),
