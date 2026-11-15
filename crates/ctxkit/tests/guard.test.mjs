@@ -278,6 +278,11 @@ const cases = [
   [false, () => postClaude('ok.json', `{"a": "C:${B}${B}x"}`)],
   [false, () => postClaude('ok.py', `s = "a${B}${B}"\n`)],
   [false, () => postClaude('tsconfig.json', `{ // comment\n "a": 1 }`)],
+  // any other .json is tried as JSONC (comments, trailing commas) before it is blocked
+  [false, () => postClaude('turbo.json', `{\n  // tasks\n  "tasks": { "build": {}, },\n  /* end */\n}\n`)],
+  [false, () => postClaude('biome.json', `{ "a": [1, 2,], // trailing\n}`)],
+  [true, () => postClaude('broken-comments.json', `{ // c\n  "a": 1\n  "b": 2 }`)],
+  [true, () => postClaude('bad-escape.json', `{"a": "C:${B}x" // c\n}`)],
   [false, () => postClaude('App.js', `export default () => <div>hi</div>;\n`)],
   [false, () => postClaude('readme.md', `a${B}`)],
 

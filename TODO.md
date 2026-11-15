@@ -18,7 +18,6 @@
 - [ ] `install.ps1` перезаписывает пользовательский `PATH` раскрытыми значениями: `crates/ctxkit/scripts/install.ps1:27-31`.
 - [ ] Нет тестов на IPC-ворота главного процесса (`validateIntent`, `trusted`): `app/src/main/index.ts:260-310`.
 - [ ] Дубли: разворот `~` (`crates/loadout-core/src/write.rs:107-118` и `crates/loadout-core/src/lib.rs:42-54`) и поиск домашнего каталога (`crates/loadoutd/src/main.rs`).
-- [ ] `PostToolUse` блокирует `.json` с комментариями (`turbo.json`, `biome.json`): `crates/ctxkit/src/backslash.rs:412-430`.
 - [ ] Шлюз Stop при `--advisor none` без `checker` всё равно просит вызвать «их»: `crates/ctxkit/src/gate.rs:130-146`.
 - [ ] Таблица алиасов `canonical_model_id` устареет (`crates/ctxkit/src/setup.rs`, около строки 540); `doctor` не замечает отсутствия `modelSettings` для основной модели.
 - [ ] Кнопка отката ctxkit в окне Loadout (следующий шаг после `ctxkit setup --uninstall`).
