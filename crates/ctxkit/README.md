@@ -107,6 +107,27 @@ ctxkit setup --uninstall               # remove it (add the same --profile / --a
 
 It does **not** touch `model`, `advisorModel`, `effortLevel`, `modelSettings`, `env.CLAUDE_CODE_SUBAGENT_MODEL`, Claude Desktop presets or the `Explore.md` / `checker.md` agent files: the previous values are not known, and `modelSettings` can hold entries written by Claude Code itself. It prints their current values and the path to the latest and earliest `backups/settings.json.*.bak` (the earliest is most likely the state before the first setup) so you can copy the old values back by hand. Setup-only options (`--no-agents`, `--effort`, `--main-model`, ...) are rejected together with `--uninstall`.
 
+## Failure safety
+
+A hook must never get in the way of your work. In hook mode `ctxkit` exits `0` with empty stdout (the call goes on) on every failure: empty or broken JSON, missing or wrongly typed fields, an unknown event, a missing transcript for the Stop gate, input over 64 MiB, non-UTF-8 bytes, even a panic. It blocks only when a rule matched on purpose (`deny` for `PreToolUse`, `block` for `PostToolUse` / `Stop`); it never exits `2`. `ctxkit setup` writes `"timeout": 10` for every hook it adds (Claude Code, Antigravity, DeepSeek Harness).
+
+Emergency switches: `CTXKIT_GUARD=0` makes the `PreToolUse` / `PostToolUse` hooks exit at once without output; `CTXKIT_GATE=0` does the same for the Stop gate. Set it in the environment of the session (for example `CTXKIT_GUARD=0 claude`). To remove the hooks altogether see "How to roll back".
+
+What Claude Code itself does when a hook misbehaves (hooks reference, https://code.claude.com/docs/en/hooks, read on 2026-11-16; this is the documentation, not a run of our own — see the note below the table):
+
+| Scenario | Does it block the tool call? | Claude Code docs |
+|---|---|---|
+| Hook binary missing / does not start | No, non-blocking error, the call goes ahead | "Non-blocking error: your hook exits with any other code, or fails in some other way, such as not starting or printing invalid JSON. The action goes ahead"; "Without onFailure set, the same missing script is a non-blocking error and ls runs." |
+| Exit code `1` (or any code other than `0` / `2`) | No | "Exit code 1 without valid JSON output is a non-blocking error unless the hook is one whose failure blocks the action, even though 1 is the conventional Unix failure code." |
+| Exit code `2` | Yes, on `PreToolUse` the call is blocked, stderr is the reason | "Blocking error: your hook exits 2. On events that can block, Claude Code stops the action." |
+| Timeout | No on `PreToolUse` | "On PreToolUse, a timed-out command, http, or mcp_tool hook doesn't block the tool call, except for hooks whose failure blocks the action. The call continues through the normal permission flow, so don't count on a stalled hook to act as a gate." |
+| Any failure with `"onFailure": "block"` on the hook (v2.1.295+, opt-in) | Yes | "With "block" set, a failure does what exit code 2 does on that event" |
+| Windows without Git Bash, shell-form `PreToolUse` hook, `onFailure` unset | Can block | "On Windows without Git Bash, a shell-form PreToolUse or PermissionRequest command hook that fails with onFailure unset can instead block the tool call." |
+
+Two findings. First, a broken hook path does not stop work (the `doctor` finding `hooks` with severity `error` shows it: "the hook points to a missing binary"); the cost is that the guards silently stop working. Second, the Windows-without-Git-Bash row: the hook command `ctxkit setup` writes (`"C:/…/ctxkit.exe"`) is a command that is only a quoted string, which the docs say PowerShell prints instead of running ("PowerShell started no program", fix: `"shell": "powershell"` with `& ` before the quoted path, or exec form). On such a machine the guards do not run and a failing hook can block calls. `ctxkit setup` does not change the command form for this yet; install Git for Windows (the usual setup for Claude Code on Windows) or follow the docs' fix by hand.
+
+Note on verification: the planned live run of the scenarios through `claude -p --settings <file>` (missing exe, a hook that sleeps past `timeout: 2`, exit 1, exit 2) could not be done on the authoring machine because the `claude` CLI there had an expired OAuth session. The table follows the documentation; repeat the run on a logged-in machine before relying on a row.
+
 ## Diagnostics and report (`doctor`, `report`)
 
 ```powershell

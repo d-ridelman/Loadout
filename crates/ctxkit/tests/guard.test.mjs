@@ -578,6 +578,56 @@ const cases = [
     return again.status === 0 && state() === after && nBackups() === nb1;
   }],
 
+  // Safe failure: broken or odd hook input is a silent pass (exit 0, empty stdout), never a block or a crash
+  [true, () => {
+    const raw = (input, args = [], env = {}) => {
+      const r = spawnSync(exe, args, { input, env: { ...process.env, ...env }, maxBuffer: 1 << 20 });
+      return { status: r.status, out: r.stdout?.toString() ?? '' };
+    };
+    const missing = join(dir, 'no-such-transcript.jsonl');
+    const odd = [
+      '', ' ', '{', '}', '{}', '[]', 'null', '42', '"str"', '\u0000',
+      Buffer.from([0xff, 0xfe, 0x00, 0x7b, 0x80]),
+      JSON.stringify({ hook_event_name: 'SessionStart' }),
+      JSON.stringify({ hook_event_name: 5 }),
+      JSON.stringify({ hook_event_name: 'PreToolUse' }),
+      JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 5, tool_input: 'x' }),
+      JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 5 } }),
+      JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 5, offset: 'x', limit: [] } }),
+      JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: null }),
+      JSON.stringify({ hook_event_name: 'PostToolUse' }),
+      JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: 5 } }),
+      JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: join(dir, 'no-such-file.json') } }),
+      JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'apply_patch', tool_input: { input: 5 } }),
+      JSON.stringify({ hook_event_name: 'Stop' }),
+      JSON.stringify({ hook_event_name: 'Stop', transcript_path: 5, stop_hook_active: 'yes' }),
+      JSON.stringify({ hook_event_name: 'Stop', transcript_path: missing }),
+      JSON.stringify({ hook_event_name: 'Stop', transcript_path: dir }),
+      '{"x":"' + 'a'.repeat(64 * 1024 * 1024 + 16) + '"}', // over the 64 MiB cap: passed unchecked
+    ];
+    for (const input of odd) {
+      const r = raw(input);
+      if (r.status !== 0 || r.out !== '') return `input ${JSON.stringify(String(input).slice(0, 60))}: status ${r.status} out ${r.out.slice(0, 80)}`;
+    }
+    // Antigravity form: exit 0 always (its own default is "ask", not a deny)
+    for (const input of ['{"toolCall":5}', '{"toolCall":{"name":"read_file","args":5}}', '{"toolCall":{"name":7}}']) {
+      const r = raw(input);
+      if (r.status !== 0 || r.out.includes('deny')) return `agy ${input}`;
+    }
+    return true;
+  }],
+  // CTXKIT_GUARD=0 mutes PreToolUse/PostToolUse (and only them)
+  [true, () => {
+    const bad = join(dir, 'guard-off.json');
+    writeFileSync(bad, '{ broken');
+    const withGuard = (payload, env) => runHook(payload, [], env);
+    const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } };
+    const post = { hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: bad } };
+    return withGuard(read, {}).includes('"deny"') && withGuard(post, {}).includes('"block"')
+      && withGuard(read, { CTXKIT_GUARD: '0' }) === '' && withGuard(post, { CTXKIT_GUARD: '0' }) === ''
+      && JSON.parse(stopGate({ env: { CTXKIT_GUARD: '0' } })).decision === 'block';
+  }],
+
   // Localization (default en vs CTXKIT_LANG=ru / --lang ru)
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }).includes('File is large')],
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }, [], { CTXKIT_LANG: 'ru' }).includes('Файл большой')],
