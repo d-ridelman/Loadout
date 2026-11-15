@@ -665,6 +665,13 @@ const cases = [
     const bomText = readFileSync(join(p9, 'CLAUDE.md'), 'utf8');
     if (bomText.split('<!-- ctxkit:start -->').length !== 2 || !bomText.includes('user tail')) return false;
 
+    // a rollback that makes the only backup does not also claim there are none
+    const p10 = mk('nobackups');
+    writeFileSync(join(p10, 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: '"C:/x/ctxkit.exe"' }] }] } }));
+    const r10 = run(p10, '--uninstall');
+    if (r10.status !== 0 || !r10.stdout.includes('backup ->') || r10.stdout.includes('no settings.json backups found')) return `uninstall output contradicts itself: ${r10.stdout}`;
+    if (!r10.stdout.includes('latest:') || !r10.stdout.includes('made by this run')) return `no latest backup line: ${r10.stdout}`;
+
     // a CLAUDE.md that is not UTF-8 stops the rollback before settings.json is rewritten
     const p4 = mk('nonutf8');
     if (run(p4, '--with-rules').status !== 0) return false;

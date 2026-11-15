@@ -215,6 +215,7 @@ fn print_kept(
     profile: &Path,
     desktop: Option<&Path>,
     backups: &[PathBuf],
+    earlier: &[PathBuf],
     lang: Lang,
 ) {
     println!(
@@ -257,35 +258,71 @@ fn print_kept(
             }
         }
     }
-    match (backups.last(), backups.first()) {
-        (Some(last), Some(first)) => {
-            println!(
-                "  settings.json backups: {}",
-                last.parent().unwrap_or(profile).display()
-            );
-            println!("    latest:   {}", last.display());
-            if first != last {
-                println!(
-                    "    earliest: {} {}",
-                    first.display(),
-                    t(
-                        lang,
-                        "(most likely the state before the first setup)",
-                        "(скорее всего, состояние до первого setup)"
-                    )
-                );
-            }
-            println!(
-                "  {}",
-                t(
-                    lang,
-                    "To restore the old values open a backup, copy the keys above into settings.json, or copy the whole file back.",
-                    "Чтобы вернуть прежние значения, откройте бэкап и перенесите ключи выше в settings.json или верните файл целиком."
-                )
-            );
-        }
-        _ => println!("  (no settings.json backups found)"),
+    for line in backup_lines(backups, earlier, profile, lang) {
+        println!("{line}");
     }
+}
+
+/// The settings.json backups block. `backups` is the list after the rollback, `earlier` the one before it:
+/// a backup that is only in `backups` was made by this very run (the state before the rollback, not before
+/// the first setup), and is said so instead of the "none found" line.
+fn backup_lines(
+    backups: &[PathBuf],
+    earlier: &[PathBuf],
+    profile: &Path,
+    lang: Lang,
+) -> Vec<String> {
+    let (Some(last), Some(first)) = (backups.last(), backups.first()) else {
+        return vec![format!(
+            "  {}",
+            t(
+                lang,
+                "(no settings.json backups: settings.json was not changed)",
+                "(бэкапов settings.json нет: файл не менялся)"
+            )
+        )];
+    };
+    let note = |p: &PathBuf| {
+        if earlier.contains(p) {
+            String::new()
+        } else {
+            t(
+                lang,
+                " (made by this run: the state before the rollback)",
+                " (сделан этим запуском: состояние до отката)",
+            )
+            .to_string()
+        }
+    };
+    let mut out = vec![
+        format!(
+            "  settings.json backups: {}",
+            last.parent().unwrap_or(profile).display()
+        ),
+        format!("    latest:   {}{}", last.display(), note(last)),
+    ];
+    if first != last {
+        let hint = if earlier.contains(first) {
+            t(
+                lang,
+                " (most likely the state before the first setup)",
+                " (скорее всего, состояние до первого setup)",
+            )
+            .to_string()
+        } else {
+            note(first)
+        };
+        out.push(format!("    earliest: {}{hint}", first.display()));
+    }
+    out.push(format!(
+        "  {}",
+        t(
+            lang,
+            "To restore the old values open a backup, copy the keys above into settings.json, or copy the whole file back.",
+            "Чтобы вернуть прежние значения, откройте бэкап и перенесите ключи выше в settings.json или верните файл целиком."
+        )
+    ));
+    out
 }
 
 /// Deletes `path` unless it is the running binary; on failure says how to do it by hand.
@@ -329,8 +366,8 @@ pub(super) fn run(
     println!("{tag}Removing ctxkit from profile: {}", profile.display());
     let backup_dir = profile.join("backups");
     let settings_path = profile.join("settings.json");
-    // Listed before any write so that the backup made by this very run is not mistaken for an old one.
-    let backups = list_backups(&backup_dir);
+    // Listed before any write, to tell the backup made by this very run from the old ones.
+    let earlier = list_backups(&backup_dir);
     let run = || -> Result<Value, String> {
         // Everything the rollback will touch is checked before the first write, so a refusal leaves no half-done state.
         preflight_settings(&settings_path, false)?;
@@ -405,7 +442,15 @@ pub(super) fn run(
             .then(|| default_desktop_presets_path(home))
             .flatten()
     });
-    print_kept(&orig, profile, desktop.as_deref(), &backups, opts.lang);
+    let backups = list_backups(&backup_dir);
+    print_kept(
+        &orig,
+        profile,
+        desktop.as_deref(),
+        &backups,
+        &earlier,
+        opts.lang,
+    );
 
     // The binary goes last: removed earlier, a settings.json failure would leave a hook on a missing file.
     if opts.hook_cmd.is_none() {
@@ -514,6 +559,26 @@ mod tests {
             strip_dsh_block(&format!("a\n{DSH_MARKER_START}\nb\n")),
             Err(())
         );
+    }
+
+    #[test]
+    fn backup_lines_tell_this_runs_backup_from_old_ones() {
+        let p = |n: &str| PathBuf::from(format!("/b/settings.json.{n}.bak"));
+        let profile = Path::new("/profile");
+        let none = backup_lines(&[], &[], profile, Lang::En);
+        assert!(none[0].contains("no settings.json backups"));
+        // the run made the only backup: it is the latest and is marked, never "none found"
+        let fresh = backup_lines(&[p("2")], &[], profile, Lang::En).join("\n");
+        assert!(fresh.contains("latest:") && fresh.contains("made by this run"));
+        assert!(!fresh.contains("no settings.json backups"));
+        // an old one plus this run's: the earliest keeps the "first setup" hint, the latest is marked
+        let both = backup_lines(&[p("1"), p("2")], &[p("1")], profile, Lang::En).join("\n");
+        assert!(both.contains("most likely the state before the first setup"));
+        assert!(both
+            .lines()
+            .any(|l| l.contains("latest") && l.contains("made by this run")));
+        let ru = backup_lines(&[p("2")], &[], profile, Lang::Ru).join("\n");
+        assert!(ru.contains("сделан этим запуском"));
     }
 
     #[test]
