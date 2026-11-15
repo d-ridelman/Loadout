@@ -70,6 +70,8 @@ fn walk(root: &Path) -> Result<Vec<(String, PathBuf, u64)>, String> {
             let ft = std::fs::symlink_metadata(e.path())
                 .map_err(|e| e.to_string())?
                 .file_type();
+            // На Windows `is_symlink` истинно и для junction (точка повторной обработки с битом name-surrogate): проверено
+            // тестом `junction_inside_the_skill_tree_is_refused`. Прочие точки (облачные заглушки) не ссылки и идут как файлы.
             if ft.is_symlink() {
                 return Err(bad(
                     &format!("в скиле есть символьная ссылка: {rel}{name}"),
@@ -156,6 +158,25 @@ fn cached_digest(path: &Path, len: u64) -> Result<String, String> {
 
 pub(super) fn dir_sha(dir: &Path) -> Option<String> {
     walk(dir).ok().and_then(|f| tree_sha(&f).ok())
+}
+
+// Швы для тестов: `NO_RENAME` имитирует `skills/` на другом томе (`rename` каталога не проходит), а `AFTER_BACKUP`
+// вызывается в откате после копии скила в бэкап и до удаления (там тест занимает файл, как это сделал бы чужой процесс).
+#[cfg(test)]
+type Hook = Box<dyn Fn()>;
+#[cfg(test)]
+thread_local! {
+    pub(super) static NO_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static AFTER_BACKUP: std::cell::RefCell<Option<Hook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn rename_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if NO_RENAME.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other("rename отключён тестом"));
+    }
+    std::fs::rename(from, to)
 }
 
 fn copy_files(files: &[(String, PathBuf, u64)], to: &Path) -> Result<(), String> {
@@ -361,7 +382,7 @@ pub fn apply(
                     "a skill with this name appeared during installation",
                 ));
             }
-            if std::fs::rename(&tmp, &c.target).is_ok() {
+            if rename_dir(&tmp, &c.target).is_ok() {
                 return Ok(());
             }
             // `skills` — ссылка на другой том: `rename` не пройдёт, копируем на место. `create_dir` откажет, если каталог
@@ -432,13 +453,19 @@ pub(super) fn rollback(
     if let Err(e) = copy_files(&files, &dir.join("removed")) {
         return fail(e);
     }
+    #[cfg(test)]
+    AFTER_BACKUP.with(|h| {
+        if let Some(hook) = h.borrow().as_ref() {
+            hook();
+        }
+    });
     // Сначала каталог уходит с места (одним `rename`, если тот же том), и только потом пишется строка журнала:
     // недоделанное удаление не должно выглядеть откатом. Сорвалось удаление — возвращаем удалённое из копии.
     let gone = home
         .join(".claude")
         .join(format!(".{}.loadout.removed", m.name));
     let _ = std::fs::remove_dir_all(&gone);
-    let moved = std::fs::rename(&target, &gone).is_ok();
+    let moved = rename_dir(&target, &gone).is_ok();
     // Возврат после сорванного отката. Копирует всё, что может, не останавливаясь на занятом файле. Если вернуть целиком
     // не вышло, копия в каталоге операции остаётся, и ошибка называет её путь (строки журнала у неё нет).
     let restore = |why: String| -> Result<Applied, String> {

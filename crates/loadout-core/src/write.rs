@@ -27,6 +27,8 @@ pub use retention::{prune as prune_backups, Pruned};
 mod race_tests;
 #[cfg(test)]
 mod retention_tests;
+#[cfg(test)]
+mod skill_tests;
 
 /// Почему запись нельзя переключить (показывается в инспекторе).
 pub fn why_not(e: &Entity) -> String {
