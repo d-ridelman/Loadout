@@ -6,7 +6,7 @@
 //! тег не исполняется, значение читается как обычная строка.
 
 use crate::mask::{self, mcp_detail};
-use crate::model::{Client, Entity, Kind, State};
+use crate::model::{Client, Entity, Format, Kind, State, Target, TargetKind};
 use crate::{scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Map, Value};
 use std::path::{Component, Path, PathBuf};
@@ -64,12 +64,20 @@ fn patch(c: &mut Ctx, path: &Path, scope: &str) {
         };
         for (ei, entry) in entries.iter().enumerate() {
             let ptr = format!("/{oi}/insert/{ei}");
-            insert_entry(c, &file, &ptr, scope, entry);
+            insert_entry(c, &file, &ptr, scope, entry, (path, oi, ei));
         }
     }
 }
 
-fn insert_entry(c: &mut Ctx, file: &str, ptr: &str, scope: &str, entry: &Yaml) {
+fn insert_entry(
+    c: &mut Ctx,
+    file: &str,
+    ptr: &str,
+    scope: &str,
+    entry: &Yaml,
+    // файл, номер операции и номер записи в её списке `insert`: по ним запись выносится в корзину
+    loc: (&Path, usize, usize),
+) {
     let plugin = entry["name"].as_str().unwrap_or("");
     let id = entry["id"]
         .as_str()
@@ -92,7 +100,14 @@ fn insert_entry(c: &mut Ctx, file: &str, ptr: &str, scope: &str, entry: &Yaml) {
         }
         let e = Entity::new(CLIENT, Kind::Mcp, scope, server, State::On, file, ptr)
             .detail(mcp_detail(&cfg))
-            .note("запись плагина dsh-mcp-client; признака «выключено» у записи нет (убрать запись = выключить)");
+            .note("запись плагина dsh-mcp-client; признака «выключено» у записи нет: выключение выносит её строки в корзину Loadout")
+            .target(Target {
+                file: loc.0.to_path_buf(),
+                format: Format::Yaml,
+                path: vec![loc.1.to_string(), "insert".to_owned(), loc.2.to_string()],
+                inverted: false,
+                kind: TargetKind::Cut,
+            });
         c.push(e);
     } else if let Some(kind) = plugin.strip_prefix(HOOKS_PREFIX) {
         hooks_file(
@@ -114,6 +129,25 @@ fn insert_entry(c: &mut Ctx, file: &str, ptr: &str, scope: &str, entry: &Yaml) {
         .detail(json!({ "id": id }));
         c.push(e);
     }
+}
+
+/// Описание вынесенной в корзину записи (строки YAML) в том же виде, что у живой: команда, аргументы, ключи env.
+pub(crate) fn trashed_detail(raw: &str) -> Value {
+    let Ok(docs) = YamlLoader::load_from_str(raw) else {
+        return json!({});
+    };
+    let entry = docs
+        .first()
+        .and_then(|d| d.as_vec())
+        .and_then(|v| v.first());
+    let Some(entry) = entry else {
+        return json!({});
+    };
+    let mut cfg = yaml_to_json(&entry["config"]);
+    if let Some(t) = cfg.get("transport").and_then(Value::as_str) {
+        cfg["type"] = Value::from(if t == "streamable-http" { "http" } else { t });
+    }
+    mcp_detail(&cfg)
 }
 
 /// Файл хуков, на который указывает запись `dsh-hooks-*`. Читаем только внутри домашнего каталога.
@@ -140,7 +174,7 @@ fn hooks_file(c: &mut Ctx, _flavor: &str, scope: &str, config_path: Option<&str>
 
 /// Защита разбора YAML: якоря и алиасы (`&x`, `*x`, `<<:`) растут экспоненциально при разворачивании, очень глубокая
 /// вложенность валит стек. Файл конфигурации dsh ничего из этого не использует, поэтому такой файл не читаем.
-fn yaml_guard(text: &str) -> Option<&'static str> {
+pub(crate) fn yaml_guard(text: &str) -> Option<&'static str> {
     let (mut depth, mut max_depth) = (0usize, 0usize);
     for c in text.chars() {
         match c {

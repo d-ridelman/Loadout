@@ -15,6 +15,7 @@ pub mod profiles;
 pub mod trash;
 pub mod watch;
 pub mod write;
+pub mod yaml_edit;
 
 use model::{Client, Entity, Kind, ScanResult, State};
 use serde_json::{json, Value};

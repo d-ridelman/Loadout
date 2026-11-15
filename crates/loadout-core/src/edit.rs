@@ -32,6 +32,10 @@ pub fn get_bool(format: Format, text: &str, path: &[String]) -> Result<Option<bo
                 .map(Some)
                 .ok_or_else(|| "значение не булево".to_owned())
         }
+        Format::Yaml => Err(
+            "для YAML правка значений не поддержана: только вынос и возврат записи (yaml_edit)"
+                .to_owned(),
+        ),
     }
 }
 
@@ -60,6 +64,7 @@ pub fn set_bool(
             })
         })?,
         Format::Toml => set_toml(body, path, Leaf::Bool(value))?,
+        Format::Yaml => return Err("для YAML булевы флаги не поддержаны".to_owned()),
     };
     Ok(format!("{bom}{out}"))
 }
@@ -95,6 +100,7 @@ pub fn get_value(
             let v = serde_json::to_value(&t).map_err(|e| e.to_string())?;
             Ok(path.iter().try_fold(&v, |cur, k| cur.get(k)).cloned())
         }
+        Format::Yaml => Err("для YAML чтение значений по пути не поддержано".to_owned()),
     }
 }
 
@@ -120,6 +126,7 @@ pub fn put_value(
             }
             set_toml(body, path, Leaf::Json(value))?
         }
+        Format::Yaml => return Err("для YAML запись значений не поддержана".to_owned()),
     };
     Ok(format!("{bom}{out}"))
 }

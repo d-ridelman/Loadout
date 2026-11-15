@@ -74,6 +74,8 @@ pub struct Origin {
 pub enum Format {
     Json,
     Toml,
+    /// `cordis.patch.yml` DeepSeek: правится только вынос и возврат записи по строкам (`yaml_edit`).
+    Yaml,
 }
 
 /// Куда писать, чтобы переключить запись (R1): булев ключ в известном файле клиента.

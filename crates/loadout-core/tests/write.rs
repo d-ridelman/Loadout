@@ -675,7 +675,9 @@ fn plugin_files_deepseek_and_denied_entries_have_no_write_target() {
         .iter()
         .find(|x| x.client == Client::DeepSeek && x.kind == Kind::Mcp)
         .unwrap();
-    assert!(ds.toggle_why.as_deref().unwrap().contains("DeepSeek"));
+    // у DeepSeek запись выносится по строкам YAML (R2), но править и копировать её нельзя
+    assert!(ds.can_toggle && !ds.can_edit);
+    assert_eq!(ds.toggle_level.as_deref(), Some("R2"));
     assert!(plan_s(
         &e,
         &Intent::Copy {
@@ -685,6 +687,58 @@ fn plugin_files_deepseek_and_denied_entries_have_no_write_target() {
     )
     .is_err());
     assert!(loadout_core::trash::read(&e.store, "../x").is_none());
+}
+
+#[test]
+fn deepseek_entry_goes_to_trash_by_lines_and_returns_byte_identical() {
+    let e = env();
+    let patch = e.home.join(".dsh/cordis.patch.yml");
+    let original = fs::read(&patch).unwrap();
+    let id = id_in(&e, Client::DeepSeek, "demo");
+    let p = plan_s(&e, &tog(&id, false)).unwrap();
+    assert_eq!(
+        (p.level.as_str(), p.to.as_str()),
+        ("R2", "в корзине Loadout")
+    );
+    assert!(!format!("{p:?}").contains("FAKE-SECRET"));
+    let done = write::apply(&e.home, &e.store, &tog(&id, false), &p.base_sha).unwrap();
+
+    let text = fs::read_to_string(&patch).unwrap();
+    assert!(
+        !text.contains("mcp-demo") && text.contains("demo-hooks"),
+        "{text}"
+    );
+    // запись видна как выключенная, её описание берётся из строк в корзине, значения секретов не показываются
+    let r = loadout_core::scan_with(&e.home, Some(&e.store));
+    let off = r
+        .entities
+        .iter()
+        .find(|x| x.id == id)
+        .expect("запись из корзины");
+    assert_eq!(off.state, State::Off);
+    assert!(!serde_json::to_string(off).unwrap().contains("FAKE-SECRET"));
+    let trashed = fs::read_to_string(e.store.join("trash").join(format!("{id}.json"))).unwrap();
+    assert!(
+        trashed.contains("FAKE-SECRET-DSENV") && trashed.contains("!!js process.cwd()"),
+        "строки как есть, с тегом"
+    );
+
+    // возврат и откат: файл побайтово как до выноса
+    let back = apply_i(&e, &tog(&id, true)).unwrap();
+    assert_eq!(fs::read(&patch).unwrap(), original);
+    assert!(!e.store.join("trash").join(format!("{id}.json")).exists());
+    // откат выноса после ручного изменения файла: обратная операция, а не возврат всего файла
+    let again = apply_i(&e, &tog(&id, false)).unwrap();
+    let mut changed = fs::read_to_string(&patch).unwrap();
+    changed.push_str("# дописал инструмент\n");
+    fs::write(&patch, &changed).unwrap();
+    rollback(&e.home, &e.store, &again.op).unwrap();
+    let after = fs::read_to_string(&patch).unwrap();
+    assert!(
+        after.contains("mcp-demo") && after.ends_with("# дописал инструмент\n"),
+        "{after}"
+    );
+    let _ = (done, back);
 }
 
 #[test]

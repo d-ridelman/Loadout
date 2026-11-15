@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 pub struct Item {
     /// id записи в скане на момент выноса: он же имя файла.
     pub id: String,
+    /// `json` (значение записи) или `yaml` (её строки в `cordis.patch.yml`, `parent`/`key` — номера операции и записи).
+    #[serde(default = "json_format")]
+    pub format: String,
     pub client: String,
     pub scope: String,
     /// Имя и указатель для показа (уже очищенные сканом).
@@ -30,6 +33,10 @@ pub struct Item {
     /// Текст значения (JSON), как он стоял в файле, без отступа.
     pub value: String,
     pub time: u64,
+}
+
+fn json_format() -> String {
+    "json".to_owned()
 }
 
 /// id идёт в имя файла: только то, что делает ядро (`16 hex` и необязательный `-N`).
@@ -89,8 +96,14 @@ pub fn inject(c: &mut Ctx, store: &Path) {
         ) else {
             continue;
         };
-        let detail = serde_json::from_str(&it.value)
-            .map_or_else(|_| serde_json::json!({}), |v| mcp_detail(&v));
+        let yaml = it.format == "yaml";
+        // у DeepSeek запись — строки YAML: для показа разбираем их так же, как скан разбирает файл
+        let detail = if yaml {
+            crate::deepseek::trashed_detail(&it.value)
+        } else {
+            serde_json::from_str(&it.value)
+                .map_or_else(|_| serde_json::json!({}), |v| mcp_detail(&v))
+        };
         let mut path = it.parent.clone();
         path.push(it.key.clone());
         let mut e = Entity::new(
@@ -106,7 +119,7 @@ pub fn inject(c: &mut Ctx, store: &Path) {
         .detail(detail)
         .target(Target {
             file: PathBuf::from(&it.path),
-            format: Format::Json,
+            format: if yaml { Format::Yaml } else { Format::Json },
             path,
             inverted: false,
             kind: TargetKind::Restore(Source::Trash(it.id.clone())),

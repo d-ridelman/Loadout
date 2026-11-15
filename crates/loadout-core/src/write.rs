@@ -10,6 +10,7 @@ use crate::edit;
 use crate::mask;
 use crate::model::{Client, Entity, Format, Kind, ScanResult, Source, State, TargetKind};
 use crate::trash;
+use crate::yaml_edit;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -51,7 +52,7 @@ fn enabled(s: State) -> Option<bool> {
 /// В `antigravity/mcp/*` и в файлы плагинов Loadout не пишет никогда.
 fn allowed(home: &Path, file: &Path) -> bool {
     let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
-    [
+    let fixed = [
         ".claude/settings.json",
         ".claude.json",
         ".codex/config.toml",
@@ -59,7 +60,19 @@ fn allowed(home: &Path, file: &Path) -> bool {
         ".gemini/config/mcp_config.json",
     ]
     .iter()
-    .any(|rel| norm(&home.join(rel)) == norm(file))
+    .any(|rel| norm(&home.join(rel)) == norm(file));
+    // DeepSeek: патч пользователя и патчи профилей `~/.dsh/profiles/<имя>/cordis.patch.yml`
+    let dsh = norm(&home.join(".dsh"));
+    let patch = norm(file)
+        .strip_prefix(&format!("{dsh}/"))
+        .is_some_and(|rest| {
+            rest == "cordis.patch.yml"
+                || rest
+                    .strip_prefix("profiles/")
+                    .and_then(|r| r.strip_suffix("/cordis.patch.yml"))
+                    .is_some_and(|n| !n.is_empty() && !n.contains('/') && n != "node_modules")
+        });
+    fixed || patch
 }
 
 pub(crate) fn sha(bytes: &[u8]) -> String {
@@ -217,6 +230,19 @@ fn plan_for(e: &Entity, op: &str, level: &str, file: String, old: &[u8]) -> Plan
     }
 }
 
+/// Номер операции и номер записи из пути цели DeepSeek (`[oi, "insert", ei]`).
+fn yaml_pos(path: &[String]) -> Result<(usize, usize), String> {
+    match path {
+        [oi, k, ei] if k == "insert" => Ok((
+            oi.parse()
+                .map_err(|_| "неверный путь записи YAML".to_owned())?,
+            ei.parse()
+                .map_err(|_| "неверный путь записи YAML".to_owned())?,
+        )),
+        _ => Err("неверный путь записи YAML".into()),
+    }
+}
+
 fn prep_toggle(
     home: &Path,
     store: Option<&Path>,
@@ -270,13 +296,25 @@ fn prep_toggle(
                 if store.is_some_and(|s| trash::read(s, &e.id).is_some()) {
                     return Err("в корзине уже лежит запись с этим id".into());
                 }
-                let (nt, raw) = edit::cut_json(&text, &t.path)?;
+                let (nt, raw) = match t.format {
+                    Format::Yaml => {
+                        let (oi, ei) = yaml_pos(&t.path)?;
+                        yaml_edit::cut(&text, oi, ei)?
+                    }
+                    _ => edit::cut_json(&text, &t.path)?,
+                };
                 new = nt.into_bytes();
                 trash = Some(TrashChange {
                     id: e.id.clone(),
                     before: None,
                     after: Some(trash::Item {
                         id: e.id.clone(),
+                        format: if t.format == Format::Yaml {
+                            "yaml"
+                        } else {
+                            "json"
+                        }
+                        .to_owned(),
                         client: e.client.slug().to_owned(),
                         scope: e.scope.clone(),
                         name: e.name.clone(),
@@ -320,6 +358,26 @@ fn prep_toggle(
                         let mut live = it.parent.clone();
                         live.push(it.key.clone());
                         let raw = it.value.clone();
+                        if it.format == "yaml" {
+                            // возврат строк DeepSeek на прежнее место списка (`yaml_edit::put` сверяет результат)
+                            let (oi, ei) = yaml_pos(&t.path)?;
+                            let put = yaml_edit::put(&text, oi, ei, &raw)
+                                .map_err(|e| format!("вернуть запись нельзя: {e}"))?;
+                            trash = Some(TrashChange {
+                                id: tid.clone(),
+                                before: Some(it),
+                                after: None,
+                            });
+                            return Ok(Prepared {
+                                plan,
+                                entity: e.id.clone(),
+                                file: t.file,
+                                old,
+                                new: put.into_bytes(),
+                                trash,
+                                inverse_enable: Some(false),
+                            });
+                        }
                         trash = Some(TrashChange {
                             id: tid.clone(),
                             before: Some(it),
@@ -491,7 +549,7 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
     let mut plan = plan_for(e, "copy", "R2", tilde(home, &file), &old);
     plan.client = dest;
     plan.pointer = match format {
-        Format::Json => format!("/{root}/{key}"),
+        Format::Json | Format::Yaml => format!("/{root}/{key}"),
         Format::Toml => format!("{root}.{key}"),
     };
     plan.from = "нет записи".into();
