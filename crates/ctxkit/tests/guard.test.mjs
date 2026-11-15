@@ -877,6 +877,27 @@ const cases = [
     const claude = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } });
     return raw(claude, [], { CTXKIT_GUARD: '0' }).out === '';
   }],
+  // "onFailure": "continue" on our PreToolUse / PostToolUse hooks (a failing ctxkit never stops the work), not on Stop
+  // (the docs: no effect there); the rollback still takes the hooks out, and a second setup does not stack them
+  [true, () => {
+    const root = join(dir, 'onfailure-test');
+    mkdirSync(join(root, 'p'), { recursive: true });
+    const cj = join(root, 'c.json');
+    writeFileSync(cj, '{}');
+    const profile = join(root, 'p');
+    const run = (...a) => spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--skip-version-check', '--no-agents', ...a], { encoding: 'utf8' });
+    if (run().status !== 0 || run().status !== 0) return 'setup failed';
+    const s = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+    const ours = (ev) => (s.hooks?.[ev] ?? []).flatMap((g) => g.hooks).filter((h) => h.command.includes('ctxkit'));
+    for (const ev of ['PreToolUse', 'PostToolUse']) {
+      if (ours(ev).length !== 1 || ours(ev)[0].onFailure !== 'continue') return `${ev}: ${JSON.stringify(ours(ev))}`;
+    }
+    if (ours('Stop').length !== 1 || 'onFailure' in ours('Stop')[0]) return `Stop: ${JSON.stringify(ours('Stop'))}`;
+    const u = spawnSync(exe, ['setup', '--uninstall', '--profile', profile, '--claude-json', cj], { encoding: 'utf8' });
+    // settings.json was created by setup, so the rollback deletes it; either way no hooks are left
+    const after = existsSync(join(profile, 'settings.json')) ? JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) : {};
+    return u.status === 0 && after.hooks === undefined || `uninstall left hooks: ${JSON.stringify(after)}`;
+  }],
   // The command setup writes for Antigravity carries the flag
   [true, () => {
     const root = join(dir, 'agy-cmd-test');

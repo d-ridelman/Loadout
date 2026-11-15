@@ -132,7 +132,7 @@ What Claude Code itself does when a hook misbehaves (hooks reference, https://co
 | Any failure with `"onFailure": "block"` on the hook (v2.1.295+, opt-in) | Yes | "With "block" set, a failure does what exit code 2 does on that event" |
 | Windows without Git Bash, shell-form `PreToolUse` hook, `onFailure` unset | Can block | "On Windows without Git Bash, a shell-form PreToolUse or PermissionRequest command hook that fails with onFailure unset can instead block the tool call." |
 
-Two findings. First, a broken hook path does not stop work (the `doctor` finding `hooks` with severity `error` shows it: "the hook points to a missing binary"); the cost is that the guards silently stop working. Second, the Windows-without-Git-Bash row (documentation only, not run live): the hook command `ctxkit setup` writes (`"C:/…/ctxkit.exe"`) is a command that is only a quoted string, which the docs say PowerShell prints instead of running ("PowerShell started no program", fix: `"shell": "powershell"` with `& ` before the quoted path, or exec form). On such a machine the guards do not run and a failing hook can block calls. `ctxkit setup` does not change the command form for this yet; install Git for Windows (the usual setup for Claude Code on Windows) or follow the docs' fix by hand.
+Two findings. First, a broken hook path does not stop work (the `doctor` finding `hooks` with severity `error` shows it: "the hook points to a missing binary"); the cost is that the guards silently stop working. Second, the Windows-without-Git-Bash row (documentation only, not run live: this machine has Git Bash). A failing hook that blocks the call there is covered: since Claude Code 2.1.295 the docs name `"onFailure": "continue"` as the fix ("The call should go ahead when the hook fails"), and `ctxkit setup` now writes it into its `PreToolUse` and `PostToolUse` hooks (not into `Stop`, where the docs say the field has no effect, and not into the Antigravity and DeepSeek Harness files, which are other schemas; with an older `claude` CLI the field is left out, and setup says so). **Known limitation: Windows without Git Bash.** The command `ctxkit setup` writes (`"C:/…/ctxkit.exe"`) is only a quoted string, which the docs say PowerShell prints instead of running ("PowerShell started no program"; their fix is `"shell": "powershell"` with `& ` before the quoted path, or exec form with `args`). On such a machine the guards do not run (a failing hook no longer blocks, but nothing is checked); `ctxkit setup` does not change the command form for this case and it was not run live. Install Git for Windows (the usual setup for Claude Code on Windows) or apply the docs' fix by hand.
 
 Checked live on `claude` 2.1.325, Windows 11 with Git for Windows, 2026-11-16. Each run: `claude -p "Run with Bash exactly: echo marker-sN" --model haiku --max-turns 3 --settings <file> --allowedTools Bash --output-format stream-json --verbose`, where the file holds one `PreToolUse` hook (`matcher: Bash`) and the result is read from the `tool_result` in the stream. `claude` exited `0` in every run; wall time 9-11 s is the model round trips, not the hook. The owner's own profile hooks (ctxkit, ponytail) were active as well.
 
@@ -148,9 +148,23 @@ Checked live on `claude` 2.1.325, Windows 11 with Git for Windows, 2026-11-16. E
 
 Row 3 proves that hooks from `--settings` do load, so rows 1, 2 and 4 are real "does not block" results. Rows 5 and 6 on `echo` alone do not show that our hook ran, so two more runs used a command the guard denies (a heredoc with a backslash) and the user-level settings were switched off with `--setting-sources project` (otherwise the profile's hook gives the same denial): with the `ctxkit.exe` form the call was blocked with the guard's own message ("Heredoc contains backslashes..."), with `CTXKIT_GUARD=0` the same call ran. So the one-quoted-string command form does run under Claude Code on this machine, and the switch works.
 
-Not checked: the "Windows without Git Bash" row (this machine has Git Bash) and `"onFailure": "block"`.
+Not checked: the "Windows without Git Bash" row (this machine has Git Bash).
 
-No row of the table diverges from the documentation. One side finding of the run: the `ctxkit.exe` installed in the profile (`~/.claude/hooks/ctxkit.exe`, dated 2026-11-15) does not contain the string `CTXKIT_GUARD`, and with the switch set its guard kept blocking; the switch needs a build that has it (`ctxkit setup` copies the current one).
+No row of the table diverges from the documentation. One side finding of the run: the `ctxkit.exe` installed in the profile (`~/.claude/hooks/ctxkit.exe`, dated 2026-11-15) did not contain the string `CTXKIT_GUARD`, and with the switch set its guard kept blocking; the switch needs a build that has it (`ctxkit setup` copies the current one; the owner's profile has been updated since).
+
+Second live run, same machine, `claude` 2.1.325, 2026-11-16, same command line plus `--setting-sources project` (so the profile's own hooks do not take part); the question was whether this version accepts `"onFailure": "continue"` and whether it changes anything. One `PreToolUse` hook (`matcher: Bash`) per run:
+
+| # | Hook | Tool call ran? | What the model saw |
+|---|---|---|---|
+| 0 | `node -e "process.exit(0)"`, no `onFailure` (control) | Yes, `marker-s0` | Nothing extra |
+| 1 | exit `2`, no `onFailure` (control for blocking) | **No** | `PreToolUse:Bash hook error: [...]: stop-test` |
+| 2 | exit `2` + `"onFailure": "continue"` | **No**, same message as row 1 | `PreToolUse:Bash hook error: [...]: stop-test` |
+| 3 | missing exe `"C:/no/such/ctxkit.exe"` + `"onFailure": "continue"` | Yes, `marker-s3` | No error |
+| 4 | exit `1` + `"onFailure": "continue"` | Yes, `marker-s4` | No error |
+| 5 | missing exe + `"onFailure": "block"` (control: the field is read) | **No** | `[...]: failed; blocking because onFailure is "block"` |
+| 6 | `"onFailure": "bogus"` (does the version complain about an unknown value?) | Yes, `marker-s6` | No error, nothing in stderr |
+
+So `"continue"` is accepted without any error or warning, a deliberate block (exit `2`) still blocks, and a missing executable or exit `1` still lets the call go ahead. Row 5 shows the field is read by this version; row 6 shows that a missing complaint alone is not proof of acceptance (an invalid value is ignored silently), which is why row 5 is there. On this machine (Git Bash present) `continue` is the default behaviour, so the runs show that it does no harm; the case it exists for (Windows without Git Bash, where the same failure can block) was not run.
 
 ## Diagnostics and report (`doctor`, `report`)
 

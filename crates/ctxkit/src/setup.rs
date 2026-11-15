@@ -13,6 +13,8 @@ const MARKER_START: &str = "<!-- ctxkit:start -->";
 const MARKER_END: &str = "<!-- ctxkit:end -->";
 const LEGACY_MARKER_START: &str = "<!-- claude-guard:start -->";
 const LEGACY_MARKER_END: &str = "<!-- claude-guard:end -->";
+/// Claude Code version that introduced the hook field `onFailure` (hooks reference).
+const ONFAILURE_SINCE: (u64, u64, u64) = (2, 1, 295);
 
 struct SetupOpts {
     dry_run: bool,
@@ -40,6 +42,9 @@ struct SetupOpts {
     claude_json: Option<PathBuf>,
     skip_version_check: bool,
     no_stop_gate: bool,
+    /// Write `"onFailure": "continue"` into the PreToolUse / PostToolUse hooks. Off only when the installed
+    /// `claude` is older than 2.1.295, which does not know the field.
+    on_failure: bool,
     /// `--uninstall`: take out what setup added (see `uninstall.rs`).
     uninstall: bool,
     lang: Lang,
@@ -69,6 +74,7 @@ impl Default for SetupOpts {
             claude_json: None,
             skip_version_check: false,
             no_stop_gate: false,
+            on_failure: true,
             uninstall: false,
             lang: Lang::En,
         }
@@ -181,6 +187,13 @@ pub fn run_setup(args: &[String]) -> i32 {
         println!("[dry-run] profile: {}", profile.display());
     } else {
         println!("Setting up profile: {}", profile.display());
+    }
+    // An unknown version (no `claude` on PATH: Desktop bundles its own, or --skip-version-check) gets the field.
+    if !opts.skip_version_check && check_claude_version().is_some_and(|v| v < ONFAILURE_SINCE) {
+        opts.on_failure = false;
+        println!(
+            "  [note] claude CLI is older than 2.1.295, which does not know \"onFailure\": the hooks are written without it (run `claude update` and setup again)"
+        );
     }
 
     // Before anything is copied or written: input that setup cannot handle is refused as it is,
@@ -649,19 +662,21 @@ fn update_claude_settings(
         "PreToolUse",
         Some("Bash|PowerShell|Write|Read|Edit|MultiEdit"),
         hook_cmd,
+        opts.on_failure,
     );
     upsert_claude_hook_event(
         hooks_obj,
         "PostToolUse",
         Some("Edit|Write|MultiEdit"),
         hook_cmd,
+        opts.on_failure,
     );
     // Stop takes no matcher. The gate fires once per turn (see gate.rs); --no-stop-gate removes our group.
     if opts.no_stop_gate {
         remove_our_hook_event(hooks_obj, "Stop", Some(hook_cmd));
         println!("  Stop gate: off (--no-stop-gate); our Stop hook is removed if present");
     } else {
-        upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd);
+        upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd, false);
         let advisor_set = root
             .get("advisorModel")
             .and_then(Value::as_str)
@@ -838,11 +853,16 @@ fn strip_our_hooks(list: Vec<Value>, current: Option<&str>) -> Vec<Value> {
         .collect()
 }
 
+/// `on_failure`: add `"onFailure": "continue"` (Claude Code 2.1.295+). Without Git Bash on Windows a hook that
+/// fails with `onFailure` unset can block the tool call; "continue" makes a crashing or missing ctxkit never
+/// stop the work (exit code 2, a deliberate block, still blocks). The docs say the field has no effect on
+/// `Stop` hooks, so the Stop group does not get it.
 fn upsert_claude_hook_event(
     hooks: &mut Map<String, Value>,
     event: &str,
     matcher: Option<&str>,
     command: &str,
+    on_failure: bool,
 ) {
     let list = hooks
         .get(event)
@@ -857,6 +877,9 @@ fn upsert_claude_hook_event(
             "timeout": 10
         }]
     });
+    if on_failure {
+        group["hooks"][0]["onFailure"] = Value::String("continue".to_string());
+    }
     if let Some(m) = matcher {
         group["matcher"] = Value::String(m.to_string());
     }
@@ -2027,7 +2050,8 @@ fn print_help() {
          Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness:\n\
          - Backs up existing configs before writing\n\
          - Creates the Explore (haiku) and checker (opus) agents; model, advisor and effort are NOT changed unless you pass --main-model / --advisor / --effort (the previous scheme: --main-model sonnet --advisor fable --effort high). Changes are printed as \"was -> became\"; custom env/hooks/plugins are preserved\n\
-         - Wires ctxkit PreToolUse/PostToolUse hooks (replacing legacy claude-guard / no-inline-backslash entries)\n\
+         - Wires ctxkit PreToolUse/PostToolUse hooks with \"onFailure\": \"continue\" (a failing hook never blocks the call; claude 2.1.295+) replacing legacy claude-guard / no-inline-backslash entries\n\
+         - Refuses, before copying or writing anything, a file it cannot handle (odd settings.json, broken presets/hooks/YAML, a CLAUDE.md with a doubled or unpaired ctxkit marker); files are written atomically\n\
          - Wires a once-per-turn Stop gate: a turn that edited code without checker/advisor afterwards is sent back once\n\
          - Audits enabled plugins, CLAUDE.md size, global MCPs, Claude CLI version, and Antigravity configs\n\n\
          Options:\n\
@@ -2050,7 +2074,7 @@ fn print_help() {
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --hook-cmd <cmd>       Override hook command path\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
-           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries) and the hooks/ctxkit binary. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
+           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries) and the hooks/ctxkit binary; a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
     );
 }
 
@@ -2302,9 +2326,11 @@ mod tests {
             "PreToolUse",
             Some("Bash|PowerShell|Write|Read"),
             "\"C:/h/ctxkit.exe\"",
+            true,
         );
         let arr = hooks["PreToolUse"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["hooks"][0]["onFailure"], "continue");
         assert!(arr[0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
@@ -2414,7 +2440,7 @@ mod tests {
             json!([{ "hooks": [{ "type": "command", "command": "notify-me.exe" }] }]),
         );
         for _ in 0..2 {
-            upsert_claude_hook_event(&mut hooks, "Stop", None, "\"C:/h/ctxkit.exe\"");
+            upsert_claude_hook_event(&mut hooks, "Stop", None, "\"C:/h/ctxkit.exe\"", false);
         }
         let ours = hooks["Stop"][0].clone();
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2);
@@ -2476,7 +2502,7 @@ mod tests {
             ]),
         );
         for _ in 0..2 {
-            upsert_claude_hook_event(&mut hooks, "Stop", None, ours);
+            upsert_claude_hook_event(&mut hooks, "Stop", None, ours, false);
         }
         let list = hooks["Stop"].as_array().unwrap();
         assert_eq!(list.len(), 3, "ours + two foreign groups");
