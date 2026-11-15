@@ -111,6 +111,25 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
         )),
     }
 
+    let has_gate = settings["hooks"]["Stop"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(crate::setup::is_our_hook_group));
+    out.push(if has_gate {
+        f("stop_gate", "ok", t(lang, "Stop gate installed", "шлюз Stop установлен"), None, None)
+    } else {
+        f(
+            "stop_gate",
+            "info",
+            t(
+                lang,
+                "no Stop gate: nothing returns the model to checker/advisor before it finishes",
+                "нет шлюза Stop: ничто не возвращает модель к checker/advisor перед завершением хода",
+            ),
+            None,
+            Some("ctxkit setup"),
+        )
+    });
+
     let model = settings["model"].as_str().map(str::to_string);
     let costly = model.as_deref().is_some_and(|m| {
         let m = m.to_ascii_lowercase();

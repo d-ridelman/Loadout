@@ -1,6 +1,7 @@
 mod backslash;
 mod check;
 mod doctor;
+mod gate;
 mod guard;
 mod report;
 mod setup;
@@ -248,6 +249,12 @@ fn extract_patch_files(input: &Value) -> Vec<String> {
 
 fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
     let event = call["hook_event_name"].as_str().unwrap_or("");
+    if event == "Stop" {
+        if let Some(reason) = gate::stop_reason(call, lang) {
+            print!("{}", json!({"decision": "block", "reason": reason}));
+        }
+        return;
+    }
     let tool = claude_tool_name(call["tool_name"].as_str().unwrap_or(""), client);
     let input = &call["tool_input"];
 

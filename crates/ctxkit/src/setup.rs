@@ -31,6 +31,7 @@ struct SetupOpts {
     hook_cmd: Option<String>,
     claude_json: Option<PathBuf>,
     skip_version_check: bool,
+    no_stop_gate: bool,
     lang: Lang,
 }
 
@@ -56,6 +57,7 @@ impl Default for SetupOpts {
             hook_cmd: None,
             claude_json: None,
             skip_version_check: false,
+            no_stop_gate: false,
             lang: Lang::En,
         }
     }
@@ -78,6 +80,7 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--antigravity" => opts.antigravity = true,
             "--dsh" => opts.dsh = true,
             "--skip-version-check" => opts.skip_version_check = true,
+            "--no-stop-gate" => opts.no_stop_gate = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
             | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home"
             | "--hook-cmd" | "--claude-json" | "--lang") => {
@@ -476,10 +479,21 @@ fn update_claude_settings(
     upsert_claude_hook_event(
         hooks_obj,
         "PreToolUse",
-        "Bash|PowerShell|Write|Read|Edit|MultiEdit",
+        Some("Bash|PowerShell|Write|Read|Edit|MultiEdit"),
         hook_cmd,
     );
-    upsert_claude_hook_event(hooks_obj, "PostToolUse", "Edit|Write|MultiEdit", hook_cmd);
+    upsert_claude_hook_event(
+        hooks_obj,
+        "PostToolUse",
+        Some("Edit|Write|MultiEdit"),
+        hook_cmd,
+    );
+    // Stop takes no matcher. The gate fires once per turn (see gate.rs); --no-stop-gate removes our group.
+    if opts.no_stop_gate {
+        remove_our_hook_event(hooks_obj, "Stop");
+    } else {
+        upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd);
+    }
 
     write_json_if_changed(
         path,
@@ -520,7 +534,7 @@ pub(crate) fn is_our_hook_group(group: &Value) -> bool {
 fn upsert_claude_hook_event(
     hooks: &mut Map<String, Value>,
     event: &str,
-    matcher: &str,
+    matcher: Option<&str>,
     command: &str,
 ) {
     let mut list = hooks
@@ -529,18 +543,35 @@ fn upsert_claude_hook_event(
         .cloned()
         .unwrap_or_default();
     list.retain(|item| !is_our_hook_group(item));
-    list.insert(
-        0,
-        json!({
-            "matcher": matcher,
-            "hooks": [{
-                "type": "command",
-                "command": command,
-                "timeout": 10
-            }]
-        }),
-    );
+    let mut group = json!({
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": 10
+        }]
+    });
+    if let Some(m) = matcher {
+        group["matcher"] = Value::String(m.to_string());
+    }
+    list.insert(0, group);
     hooks.insert(event.to_string(), Value::Array(list));
+}
+
+/// Drops our group from `event`, keeps foreign ones, and removes the key when nothing is left.
+fn remove_our_hook_event(hooks: &mut Map<String, Value>, event: &str) {
+    let Some(list) = hooks.get(event).and_then(|v| v.as_array()) else {
+        return;
+    };
+    let kept: Vec<Value> = list
+        .iter()
+        .filter(|g| !is_our_hook_group(g))
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        hooks.remove(event);
+    } else {
+        hooks.insert(event.to_string(), Value::Array(kept));
+    }
 }
 
 fn write_agent_file(
@@ -991,7 +1022,7 @@ fn rules_snippet(opts: &SetupOpts) -> String {
         Lang::Ru => {
             let adv_line = match adv {
                 Some(a) => format!(
-                    "- Основная сессия — **{}**. Советуйся с **advisor ({a})** до фиксации подхода на нетривиальной задаче, когда одна ошибка повторяется дважды, и перед тем как объявить задачу готовой.\n",
+                    "- Основная сессия — **{}**. Не фиксируй подход и не правь код по задаче больше чем в одном файле, не вызвав **advisor ({a})**; зови его и при второй одинаковой ошибке подряд.\n",
                     opts.main_model
                 ),
                 None => format!(
@@ -1003,7 +1034,8 @@ fn rules_snippet(opts: &SetupOpts) -> String {
                 "{MARKER_START}\n\
 ## Команда моделей и экономия контекста (ctxkit)\n\n\
 {adv_line}\
-- Поиск по коду, греп и чтение документации отправляй в `Explore` ({sub}); мелкую правку 1-2 файлов делай сам, перед сдачей нетривиальной работы прогоняй `checker` (Opus).\n\
+- Поиск по коду, греп и чтение документации отправляй в `Explore` ({sub}); правку одного файла без изменения логики делай сам.\n\
+- Не объявляй задачу готовой без `checker` (Opus), кроме правки одного файла без изменения логики; хук Stop один раз вернёт тебя, если правки остались без `checker` или advisor.\n\
 - Группируй независимые `Read`/`Edit`; не читай длинные файлы целиком: сначала `Grep` или LSP, затем диапазон.\n\
 - Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `ctxkit check <cmd>`.\n\
 - Закрывай длинную задачу через `/clear`, не тяни одну сессию дальше ~100-150 ходов.\n\
@@ -1014,7 +1046,7 @@ fn rules_snippet(opts: &SetupOpts) -> String {
         Lang::En => {
             let adv_line = match adv {
                 Some(a) => format!(
-                    "- Main session runs on **{}**. Consult **advisor ({a})** before locking a non-trivial plan, when the same error repeats twice, and before calling work done.\n",
+                    "- Main session runs on **{}**. Do not lock a plan or edit code across more than one file without calling **advisor ({a})** first; call it again when the same error repeats twice.\n",
                     opts.main_model
                 ),
                 None => format!("- Main session runs on **{}**.\n", opts.main_model),
@@ -1023,7 +1055,8 @@ fn rules_snippet(opts: &SetupOpts) -> String {
                 "{MARKER_START}\n\
 ## Model Team & Context Discipline (ctxkit)\n\n\
 {adv_line}\
-- Delegate codebase search/grep/docs reading to `Explore` ({sub}); keep tiny 1-2 file fixes local; run `checker` (Opus) before finishing non-trivial changes.\n\
+- Delegate codebase search/grep/docs reading to `Explore` ({sub}); keep a one-file fix with no logic change local.\n\
+- Do not declare work done without `checker` (Opus), except a one-file change with no logic change; the Stop hook sends you back once if edits were left without `checker` or advisor.\n\
 - Batch independent `Read`/`Edit` calls; locate symbols via `Grep`/LSP first, then read tight line ranges.\n\
 - Run `ctxkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n\
 - Clear finished tasks with `/clear` instead of dragging sessions past ~100-150 turns.\n\
@@ -1494,6 +1527,7 @@ fn print_help() {
          - Backs up existing configs before writing\n\
          - Configures Sonnet main + Fable advisor + Haiku subagents + Opus checker (preserving custom env/hooks/plugins)\n\
          - Wires ctxkit PreToolUse/PostToolUse hooks (replacing legacy claude-guard / no-inline-backslash entries)\n\
+         - Wires a once-per-turn Stop gate: a turn that edited code without checker/advisor afterwards is sent back once\n\
          - Audits enabled plugins, CLAUDE.md size, global MCPs, Claude CLI version, and Antigravity configs\n\n\
          Options:\n\
            --dry-run              Preview changes without writing files\n\
@@ -1502,6 +1536,7 @@ fn print_help() {
            --advisor <name>       Advisor model (default: fable; pass \"none\" to omit)\n\
            --subagent <name>      CLAUDE_CODE_SUBAGENT_MODEL (default: haiku)\n\
            --effort <level>       effortLevel (default: high)\n\
+           --no-stop-gate         Do not wire the Stop gate (and remove ours if present; env CTXKIT_GATE=0 mutes it per session)\n\
            --no-agents            Skip creating Explore.md and checker.md\n\
            --force-agents         Overwrite existing Explore.md / checker.md\n\
            --with-rules           Add/update idempotent rules block in CLAUDE.md\n\
@@ -1551,7 +1586,7 @@ mod tests {
         upsert_claude_hook_event(
             &mut hooks,
             "PreToolUse",
-            "Bash|PowerShell|Write|Read",
+            Some("Bash|PowerShell|Write|Read"),
             "\"C:/h/ctxkit.exe\"",
         );
         let arr = hooks["PreToolUse"].as_array().unwrap();
@@ -1561,6 +1596,31 @@ mod tests {
             .unwrap()
             .contains("ctxkit.exe"));
         assert_eq!(arr[1]["hooks"][0]["command"], "custom-other-hook");
+    }
+
+    #[test]
+    fn stop_gate_group_has_no_matcher_is_idempotent_and_removable() {
+        let mut hooks = Map::new();
+        hooks.insert(
+            "Stop".to_string(),
+            json!([{ "hooks": [{ "type": "command", "command": "notify-me.exe" }] }]),
+        );
+        for _ in 0..2 {
+            upsert_claude_hook_event(&mut hooks, "Stop", None, "\"C:/h/ctxkit.exe\"");
+        }
+        let ours = hooks["Stop"][0].clone();
+        assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2);
+        assert!(ours.get("matcher").is_none());
+        assert!(ours["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("ctxkit"));
+        remove_our_hook_event(&mut hooks, "Stop");
+        assert_eq!(hooks["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(hooks["Stop"][0]["hooks"][0]["command"], "notify-me.exe");
+        hooks.insert("Stop".to_string(), json!([ours]));
+        remove_our_hook_event(&mut hooks, "Stop");
+        assert!(hooks.get("Stop").is_none());
     }
 
     #[test]

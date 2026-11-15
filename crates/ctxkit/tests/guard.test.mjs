@@ -50,6 +50,16 @@ const postClaude = (name, content) => {
   return runHook({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path } }).includes('"block"');
 };
 
+// Stop gate: a transcript whose last turn edits two code files, optionally followed by checker
+const stopGate = ({ checker = false, active = false, env = {} } = {}) => {
+  const edit = (p) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: p } }] } });
+  const rows = [{ type: 'user', message: { content: 'go' } }, edit('/p/a.rs'), edit('/p/b.rs')];
+  if (checker) rows.push({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', input: { subagent_type: 'checker' } }] } });
+  const transcript_path = join(dir, 'turn.jsonl');
+  writeFileSync(transcript_path, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+  return runHook({ hook_event_name: 'Stop', transcript_path, stop_hook_active: active }, [], env);
+};
+
 const TMP = `C:${B}Users${B}u${B}AppData${B}Local${B}Temp${B}agents${B}x${B}`;
 const bigFile = join(dir, 'big.ts');
 writeFileSync(
@@ -491,6 +501,13 @@ const cases = [
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }).includes('File is large')],
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }, [], { CTXKIT_LANG: 'ru' }).includes('Файл большой')],
   [true, () => runHook({ toolCall: { name: 'run_command', args: { CommandLine: `python -c "print('a${B}nb')"` } }, stepIdx: 1 }, ['--lang', 'ru']).includes('Так обратные слеши теряются')],
+
+  // Stop gate: blocks once, never twice in a row, never after checker, can be muted
+  [true, () => JSON.parse(stopGate()).decision === 'block'],
+  [true, () => stopGate({ env: { CTXKIT_LANG: 'ru' } }).includes('вызови агента `checker`')],
+  [true, () => stopGate({ active: true }) === ''],
+  [true, () => stopGate({ checker: true }) === ''],
+  [true, () => stopGate({ env: { CTXKIT_GATE: '0' } }) === ''],
 ];
 
 let failed = 0;
