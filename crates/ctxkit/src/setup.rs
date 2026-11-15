@@ -208,6 +208,18 @@ pub fn run_setup(args: &[String]) -> i32 {
                 read_json_object(&p)?;
             }
         }
+        if opts.desktop {
+            let presets = opts
+                .desktop_file
+                .clone()
+                .or_else(|| default_desktop_presets_path(&home));
+            if let Some(p) = presets.filter(|p| p.exists()) {
+                read_json_object(&p)?;
+            }
+        }
+        if opts.dsh {
+            preflight_dsh(&dsh_home_dir())?;
+        }
         Ok(())
     };
     if let Err(e) = preflight() {
@@ -1190,6 +1202,46 @@ fn format_custom_dsh_command(cmd: &str, lang: Lang) -> String {
     res
 }
 
+/// Refuses a `cordis.patch.yml` that setup could only break further. The start marker is paired only with an
+/// end marker after it (guessing the span of a half-deleted block would eat the user's own entries), and the
+/// block is a sequence item, so appending it to a flow list or a mapping would break the YAML.
+fn dsh_patch_check(existing: &str, path: &Path) -> Result<(), String> {
+    match existing.find(DSH_MARKER_START) {
+        Some(s) if !existing[s..].contains(DSH_MARKER_END) => Err(format!(
+            "{}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand and rerun",
+            path.display()
+        )),
+        Some(_) => Ok(()),
+        None => {
+            let first = existing
+                .lines()
+                .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
+            if first.is_some_and(|l| l.trim_end() != "-" && !l.starts_with("- ")) {
+                return Err(format!(
+                    "{}: top level is not a block list (`- ...`); add the entry from examples/dsh-cordis.patch.yml by hand",
+                    path.display()
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// What `update_dsh_hooks` will read: the patch of the `desktop` profile and our hooks file.
+fn preflight_dsh(dsh_home: &Path) -> Result<(), String> {
+    let profile = dsh_home.join("profiles").join("desktop");
+    if !profile.exists() {
+        return Ok(()); // setup skips DeepSeek Harness then
+    }
+    let patch = profile.join("cordis.patch.yml");
+    if patch.exists() {
+        let text =
+            fs::read_to_string(&patch).map_err(|e| format!("read {}: {e}", patch.display()))?;
+        dsh_patch_check(&text, &patch)?;
+    }
+    read_json_object(&dsh_home.join("ctxkit-hooks.json")).map(|_| ())
+}
+
 /// Writes `<dsh_home>/ctxkit-hooks.json` and mounts the official Claude Code hook
 /// bridge on it from the desktop profile's `cordis.patch.yml`.
 fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(), String> {
@@ -1246,33 +1298,25 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     let block = format!(
         "{DSH_MARKER_START}\n- insert:\n    - id: ctxkit-hooks\n      name: '{DSH_HOOKS_PLUGIN}'\n      config:\n        configPath: '{config_path}'\n{DSH_MARKER_END}"
     );
-    let existing = fs::read_to_string(&patch_path)
-        .map_err(|e| format!("read {}: {e}", patch_path.display()))?;
+    // A dry run does not create the patch file, so it may not exist yet.
+    let existing = if patch_path.exists() {
+        fs::read_to_string(&patch_path)
+            .map_err(|e| format!("read {}: {e}", patch_path.display()))?
+    } else {
+        String::new()
+    };
+    // Already refused by the preflight; checked again so this function stands on its own.
+    dsh_patch_check(&existing, &patch_path)?;
     let updated = match existing.find(DSH_MARKER_START) {
-        // Pair the start marker only with an end marker after it; guessing the span of a
-        // half-deleted block would eat the user's own entries.
-        Some(s) => match existing[s..].find(DSH_MARKER_END) {
-            Some(len) => {
-                format!("{}{block}{}", &existing[..s], &existing[s + len + DSH_MARKER_END.len()..])
-            }
-            None => {
-                return Err(format!(
-                    "{}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand and rerun",
-                    patch_path.display()
-                ))
-            }
-        },
-        None => {
-            // The block is a sequence item: appending it to a flow list or a mapping breaks the YAML.
-            let first = existing.lines().find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
-            if first.is_some_and(|l| l.trim_end() != "-" && !l.starts_with("- ")) {
-                return Err(format!(
-                    "{}: top level is not a block list (`- ...`); add the entry from examples/dsh-cordis.patch.yml by hand",
-                    patch_path.display()
-                ));
-            }
-            append_block(&existing, &block)
+        Some(s) => {
+            let len = existing[s..].find(DSH_MARKER_END).unwrap_or_default();
+            format!(
+                "{}{block}{}",
+                &existing[..s],
+                &existing[s + len + DSH_MARKER_END.len()..]
+            )
         }
+        None => append_block(&existing, &block),
     };
     if existing == updated {
         println!(
@@ -2084,6 +2128,30 @@ mod tests {
         .is_ok());
         assert!(preflight_settings(&d.join("none.json"), true).is_ok());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn dsh_patch_check_refuses_what_setup_would_break() {
+        let p = Path::new("cordis.patch.yml");
+        for ok in [
+            "",
+            "# only a comment\n",
+            "- keep: 1\n",
+            "-\n  a: 1\n",
+            &format!("a: 1\n{DSH_MARKER_START}\nx\n{DSH_MARKER_END}\n"),
+        ] {
+            assert!(dsh_patch_check(ok, p).is_ok(), "{ok:?}");
+        }
+        let half = format!("- a\n{DSH_MARKER_START}\nx\n");
+        assert!(dsh_patch_check(&half, p)
+            .unwrap_err()
+            .contains("no end marker"));
+        let end_first = format!("{DSH_MARKER_END}\n{DSH_MARKER_START}\n");
+        assert!(dsh_patch_check(&end_first, p).is_err());
+        assert!(dsh_patch_check("key: v\n", p)
+            .unwrap_err()
+            .contains("not a block list"));
+        assert!(dsh_patch_check("[a, b]\n", p).is_err());
     }
 
     #[test]

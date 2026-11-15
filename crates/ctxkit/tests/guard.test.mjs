@@ -680,6 +680,38 @@ const cases = [
     const bomText = readFileSync(join(p9, 'CLAUDE.md'), 'utf8');
     if (bomText.split('<!-- ctxkit:start -->').length !== 2 || !bomText.includes('user tail')) return false;
 
+    // the preflight covers the Desktop presets file and the DeepSeek Harness files too: a refusal happens
+    // before the binary is copied, settings.json is written or any backup is made
+    const untouched = (profile) => !existsSync(join(profile, 'hooks')) && !existsSync(join(profile, 'settings.json')) && !existsSync(join(profile, 'backups'));
+    const p11 = mk('badpresets');
+    const badPresets = join(root, 'presets-bad.json');
+    writeFileSync(badPresets, '{ broken');
+    const r11 = run(p11, '--desktop', '--desktop-file', badPresets);
+    if (r11.status !== 1 || !untouched(p11) || readFileSync(badPresets, 'utf8') !== '{ broken') return `presets: ${r11.status} ${r11.stderr}`;
+    const dshCase = (name, patch, hooksJson) => {
+      const home = join(root, `dsh-${name}`);
+      mkdirSync(join(home, 'profiles', 'desktop'), { recursive: true });
+      if (patch !== null) writeFileSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml'), patch);
+      if (hooksJson !== null) writeFileSync(join(home, 'ctxkit-hooks.json'), hooksJson);
+      const profile = mk(`dsh-${name}-profile`);
+      const r = run(profile, '--dsh', '--dsh-home', home);
+      const patchAfter = existsSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml')) ? readFileSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8') : null;
+      return { r, profile, patchAfter, hooksAfter: existsSync(join(home, 'ctxkit-hooks.json')) ? readFileSync(join(home, 'ctxkit-hooks.json'), 'utf8') : null };
+    };
+    const half = dshCase('half', '- keep: 1\n# >>> ctxkit (managed by `ctxkit setup --dsh`; do not edit) >>>\n- insert: x\n', null);
+    if (half.r.status !== 1 || !untouched(half.profile) || half.hooksAfter !== null || !half.r.stderr.includes('no end marker')) return `half block: ${half.r.status} ${half.r.stderr}`;
+    const mapping = dshCase('mapping', 'key: value\n', null);
+    if (mapping.r.status !== 1 || !untouched(mapping.profile) || mapping.hooksAfter !== null || mapping.patchAfter !== 'key: value\n') return `mapping: ${mapping.r.status} ${mapping.r.stderr}`;
+    const badHooks = dshCase('badhooks', '- keep: 1\n', '[1]');
+    if (badHooks.r.status !== 1 || !untouched(badHooks.profile) || badHooks.hooksAfter !== '[1]' || badHooks.patchAfter !== '- keep: 1\n') return `hooks json: ${badHooks.r.status} ${badHooks.r.stderr}`;
+    // no patch file yet: setup creates it; a dry run of the same is a preview, not an error
+    const fresh = dshCase('fresh', null, null);
+    if (fresh.r.status !== 0 || !existsSync(join(fresh.profile, 'hooks')) || fresh.patchAfter === null || !fresh.patchAfter.includes('ctxkit-hooks')) return `fresh dsh: ${fresh.r.status} ${fresh.r.stderr}`;
+    const dryHome = join(root, 'dsh-dry');
+    mkdirSync(join(dryHome, 'profiles', 'desktop'), { recursive: true });
+    const dryRun = run(mk('dsh-dry-profile'), '--dsh', '--dsh-home', dryHome, '--dry-run');
+    if (dryRun.status !== 0 || existsSync(join(dryHome, 'ctxkit-hooks.json'))) return `dsh dry run: ${dryRun.status} ${dryRun.stderr}`;
+
     // a rollback that makes the only backup does not also claim there are none
     const p10 = mk('nobackups');
     writeFileSync(join(p10, 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: '"C:/x/ctxkit.exe"' }] }] } }));
