@@ -12,6 +12,7 @@ const api: LoadoutApi = {
   plan: (intent) => ipcRenderer.invoke('plan', intent),
   apply: (intent, baseSha) => ipcRenderer.invoke('apply', intent, baseSha),
   journal: () => ipcRenderer.invoke('journal'),
+  pruneBackups: () => ipcRenderer.invoke('backups:prune'),
   rollback: (op) => ipcRenderer.invoke('rollback', op),
   rollbackBatch: (batch) => ipcRenderer.invoke('rollbackBatch', batch),
   profiles: () => ipcRenderer.invoke('profiles'),

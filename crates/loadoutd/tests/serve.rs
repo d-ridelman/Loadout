@@ -750,6 +750,37 @@ fn profiles_save_plan_apply_and_roll_back_over_jsonrpc() {
     assert_eq!(del["result"].as_array().unwrap().len(), 0);
 }
 
+/// Каталоги «операций» с давними ID: чистка по сроку удаляет их все, корзина и прочее остаются.
+#[test]
+fn old_backups_are_pruned_by_the_rpc_method_and_by_the_prune_command() {
+    let mut s = Server::start_writable();
+    let store = s.home.with_extension("backups");
+    for dir in ["trash", "0000000000001-00", "0000000000002-00"] {
+        fs::create_dir_all(store.join(dir)).unwrap();
+    }
+    fs::write(store.join("0000000000001-00").join("before"), "секрет").unwrap();
+    let r = s.call("pruneBackups");
+    assert_eq!(r["result"], json!({ "removed": 2, "kept": 0 }), "{r}");
+    assert!(store.join("trash").is_dir() && !store.join("0000000000001-00").exists());
+
+    fs::create_dir_all(store.join("0000000000003-00")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_loadout"))
+        .args(["prune", "--backups"])
+        .arg(&store)
+        .output()
+        .expect("loadout prune запускается");
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("удалено операций: 1"));
+    assert!(!store.join("0000000000003-00").exists());
+    // без каталога копий команда отказывает, а не создаёт его
+    let missing = Command::new(env!("CARGO_BIN_EXE_loadout"))
+        .args(["prune", "--backups"])
+        .arg(store.join("нет"))
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+}
+
 #[test]
 fn broken_profiles_file_is_an_error_over_jsonrpc_and_is_set_aside_on_request() {
     let mut s = Server::start_writable();

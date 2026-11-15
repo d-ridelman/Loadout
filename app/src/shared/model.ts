@@ -139,6 +139,12 @@ export interface Applied {
   to: string
 }
 
+/** Итог очистки старых копий операций. */
+export interface Pruned {
+  removed: number
+  kept: number
+}
+
 export interface JournalEntry {
   id: string
   time: number
@@ -276,6 +282,8 @@ export interface LoadoutApi {
   plan: (intent: Intent) => Promise<PlanResponse>
   apply: (intent: Intent, baseSha: string) => Promise<Result<Applied>>
   journal: () => Promise<Result<JournalEntry[]>>
+  /** Удалить старые копии операций (последние 100 и не старше 90 дней остаются); main спрашивает подтверждение системным окном. */
+  pruneBackups: () => Promise<Result<Pruned>>
   rollback: (op: string) => Promise<Result<Applied>>
   rollbackBatch: (batch: string) => Promise<Result<Applied[]>>
   profiles: () => Promise<Result<Profile[]>>

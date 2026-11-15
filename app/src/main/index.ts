@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { backupNotice } from '../shared/backups'
 import { getLang, isLang, langFromLocale, setLang, t } from '../shared/i18n'
 import type { Lang } from '../shared/i18n'
 import { CLIENTS, LEVEL_RANK } from '../shared/model'
@@ -20,6 +21,7 @@ import {
   validateJournal,
   validatePlan,
   validateProfiles,
+  validatePruned,
   validateScan,
 } from './validate'
 
@@ -68,6 +70,9 @@ function iconPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'icon.png') : resolve(app.getAppPath(), 'build', 'icon.png')
 }
 
+/** Каталог копий операций и корзины Loadout: внутри профиля приложения. */
+const backupsDir = (): string => join(app.getPath('userData'), 'backups')
+
 let sidecar: Sidecar | undefined
 let lastWindow: BrowserWindow | undefined
 /** Скан не удался: окно показывает ошибку, и первый же `ready` перезапущенного ядра должен её сменить данными. */
@@ -81,7 +86,7 @@ function ensureSidecar(): Sidecar | string {
     return tidy(t(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`, `core not found: ${bin}. Build it with "cargo build --release" in the project root.`))
   }
   // Каталог бэкапов передаём всегда, а право писать проверяет main (уровень R1) перед каждым `apply` и `rollback`.
-  const args = ['serve', '--backups', join(app.getPath('userData'), 'backups'), '--lang', getLang()]
+  const args = ['serve', '--backups', backupsDir(), '--lang', getLang()]
   const homeOverride = envOf('LOADOUT_HOME')
   if (homeOverride) args.push('--home', homeOverride)
   let readySeen = false
@@ -404,7 +409,10 @@ void app.whenReady().then(() => {
         message: r2
           ? t('Разрешить Loadout выносить записи в корзину, править команды MCP, копировать записи между клиентами и применять профили?', 'Allow Loadout to move entries to the trash, edit MCP commands, copy entries between clients and apply profiles?')
           : t('Разрешить Loadout включать и выключать записи в конфигах клиентов?', 'Allow Loadout to turn entries on and off in client configs?'),
-        detail: t('Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.', 'A preview is shown and a backup is made before every change, and every change can be rolled back from the journal. Close Claude Code and Codex if they are running: they may overwrite the file.'),
+        detail:
+          t('Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.', 'A preview is shown and a backup is made before every change, and every change can be rolled back from the journal. Close Claude Code and Codex if they are running: they may overwrite the file.') +
+          '\n\n' +
+          backupNotice(tidy(backupsDir())),
         buttons: [t('Отмена', 'Cancel'), r2 ? t('Включить R2', 'Enable R2') : t('Включить запись', 'Enable writing')],
         defaultId: 0,
         cancelId: 0,
@@ -437,6 +445,24 @@ void app.whenReady().then(() => {
   ipcMain.handle('journal', (e) => {
     guard(e)
     return guarded(async () => validateJournal(await core('journal')))
+  })
+  // Очистка старых копий: необратима, поэтому подтверждает человек в окне ОС (страница его нажать не может), как и повышение уровня.
+  ipcMain.handle('backups:prune', async (e) => {
+    guard(e)
+    const opts = {
+      type: 'warning' as const,
+      title: t('Loadout: очистить старые копии?', 'Loadout: clean up old copies?'),
+      message: t('Удалить копии старых операций? Откатить их после этого будет нельзя.', 'Delete the copies of old operations? They cannot be rolled back afterwards.'),
+      detail: backupNotice(tidy(backupsDir())),
+      buttons: [t('Отмена', 'Cancel'), t('Очистить', 'Clean up')],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    }
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+    if (r.response !== 1) return { ok: false, error: t('очистка отменена', 'cleanup cancelled') }
+    return guarded(async () => validatePruned(await core('pruneBackups')))
   })
   ipcMain.handle('rollback', (e, op: unknown) => {
     guard(e)

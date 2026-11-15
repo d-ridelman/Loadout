@@ -52,10 +52,67 @@ fn serve_main(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `loadout prune [--backups КАТАЛОГ] [--lang ru|en]`: удаляет старые копии операций (оставляет последние 100 и не старше
+/// 90 дней, корзина не трогается). Без `--backups` берёт `%APPDATA%\Loadout\backups`, куда складывает копии окно.
+fn prune_main(args: &[String]) -> ExitCode {
+    let mut backups = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--backups" => backups = it.next().map(PathBuf::from),
+            "--lang" => loadout_core::i18n::set_lang(it.next().map_or("ru", String::as_str)),
+            other => {
+                eprintln!(
+                    "{}",
+                    loadout_core::tr!("неизвестный аргумент: {other}", "unknown argument: {other}")
+                );
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let Some(dir) = backups.or_else(|| {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Loadout").join("backups"))
+    }) else {
+        eprintln!(
+            "{}",
+            loadout_core::tr!(
+                "каталог копий не определён, укажите --backups",
+                "the backup directory is unknown, pass --backups"
+            )
+        );
+        return ExitCode::from(2);
+    };
+    if !dir.is_dir() {
+        eprintln!(
+            "{}",
+            loadout_core::tr!(
+                "каталога копий нет: {}",
+                "the backup directory does not exist: {}",
+                dir.display()
+            )
+        );
+        return ExitCode::from(2);
+    }
+    let r = loadout_core::write::prune_backups(&dir);
+    println!(
+        "{}",
+        loadout_core::tr!(
+            "удалено операций: {}, осталось: {}",
+            "operations removed: {}, kept: {}",
+            r.removed,
+            r.kept
+        )
+    );
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("serve") {
         return serve_main(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("prune") {
+        return prune_main(&args[1..]);
     }
     if args.first().map(String::as_str) != Some("scan") {
         eprintln!(
@@ -70,6 +127,13 @@ fn main() -> ExitCode {
             loadout_core::tr!(
                 "             loadout serve [--home ПУТЬ] [--backups КАТАЛОГ] [--lang ru|en]",
                 "             loadout serve [--home PATH] [--backups DIR] [--lang ru|en]"
+            )
+        );
+        eprintln!(
+            "{}",
+            loadout_core::tr!(
+                "             loadout prune [--backups КАТАЛОГ] [--lang ru|en]",
+                "             loadout prune [--backups DIR] [--lang ru|en]"
             )
         );
         return ExitCode::from(2);

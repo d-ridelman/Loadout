@@ -18,10 +18,15 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod retention;
 pub mod skill;
+
+pub use retention::{prune as prune_backups, Pruned};
 
 #[cfg(test)]
 mod race_tests;
+#[cfg(test)]
+mod retention_tests;
 
 /// Почему запись нельзя переключить (показывается в инспекторе).
 pub fn why_not(e: &Entity) -> String {
@@ -1317,6 +1322,7 @@ pub fn apply(
     base_sha: &str,
     max_level: &str,
 ) -> Result<Applied, String> {
+    retention::before_write(store, &[]);
     apply_one(home, store, i, Some(base_sha), None, max_level)
 }
 
@@ -1398,6 +1404,8 @@ pub fn apply_batch(
         ));
     }
     need_level(&bp.level, max_level)?;
+    // один раз на пакет, а не по записям: пакет не должен срезать собственное начало
+    retention::before_write(store, &[]);
     let batch = format!("{:013}", now_ms());
     let mut done = Vec::new();
     for (n, i) in items.iter().enumerate() {
@@ -1440,8 +1448,18 @@ fn read_manifest(store: &Path, id: &str) -> Result<Manifest, String> {
             "invalid operation number"
         ));
     }
-    let text = std::fs::read_to_string(store.join(id).join("manifest.json"))
-        .map_err(|_| crate::tr!("операция не найдена", "operation not found"))?;
+    let text = std::fs::read_to_string(store.join(id).join("manifest.json")).map_err(|_| {
+        if retention::was_pruned(store, id) {
+            crate::tr!(
+                "копия этой операции уже удалена очисткой (хранятся последние {} операций не старше {} дней): откатить её нельзя",
+                "the copy of this operation was already removed by the cleanup (the last {} operations, not older than {} days, are kept): it cannot be rolled back",
+                retention::KEEP_OPS,
+                retention::KEEP_DAYS
+            )
+        } else {
+            crate::tr!("операция не найдена", "operation not found")
+        }
+    })?;
     serde_json::from_str(&text)
         .map_err(|_| crate::tr!("манифест повреждён", "the manifest is corrupted"))
 }
@@ -1450,17 +1468,20 @@ fn file_sha(path: &Path) -> Option<String> {
     std::fs::read(path).ok().map(|b| sha(&b))
 }
 
-fn manifests(store: &Path) -> Vec<Manifest> {
-    let Ok(rd) = std::fs::read_dir(store) else {
-        return Vec::new();
-    };
-    let mut ids: Vec<String> = rd
-        .flatten()
-        .filter(|e| e.path().is_dir() && e.file_name() != "trash")
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    ids.sort_unstable_by(|a, b| b.cmp(a));
-    ids.iter()
+/// Последние `limit` операций, новые первыми. Разбираются только они: по остальным читаются лишь имена каталогов.
+fn manifests_recent(store: &Path, limit: usize) -> Vec<Manifest> {
+    retention::op_ids(store)
+        .iter()
+        .filter_map(|id| read_manifest(store, id).ok())
+        .take(limit)
+        .collect()
+}
+
+/// Операции с id не старше `min_id`, новые первыми: откат операции всегда новее неё, остальные читать незачем.
+fn manifests_since(store: &Path, min_id: &str) -> Vec<Manifest> {
+    retention::op_ids(store)
+        .iter()
+        .take_while(|id| id.as_str() >= min_id)
         .filter_map(|id| read_manifest(store, id).ok())
         .collect()
 }
@@ -1523,17 +1544,16 @@ fn relang(s: &str) -> String {
 
 /// Журнал наших операций, новые первыми. Изменения клиентов извне в него не попадают.
 pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
-    let all = manifests(store);
+    // откат всегда новее своей операции, поэтому «откатана» видно по тем же последним строкам; остальные не разбираются
+    let all = manifests_recent(store, retention::JOURNAL_MAX);
     let undone: std::collections::HashSet<&str> =
         all.iter().filter_map(|m| m.of.as_deref()).collect();
     // состояние записей нужно только для откатов вынесенных в корзину: один скан на весь журнал
     let scan: Option<ScanResult> = all
         .iter()
-        .take(200)
         .any(|m| m.inverse_enable.is_some())
         .then(|| crate::scan_with(home, Some(store)));
     all.iter()
-        .take(200)
         .map(|m| {
             let rolled_back = undone.contains(m.id.as_str());
             let can_rollback = m.op != "rollback"
@@ -1575,6 +1595,11 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
 /// Вынос в корзину и возврат откатываются обратной операцией над текущим файлом: `~/.claude.json` клиент переписывает
 /// постоянно, и сверка хеша там почти всегда отказывала бы.
 pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<Applied, String> {
+    retention::before_write(store, &[op.to_owned()]);
+    rollback_one(home, store, op, max_level)
+}
+
+fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<Applied, String> {
     let m = read_manifest(store, op)?;
     need_level(&m.level, max_level)?;
     if m.op == "rollback" {
@@ -1583,7 +1608,10 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
             "only the operation itself can be rolled back, not a rollback"
         ));
     }
-    if manifests(store).iter().any(|x| x.of.as_deref() == Some(op)) {
+    if manifests_since(store, op)
+        .iter()
+        .any(|x| x.of.as_deref() == Some(op))
+    {
         return Err(crate::tr!(
             "операция уже откатана",
             "the operation has already been rolled back"
@@ -1681,7 +1709,8 @@ pub fn rollback_batch(
     batch: &str,
     max_level: &str,
 ) -> Result<Vec<Applied>, String> {
-    let all = manifests(store);
+    // операции пакета не старше его номера (мс начала пакета): остальные не читаются
+    let all = manifests_since(store, batch);
     let members: Vec<&Manifest> = all
         .iter()
         .filter(|m| m.batch.as_deref() == Some(batch) && m.op != "rollback")
@@ -1690,13 +1719,16 @@ pub fn rollback_batch(
     for m in &members {
         need_level(&m.level, max_level)?;
     }
-    let ops: Vec<String> = members.iter().map(|m| m.id.clone()).collect(); // новые первыми: нужный порядок отката
+    // новые первыми: нужный порядок отката
+    let ops: Vec<String> = members.iter().map(|m| m.id.clone()).collect();
+    // операции пакета не должны уйти под очистку посреди отката
+    retention::before_write(store, &ops);
     let mut done = Vec::new();
     for id in ops {
         if all.iter().any(|x| x.of.as_deref() == Some(id.as_str())) {
             continue;
         }
-        done.push(rollback(home, store, &id, max_level)?);
+        done.push(rollback_one(home, store, &id, max_level)?);
     }
     if done.is_empty() {
         return Err(crate::tr!(

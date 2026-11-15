@@ -6,10 +6,10 @@ use crate::model::{Client, Kind};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-struct Env {
-    top: PathBuf,
-    home: PathBuf,
-    store: PathBuf,
+pub(super) struct Env {
+    pub(super) top: PathBuf,
+    pub(super) home: PathBuf,
+    pub(super) store: PathBuf,
 }
 
 impl Drop for Env {
@@ -19,7 +19,7 @@ impl Drop for Env {
     }
 }
 
-fn env(tag: &str) -> Env {
+pub(super) fn env(tag: &str) -> Env {
     let top = std::env::temp_dir().join(format!("loadout-race-{}-{tag}", std::process::id()));
     let _ = fs::remove_dir_all(&top);
     let home = top.join("home");
@@ -36,11 +36,11 @@ fn env(tag: &str) -> Env {
     }
 }
 
-fn cfg(e: &Env) -> PathBuf {
+pub(super) fn cfg(e: &Env) -> PathBuf {
     e.home.join(".codex/config.toml")
 }
 
-fn toggle(e: &Env, enable: bool) -> Intent {
+pub(super) fn toggle(e: &Env, enable: bool) -> Intent {
     let scan = crate::scan(&e.home);
     let id = scan
         .entities

@@ -221,6 +221,8 @@ impl Server {
                 &intent()?,
             )?)?,
             "journal" => json(&write::journal(&self.home, &store()?))?,
+            // очистка старых копий (последние 100 операций и не старше 90 дней); окно просит её явной кнопкой
+            "pruneBackups" => json(&write::prune_backups(&store()?))?,
             "apply" => json(&write::apply(
                 &self.home,
                 &store()?,
@@ -313,7 +315,7 @@ impl Server {
             Some(
                 m @ ("plan" | "apply" | "journal" | "rollback" | "rollbackBatch" | "profiles"
                 | "profileSave" | "profileDelete" | "planProfile" | "applyProfile"
-                | "profilesQuarantine"),
+                | "profilesQuarantine" | "pruneBackups"),
             ) => match self.write_method(m, req.get("params").unwrap_or(&Value::Null)) {
                 Ok(v) => json!({ "result": v }),
                 Err(e) => json!({ "error": { "message": e } }),
