@@ -29,23 +29,38 @@ const defaults = (): SetupOptions => ({ withRules: true, desktop: false, antigra
 
 type Loaded<T> = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; data: T }
 
-function useLoaded<T>(load: () => Promise<{ ok: true; data: T } | { ok: false; error: string }>, deps: unknown[]): [Loaded<T>, () => void] {
+/** Данные, перезапуск и признак «идёт подсчёт»: при повторном запросе прежние данные остаются на экране, но busy виден. */
+function useLoaded<T>(load: () => Promise<{ ok: true; data: T } | { ok: false; error: string }>, deps: unknown[]): [Loaded<T>, () => void, boolean, Date | null] {
   const [s, setS] = useState<Loaded<T>>({ status: 'loading' })
   const [n, setN] = useState(0)
+  const [busy, setBusy] = useState(true)
+  const [at, setAt] = useState<Date | null>(null)
   useEffect(() => {
     let alive = true
+    setBusy(true)
     setS((p) => (p.status === 'ready' ? p : { status: 'loading' }))
     load().then(
-      (r) => alive && setS(r.ok ? { status: 'ready', data: r.data } : { status: 'error', error: r.error }),
-      (e: unknown) => alive && setS({ status: 'error', error: e instanceof Error ? e.message : t('не удалось', 'failed') }),
+      (r) => {
+        if (!alive) return
+        setS(r.ok ? { status: 'ready', data: r.data } : { status: 'error', error: r.error })
+        setBusy(false)
+        setAt(new Date())
+      },
+      (e: unknown) => {
+        if (!alive) return
+        setS({ status: 'error', error: e instanceof Error ? e.message : t('не удалось', 'failed') })
+        setBusy(false)
+      },
     )
     return () => {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, n])
-  return [s, () => setN((x) => x + 1)]
+  return [s, () => setN((x) => x + 1), busy, at]
 }
+
+const clock = (d: Date) => d.toLocaleTimeString(getLang() === 'ru' ? 'ru-RU' : 'en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 
 interface Props {
   level: WriteLevel
@@ -55,9 +70,9 @@ interface Props {
 /** Встроенный ctxkit (CONCEPT.md §13): установить и применить, диагностика, эффективность по счётчикам транскриптов. */
 export function Ctxkit({ level, onNotice }: Props) {
   const [status, reloadStatus] = useLoaded<CtxkitStatus>(() => window.loadout.ctxkitStatus(), [])
-  const [doctor, reloadDoctor] = useLoaded<CtxkitDoctor>(() => window.loadout.ctxkitDoctor(), [])
+  const [doctor, reloadDoctor, doctorBusy] = useLoaded<CtxkitDoctor>(() => window.loadout.ctxkitDoctor(), [])
   const [days, setDays] = useState<7 | 14 | 30>(14)
-  const [report, reloadReport] = useLoaded<CtxkitReport>(() => window.loadout.ctxkitReport(days), [days])
+  const [report, reloadReport, reportBusy, reportAt] = useLoaded<CtxkitReport>(() => window.loadout.ctxkitReport(days), [days])
   const [opts, setOpts] = useState<SetupOptions>(defaults)
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [result, setResult] = useState<SetupResult | null>(null)
@@ -192,7 +207,7 @@ export function Ctxkit({ level, onNotice }: Props) {
         ) : doctor.status === 'error' ? (
           <p className="s-broken" role="alert">{doctor.error}</p>
         ) : (
-          <ul className="plist" aria-label={t('Находки диагностики', 'Diagnostic findings')}>
+          <ul className="plist all" aria-label={t('Находки диагностики', 'Diagnostic findings')} aria-busy={doctorBusy}>
             {doctor.data.findings.map((f) => (
               <li key={f.id} className="pitem">
                 <span>
@@ -204,27 +219,41 @@ export function Ctxkit({ level, onNotice }: Props) {
             ))}
           </ul>
         )}
-        <div className="actions col"><button onClick={reloadDoctor}>{t('Обновить диагностику', 'Refresh diagnostics')}</button></div>
+        <div className="actions col">
+          <button onClick={reloadDoctor} disabled={doctorBusy} aria-busy={doctorBusy}>
+            {doctorBusy ? <><span className="spin" aria-hidden="true" />{t('Проверяю…', 'Checking…')}</> : t('Обновить диагностику', 'Refresh diagnostics')}
+          </button>
+        </div>
       </section>
 
       <section className="hud card" aria-label={t('Эффективность', 'Efficiency')}>
         <h3>{t('Эффективность', 'Efficiency')}</h3>
-        <label className="form">
-          {t('Период', 'Period')}
-          <select value={days} onChange={(e) => setDays(Number(e.target.value) as 7 | 14 | 30)} aria-label={t('Период отчёта', 'Report period')}>
-            <option value={7}>{t('7 дней', '7 days')}</option>
-            <option value={14}>{t('14 дней', '14 days')}</option>
-            <option value={30}>{t('30 дней', '30 days')}</option>
-          </select>
-        </label>
-        {report.status === 'loading' ? (
-          <p className="mute" role="status">{t('Считаю по транскриптам…', 'Counting from transcripts…')}</p>
-        ) : report.status === 'error' ? (
+        <div className="bar">
+          <label>
+            <span className="mute">{t('Период', 'Period')}</span>
+            <select value={days} onChange={(e) => setDays(Number(e.target.value) as 7 | 14 | 30)} aria-label={t('Период отчёта', 'Report period')}>
+              <option value={7}>{t('7 дней', '7 days')}</option>
+              <option value={14}>{t('14 дней', '14 days')}</option>
+              <option value={30}>{t('30 дней', '30 days')}</option>
+            </select>
+          </label>
+          <button onClick={reloadReport} disabled={reportBusy} aria-busy={reportBusy}>
+            {reportBusy ? <><span className="spin" aria-hidden="true" />{t('Считаю…', 'Counting…')}</> : t('Пересчитать', 'Recalculate')}
+          </button>
+          <span className="mute small" role="status">
+            {reportBusy
+              ? t(`Считаю по транскриптам за ${days} дн., это может занять до минуты`, `Counting transcripts for ${days} days, this can take up to a minute`)
+              : reportAt && report.status === 'ready'
+                ? t(`Посчитано в ${clock(reportAt)}`, `Counted at ${clock(reportAt)}`)
+                : ''}
+          </span>
+        </div>
+        {report.status === 'loading' ? null : report.status === 'error' ? (
           <p className="s-broken" role="alert">{report.error}</p>
         ) : sum && sum.days === 0 ? (
           <p className="mute">{t('За этот период транскриптов Claude Code нет: считать нечего.', 'No Claude Code transcripts for this period: nothing to count.')}</p>
         ) : sum ? (
-          <>
+          <div className={reportBusy ? 'stale' : undefined} aria-busy={reportBusy}>
             <dl className="kv">
               <dt>{t('ходов основной сессии', 'main session turns')}</dt><dd>{sum.mainTurns}</dd>
               <dt>{t('на Sonnet и Haiku', 'on Sonnet and Haiku')}</dt><dd className="s-on">{pct(sum.cheapShare)}</dd>
@@ -271,9 +300,8 @@ export function Ctxkit({ level, onNotice }: Props) {
                 'These are counters from Claude Code transcripts (numbers only, no text or paths; days are in UTC). The report has no “before ctxkit” baseline, so “saved” is not computed: watch how the share of cheap models and blocked reads changes day by day after applying.',
               )}
             </p>
-          </>
+          </div>
         ) : null}
-        <div className="actions col"><button onClick={reloadReport}>{t('Пересчитать', 'Recalculate')}</button></div>
       </section>
     </div>
   )

@@ -172,10 +172,14 @@ async function axeCheck(page, label) {
 }
 
 function leftovers() {
+  // только процессы этой копии репозитория: e2e другой рабочей папки (соседний worktree) идёт со своим профилем, его не считаем и не убиваем
+  const q = (p) => p.replaceAll("'", "''")
   try {
     const out = execFileSync(
       'powershell',
-      ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "Name='electron.exe'" | Where-Object { $_.CommandLine -like '*loadout-qa*' } | Select-Object -ExpandProperty ProcessId`],
+      // IndexOf, а не -like: скобки в пути не превращаются в шаблон. Основной процесс — appDir и порт отладки Playwright
+      // (dev-окно `npm run dev` этой же копии под фильтр не попадает), дочерние — по --user-data-dir профиля e2e.
+      ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "Name='electron.exe'" | Where-Object { $c = $_.CommandLine; $c -and ($c.IndexOf('${q(profile)}', [StringComparison]::OrdinalIgnoreCase) -ge 0 -or ($c.IndexOf('${q(appDir)}', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $c.Contains('--remote-debugging-port'))) } | Select-Object -ExpandProperty ProcessId`],
       { encoding: 'utf8' },
     )
     return out.split(/\s+/).filter(Boolean)
@@ -719,6 +723,25 @@ try {
   await page.locator('table[aria-label="Ходы по дням"] tbody tr').first().waitFor({ timeout: 30000 })
   const eff = await page.locator('main').innerText()
   must(eff.includes('на Sonnet и Haiku') && eff.includes('checker ×'), `нет сводки эффективности: ${eff.slice(-600)}`)
+  // период и «Пересчитать» в одной строке; во время подсчёта кнопка занята и это видно; после — время подсчёта
+  const recalc = page.getByRole('button', { name: /^(Пересчитать|Считаю…)$/ })
+  await waitFor(async () => (await page.locator('section[aria-label="Эффективность"] [role=status]').innerText()).includes('Посчитано в'), 'после первого подсчёта видно время')
+  const effRow = await page.evaluate(() => {
+    const s = document.querySelector('select[aria-label="Период отчёта"]').getBoundingClientRect()
+    const b = [...document.querySelectorAll('section[aria-label="Эффективность"] button')][0].getBoundingClientRect()
+    return { dy: Math.abs(s.top + s.height / 2 - (b.top + b.height / 2)), below: b.top > s.bottom }
+  })
+  must(effRow.dy <= 4 && !effRow.below, `период и «Пересчитать» должны быть в одной строке: ${JSON.stringify(effRow)}`)
+  await page.getByLabel('Период отчёта').selectOption('30')
+  await waitFor(async () => (await recalc.innerText()).includes('Считаю') || (await page.locator('section[aria-label="Эффективность"] [role=status]').innerText()).includes('Посчитано'), 'смена периода запускает подсчёт')
+  await waitFor(async () => (await recalc.isEnabled()) && (await recalc.innerText()) === 'Пересчитать', 'подсчёт за 30 дней завершился, кнопка снова доступна')
+  await page.getByLabel('Период отчёта').selectOption('14')
+  await waitFor(async () => (await recalc.isEnabled()) && (await recalc.innerText()) === 'Пересчитать', 'подсчёт за 14 дней завершился')
+  // список диагностики целиком, без внутренней прокрутки, которая обрезала последнюю находку
+  const diag = await page.evaluate(() => { const u = document.querySelector('ul[aria-label="Находки диагностики"]'); return u.scrollHeight - u.clientHeight })
+  must(diag <= 1, `список диагностики прокручивается внутри и обрезает строки: ${diag}`)
+  await page.locator('section[aria-label="Диагностика"]').screenshot({ path: join(stateDir, 'm5-ctxkit-diag-1280.png') })
+  await page.locator('section[aria-label="Эффективность"]').screenshot({ path: join(stateDir, 'm5-ctxkit-efficiency-1280.png') })
   const ctxLayout = await page.evaluate(() => ({ h: document.documentElement.scrollWidth - document.documentElement.clientWidth, m: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth }))
   must(ctxLayout.h <= 0 && ctxLayout.m <= 1, `горизонтальная прокрутка в разделе ctxkit: ${JSON.stringify(ctxLayout)}`)
   const v4 = await axeCheck(page, 'ctxkit')
