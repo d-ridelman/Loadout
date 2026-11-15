@@ -54,6 +54,11 @@ function sidecarPath(): string {
   return envOf('LOADOUT_BIN') ?? resolve(app.getAppPath(), '..', 'target', 'release', 'loadout.exe')
 }
 
+/** Значок окна на панели задач (у exe без подписи своего нет): из resources в сборке, из `build/` в разработке. */
+function iconPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'icon.png') : resolve(app.getAppPath(), 'build', 'icon.png')
+}
+
 let sidecar: Sidecar | undefined
 let lastWindow: BrowserWindow | undefined
 /** Скан не удался: окно показывает ошибку, и первый же `ready` перезапущенного ядра должен её сменить данными. */
@@ -144,6 +149,9 @@ const CLIENT_PROCESSES: Partial<Record<ClientId, string[]>> = {
   'claude-code': ['claude.exe'],
   'claude-desktop': ['claude.exe'],
   codex: ['codex.exe'],
+  // имена сняты с этой машины: окно DeepSeek зовётся «DeepSeek Harness», у Antigravity есть оболочка и CLI `agy`
+  antigravity: ['antigravity.exe', 'agy.exe'],
+  deepseek: ['deepseek harness.exe'],
 }
 
 function runningOf(client: ClientId): Promise<string[]> {
@@ -245,6 +253,11 @@ function createWindow(): void {
     title: 'Loadout',
     backgroundColor: '#282a36',
     autoHideMenuBar: true,
+    // Без системной рамки и заголовка: верхняя строка окна — наша (логотип, управление), а кнопки свернуть, развернуть и
+    // закрыть остаются системными (с раскладками Snap), но в цветах окна и в нашей строке высотой 48 px.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#21222c', symbolColor: '#f8f8f2', height: 48 },
+    icon: iconPath(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

@@ -196,6 +196,28 @@ try {
   await page.waitForSelector('#grid', { timeout: 20000 })
   must((await page.title()) === 'Loadout', 'заголовок окна не Loadout')
 
+  // верхняя строка — своя (системной рамки нет): знак, перетаскивание, элементы управления не заходят под кнопки окна
+  const bar = await page.evaluate(() => {
+    const h = document.querySelector('header')
+    const wco = navigator.windowControlsOverlay
+    const area = wco?.getTitlebarAreaRect()
+    const right = Math.max(...[...h.children].map((c) => c.getBoundingClientRect().right))
+    return {
+      overlay: wco?.visible === true,
+      drag: getComputedStyle(h).getPropertyValue('-webkit-app-region'),
+      selectDrag: getComputedStyle(h.querySelector('select')).getPropertyValue('-webkit-app-region'),
+      mark: !!h.querySelector('svg.mark'),
+      height: Math.round(h.getBoundingClientRect().height),
+      right: Math.round(right),
+      areaRight: area ? Math.round(area.x + area.width) : null,
+    }
+  })
+  log('  верхняя строка:', JSON.stringify(bar))
+  must(bar.overlay, 'системная рамка не убрана: нет наложения кнопок окна')
+  must(bar.drag === 'drag' && bar.selectDrag === 'no-drag', 'строка заголовка должна перетаскиваться, а элементы управления нет')
+  must(bar.mark, 'в шапке нет знака')
+  must(bar.height === 48, `высота строки заголовка ${bar.height}, нужно 48 (как у наложения)`)
+  must(bar.areaRight !== null && bar.right <= bar.areaRight, `элементы шапки заходят под кнопки окна: ${bar.right} > ${bar.areaRight}`)
   const rowCount = await page.locator('tbody tr').count()
   log('строк в матрице:', rowCount)
   must(rowCount > 10, 'в матрице слишком мало строк')

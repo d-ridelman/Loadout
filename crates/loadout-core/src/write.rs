@@ -544,6 +544,24 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
         return Err("в клиенте-получателе уже есть запись с таким именем".into());
     }
     let (value, skipped) = translate(&entry, dest)?;
+    // Запись без command и url у получателя мертва: так бывает, когда адрес лежит в другом ключе (`serverUrl`),
+    // а перевод его не знает. Лучше отказать, чем записать пустышку в чужой конфиг.
+    let has = |k: &str| {
+        value
+            .get(k)
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+    };
+    if !has("command") && !has("url") {
+        return Err(format!(
+            "запись не переносится: после перевода у неё нет ни command, ни url{}",
+            if skipped.is_empty() {
+                String::new()
+            } else {
+                format!(" (не распознаны ключи: {})", skipped.join(", "))
+            }
+        ));
+    }
     let new_text = edit::put_value(format, &text, &path, &value, false)?;
 
     let mut plan = plan_for(e, "copy", "R2", tilde(home, &file), &old);

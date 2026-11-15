@@ -4,6 +4,7 @@ import type { ClientId, Entity, Intent, ScanResult, WriteLevel } from '../shared
 import { buildRows, groupOf, onlyUnknown } from './aggregate'
 import type { Row } from './aggregate'
 import { diagnose } from './doctor'
+import { Logo } from './Logo'
 import { Doctor } from './views/Doctor'
 import { Hooks } from './views/Hooks'
 import { Inspector, levelOk } from './views/Inspector'
@@ -290,8 +291,11 @@ export function App() {
   return (
     <div id="app">
       <header>
-        <span className="logo">
-          LOAD<i>/</i>OUT
+        <span className="brand">
+          <Logo />
+          <span className="logo">
+            LOAD<i>/</i>OUT
+          </span>
         </span>
         <span className="mute mono" id="scanInfo">
           {scan.status === 'ready' ? `скан: ${scan.ms} мс` : scan.status === 'loading' ? 'скан…' : 'скан не удался'}

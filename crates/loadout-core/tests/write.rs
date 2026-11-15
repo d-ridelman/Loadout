@@ -887,6 +887,37 @@ fn plan_and_journal_have_no_home_path_and_edit_keeps_crlf() {
 }
 
 #[test]
+fn copy_refuses_an_entry_that_would_be_dead_at_the_receiver() {
+    let e = env();
+    // удалённый сервер с адресом в нестандартном ключе: после перевода нет ни command, ни url
+    let path = e
+        .home
+        .join("AppData/Roaming/Claude/claude_desktop_config.json");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        text.replace(
+            "\"mcpServers\": {",
+            "\"mcpServers\": {\n    \"remote-x\": { \"serverUrl\": \"https://x.example/mcp\" },",
+        ),
+    )
+    .unwrap();
+    let id = id_in(&e, Client::ClaudeDesktop, "remote-x");
+    let err = plan_s(
+        &e,
+        &Intent::Copy {
+            entity: id,
+            to: "codex".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("нет ни command, ни url") && err.contains("serverUrl"),
+        "{err}"
+    );
+}
+
+#[test]
 fn stale_trash_item_does_not_block_the_next_removal() {
     let e = env();
     let id = id_in(&e, Client::Antigravity, "tool-b");

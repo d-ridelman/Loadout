@@ -20,6 +20,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
+/// Версия протокола JSON-RPC: растёт при несовместимых изменениях методов и форм ответов. Окно, `ctxkit` и другие
+/// оболочки сверяют её по `ready` и `status` (см. CONCEPT.md §13).
+const PROTOCOL: u32 = 1;
+
 /// Тишина, после которой пачка событий считается законченной.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 /// Предел ожидания, если события идут без перерыва (`.claude.json` переписывается постоянно).
@@ -278,7 +282,7 @@ impl Server {
             }
             Some("snapshot") => json!({ "result": &self.last }),
             Some("status") => {
-                json!({ "result": { "watching": self.watched.len(), "seq": self.seq, "writable": self.backups.is_some() } })
+                json!({ "result": { "watching": self.watched.len(), "seq": self.seq, "writable": self.backups.is_some(), "protocol": PROTOCOL } })
             }
             Some(
                 m @ ("plan" | "apply" | "journal" | "rollback" | "rollbackBatch" | "profiles"
@@ -328,7 +332,7 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
 
     let mut server = Server::new(home, backups, watcher);
     send(
-        &json!({ "jsonrpc": "2.0", "method": "ready", "params": { "watching": server.watched.len() } }),
+        &json!({ "jsonrpc": "2.0", "method": "ready", "params": { "watching": server.watched.len(), "protocol": PROTOCOL } }),
     );
 
     // (когда пришло первое событие пачки, когда последнее, нужно ли пересоздать все подписки)

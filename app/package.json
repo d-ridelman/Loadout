@@ -20,10 +20,14 @@
     "productName": "Loadout",
     "directories": { "output": "dist" },
     "files": ["out/**", "package.json"],
-    "extraResources": [{ "from": "../target/release/loadout.exe", "to": "loadout.exe" }],
+    "extraResources": [
+      { "from": "../target/release/loadout.exe", "to": "loadout.exe" },
+      { "from": "build/icon.png", "to": "icon.png" }
+    ],
     "asar": true,
     "publish": null,
     "win": {
+      "icon": "build/icon.png",
       "target": [{ "target": "nsis", "arch": ["x64"] }],
       "signAndEditExecutable": false
     },
