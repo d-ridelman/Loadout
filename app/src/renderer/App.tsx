@@ -88,6 +88,11 @@ export function App() {
     },
     [say],
   )
+  /** Закрывает предпросмотр и возвращает фокус на таблицу, как палитра. */
+  const closeToggle = useCallback(() => {
+    setToggle(null)
+    requestAnimationFrame(() => document.getElementById('grid')?.focus())
+  }, [])
   /** Номер обновления данных: раздел «Журнал» перечитывается по нему (`canRollback` зависит от файла). */
   const [rev, setRev] = useState(0)
 
@@ -200,7 +205,11 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (toggle) return // окно предпросмотра перехватывает клавиатуру само
+      if (toggle) {
+        // пока открыт предпросмотр, остальные клавиши отключены; Esc закрывает его, где бы ни стоял фокус
+        if (e.key === 'Escape') closeToggle()
+        return
+      }
       const k = keyOf(e)
       if ((e.ctrlKey || e.metaKey) && k === 'k') {
         e.preventDefault()
@@ -212,9 +221,10 @@ export function App() {
         return
       }
       const t = e.target
-      if (t instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(t.tagName)) return
+      if (t instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return
       if (palette) return
-      if (e.key === ' ' && view === 'matrix' && selEntity) {
+      // Space на кнопке нажимает кнопку, а не переключает выбранную запись; прочие клавиши от фокуса на кнопке не зависят
+      if (e.key === ' ' && view === 'matrix' && selEntity && !(t instanceof HTMLButtonElement)) {
         e.preventDefault() // иначе пробел прокрутит страницу
         requestToggle(selEntity, selEntity.state === 'off' || selEntity.state === 'unknown')
       } else if (e.key === '?' || (e.code === 'Slash' && e.shiftKey)) {
@@ -236,7 +246,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [palette, view, load, toggle, selEntity, requestToggle])
+  }, [palette, view, load, toggle, selEntity, requestToggle, closeToggle])
 
   const paletteItems = useMemo<PaletteItem[]>(
     () => [
@@ -364,9 +374,9 @@ export function App() {
         <ToggleDialog
           entity={toggle.entity}
           enable={toggle.enable}
-          onClose={() => setToggle(null)}
+          onClose={closeToggle}
           onDone={(m) => {
-            setToggle(null)
+            closeToggle()
             say(m)
           }}
         />

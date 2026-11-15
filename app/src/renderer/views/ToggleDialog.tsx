@@ -21,6 +21,8 @@ export function ToggleDialog({ entity, enable, onClose, onDone }: Props) {
   const [busy, setBusy] = useState(false)
   const [applyError, setApplyError] = useState<string | null>(null)
   const applyRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const boxRef = useRef<HTMLDivElement>(null)
 
   const build = useCallback(async () => {
     setState({ status: 'loading' })
@@ -36,9 +38,30 @@ export function ToggleDialog({ entity, enable, onClose, onDone }: Props) {
   useEffect(() => {
     void build()
   }, [build])
+  // фокус в диалоге с самого начала (на «Отмена»), когда план готов и запись возможна — на «Применить»
+  useEffect(() => {
+    cancelRef.current?.focus()
+  }, [])
   useEffect(() => {
     if (state.status === 'ready') applyRef.current?.focus()
   }, [state.status])
+
+  /** Ловушка фокуса: Tab ходит по кнопкам диалога и не выпускает фокус на страницу под ним. */
+  const trapTab = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab') return
+    const btns = [...(boxRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])]
+    const first = btns[0]
+    const last = btns[btns.length - 1]
+    if (!first || !last) return
+    const cur = document.activeElement
+    if (e.shiftKey && cur === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && cur === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
 
   const apply = async () => {
     if (state.status !== 'ready' || busy) return
@@ -58,8 +81,8 @@ export function ToggleDialog({ entity, enable, onClose, onDone }: Props) {
   const client = CLIENTS.find((c) => c.id === entity.client)?.name ?? entity.client
   const verb = enable ? 'Включить' : 'Выключить'
   return (
-    <div className="modal" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
-      <div className="hud box" role="dialog" aria-modal="true" aria-label={`${verb}: ${entity.name}`}>
+    <div className="modal" onKeyDown={trapTab}>
+      <div ref={boxRef} className="hud box" role="dialog" aria-modal="true" aria-label={`${verb}: ${entity.name}`}>
         <h2>{verb}</h2>
         <p>
           <b>{entity.name}</b> <span className="mute">· {client}</span>
@@ -100,7 +123,7 @@ export function ToggleDialog({ entity, enable, onClose, onDone }: Props) {
             {busy ? 'Записываю…' : 'Применить'}
           </button>
           {applyError ? <button onClick={() => void build()}>Обновить предпросмотр</button> : null}
-          <button onClick={onClose}>Отмена</button>
+          <button ref={cancelRef} onClick={onClose}>Отмена</button>
         </div>
       </div>
     </div>

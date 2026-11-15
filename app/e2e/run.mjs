@@ -308,6 +308,16 @@ try {
   const asOff = original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false')
   must(asOff !== original, 'фикстура: у p1 нет enabled = true')
 
+  // одиночные клавиши работают и после клика мышью по кнопке (фокус остаётся на кнопке, а не на таблице)
+  await page.getByRole('button', { name: /^Радар/ }).click()
+  await page.keyboard.press('1')
+  await waitFor(async () => (await page.locator('#grid').count()) === 1, 'после клика по кнопке клавиша 1 открывает матрицу')
+  // журнал пуст, пока записей не было
+  await page.keyboard.press('5')
+  must((await page.locator('main').innerText()).includes('Операций пока не было'), 'пустой журнал без пояснения')
+  await shot(page, 'm3-journal-empty-1280')
+  await page.keyboard.press('1')
+
   await clickCell('p1', 2)
   must((await levelBtn.innerText()).startsWith('R0'), 'по умолчанию уровень R0')
   await page.keyboard.press('Space')
@@ -330,9 +340,25 @@ try {
   const footerOk = () => page.evaluate(() => { const f = document.querySelector('footer'); return f.scrollHeight <= f.clientHeight + 1 && f.scrollWidth <= f.clientWidth + 1 })
   must(await footerOk(), 'подвал с сообщением не помещается в одну строку')
   await shot(page, 'm3-dialog-1280')
+  await resize(app, 1920, 1080)
+  await page.waitForTimeout(250)
+  await shot(page, 'm3-dialog-1920')
+  await resize(app, 1280, 800)
   await page.keyboard.press('Escape')
   must((await dialog.count()) === 0, 'Esc не закрыл предпросмотр')
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'после закрытия предпросмотра фокус вернулся на таблицу')
   must(readFileSync(cfg, 'utf8') === original, 'отмена не должна менять файл')
+
+  // файл со смешанными переводами строк: план отказывает, и Esc закрывает окно, даже если фокус не на «Применить»
+  writeFileSync(cfg, original.replace('\n', '\r\n'))
+  await page.waitForTimeout(600)
+  await page.keyboard.press('Space')
+  await dialog.locator('[role=alert]').waitFor({ timeout: 8000 })
+  must((await dialog.locator('[role=alert]').innerText()).includes('смешанные'), 'смешанные переводы строк должны давать отказ в плане')
+  await page.keyboard.press('Escape')
+  must((await dialog.count()) === 0, 'Esc не закрыл предпросмотр с ошибкой плана')
+  writeFileSync(cfg, original)
+  await page.waitForTimeout(600)
 
   // файл изменился между предпросмотром и записью: запись отказывает, чужая правка цела
   await page.locator('#grid').focus()
@@ -371,6 +397,10 @@ try {
   const wrapped = await page.evaluate(() => [...document.querySelectorAll('table[aria-label="Журнал операций"] td.nw')].filter((td) => { const r = document.createRange(); r.selectNodeContents(td); return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size > 1 }).length)
   must(wrapped === 0, `в журнале перенесены значения: ${wrapped}`)
   await shot(page, 'm3-journal-1280')
+  await resize(app, 1920, 1080)
+  await page.waitForTimeout(250)
+  await shot(page, 'm3-journal-1920')
+  await resize(app, 1280, 800)
   await page.getByRole('button', { name: 'Откатить' }).click()
   await waitFor(async () => (await page.locator('table[aria-label="Журнал операций"] tbody tr').count()) === 2, 'откат записан в журнал')
   must(readFileSync(cfg, 'utf8') === original, 'после отката файл побайтово как до записи')
