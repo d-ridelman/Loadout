@@ -598,6 +598,82 @@ const cases = [
     return again.status === 0 && state() === after && nBackups() === nb1;
   }],
 
+  // Data safety: the user's own text that mentions our markers survives, and a settings.json setup cannot
+  // handle (or a CLAUDE.md that is not UTF-8) is refused before anything is copied or written
+  [true, () => {
+    const root = join(dir, 'datasafe-test');
+    const mk = (name) => {
+      const profile = join(root, name);
+      mkdirSync(profile, { recursive: true });
+      return profile;
+    };
+    const run = (profile, ...a) => spawnSync(exe, ['setup', '--profile', profile, '--claude-json', join(root, 'c.json'), '--skip-version-check', ...a], { encoding: 'utf8' });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'c.json'), '{}');
+    const hash =(f) => (existsSync(f) ? readFileSync(f).toString('hex') : 'none');
+
+    // markers mentioned inside the user's own sentences
+    const p1 = mk('prose');
+    const prose = '# Rules\nNote: after <!-- ctxkit:start --> marker.\nIMPORTANT 1\nIMPORTANT 2\nMarkers are <!-- ctxkit:start --> and <!-- ctxkit:end -->, do not edit.\n';
+    writeFileSync(join(p1, 'CLAUDE.md'), prose);
+    if (run(p1, '--with-rules').status !== 0) return false;
+    const once = readFileSync(join(p1, 'CLAUDE.md'), 'utf8');
+    if (!once.startsWith(prose.trimEnd()) || !once.includes('\n<!-- ctxkit:start -->\n')) return false;
+    if (run(p1, '--with-rules').status !== 0 || readFileSync(join(p1, 'CLAUDE.md'), 'utf8') !== once) return false;
+    if (run(p1, '--uninstall').status !== 0 || readFileSync(join(p1, 'CLAUDE.md'), 'utf8') !== prose) return false;
+
+    // hooks.<event> that is not an array: setup refuses, nothing is copied or changed
+    const p2 = mk('badevent');
+    const bad = '{"hooks":{"PreToolUse":{"x":1}},"model":"opus"}';
+    writeFileSync(join(p2, 'settings.json'), bad);
+    const r2 = run(p2, '--with-rules');
+    if (r2.status !== 1 || readFileSync(join(p2, 'settings.json'), 'utf8') !== bad || existsSync(join(p2, 'hooks')) || existsSync(join(p2, 'CLAUDE.md'))) return false;
+
+    // the rollback refuses the same structure and keeps the binary
+    const p3 = mk('baduninstall');
+    if (run(p3).status !== 0 || !existsSync(join(p3, 'hooks', BIN_NAME))) return false;
+    writeFileSync(join(p3, 'settings.json'), '{"hooks":{"Stop":"s"}}');
+    const r3 = run(p3, '--uninstall');
+    if (r3.status !== 1 || !existsSync(join(p3, 'hooks', BIN_NAME)) || readFileSync(join(p3, 'settings.json'), 'utf8') !== '{"hooks":{"Stop":"s"}}') return false;
+
+    // setup refuses unreadable input before copying the binary or rewriting settings.json
+    const p5 = mk('setuprefuse');
+    writeFileSync(join(p5, 'CLAUDE.md'), Buffer.from([0xff, 0xfe, 0x41, 0x80]));
+    writeFileSync(join(p5, 'settings.json'), '{"model":"opus"}');
+    const r5 = run(p5, '--with-rules');
+    if (r5.status !== 1 || existsSync(join(p5, 'hooks')) || existsSync(join(p5, 'backups')) || readFileSync(join(p5, 'settings.json'), 'utf8') !== '{"model":"opus"}') return false;
+    const p6 = mk('setuprefuse2');
+    const agyBad = join(root, 'agy-bad.json');
+    writeFileSync(agyBad, '[1]');
+    const r6 = run(p6, '--antigravity', '--agy-file', agyBad);
+    if (r6.status !== 1 || existsSync(join(p6, 'hooks')) || existsSync(join(p6, 'settings.json'))) return false;
+    const p7 = mk('setuprefuse3');
+    writeFileSync(join(p7, 'settings.json'), '{"modelSettings":{"claude-sonnet-5-5":"x"}}');
+    if (run(p7, '--effort', 'high').status !== 1 || existsSync(join(p7, 'hooks'))) return false;
+
+    // a lone start marker line of the user's own does not make setup eat the lines after it, and a BOM does not hide our block
+    const p8 = mk('lonemarker');
+    writeFileSync(join(p8, 'CLAUDE.md'), 'keep1\n<!-- ctxkit:start -->\nkeep2 no end\n');
+    if (run(p8, '--with-rules').status !== 0) return false;
+    const lone1 = readFileSync(join(p8, 'CLAUDE.md'), 'utf8');
+    if (run(p8, '--with-rules').status !== 0 || readFileSync(join(p8, 'CLAUDE.md'), 'utf8') !== lone1 || !lone1.includes('keep2 no end')) return false;
+    const p9 = mk('bom');
+    run(p9, '--with-rules');
+    const withBlock = readFileSync(join(p9, 'CLAUDE.md'), 'utf8');
+    writeFileSync(join(p9, 'CLAUDE.md'), '﻿' + withBlock + '\nuser tail\n');
+    if (run(p9, '--with-rules').status !== 0) return false;
+    const bomText = readFileSync(join(p9, 'CLAUDE.md'), 'utf8');
+    if (bomText.split('<!-- ctxkit:start -->').length !== 2 || !bomText.includes('user tail')) return false;
+
+    // a CLAUDE.md that is not UTF-8 stops the rollback before settings.json is rewritten
+    const p4 = mk('nonutf8');
+    if (run(p4, '--with-rules').status !== 0) return false;
+    writeFileSync(join(p4, 'CLAUDE.md'), Buffer.from([0xff, 0xfe, 0x41, 0x80]));
+    const sBefore = hash(join(p4, 'settings.json'));
+    const r4 = run(p4, '--uninstall');
+    return r4.status === 1 && hash(join(p4, 'settings.json')) === sBefore && existsSync(join(p4, 'hooks', BIN_NAME));
+  }],
+
   // Safe failure: broken or odd hook input is a silent pass (exit 0, empty stdout), never a block or a crash
   [true, () => {
     const raw = (input, args = [], env = {}) => {

@@ -89,7 +89,9 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
     let existing = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let updated = strip_rules_blocks(&existing);
     if existing == updated {
-        if existing.contains(MARKER_START) || existing.contains(LEGACY_MARKER_START) {
+        if has_marker_line(&existing, MARKER_START)
+            || has_marker_line(&existing, LEGACY_MARKER_START)
+        {
             println!(
                 "  [warn] {}: a ctxkit start marker has no end marker; remove the leftover block by hand",
                 path.display()
@@ -330,6 +332,31 @@ pub(super) fn run(
     // Listed before any write so that the backup made by this very run is not mistaken for an old one.
     let backups = list_backups(&backup_dir);
     let run = || -> Result<Value, String> {
+        // Everything the rollback will touch is checked before the first write, so a refusal leaves no half-done state.
+        preflight_settings(&settings_path, false)?;
+        readable_utf8(&profile.join("CLAUDE.md"))?;
+        if opts.dsh || opts.dsh_home.is_some() {
+            let dsh = opts
+                .dsh_home
+                .clone()
+                .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
+                .unwrap_or_else(|| home.join(".dsh"));
+            readable_utf8(&dsh.join("AGENTS.md"))?;
+            readable_utf8(
+                &dsh.join("profiles")
+                    .join("desktop")
+                    .join("cordis.patch.yml"),
+            )?;
+        }
+        if opts.antigravity || opts.agy_file.is_some() {
+            let apath = opts
+                .agy_file
+                .clone()
+                .unwrap_or_else(|| home.join(".gemini").join("config").join("hooks.json"));
+            if apath.exists() {
+                read_json_object(&apath)?;
+            }
+        }
         let orig = read_json_object(&settings_path)?;
         let next = remove_from_settings(&orig, hook_cmd);
         write_json_if_changed(

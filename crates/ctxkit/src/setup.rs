@@ -182,6 +182,38 @@ pub fn run_setup(args: &[String]) -> i32 {
         println!("Setting up profile: {}", profile.display());
     }
 
+    // Before anything is copied or written: input that setup cannot handle is refused as it is,
+    // so a refusal leaves neither a copied binary nor a rewritten settings.json behind.
+    let dsh_home_dir = || {
+        opts.dsh_home
+            .clone()
+            .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
+            .unwrap_or_else(|| home.join(".dsh"))
+    };
+    let preflight = || -> Result<(), String> {
+        preflight_settings(&profile.join("settings.json"), true)?;
+        if opts.with_rules {
+            readable_utf8(&profile.join("CLAUDE.md"))?;
+            if opts.dsh {
+                readable_utf8(&dsh_home_dir().join("AGENTS.md"))?;
+            }
+        }
+        if opts.antigravity {
+            let p = opts
+                .agy_file
+                .clone()
+                .unwrap_or_else(|| home.join(".gemini").join("config").join("hooks.json"));
+            if p.exists() {
+                read_json_object(&p)?;
+            }
+        }
+        Ok(())
+    };
+    if let Err(e) = preflight() {
+        eprintln!("ERR: {e}");
+        return 1;
+    }
+
     // Install current binary into hooks/ and .local/bin/ unless explicit --hook-cmd
     if opts.hook_cmd.is_none() {
         if let Err(e) = install_binary(
@@ -874,19 +906,85 @@ fn upsert_claude_md(
     Ok(())
 }
 
+/// Span of our rules block. A marker counts only when it is alone on its line (as `append_block` writes it):
+/// the same text inside the user's own sentence is not ours, and cutting from it would delete their text.
 pub(crate) fn marker_span(text: &str) -> Option<(usize, usize)> {
     for (start_m, end_m) in [
         (MARKER_START, MARKER_END),
         (LEGACY_MARKER_START, LEGACY_MARKER_END),
     ] {
-        // The end marker is searched after the start: the same text in the user's own notes before it is not ours.
-        if let Some(s) = text.find(start_m) {
-            if let Some(len) = text[s..].find(end_m) {
-                return Some((s, s + len + end_m.len()));
+        let mut start = None;
+        let mut off = 0;
+        for line in text.split_inclusive('\n') {
+            // A BOM (editors add one to the first line) is not a marker character, and not whitespace for Rust.
+            let body = line.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+            let lead = line.len() - body.len();
+            let t = body.trim_end();
+            match start {
+                Some(s) if t == end_m => return Some((s, off + lead + end_m.len())),
+                // The nearest start before the end: a lone start line of the user's own is not ours.
+                _ if t == start_m => start = Some(off + lead),
+                _ => {}
             }
+            off += line.len();
         }
     }
     None
+}
+
+/// Whether `m` stands alone on some line (how `marker_span` recognises a marker).
+pub(crate) fn has_marker_line(text: &str, m: &str) -> bool {
+    text.lines().any(|l| {
+        l.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+            .trim_end()
+            == m
+    })
+}
+
+/// `Ok` when the file is missing or readable as UTF-8: checked before a write that would read it later.
+pub(crate) fn readable_utf8(p: &Path) -> Result<(), String> {
+    if !p.exists() {
+        return Ok(());
+    }
+    fs::read_to_string(p)
+        .map(|_| ())
+        .map_err(|e| format!("read {}: {e}", p.display()))
+}
+
+/// Refuses a settings.json whose structure setup or the rollback would have to guess at (nothing is written
+/// before this passes, so a refusal leaves the profile untouched). `for_setup` also checks `modelSettings`.
+pub(crate) fn preflight_settings(path: &Path, for_setup: bool) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let v = read_json_object(path)?;
+    if let Some(h) = v.get("hooks") {
+        let h = h.as_object().ok_or("'hooks' is not a JSON object")?;
+        for ev in ["PreToolUse", "PostToolUse", "Stop"] {
+            if h.get(ev).is_some_and(|e| !e.is_array()) {
+                return Err(format!("'hooks.{ev}' is not a JSON array"));
+            }
+        }
+    }
+    let mut objects = vec!["env"];
+    if for_setup {
+        objects.push("modelSettings");
+    }
+    for k in objects {
+        if v.get(k).is_some_and(|x| !x.is_object()) {
+            return Err(format!("'{k}' is not a JSON object"));
+        }
+    }
+    if for_setup {
+        if let Some(bad) = v
+            .get("modelSettings")
+            .and_then(|m| m.as_object())
+            .and_then(|m| m.iter().find(|(_, e)| !e.is_object()))
+        {
+            return Err(format!("'modelSettings.{}' is not a JSON object", bad.0));
+        }
+    }
+    Ok(())
 }
 
 fn append_block(existing: &str, block: &str) -> String {
@@ -1897,6 +1995,71 @@ mod tests {
             change_line("advisorModel", Some("fable"), None),
             "  advisorModel: fable -> (unset)"
         );
+    }
+
+    #[test]
+    fn markers_inside_user_text_are_not_ours() {
+        // mention inside a sentence, then user lines: nothing may be cut
+        let prose =
+            "# Rules\nNote: after <!-- ctxkit:start --> marker.\nIMPORTANT 1\nIMPORTANT 2\n";
+        assert_eq!(marker_span(prose), None);
+        // both markers in one sentence
+        let one = "Markers are <!-- ctxkit:start --> and <!-- ctxkit:end -->, do not edit.\n";
+        assert_eq!(marker_span(one), None);
+        // setup appends a block, a second setup replaces exactly that block, user text stays
+        let block = format!("{MARKER_START}\nrules\n{MARKER_END}");
+        let once = append_block(prose, &block);
+        let (s, e) = marker_span(&once).unwrap();
+        assert_eq!(&once[s..e], block);
+        assert!(once.starts_with(prose.trim_end()));
+        let again = format!("{}{}{}", &once[..s], block, &once[e..]);
+        assert_eq!(again, once);
+        // markers alone on their lines still work, with CRLF and indentation
+        let crlf = format!("a\r\n{MARKER_START}\r\nx\r\n{MARKER_END}\r\nb\r\n");
+        let (s, e) = marker_span(&crlf).unwrap();
+        assert_eq!(&crlf[s..e], format!("{MARKER_START}\r\nx\r\n{MARKER_END}"));
+        // BOM on the first line, as editors write it
+        let bom = format!("\u{feff}{MARKER_START}\nold\n{MARKER_END}\n\nuser tail\n");
+        let (s, e) = marker_span(&bom).unwrap();
+        assert_eq!(&bom[e..], "\n\nuser tail\n");
+        assert!(bom[..s].chars().all(|c| c == '\u{feff}'));
+        // a lone start line of the user's own, then our block: only our block is replaced
+        let lone = format!("keep1\n{MARKER_START}\nkeep2 no end\n");
+        let with = append_block(&lone, &block);
+        let (s, e) = marker_span(&with).unwrap();
+        assert_eq!(&with[s..e], block);
+        assert!(with[..s].contains("keep2 no end"));
+        // legacy markers
+        let legacy = format!("{LEGACY_MARKER_START}\nold\n{LEGACY_MARKER_END}\n");
+        assert!(marker_span(&legacy).is_some());
+    }
+
+    #[test]
+    fn preflight_refuses_structures_it_would_have_to_guess_at() {
+        let d = std::env::temp_dir().join(format!("ctxkit_preflight_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let p = d.join("settings.json");
+        let check = |s: &str, setup: bool| {
+            fs::write(&p, s).unwrap();
+            preflight_settings(&p, setup)
+        };
+        assert!(check(r#"{"hooks":{"PreToolUse":{"x":1}}}"#, true).is_err());
+        assert!(check(r#"{"hooks":{"Stop":"s"}}"#, false).is_err());
+        assert!(check(r#"{"hooks":[]}"#, false).is_err());
+        assert!(check(r#"{"env":"s"}"#, false).is_err());
+        assert!(check(r#"{"modelSettings":null}"#, true).is_err());
+        assert!(
+            check(r#"{"modelSettings":null}"#, false).is_ok(),
+            "rollback does not touch it"
+        );
+        assert!(check(
+            r#"{"hooks":{"SessionStart":"free-form"},"model":"x"}"#,
+            true
+        )
+        .is_ok());
+        assert!(preflight_settings(&d.join("none.json"), true).is_ok());
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
