@@ -186,7 +186,7 @@ kbd{font:11px var(--mono);border:1px solid var(--line);border-bottom-width:2px;b
 "use strict";
 /* ---------- данные: форма совпадает с моделью из CONCEPT.md §3 ---------- */
 const CLIENTS=[
- {id:"cc",name:"Claude Code"},{id:"cd",name:"Claude Desktop"},{id:"cx",name:"Codex"},
+ {id:"cc",name:"Claude Code"},{id:"cd",name:"Claude Desktop"},{id:"cx",name:"ChatGPT / Codex"},
  {id:"ag",name:"Antigravity"},{id:"ds",name:"DeepSeek"}];
 const GLYPH={on:["●","включено"],off:["○","выключено"],broken:["✕","сломано"],stale:["◐","расхождение версий"],
  shadowed:["◒","перекрыто другой областью"],cloud:["☁","только в приложении"],none:["–","нет"]};
@@ -195,9 +195,10 @@ const U="~/.claude/settings.json",CJ="~/.claude.json",CT="~/.codex/config.toml",
  AG="~/.gemini/config/mcp_config.json",CD="%APPDATA%/Claude/claude_desktop_config.json";
 const ROWS=[
  {key:"glidehand",kind:"plugin",origin:"marketplace: glidehand",inst:{
-  cc:I("on","user","0.9.2",U,"/enabledPlugins/glidehand@glidehand",['"glidehand@glidehand": true'],"Тип у экземпляров разный: плагин в Claude Code, MCP-сервер в Codex и Antigravity."),
+  cc:I("on","user","0.9.2",U,"/enabledPlugins/glidehand@glidehand",['"glidehand@glidehand": true'],"Тип у экземпляров разный: плагин в Claude Code, MCP-сервер в Codex, Antigravity и DeepSeek."),
   cx:{...I("on","user","—",CT,"mcp_servers.glidehand",['[mcp_servers.glidehand]','command = "glidehand"']),kind:"mcp"},
-  ag:{...I("on","user","—",AG,"/mcpServers/glidehand",['{ "command": "glidehand" }']),kind:"mcp"}}},
+  ag:{...I("on","user","—",AG,"/mcpServers/glidehand",['{ "command": "glidehand" }']),kind:"mcp"},
+  ds:{...I("on","user","—","~/.dsh/cordis.patch.yml","[3]/insert/0  (id: mcp-glidehand)",['- insert:','    - id: mcp-glidehand','      name: "@deepseek-ai/dsh-mcp-client"','      config: { serverName: glidehand, transport: stdio, … }'],"В dsh MCP — это запись плагина dsh-mcp-client в cordis.patch.yml. Флага «выключено» у записи нет: выключение = убрать запись (копия уйдёт в корзину Loadout)."),kind:"mcp"}}},
  {key:"harnio",kind:"plugin",origin:"marketplace: harnio",inst:{
   cc:I("on","user","1.4.0",U,"/enabledPlugins/harnio@harnio",['"harnio@harnio": true']),
   cx:I("on","user","1.4.0",CT,'plugins."harnio@harnio"',['[plugins."harnio@harnio"]','enabled = true']),
@@ -236,8 +237,11 @@ const ROWS=[
  {key:"karpathy-guidelines",kind:"rule",origin:"плагин karpathy-skills",inst:{
   cx:I("on","plugin","—","~/.codex/rules/","—",["…"]),
   ag:I("on","plugin","—","~/.gemini/config/plugins/claude-kit/rules/","—",["…"])}},
- {key:"claude.ai Connectors",kind:"connector",origin:"облако",inst:{
-  cd:I("cloud","cloud","—","—","—",["Список хранится на сервере claude.ai."],"С диска не читается. Loadout не управляет облачными коннекторами.")}}
+ {key:"claude.ai Github",kind:"connector",origin:"аккаунт claude.ai",inst:{
+  cc:I("off","user","—",U,"/disableClaudeAiConnectors",['"disableClaudeAiConnectors": true'],"Все коннекторы claude.ai выключены в Claude Code одним ключом. Рубильник локальный: Desktop и аккаунт не затрагивает."),
+  cd:I("cloud","аккаунт","—","—","—",["Подключение хранится в аккаунте claude.ai."],"Источник правды — аккаунт. Подключить или отключить можно только на странице claude.ai → Customize → Connectors; Loadout откроет её в браузере.")}},
+ {key:"github (OpenAI remote)",kind:"connector",origin:"openai-curated-remote",inst:{
+  cx:I("cloud","аккаунт","—","~/.codex/plugins/cache/openai-curated-remote/github","каталог кеша",["Запись каталога удалённых плагинов (кеш)."],"Кеш каталога, а не подтверждённое подключение. Управление — в приложении ChatGPT (Settings).")}}
 ];
 const EVENTS=["SessionStart","UserPromptSubmit","PreToolUse","PermissionRequest","PostToolUse","Stop"];
 const HOOKS=[
@@ -246,7 +250,7 @@ const HOOKS=[
  {c:"cx",e:"SessionStart",n:"ponytail-init",src:"plugin: ponytail"},{c:"cx",e:"PreToolUse",n:"ctxkit",m:"Bash",src:"user"},
  {c:"cx",e:"PermissionRequest",n:"auto-allow-safe",src:"user"},{c:"cx",e:"Stop",n:"notify",src:"user"},
  {c:"ag",e:"PreToolUse",n:"ctxkit",src:"user"},{c:"ag",e:"Stop",n:"notify",src:"user"},
- {c:"ds",e:"PreToolUse",n:"ctxkit",m:"shell",src:"user"},{c:"ds",e:"PostToolUse",n:"ctxkit",src:"user"}];
+ {c:"ds",e:"PreToolUse",n:"ctxkit",m:"read|write|edit|bash|…",src:"user (ctxkit-hooks.json)"},{c:"ds",e:"PostToolUse",n:"ctxkit",m:"write|edit|apply_patch",src:"user (ctxkit-hooks.json)"}];
 const NA={cd:EVENTS,ag:["UserPromptSubmit","PermissionRequest","SessionStart","PostToolUse"],ds:["SessionStart","UserPromptSubmit","PermissionRequest","Stop"]};
 const DEMO_SECRET="demo-not-a-real-secret";
 
@@ -345,7 +349,7 @@ function renderInspector(){
  ${x.state==="cloud"?"":`<h2>Предпросмотр записи (M3)</h2>
  <pre><span class="mute">${esc(x.file)}</span>\n<span class="${x.state==="off"?"add":"del"}">${x.state==="off"?"+ включить":"- выключить"} ${esc(r.key)}</span></pre>`}
  <div style="display:flex;gap:6px;flex-wrap:wrap">
-  ${x.state==="cloud"?"":`<button disabled title="Запись включается с M3 (CONCEPT.md §5)">${x.state==="off"?"Включить":"Выключить"}</button>`}
+  ${x.state==="cloud"?`<button disabled title="Откроет страницу управления в браузере (CONCEPT.md §5.1, уровень C2)">Открыть управление в браузере</button>`:`<button disabled title="Запись включается с M3 (CONCEPT.md §5)">${x.state==="off"?"Включить":"Выключить"}</button>`}
   <button id="cp">Копировать путь</button><button disabled title="M2">Открыть в редакторе</button></div>
  <p class="mute" style="font-size:11px;margin-top:10px">Запись идёт через план → diff → проверку процесса → бэкап → атомарную запись → проверку → откат.</p>`;
  const rev=$("#rev");
