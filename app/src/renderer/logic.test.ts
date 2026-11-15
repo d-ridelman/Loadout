@@ -20,17 +20,20 @@ const ent = (over: Partial<Entity>): Entity => ({
 })
 
 describe('aggregate', () => {
-  it('плагин и MCP одного имени попадают в одну строку, маркетплейс отдельно', () => {
+  it('плагины и MCP разведены по разным строкам и группам, а один тип с одним именем в разных клиентах сводится в строку', () => {
     const rows = buildRows([
       ent({ kind: 'plugin', logicalKey: 'glidehand', name: 'glidehand@glidehand' }),
+      ent({ kind: 'plugin', logicalKey: 'glidehand', name: 'glidehand@glidehand', client: 'codex' }),
       ent({ kind: 'mcp', logicalKey: 'glidehand', name: 'glidehand', client: 'codex' }),
       ent({ kind: 'marketplace', logicalKey: 'glidehand', name: 'glidehand' }),
     ])
-    expect(rows).toHaveLength(2)
-    const ext = rows.find((r) => r.group === 'extension')
-    expect(ext?.kinds.sort()).toEqual(['mcp', 'plugin'])
-    expect(Object.keys(ext?.cells ?? {}).sort()).toEqual(['claude-code', 'codex'])
-    expect(ext?.name).toBe('glidehand')
+    expect(rows).toHaveLength(3)
+    const plugin = rows.find((r) => r.group === 'plugin')
+    const mcp = rows.find((r) => r.group === 'mcp')
+    expect(Object.keys(plugin?.cells ?? {}).sort()).toEqual(['claude-code', 'codex'])
+    expect(plugin?.name).toBe('glidehand')
+    expect(mcp?.kinds).toEqual(['mcp'])
+    expect(Object.keys(mcp?.cells ?? {})).toEqual(['codex'])
   })
 
   it('ячейку определяет user-запись, а не десятки project-записей', () => {

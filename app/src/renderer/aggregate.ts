@@ -1,13 +1,14 @@
 import type { ClientId, Entity, EntityState, Kind } from '../shared/model'
 
 /**
- * Группы строк матрицы. Плагин и MCP-сервер одного имени — одна строка («glidehand» плагин в Claude Code
- * и MCP в Codex), а маркетплейс с тем же именем — другая, поэтому группируем по классу, а не по `kind`.
+ * Группы строк матрицы. Плагины и MCP-серверы разведены по разным строкам и фильтрам (так удобнее: у них разные
+ * действия и разная природа); запись одного типа с тем же именем в разных клиентах по-прежнему сводится в одну строку.
  */
-export type Group = 'extension' | 'connector' | 'skill' | 'agent' | 'command' | 'hook' | 'marketplace'
+export type Group = 'plugin' | 'mcp' | 'connector' | 'skill' | 'agent' | 'command' | 'hook' | 'marketplace'
 
 export const GROUPS: readonly { id: Group; label: string }[] = [
-  { id: 'extension', label: 'плагины и MCP' },
+  { id: 'plugin', label: 'плагины' },
+  { id: 'mcp', label: 'MCP' },
   { id: 'connector', label: 'коннекторы' },
   { id: 'skill', label: 'скилы' },
   { id: 'agent', label: 'агенты' },
@@ -17,13 +18,7 @@ export const GROUPS: readonly { id: Group; label: string }[] = [
 ]
 
 export function groupOf(kind: Kind): Group {
-  switch (kind) {
-    case 'plugin':
-    case 'mcp':
-      return 'extension'
-    default:
-      return kind
-  }
+  return kind
 }
 
 /**
