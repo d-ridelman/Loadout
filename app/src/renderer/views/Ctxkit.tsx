@@ -25,7 +25,7 @@ const copyText = (k: CtxkitStatus['hook']): string =>
 const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'var(--orange)', other: 'var(--deco)' } as const
 
 /** Язык хуков по умолчанию — язык интерфейса (потом настройка независима); функция, а не константа: язык выбирается после импорта. */
-const defaults = (): SetupOptions => ({ withRules: true, desktop: false, antigravity: false, dsh: false, lang: getLang(), advisor: 'fable' })
+const defaults = (): SetupOptions => ({ withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: getLang(), advisor: 'fable' })
 
 type Loaded<T> = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; data: T }
 
@@ -132,6 +132,7 @@ export function Ctxkit({ level, onNotice }: Props) {
           <fieldset className="choices">
             <legend className="mute small">{t('Что настроить', 'What to configure')}</legend>
             <label><input type="checkbox" checked disabled /> {t('Claude Code: хуки, модели, агенты Explore и checker (всегда)', 'Claude Code: hooks, models, Explore and checker agents (always)')}</label>
+            <label><input type="checkbox" checked={!opts.noStopGate} onChange={(e) => change({ noStopGate: !e.target.checked })} /> {t('Шлюз Stop: хук возвращает модель к работе один раз за ход, если правки кода остались без checker или советника (снять галочку — хук уберётся)', 'Stop gate: a hook sends the model back once per turn if code edits were not followed by checker or the advisor (untick to remove the hook)')}</label>
             <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил в CLAUDE.md', 'Rules block in CLAUDE.md')}</label>
             <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> {t('Claude Desktop (пресеты; закройте его перед применением)', 'Claude Desktop (presets; close it before applying)')}</label>
             <label><input type="checkbox" checked={opts.antigravity} onChange={(e) => change({ antigravity: e.target.checked })} /> Antigravity</label>

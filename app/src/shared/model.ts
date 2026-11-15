@@ -171,6 +171,8 @@ export interface SetupOptions {
   desktop: boolean
   antigravity: boolean
   dsh: boolean
+  /** true — не ставить хук Stop (шлюз) и убрать наш, если он есть */
+  noStopGate: boolean
   lang: 'en' | 'ru'
   advisor: 'fable' | 'opus' | 'none'
 }

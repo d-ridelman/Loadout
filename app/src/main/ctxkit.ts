@@ -18,7 +18,7 @@ export function parseSetupOptions(raw: unknown): SetupOptions {
   const advisor = r['advisor']
   if (lang !== 'en' && lang !== 'ru') throw new Error(t('неверный язык ctxkit', 'invalid ctxkit language'))
   if (advisor !== 'fable' && advisor !== 'opus' && advisor !== 'none') throw new Error(t('неверный советник ctxkit', 'invalid ctxkit advisor'))
-  return { withRules: flag('withRules'), desktop: flag('desktop'), antigravity: flag('antigravity'), dsh: flag('dsh'), lang, advisor }
+  return { withRules: flag('withRules'), desktop: flag('desktop'), antigravity: flag('antigravity'), dsh: flag('dsh'), noStopGate: flag('noStopGate'), lang, advisor }
 }
 
 /**
@@ -32,6 +32,7 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
   if (o.desktop) a.push('--desktop')
   if (o.antigravity) a.push('--antigravity')
   if (o.dsh) a.push('--dsh')
+  if (o.noStopGate) a.push('--no-stop-gate')
   a.push('--lang', o.lang, '--advisor', o.advisor)
   // версию claude ctxkit проверяет в самом конце, уже после записи, и зависший `claude` оставил бы окно с ошибкой при
   // изменённых файлах; предпросмотр проверку оставляет (она нужна диагностике)
