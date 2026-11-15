@@ -63,7 +63,7 @@ export function SkillDialog({ onClose, onSubmit }: Props) {
               setPreview(null)
               setError(null)
             }}
-            placeholder={t('owner/repo[/путь], https://github.com/… или D:\\папка', 'owner/repo[/path], https://github.com/… or D:\\folder')}
+            placeholder={t('owner/repo[/путь], https://github.com/…/tree/ветка-или-хеш/… или D:\\папка', 'owner/repo[/path], https://github.com/…/tree/branch-or-hash/… or D:\\folder')}
             maxLength={400}
             spellCheck={false}
           />

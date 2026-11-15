@@ -22,6 +22,21 @@ const fail = (): never => {
   )
 }
 
+const failMarketplace = (): never => {
+  throw new Error(
+    t(
+      'источник: owner/repo с GitHub, адрес https://, SSH-адрес (git@хост:путь или ssh://хост/путь) или полный путь к папке; после адреса можно добавить #ветка или #тег',
+      'source: a GitHub owner/repo, an https:// address, an SSH address (git@host:path or ssh://host/path) or a full path to a folder; a #branch or #tag may follow the address',
+    ),
+  )
+}
+
+/** Хеш коммита git: 7–40 шестнадцатеричных знаков. */
+export const isCommitRef = (r: string | undefined): boolean => r !== undefined && /^[0-9a-fA-F]{7,40}$/.test(r)
+
+/** Имя ветки или тега: безопасные знаки, без `..`, `//`, `.lock` и слэша на краях (правила `git check-ref-format` в нужной нам части). */
+const refOk = (r: string): boolean => REF.test(r) && !r.includes('..') && !r.includes('//') && !r.endsWith('/') && !r.endsWith('.') && !r.endsWith('.lock')
+
 const repoOk = (owner: string, repo: string): boolean => GH_OWNER.test(owner) && GH_REPO.test(repo) && repo !== '.' && repo !== '..' && !repo.endsWith('.')
 
 /** Общая проверка строки до разбора: ввод никогда не станет флагом или второй командой. */
@@ -49,18 +64,59 @@ function httpsUrl(s: string): URL | undefined {
   }
 }
 
-export type MarketplaceSource = { kind: 'github' | 'url' | 'path'; value: string }
+export type MarketplaceSource = { kind: 'github' | 'url' | 'ssh' | 'path'; value: string }
 
-/** Источник для `claude plugin marketplace add`. Существование локального пути проверяет вызывающий. */
+const SSH_USER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+const HOST = /^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/
+/** Путь репозитория на SSH-хосте: сегменты из безопасных знаков без начального и конечного `/`, `.` и `..`. */
+const gitPathOk = (p: string): boolean => p.length <= 200 && p.split('/').length <= 6 && p.split('/').every((x) => SUB_PART.test(x) && x !== '.' && x !== '..' && !x.startsWith('-'))
+
+/**
+ * SSH-адрес в форме `user@host:path` или `ssh://[user@]host[:порт]/path`. Строгая проверка каждой части: ни пробелов,
+ * кавычек и управляющих знаков, ни `-` в начале имени, хоста и пути (иначе адрес стал бы флагом `ssh`/`git`).
+ * Возвращает адрес в нормальной форме либо `undefined`.
+ */
+function sshUrl(s: string): string | undefined {
+  const scp = /^([^@:/\s]+)@([^:/\s]+):([^\s]+)$/.exec(s)
+  if (scp) {
+    const [, user, host, path] = scp
+    return SSH_USER.test(user!) && HOST.test(host!) && gitPathOk(path!) ? `${user}@${host}:${path}` : undefined
+  }
+  // разбор вручную, а не `new URL`: он молча сворачивает `a/../b` и `%2e%2e`, а проверять надо то, что ввёл человек
+  const m = /^ssh:\/\/(?:([^@:/\s]+)@)?([^@:/\s]+)(?::(\d{1,5}))?\/([^\s]+)$/.exec(s)
+  if (!m) return undefined
+  const [, user, host, port, path] = m
+  const ok = (user === undefined || SSH_USER.test(user)) && HOST.test(host!) && gitPathOk(path!)
+  return ok ? `ssh://${user ? `${user}@` : ''}${host}${port ? `:${port}` : ''}/${path}` : undefined
+}
+
+/**
+ * Источник для `claude plugin marketplace add`. Формы по документации Claude Code (install → «Add a marketplace»):
+ * `owner/repo`, полный адрес клона (`https://…`, `git@host:path`), путь к папке или файлу; после адреса репозитория
+ * `#ветка` или `#тег`. Хеш коммита документация как ссылку не называет («pin a branch or tag»), поэтому он отклоняется.
+ * Существование локального пути проверяет вызывающий.
+ */
 export function parseMarketplaceSource(raw: unknown): MarketplaceSource {
   const s = base(raw)
-  const gh = /^([^/]+)\/([^/]+)$/.exec(s)
-  if (gh && repoOk(gh[1]!, gh[2]!)) return { kind: 'github', value: s }
-  const u = httpsUrl(s)
-  if (u) return { kind: 'url', value: u.href }
   const p = localPath(s)
   if (p) return { kind: 'path', value: p }
-  return fail()
+  const hash = s.indexOf('#')
+  const addr = hash < 0 ? s : s.slice(0, hash)
+  const ref = hash < 0 ? undefined : s.slice(hash + 1)
+  if (ref !== undefined) {
+    if (isCommitRef(ref)) {
+      throw new Error(t('маркетплейс: после # документация Claude Code называет ветку или тег, хеш коммита не принимается', 'marketplace: the Claude Code docs name a branch or a tag after #, a commit hash is not accepted'))
+    }
+    if (!refOk(ref)) return failMarketplace()
+  }
+  const suffix = ref === undefined ? '' : `#${ref}`
+  const gh = /^([^/]+)\/([^/]+)$/.exec(addr)
+  if (gh && repoOk(gh[1]!, gh[2]!)) return { kind: 'github', value: `${addr}${suffix}` }
+  const ssh = sshUrl(addr)
+  if (ssh) return { kind: 'ssh', value: `${ssh}${suffix}` }
+  const u = httpsUrl(addr)
+  if (u && u.hash === '') return { kind: 'url', value: `${u.href}${suffix}` }
+  return failMarketplace()
 }
 
 /** Локальный маркетплейс: каталог с `.claude-plugin/marketplace.json` или сам этот файл. */
@@ -74,12 +130,20 @@ export function localMarketplaceOk(p: string): boolean {
 }
 
 export type SkillSource =
-  | { kind: 'github'; owner: string; repo: string; ref: string | undefined; sub: string }
+  | {
+      kind: 'github'
+      owner: string
+      repo: string
+      ref: string | undefined
+      sub: string
+      /** Только адрес `tree/…` или `blob/…`: все сегменты после него. `ref` и `sub` — прикидка «первый сегмент — ветка»; ветка со `/` уточняется по списку веток (`pickTreeRef`). */
+      treePath?: string[]
+    }
   | { kind: 'path'; path: string }
 
 /**
- * Источник скила: `owner/repo[/путь]`, `https://github.com/owner/repo[.git][/tree/<ветка>/<путь>]` или папка.
- * Ветка в адресе `tree/…` — один сегмент (ветки со `/` указывайте без пути).
+ * Источник скила: `owner/repo[/путь]`, `https://github.com/owner/repo[.git][/tree/<ветка или хеш коммита>/<путь>]` или папка.
+ * В адресе `tree/…` ветка может содержать `/`: перед загрузкой main сверяет сегменты со списком веток и тегов репозитория.
  */
 export function parseSkillSource(raw: unknown): SkillSource {
   const s = base(raw)
@@ -87,6 +151,7 @@ export function parseSkillSource(raw: unknown): SkillSource {
   if (p) return { kind: 'path', path: p }
   let rest: string[]
   let ref: string | undefined
+  let treePath: string[] | undefined
   const u = httpsUrl(s)
   if (u) {
     if (u.hostname !== 'github.com' || u.search !== '' || u.hash !== '') return fail()
@@ -95,6 +160,7 @@ export function parseSkillSource(raw: unknown): SkillSource {
     if (rest[2] === 'tree' || rest[2] === 'blob') {
       ref = rest[3]
       if (ref === undefined || !REF.test(ref)) return fail()
+      if (rest.length > 4) treePath = rest.slice(3)
       rest = [rest[0]!, rest[1]!, ...rest.slice(4)]
     }
   } else {
@@ -107,18 +173,63 @@ export function parseSkillSource(raw: unknown): SkillSource {
   // ссылка на сам SKILL.md — это его каталог
   if (sub.at(-1) === 'SKILL.md') sub.pop()
   if (!sub.every((x) => SUB_PART.test(x) && x !== '.' && x !== '..' && x !== '.git')) return fail()
-  return { kind: 'github', owner, repo, ref, sub: sub.join('/') }
+  return { kind: 'github', owner, repo, ref, sub: sub.join('/'), ...(treePath ? { treePath } : {}) }
 }
 
-/** Аргументы `git clone`: адрес собирается из проверенных частей, перед ним `--`, флаги фиксированы. */
+/** Адрес репозитория для `git ls-remote`: собирается так же, как в `cloneArgs`. */
+export const remoteUrl = (src: { owner: string; repo: string }, base: string): string => `${base}${src.owner}/${src.repo}.git`
+
+/** Имена веток и тегов из вывода `git ls-remote --heads --tags` (строки `<sha>\trefs/heads/<имя>`, у аннотированных тегов ещё `^{}`). */
+export function parseRefs(out: string): Set<string> {
+  const names = new Set<string>()
+  for (const line of out.split(/\r?\n/)) {
+    const m = /^[0-9a-f]{40,64}\trefs\/(?:heads|tags)\/(.+?)(?:\^\{\})?$/.exec(line)
+    if (m?.[1] !== undefined) names.add(m[1])
+  }
+  return names
+}
+
+/**
+ * Ветка со `/` в адресе `tree/…`: сегменты после `tree` — это ветка, а затем путь. Берётся самое длинное начало, которое
+ * есть среди веток и тегов (ветки `a` и `a/b` в git сосуществовать не могут, так что совпадение одно). Если ни одно не
+ * подошло, а первый сегмент — хеш коммита, это он; иначе `undefined` (вызывающий оставляет «первый сегмент — ветка»).
+ */
+export function pickTreeRef(segments: string[], refs: Set<string>): { ref: string; sub: string } | undefined {
+  const sub = (from: number): string | undefined => {
+    const rest = segments.slice(from)
+    if (rest.at(-1) === 'SKILL.md') rest.pop()
+    return rest.every((x) => SUB_PART.test(x) && x !== '.' && x !== '..' && x !== '.git') ? rest.join('/') : undefined
+  }
+  for (let k = segments.length - 1; k >= 1; k--) {
+    const ref = segments.slice(0, k).join('/')
+    const rest = sub(k)
+    if (refs.has(ref) && refOk(ref) && rest !== undefined) return { ref, sub: rest }
+  }
+  const first = segments[0]
+  const rest = sub(1)
+  if (refs.has(first ?? '') || !isCommitRef(first) || rest === undefined) return undefined
+  return { ref: first!, sub: rest }
+}
+
+const GIT_SAFE = ['-c', 'protocol.ext.allow=never', '-c', 'core.symlinks=false']
+
+/**
+ * Аргументы `git clone`: адрес собирается из проверенных частей, перед ним `--`, флаги фиксированы. Для хеша коммита
+ * `--branch` не принимается: клон без выгрузки и без истории блобов, коммит выбирает `checkoutArgs`.
+ */
 export function cloneArgs(src: { owner: string; repo: string; ref: string | undefined }, base: string, dest: string): string[] {
+  if (isCommitRef(src.ref)) return [...GIT_SAFE, 'clone', '--no-checkout', '--filter=blob:none', '--no-recurse-submodules', '--', remoteUrl(src, base), dest]
   return [
-    '-c', 'protocol.ext.allow=never',
-    '-c', 'core.symlinks=false',
+    ...GIT_SAFE,
     'clone', '--depth', '1', '--no-recurse-submodules',
     ...(src.ref ? ['--branch', src.ref] : []),
-    '--', `${base}${src.owner}/${src.repo}.git`, dest,
+    '--', remoteUrl(src, base), dest,
   ]
+}
+
+/** Второй шаг для хеша коммита: выгрузка этого коммита в клон, сделанный `cloneArgs`. */
+export function checkoutArgs(ref: string, dest: string): string[] {
+  return [...GIT_SAFE, '-C', dest, 'checkout', '--detach', ref, '--']
 }
 
 /** Имя каталога скила, как его проверяет ядро. */

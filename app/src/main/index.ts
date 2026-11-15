@@ -12,7 +12,7 @@ import { LEVEL_RANK } from '../shared/model'
 import type { ChangedEvent, ClientId, Result, ScanResponse, WriteLevel } from '../shared/model'
 import * as ctxkit from './ctxkit'
 import { assertTrusted, grantedOf, parseBatch, parseLevel, parseOp, parseSha, trustedSender, validateIntent, validateName } from './gate'
-import { checkTreeSize, cloneArgs, findSkills, localMarketplaceOk, parseMarketplaceSource, parseSkillSource, readCatalog } from './install'
+import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, localMarketplaceOk, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, remoteUrl } from './install'
 import { Sidecar } from './sidecar'
 import { tidyHome } from './tidy'
 import {
@@ -596,9 +596,16 @@ void app.whenReady().then(() => {
       const src = parseSkillSource(raw)
       const ghBase = envOf('LOADOUT_GITHUB_BASE') ?? 'https://github.com/'
       const shownDest = tidy(join(stagingRoot(), '…'))
+      const gitLine = (args: string[]): string => `git ${args.map(quoteArg).join(' ')}`
       const command =
         src.kind === 'github'
-          ? `git ${cloneArgs(src, ghBase, shownDest).map(quoteArg).join(' ')}`
+          ? [
+              gitLine(cloneArgs(src, ghBase, shownDest)),
+              // хеш коммита: `--branch` его не принимает, поэтому второй шаг
+              ...(isCommitRef(src.ref) ? [gitLine(checkoutArgs(src.ref!, shownDest))] : []),
+              // ветка из адреса tree/… может содержать `/`: её находят по списку веток, этого шага в предпросмотре ещё нет
+              ...(src.treePath ? [t(`(перед этим: git ls-remote, чтобы отделить ветку ${src.treePath.join('/')} от пути внутри репозитория)`, `(first: git ls-remote, to tell the branch in ${src.treePath.join('/')} from the path inside the repository)`)] : []),
+            ].join('\n')
           : t(`копия ${tidy(src.path)} → ${shownDest}`, `copy ${tidy(src.path)} → ${shownDest}`)
       const key = JSON.stringify(src)
       if (dryRun) {
@@ -617,18 +624,35 @@ void app.whenReady().then(() => {
       const dest = join(stagingRoot(), stage)
       mkdirSync(stagingRoot(), { recursive: true })
       try {
+        let subDir = ''
         if (src.kind === 'github') {
+          let found = src
           // без окна входа и вопросов в консоли: на закрытом или несуществующем репозитории git сразу выходит с ошибкой
           // LFS-смазка не идёт: она обратилась бы к хосту из `.lfsconfig` репозитория
-          const r = await ctxkit.run('git', cloneArgs(src, ghBase, dest), 120_000, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_LFS_SKIP_SMUDGE: '1' })
-          if (r.code !== 0) throw new Error(t(`git clone не удался: ${tidy(r.stderr).slice(-400)}`, `git clone failed: ${tidy(r.stderr).slice(-400)}`))
+          const gitEnv = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_LFS_SKIP_SMUDGE: '1' }
+          if (src.treePath) {
+            // ветка со `/` в адресе tree/…: сверяем сегменты со списком веток и тегов; не вышло — остаётся «первый сегмент — ветка»
+            const ls = await ctxkit.run('git', ['-c', 'protocol.ext.allow=never', 'ls-remote', '--heads', '--tags', '--', remoteUrl(src, ghBase)], 60_000, gitEnv)
+            const pick = ls.code === 0 ? pickTreeRef(src.treePath, parseRefs(ls.stdout)) : undefined
+            if (pick) found = { ...src, ref: pick.ref, sub: pick.sub }
+          }
+          subDir = found.sub
+          const r = await ctxkit.run('git', cloneArgs(found, ghBase, dest), 120_000, gitEnv)
+          if (r.code !== 0) {
+            const hint = src.treePath && found === src ? t(' Если ветка в адресе содержит «/», а репозиторий не отвечает на список веток, укажите адрес без tree/… (owner/repo/путь).', ' If the branch in the address contains “/” and the repository does not answer the branch list, use an address without tree/… (owner/repo/path).') : ''
+            throw new Error(t(`git clone не удался: ${tidy(r.stderr).slice(-400)}${hint}`, `git clone failed: ${tidy(r.stderr).slice(-400)}${hint}`))
+          }
+          if (isCommitRef(found.ref)) {
+            const co = await ctxkit.run('git', checkoutArgs(found.ref!, dest), 120_000, gitEnv)
+            if (co.code !== 0) throw new Error(t(`коммит ${found.ref} не найден или не выгружен: ${tidy(co.stderr).slice(-400)}`, `commit ${found.ref} was not found or not checked out: ${tidy(co.stderr).slice(-400)}`))
+          }
         } else {
           if (!statSync(src.path, { throwIfNoEntry: false })?.isDirectory()) throw new Error(t('папка не найдена', 'folder not found'))
           checkTreeSize(src.path)
           // ссылки не разыменовываются: ядро откажет на дереве со ссылками
           cpSync(src.path, dest, { recursive: true, dereference: false, verbatimSymlinks: true, filter: (s) => !/[\\/](\.git|node_modules)$/.test(s) })
         }
-        const skills = src.kind === 'github' ? findSkills(dest, src.sub, src.repo) : findSkills(dest, '', basename(src.path))
+        const skills = src.kind === 'github' ? findSkills(dest, subDir, src.repo) : findSkills(dest, '', basename(src.path))
         if (skills.length === 0) throw new Error(t('в источнике нет каталога со SKILL.md', 'the source has no directory with SKILL.md'))
         return { dryRun, command: '', stage, skills }
       } catch (err) {

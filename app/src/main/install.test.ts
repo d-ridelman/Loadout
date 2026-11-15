@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { checkTreeSize, cloneArgs, findSkills, parseMarketplaceSource, parseSkillSource, readCatalog, skillNameOk } from './install'
+import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, skillNameOk } from './install'
 
 const dirs: string[] = []
 const tmp = (): string => {
@@ -24,10 +24,36 @@ describe('parseMarketplaceSource', () => {
     expect(parseMarketplaceSource('https://git.example.com/team/mp.git')).toEqual({ kind: 'url', value: 'https://git.example.com/team/mp.git' })
     expect(parseMarketplaceSource('C:\\Users\\My Name\\mp')).toEqual({ kind: 'path', value: 'C:\\Users\\My Name\\mp' })
   })
+  it('принимает #ветка и #тег у owner/repo, https и SSH', () => {
+    expect(parseMarketplaceSource('your-org/plugins#v1.2.0')).toEqual({ kind: 'github', value: 'your-org/plugins#v1.2.0' })
+    expect(parseMarketplaceSource('https://gitlab.example.com/g/mp.git#release/2025')).toEqual({ kind: 'url', value: 'https://gitlab.example.com/g/mp.git#release/2025' })
+    expect(parseMarketplaceSource('git@github.com:a/b.git#main')).toEqual({ kind: 'ssh', value: 'git@github.com:a/b.git#main' })
+  })
+  it('принимает SSH-адреса: git@host:путь и ssh://', () => {
+    expect(parseMarketplaceSource('git@github.com:owner/repo')).toEqual({ kind: 'ssh', value: 'git@github.com:owner/repo' })
+    expect(parseMarketplaceSource('git@gitlab.example.com:group/sub/mp.git')).toEqual({ kind: 'ssh', value: 'git@gitlab.example.com:group/sub/mp.git' })
+    expect(parseMarketplaceSource('org-123@ghe.corp.example:team/mp.git')).toEqual({ kind: 'ssh', value: 'org-123@ghe.corp.example:team/mp.git' })
+    expect(parseMarketplaceSource('ssh://git@host.example.com/owner/repo.git')).toEqual({ kind: 'ssh', value: 'ssh://git@host.example.com/owner/repo.git' })
+    expect(parseMarketplaceSource('ssh://host.example.com:2222/owner/repo')).toEqual({ kind: 'ssh', value: 'ssh://host.example.com:2222/owner/repo' })
+  })
+  it('хеш коммита после # отклоняется понятным текстом: документация называет только ветку или тег', () => {
+    for (const s of ['a/b#0123abc', 'a/b#' + 'f'.repeat(40), 'git@github.com:a/b.git#deadbeef']) {
+      expect(() => parseMarketplaceSource(s)).toThrow(/хеш коммита/)
+    }
+    // ветка, похожая на хеш по длине, но не по знакам, — обычная ветка
+    expect(parseMarketplaceSource('a/b#release-1')).toMatchObject({ value: 'a/b#release-1' })
+  })
   it.each([
     '', '-x', '--scope=local', 'a/b --scope local', 'a/b\n--x', '../x', 'a/../b', 'C:\\a\\..\\b', '\\\\server\\share',
-    'http://x.test/mp', 'https://user:pw@x.test/mp', 'ext::sh -c evil', 'file:///C:/x', 'git@github.com:a/b.git', 'a/b/c', 'a/.', 'relative\\dir',
+    'http://x.test/mp', 'https://user:pw@x.test/mp', 'ext::sh -c evil', 'file:///C:/x', 'a/b/c', 'a/.', 'relative\\dir',
     'a\u202eb/c', 42, null,
+    // ссылка: пусто, флаг, `..`, пробел, кавычки, вторая решётка
+    'a/b#', 'a/b#-x', 'a/b#x..y', 'a/b#x y', 'a/b#"x"', "a/b#'x'", 'a/b#x#y', 'a/b#x/', 'a/b#x.lock', 'a/b#/x',
+    // SSH: флаги, пробелы, кавычки, управляющие знаки, `..`, пароль, начальный `/`, пустые части
+    '-oProxyCommand=x@h:a/b', 'git@-host:a/b', 'git@host:-a/b', 'git@host:/abs/path', 'git@host:a/../b', 'git@host:a b', 'git@host:"a"/b',
+    "git@host:'a'", 'git@host:a\u0000b', 'git@host:a\nb', 'git@host:', 'git@:a/b', '@host:a/b', 'git@host:a//b', 'git@host:a/b/', 'git@ho st:a/b', 'git@host:a;b', 'git@host:a$(x)', 'git@host:a`x`',
+    'git@host:%2e%2e/x', 'git@host:a\\b', 'user:pw@host:a/b', 'git@[::1]:a/b',
+    'ssh://-oProxyCommand=x/a', 'ssh://git@-host/a/b', 'ssh://git:pw@host/a/b', 'ssh://host/', 'ssh://host', 'ssh://host/a b', 'ssh://host/a/../b', 'ssh://host:99999x/a', 'ssh://host/-a/b', 'ssh://host/a?x=1', 'ssh://host/%2e%2e/b', "ssh://host/a'b", 'ssh:///a/b', 'ssh://git@host/a\u0001',
   ])('отвергает %j', (s) => {
     expect(() => parseMarketplaceSource(s)).toThrow()
   })
@@ -36,10 +62,14 @@ describe('parseMarketplaceSource', () => {
 describe('parseSkillSource', () => {
   it('разбирает короткую запись, адрес tree и папку', () => {
     expect(parseSkillSource('acme/skills/web/search')).toEqual({ kind: 'github', owner: 'acme', repo: 'skills', ref: undefined, sub: 'web/search' })
-    expect(parseSkillSource('https://github.com/acme/skills/tree/main/web')).toEqual({ kind: 'github', owner: 'acme', repo: 'skills', ref: 'main', sub: 'web' })
+    // ветка и путь: «первый сегмент — ветка» как прикидка, сегменты целиком — для уточнения по списку веток
+    expect(parseSkillSource('https://github.com/acme/skills/tree/main/web')).toEqual({ kind: 'github', owner: 'acme', repo: 'skills', ref: 'main', sub: 'web', treePath: ['main', 'web'] })
+    expect(parseSkillSource('https://github.com/acme/skills/tree/main')).toEqual({ kind: 'github', owner: 'acme', repo: 'skills', ref: 'main', sub: '' })
+    expect(parseSkillSource('https://github.com/acme/skills/tree/feature/x/web/a')).toMatchObject({ ref: 'feature', sub: 'x/web/a', treePath: ['feature', 'x', 'web', 'a'] })
+    expect(parseSkillSource('https://github.com/acme/skills/tree/0123abc/web')).toMatchObject({ ref: '0123abc', sub: 'web' })
     expect(parseSkillSource('https://github.com/acme/skills.git')).toEqual({ kind: 'github', owner: 'acme', repo: 'skills', ref: undefined, sub: '' })
     expect(parseSkillSource('acme/skills.git')).toMatchObject({ repo: 'skills' })
-    expect(parseSkillSource('https://github.com/acme/skills/blob/v1/web/SKILL.md')).toMatchObject({ ref: 'v1', sub: 'web' })
+    expect(parseSkillSource('https://github.com/acme/skills/blob/v1/web/SKILL.md')).toMatchObject({ ref: 'v1', sub: 'web', treePath: ['v1', 'web', 'SKILL.md'] })
     expect(parseSkillSource('D:\\src\\my skill')).toEqual({ kind: 'path', path: 'D:\\src\\my skill' })
   })
   it.each(['acme', '-acme/x', 'acme/x/../y', 'acme/x/.git', 'https://gitlab.com/a/b', 'https://github.com/a/b?x=1', 'https://github.com/a/b/tree/-x', 'a/b c', 'a:b/c'])(
@@ -48,6 +78,55 @@ describe('parseSkillSource', () => {
       expect(() => parseSkillSource(s)).toThrow()
     },
   )
+})
+
+it('parseRefs: ветки и теги из вывода ls-remote, у аннотированных тегов без ^{}', () => {
+  const sha = 'a'.repeat(40)
+  const out = [`${sha}\trefs/heads/main`, `${sha}\trefs/heads/feature/x`, `${sha}\trefs/tags/v1`, `${sha}\trefs/tags/v1^{}`, `${sha}\tHEAD`, `${sha}\trefs/pull/1/head`, 'мусор'].join('\r\n')
+  expect([...parseRefs(out)].sort()).toEqual(['feature/x', 'main', 'v1'])
+})
+
+describe('pickTreeRef: ветка со / в адресе tree/…', () => {
+  const refs = new Set(['main', 'feature/x', 'release/2025/q1', 'v1'])
+  it('берёт самое длинное начало, которое есть среди веток и тегов', () => {
+    expect(pickTreeRef(['main', 'web', 'a'], refs)).toEqual({ ref: 'main', sub: 'web/a' })
+    expect(pickTreeRef(['feature', 'x', 'skills', 'demo'], refs)).toEqual({ ref: 'feature/x', sub: 'skills/demo' })
+    expect(pickTreeRef(['release', '2025', 'q1', 'SKILL.md'], refs)).toEqual({ ref: 'release/2025/q1', sub: '' })
+    expect(pickTreeRef(['v1', 'web', 'SKILL.md'], refs)).toEqual({ ref: 'v1', sub: 'web' })
+  })
+  it('хеш коммита в первом сегменте — ссылка, если такой ветки нет', () => {
+    expect(pickTreeRef(['0123abc', 'web'], refs)).toEqual({ ref: '0123abc', sub: 'web' })
+    expect(pickTreeRef(['0123abc', 'web'], new Set(['0123abc']))).toEqual({ ref: '0123abc', sub: 'web' })
+  })
+  it('не нашёл — undefined (останется прикидка «первый сегмент — ветка»); путь проверяется', () => {
+    expect(pickTreeRef(['nope', 'web'], refs)).toBeUndefined()
+    expect(pickTreeRef(['feature', 'y', 'web'], refs)).toBeUndefined()
+    expect(pickTreeRef(['main', '..', 'x'], refs)).toBeUndefined()
+    expect(pickTreeRef(['main', '.git', 'x'], refs)).toBeUndefined()
+    expect(pickTreeRef(['0123abc', 'a b'], refs)).toBeUndefined()
+  })
+  it('имя ветки из чужого списка проходит те же проверки', () => {
+    expect(pickTreeRef(['-x', 'a'], new Set(['-x']))).toBeUndefined()
+    expect(pickTreeRef(['a', 'b'], new Set(['a..b']))).toBeUndefined()
+  })
+})
+
+it('isCommitRef: 7–40 шестнадцатеричных знаков', () => {
+  for (const ok of ['0123abc', 'DEADBEEF', 'a'.repeat(40)]) expect(isCommitRef(ok), ok).toBe(true)
+  for (const no of [undefined, '', '012345', 'a'.repeat(41), 'ghijklm', 'v1.0.0', 'main', '0123abc;x', '-0123abc']) expect(isCommitRef(no), String(no)).toBe(false)
+})
+
+it('cloneArgs для хеша коммита: без --branch и --depth, выгрузка вторым шагом', () => {
+  const a = cloneArgs({ owner: 'acme', repo: 'skills', ref: '0123abcd' }, 'https://github.com/', 'D:\\st')
+  expect(a).not.toContain('--branch')
+  expect(a).not.toContain('--depth')
+  expect(a).toContain('--no-checkout')
+  expect(a.slice(-3)).toEqual(['--', 'https://github.com/acme/skills.git', 'D:\\st'])
+  expect(a).toContain('protocol.ext.allow=never')
+  const c = checkoutArgs('0123abcd', 'D:\\st')
+  expect(c.slice(-4)).toEqual(['checkout', '--detach', '0123abcd', '--'])
+  expect(c[c.indexOf('-C') + 1]).toBe('D:\\st')
+  expect(c).toContain('protocol.ext.allow=never')
 })
 
 it('cloneArgs: адрес после --, ветка отдельным аргументом', () => {

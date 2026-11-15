@@ -127,7 +127,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
                   setSource(e.target.value)
                   reset()
                 }}
-                placeholder={t('owner/repo, https://… или D:\\путь\\к\\папке', 'owner/repo, https://… or D:\\path\\to\\folder')}
+                placeholder={t('owner/repo[#ветка], https://…, git@хост:путь или D:\\путь\\к\\папке', 'owner/repo[#branch], https://…, git@host:path or D:\\path\\to\\folder')}
                 maxLength={400}
                 spellCheck={false}
               />
