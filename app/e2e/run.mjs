@@ -826,6 +826,7 @@ try {
     await en.waitForTimeout(250)
     await headerLayout(en, 'en@1100')
     await resize(enApp, 1280, 800)
+    await en.waitForTimeout(250)
     await shot(en, 'en-matrix-1280')
     for (const [key, name] of [['2', 'radar'], ['3', 'hooks'], ['4', 'doctor'], ['5', 'journal'], ['6', 'profiles'], ['7', 'ctxkit']]) {
       await en.keyboard.press(key)
