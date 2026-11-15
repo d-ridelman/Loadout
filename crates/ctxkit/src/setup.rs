@@ -479,15 +479,42 @@ fn update_claude_settings(
     let mut next = orig.clone();
     let root = next.as_object_mut().ok_or("settings root is not object")?;
 
+    // What setup changes in the user's choices is printed as "was -> became" (also in --dry-run).
+    let old = |v: &Value| v.as_str().map(str::to_string);
+    println!(
+        "{}",
+        change_line(
+            "model",
+            old(&orig["model"]).as_deref(),
+            Some(&opts.main_model)
+        )
+    );
     root.insert("model".to_string(), Value::String(opts.main_model.clone()));
-    if opts.advisor.eq_ignore_ascii_case("none") {
-        root.remove("advisorModel");
-    } else {
-        root.insert(
-            "advisorModel".to_string(),
-            Value::String(opts.advisor.clone()),
-        );
+    let advisor = (!opts.advisor.eq_ignore_ascii_case("none")).then_some(opts.advisor.as_str());
+    println!(
+        "{}",
+        change_line(
+            "advisorModel",
+            old(&orig["advisorModel"]).as_deref(),
+            advisor
+        )
+    );
+    match advisor {
+        Some(a) => {
+            root.insert("advisorModel".to_string(), Value::String(a.to_string()));
+        }
+        None => {
+            root.remove("advisorModel");
+        }
     }
+    println!(
+        "{}",
+        change_line(
+            "effortLevel",
+            old(&orig["effortLevel"]).as_deref(),
+            Some(&opts.effort)
+        )
+    );
     root.insert(
         "effortLevel".to_string(),
         Value::String(opts.effort.clone()),
@@ -501,8 +528,15 @@ fn update_claude_settings(
     ) {
         (Some(id), true) => {
             let entry = ensure_object(ensure_object(root, "modelSettings")?, &id)?;
+            println!(
+                "{}",
+                change_line(
+                    &format!("effort modelSettings.{id}"),
+                    entry.get("effortLevel").and_then(old).as_deref(),
+                    Some(&opts.effort)
+                )
+            );
             entry.insert("effortLevel".to_string(), Value::String(opts.effort.clone()));
-            println!("  effort: modelSettings.{id}.effortLevel = {}", opts.effort);
         }
         _ => println!(
             "  effort: modelSettings not written (needs a known main model and low|medium|high|xhigh); top-level effortLevel only"
@@ -510,6 +544,25 @@ fn update_claude_settings(
     }
 
     let env_obj = ensure_object(root, "env")?;
+    let sub_old = env_obj.get("CLAUDE_CODE_SUBAGENT_MODEL").and_then(old);
+    if opts.subagent_env {
+        println!(
+            "{}",
+            change_line(
+                "env.CLAUDE_CODE_SUBAGENT_MODEL",
+                sub_old.as_deref(),
+                Some(&opts.subagent)
+            )
+        );
+    } else if sub_old
+        .as_deref()
+        .is_some_and(|v| v.to_ascii_lowercase().contains("haiku"))
+    {
+        println!(
+            "  [warn] env.CLAUDE_CODE_SUBAGENT_MODEL={} puts every subagent without its own model (code writers too) on Haiku; left as is. Remove it, or pass --subagent <model> to change it",
+            sub_old.as_deref().unwrap_or_default()
+        );
+    }
     if opts.subagent_env {
         env_obj.insert(
             "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
@@ -558,6 +611,16 @@ fn update_claude_settings(
         "settings.json",
     )?;
     Ok(next)
+}
+
+/// One "was -> became" line for a setting; `new == None` means the key ends up unset.
+fn change_line(label: &str, old: Option<&str>, new: Option<&str>) -> String {
+    let show = |v: Option<&str>| v.unwrap_or("(unset)").to_string();
+    if old == new {
+        format!("  {label}: {} (unchanged)", show(new))
+    } else {
+        format!("  {label}: {} -> {}", show(old), show(new))
+    }
 }
 
 /// Canonical id for the `modelSettings` key. shortcut: alias table of 2026-11-15 (docs: `sonnet` is Sonnet 5.5,
@@ -842,20 +905,36 @@ fn update_desktop_presets(
         println!("  skip desktop presets (no byAccount): {}", path.display());
         return Ok(());
     };
+    // Sets modelId/effort of one preset and prints "model X -> Y, effort A -> B".
+    let apply = |name: &str, s: &mut Map<String, Value>| {
+        let was = |k: &str| s.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let (m0, e0) = (was("modelId"), was("effort"));
+        let line = if m0.as_deref() == Some(model_id) && e0.as_deref() == Some(effort) {
+            format!("model {model_id}, effort {effort} (unchanged)")
+        } else {
+            format!(
+                "model {} -> {model_id}, effort {} -> {effort}",
+                m0.as_deref().unwrap_or("(unset)"),
+                e0.as_deref().unwrap_or("(unset)")
+            )
+        };
+        println!("  desktop preset {name}: {line}");
+        s.insert("modelId".to_string(), Value::String(model_id.to_string()));
+        s.insert("effort".to_string(), Value::String(effort.to_string()));
+    };
     for (_acct_id, acct) in accounts.iter_mut() {
         if let Some(presets) = acct.get_mut("presets").and_then(|v| v.as_array_mut()) {
             for p in presets.iter_mut() {
+                let name = p["name"].as_str().unwrap_or("(unnamed)").to_string();
                 if let Some(s) = p.get_mut("settings").and_then(|v| v.as_object_mut()) {
-                    s.insert("modelId".to_string(), Value::String(model_id.to_string()));
-                    s.insert("effort".to_string(), Value::String(effort.to_string()));
+                    apply(&name, s);
                 }
             }
         }
         if let Some(built_ins) = acct.get_mut("builtIns").and_then(|v| v.as_object_mut()) {
-            for (_k, b) in built_ins.iter_mut() {
+            for (k, b) in built_ins.iter_mut() {
                 if let Some(s) = b.get_mut("settings").and_then(|v| v.as_object_mut()) {
-                    s.insert("modelId".to_string(), Value::String(model_id.to_string()));
-                    s.insert("effort".to_string(), Value::String(effort.to_string()));
+                    apply(&format!("built-in {k}"), s);
                 }
             }
         }
@@ -1743,6 +1822,26 @@ mod tests {
         );
         assert_eq!(canonical_model_id("gpt"), None);
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn change_line_shows_was_and_became() {
+        assert_eq!(
+            change_line("model", Some("opus"), Some("sonnet")),
+            "  model: opus -> sonnet"
+        );
+        assert_eq!(
+            change_line("advisorModel", None, Some("fable")),
+            "  advisorModel: (unset) -> fable"
+        );
+        assert_eq!(
+            change_line("model", Some("sonnet"), Some("sonnet")),
+            "  model: sonnet (unchanged)"
+        );
+        assert_eq!(
+            change_line("advisorModel", Some("fable"), None),
+            "  advisorModel: fable -> (unset)"
+        );
     }
 
     #[test]

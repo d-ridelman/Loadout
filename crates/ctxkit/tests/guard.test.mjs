@@ -425,6 +425,10 @@ const cases = [
     if (readFileSync(join(profile, 'CLAUDE.md'), 'utf8') !== origClaudeMd) return false;
     if (JSON.parse(readFileSync(desktopFile, 'utf8')).byAccount.acct1.presets[0].settings.modelId !== 'claude-opus-5-5') return false;
     if (JSON.parse(readFileSync(agyFile, 'utf8'))['ctxkit']) return false;
+    // the preview says what will change (was -> became), the same lines as the real run
+    for (const line of ['  model: (unset) -> sonnet', '  advisorModel: (unset) -> fable', '  effortLevel: (unset) -> high', '  effort modelSettings.claude-sonnet-5-5: (unset) -> high', '  desktop preset dev: model claude-opus-5-5 -> claude-sonnet-5-5, effort max -> high', '  desktop preset built-in local: model claude-opus-5-5 -> claude-sonnet-5-5, effort low -> high']) {
+      if (!dry.stdout.includes(line)) return `dry-run lacks: ${line}`;
+    }
 
     // 2) Real run updates configs, creates backups & agents, preserves custom keys
     const run1 = spawnSync(exe, commonArgs, { encoding: 'utf8' });
@@ -466,6 +470,19 @@ const cases = [
     // 3) Second run must be idempotent (same files, no extra backups)
     const run2 = spawnSync(exe, commonArgs, { encoding: 'utf8' });
     if (run2.status !== 0) return false;
+    for (const line of ['  model: sonnet (unchanged)', '  advisorModel: fable (unchanged)', '  desktop preset dev: model claude-sonnet-5-5, effort high (unchanged)']) {
+      if (!run2.stdout.includes(line)) return `second run lacks: ${line}`;
+    }
+    if (!run1.stdout.includes('  desktop preset dev: model claude-opus-5-5 -> claude-sonnet-5-5, effort max -> high')) return false;
+    // CLAUDE_CODE_SUBAGENT_MODEL=haiku: a [warn] without --subagent, the value stays; with --subagent it is shown as a change
+    const haikuProfile = join(setupRoot, 'haiku-profile');
+    mkdirSync(haikuProfile, { recursive: true });
+    writeFileSync(join(haikuProfile, 'settings.json'), JSON.stringify({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' } }));
+    const haikuArgs = ['setup', '--profile', haikuProfile, '--no-agents', '--hook-cmd', 'test-ctxkit', '--skip-version-check', '--claude-json', claudeJson];
+    const warn = spawnSync(exe, haikuArgs, { encoding: 'utf8' });
+    if (!warn.stdout.includes('[warn] env.CLAUDE_CODE_SUBAGENT_MODEL=haiku') || JSON.parse(readFileSync(join(haikuProfile, 'settings.json'), 'utf8')).env.CLAUDE_CODE_SUBAGENT_MODEL !== 'haiku') return false;
+    const noWarn = spawnSync(exe, [...haikuArgs, '--subagent', 'sonnet'], { encoding: 'utf8' });
+    if (!noWarn.stdout.includes('  env.CLAUDE_CODE_SUBAGENT_MODEL: haiku -> sonnet') || noWarn.stdout.includes('[warn] env.CLAUDE_CODE_SUBAGENT_MODEL')) return false;
     if (readFileSync(join(profile, 'CLAUDE.md'), 'utf8') !== claudeMd1) return false;
     if (readdirSync(join(profile, 'backups')).length !== backups1.length) return false;
     if (s1.env?.CTXKIT_LANG !== undefined) return false;
