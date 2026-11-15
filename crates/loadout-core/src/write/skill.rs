@@ -320,7 +320,9 @@ pub fn apply(
             if std::fs::rename(&tmp, &c.target).is_ok() {
                 return Ok(());
             }
-            // `skills` — ссылка на другой том: `rename` не пройдёт, копируем на место; каталог создали мы, при сбое убираем
+            // `skills` — ссылка на другой том: `rename` не пройдёт, копируем на место. `create_dir` откажет, если каталог
+            // успел появиться: чужое не перезаписываем и не удаляем; созданный нами при сбое убираем
+            std::fs::create_dir(&c.target).map_err(|e| e.to_string())?;
             copy_files(&c.files, &c.target).inspect_err(|_| {
                 let _ = std::fs::remove_dir_all(&c.target);
             })
@@ -389,20 +391,40 @@ pub(super) fn rollback(
         .join(format!(".{}.loadout.removed", m.name));
     let _ = std::fs::remove_dir_all(&gone);
     let moved = std::fs::rename(&target, &gone).is_ok();
-    let restore = || {
-        if moved {
-            let _ = std::fs::rename(&gone, &target);
-        } else if let Ok(back) = walk(&dir.join("removed")) {
-            let _ = copy_files(&back, &target);
+    // Возврат после сорванного отката. Копирует всё, что может, не останавливаясь на занятом файле. Если вернуть целиком
+    // не вышло, копия в каталоге операции остаётся, и ошибка называет её путь (строки журнала у неё нет).
+    let restore = |why: String| -> Result<Applied, String> {
+        let whole = if moved {
+            std::fs::rename(&gone, &target).is_ok()
+        } else {
+            walk(&dir.join("removed")).is_ok_and(|back| {
+                back.iter().fold(true, |ok, (rel, path, _)| {
+                    let dest = target.join(rel);
+                    let done = dest.is_file()
+                        && std::fs::read(&dest).ok() == std::fs::read(path).ok()
+                        || dest
+                            .parent()
+                            .is_some_and(|p| std::fs::create_dir_all(p).is_ok())
+                            && std::fs::copy(path, &dest).is_ok();
+                    ok && done
+                })
+            })
+        };
+        if whole {
+            return fail(bad(
+                &format!("откат не выполнен: {why}; скил на месте"),
+                &format!("the rollback did not happen: {why}; the skill is in place"),
+            ));
         }
+        let copy = tilde(home, &dir.join("removed"));
+        Err(bad(
+            &format!("откат не выполнен: {why}; скил вернулся не полностью, полная копия: {copy}"),
+            &format!("the rollback did not happen: {why}; the skill was not fully restored, a full copy is in {copy}"),
+        ))
     };
     if !moved {
         if let Err(e) = std::fs::remove_dir_all(&target) {
-            restore();
-            return fail(bad(
-                &format!("каталог скила не убран: {e}; скил возвращён на место"),
-                &format!("the skill directory was not removed: {e}; the skill was put back"),
-            ));
+            return restore(e.to_string());
         }
     }
     let r = Manifest {
@@ -418,8 +440,7 @@ pub(super) fn rollback(
         ..m.clone()
     };
     if let Err(e) = write_manifest(&dir, &r) {
-        restore();
-        return fail(e);
+        return restore(e);
     }
     // копия уже в бэкапе операции: не удалившийся до конца временный каталог ничего не портит
     let _ = std::fs::remove_dir_all(&gone);
