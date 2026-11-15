@@ -10,9 +10,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "e2e": "electron-vite build && node e2e/run.mjs",
-    "pack": "electron-vite build && electron-builder --win --dir",
+    "bundle:ctxkit": "node scripts/bundle-ctxkit.mjs",
+    "pack": "node scripts/bundle-ctxkit.mjs && electron-vite build && electron-builder --win --dir",
     "pack:check": "node e2e/pack-check.mjs",
-    "dist": "electron-vite build && electron-builder --win"
+    "dist": "node scripts/bundle-ctxkit.mjs && electron-vite build && electron-builder --win"
   },
   "author": "Loadout",
   "build": {
@@ -22,7 +23,8 @@
     "files": ["out/**", "package.json"],
     "extraResources": [
       { "from": "../target/release/loadout.exe", "to": "loadout.exe" },
-      { "from": "build/icon.png", "to": "icon.png" }
+      { "from": "build/icon.png", "to": "icon.png" },
+      { "from": "build/ctxkit.exe", "to": "ctxkit.exe" }
     ],
     "asar": true,
     "publish": null,

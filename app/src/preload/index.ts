@@ -17,6 +17,10 @@ const api: LoadoutApi = {
   deleteProfile: (name) => ipcRenderer.invoke('profileDelete', name),
   planProfile: (name) => ipcRenderer.invoke('planProfile', name),
   applyProfile: (name, batchSha) => ipcRenderer.invoke('applyProfile', name, batchSha),
+  ctxkitStatus: () => ipcRenderer.invoke('ctxkit:status'),
+  ctxkitDoctor: () => ipcRenderer.invoke('ctxkit:doctor'),
+  ctxkitReport: (days) => ipcRenderer.invoke('ctxkit:report', days),
+  ctxkitSetup: (options, dryRun) => ipcRenderer.invoke('ctxkit:setup', options, dryRun),
   // страница получает только данные события, без объекта IpcRendererEvent и самого ipcRenderer
   onChanged: (cb) => {
     const handler = (_e: IpcRendererEvent, payload: ChangedEvent) => cb(payload)

@@ -183,8 +183,12 @@ button.level[aria-pressed='true'] { border-color: var(--orange); background: rgb
 .form input, .form textarea, select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--fg); font: 13px var(--mono); }
 .form textarea { resize: vertical; min-height: 80px; }
 .choices { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
-.choices label { display: flex; gap: 8px; align-items: center; }
+.choices label, .form .choices label { display: flex; flex-direction: row; gap: 8px; align-items: center; color: var(--fg); }
 .cards { display: flex; flex-direction: column; gap: 12px; }
+.card h3 { margin: 0 0 8px; font: 600 12px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); }
+pre.out { margin: 6px 0; padding: 10px 12px; max-height: 260px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.stack { display: flex; height: 10px; border-radius: 2px; overflow: hidden; background: var(--bg); border: 1px solid var(--line); min-width: 120px; }
+.stack span { display: block; height: 100%; }
 .pitem { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(68, 71, 90, 0.55); }
 .pitem .sub { grid-column: 1; }
 .plist { list-style: none; margin: 6px 0 0; padding: 0; max-height: 240px; overflow: auto; }

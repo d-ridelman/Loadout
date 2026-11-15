@@ -117,6 +117,68 @@ export interface JournalEntry {
 }
 
 /** R0 — только чтение, R1 — флаги, R2 — корзина, правка, копирование, профили. Каждый уровень включает прежние. */
+/** Встроенный ctxkit (CONCEPT.md §13): состояние установки, диагностика и счётчики эффективности. */
+export interface CtxkitStatus {
+  /** Бинарь ctxkit есть в составе приложения. */
+  available: boolean
+  version: string | null
+  /** Копия в `~/.claude/hooks` (её вызывают хуки) и в `~/.local/bin` (PATH): совпадает со встроенной, отличается или нет. */
+  hook: 'same' | 'different' | 'missing'
+  bin: 'same' | 'different' | 'missing'
+}
+
+export type FindingSeverity = 'ok' | 'info' | 'warn' | 'error'
+
+export interface DoctorFinding {
+  id: string
+  severity: FindingSeverity
+  message: string
+  detail: string | null
+  fix: string | null
+}
+
+export interface CtxkitDoctor {
+  findings: DoctorFinding[]
+  version: string
+}
+
+/** Счётчики одного дня (UTC) из транскриптов Claude Code: только числа, текста и путей в них нет. */
+export interface DayStats {
+  mainTurns: { sonnet: number; haiku: number; opusFable: number; other: number }
+  subTurns: number
+  advisorCalls: number
+  agentCalls: Record<string, number>
+  toolResultChars: number
+  readChars: number
+  readBlocked: number
+  shellInspectChars: number
+  buildChars: number
+  checkCalls: number
+  checkChars: number
+}
+
+export interface CtxkitReport {
+  days: Record<string, DayStats>
+}
+
+export interface SetupOptions {
+  withRules: boolean
+  desktop: boolean
+  antigravity: boolean
+  dsh: boolean
+  lang: 'en' | 'ru'
+  advisor: 'fable' | 'opus' | 'none'
+}
+
+export interface SetupResult {
+  dryRun: boolean
+  /** Код выхода ctxkit: 0 — готово. */
+  code: number
+  /** Вывод ctxkit (stdout и stderr), путь домашнего каталога заменён на `~`. */
+  output: string
+}
+
+/** R0 — только чтение, R1 — флаги, R2 — корзина, правка, копирование, профили, применение ctxkit. */
 export type WriteLevel = 'R0' | 'R1' | 'R2'
 export const LEVEL_RANK: Record<WriteLevel, number> = { R0: 0, R1: 1, R2: 2 }
 
@@ -175,6 +237,11 @@ export interface LoadoutApi {
   deleteProfile: (name: string) => Promise<Result<Profile[]>>
   planProfile: (name: string) => Promise<Result<BatchPlan & { running: string[] }>>
   applyProfile: (name: string, batchSha: string) => Promise<Result<BatchApplied>>
+  ctxkitStatus: () => Promise<Result<CtxkitStatus>>
+  ctxkitDoctor: () => Promise<Result<CtxkitDoctor>>
+  ctxkitReport: (days: 7 | 14 | 30) => Promise<Result<CtxkitReport>>
+  /** `dryRun` — предпросмотр (любой уровень); применение требует R2 и совпадающего предпросмотра. */
+  ctxkitSetup: (options: SetupOptions, dryRun: boolean) => Promise<Result<SetupResult>>
   /** Подписка на изменения конфигов; возвращает отписку. */
   onChanged: (cb: (e: ChangedEvent) => void) => () => void
 }

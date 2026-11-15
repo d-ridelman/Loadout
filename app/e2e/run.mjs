@@ -184,6 +184,17 @@ try {
     const dir = join(h, '.claude', 'skills', 'very-long-skill-name-that-should-wrap-inside-the-name-column-without-clipping-anything')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'SKILL.md'), '---\ndescription: Длинное имя для проверки переноса\n---\n')
+    // транскрипты Claude Code для отчёта ctxkit: ходы на двух моделях, вызов субагента и результат инструмента
+    const ts = new Date().toISOString()
+    const row = (i, model, tool) =>
+      JSON.stringify({ type: 'assistant', uuid: `a${i}`, timestamp: ts, message: { id: `m${i}`, model, content: [{ type: 'tool_use', id: `t${i}`, name: tool.name, input: tool.input }] } }) +
+      '\n' +
+      JSON.stringify({ type: 'user', uuid: `u${i}`, timestamp: ts, message: { content: [{ type: 'tool_result', tool_use_id: `t${i}`, content: '0123456789' }] } })
+    const rows = []
+    for (let i = 0; i < 8; i++) rows.push(row(i, 'claude-sonnet-5-5', { name: 'Bash', input: { command: 'ls' } }))
+    for (let i = 8; i < 11; i++) rows.push(row(i, 'claude-opus-5-5', { name: 'Agent', input: { subagent_type: 'checker' } }))
+    mkdirSync(join(h, '.claude', 'projects', 'p'), { recursive: true })
+    writeFileSync(join(h, '.claude', 'projects', 'p', 'a.jsonl'), rows.join('\n') + '\n')
   })
   homes.push(home)
 
@@ -559,8 +570,57 @@ try {
   await page.keyboard.press('6')
   await card.getByRole('button', { name: 'Удалить профиль' }).click()
   await waitFor(async () => (await card.count()) === 0, 'профиль удалён')
+
+  // ---- встроенный ctxkit: установить и применить на копии фикстуры, диагностика и эффективность ----
+  const claudeDir = join(home, '.claude')
+  const hookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
+  const settingsFile = join(claudeDir, 'settings.json')
+  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, lang: 'ru', advisor: 'fable' }
+  must(!existsSync(hookExe), 'в копии фикстуры уже есть ctxkit')
+  await page.keyboard.press('7')
+  await page.getByText('ctxkit 0.', { exact: false }).first().waitFor({ timeout: 15000 })
+  must((await page.locator('main').innerText()).includes('нет: «Применить» установит'), 'до установки копия ctxkit должна быть «нет»')
+  const applyBtn = page.getByRole('button', { name: /^Применить: установить/ })
+  must(await applyBtn.isDisabled(), 'применение доступно без предпросмотра')
+  // ядро-main отказывает и в обход страницы: без предпросмотра и без нужного уровня
+  const refusal = (o) => page.evaluate(async (x) => (await window.loadout.ctxkitSetup(x, false)).error ?? 'ok', o)
+  must((await refusal(opts)).includes('предпросмотр'), 'применение без предпросмотра не отвергнуто в main')
+  must((await refusal({ ...opts, lang: 'de' })).includes('язык'), 'неверный язык не отвергнут')
+  const settingsBefore = readFileSync(settingsFile, 'utf8')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await page.locator('pre.out').waitFor({ timeout: 30000 })
+  const preview = await page.locator('pre.out').innerText()
+  must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !preview.includes(home.replaceAll('\\', '/')), `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
+  must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
+  await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')
+  await page.getByLabel('Язык подсказок и хуков').selectOption('en')
+  must(await applyBtn.isDisabled(), 'после смены настроек старый предпросмотр не должен разрешать применение')
+  await page.getByLabel('Язык подсказок и хуков').selectOption('ru')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр повторён')
+  await shot(page, 'm5-ctxkit-1280')
+  await resize(app, 1920, 1080)
+  await page.waitForTimeout(250)
+  await shot(page, 'm5-ctxkit-1920')
+  await resize(app, 1280, 800)
+  await applyBtn.click()
+  await waitFor(() => existsSync(hookExe), 'ctxkit установил бинарь хуков')
+  await waitFor(() => readFileSync(settingsFile, 'utf8').includes('ctxkit'), 'ctxkit прописал хуки в settings.json')
+  must(existsSync(join(claudeDir, 'backups')), 'ctxkit не сделал бэкап перед записью')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/ctxkit.exe: ● совпадает'), 'статус: копия хуков совпадает со встроенной')
+  // диагностика и эффективность по транскриптам фикстуры
+  await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 15000 })
+  await page.locator('table[aria-label="Ходы по дням"] tbody tr').first().waitFor({ timeout: 30000 })
+  const eff = await page.locator('main').innerText()
+  must(eff.includes('на Sonnet и Haiku') && eff.includes('checker ×'), `нет сводки эффективности: ${eff.slice(-600)}`)
+  const ctxLayout = await page.evaluate(() => ({ h: document.documentElement.scrollWidth - document.documentElement.clientWidth, m: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth }))
+  must(ctxLayout.h <= 0 && ctxLayout.m <= 1, `горизонтальная прокрутка в разделе ctxkit: ${JSON.stringify(ctxLayout)}`)
+  const v4 = await axeCheck(page, 'ctxkit')
+  must(v4.length === 0, `axe: ctxkit: ${v4.map((x) => x.id).join(', ')}`)
+  await noSecretOnPage('ctxkit')
   await page.keyboard.press('1')
   await levelSel.selectOption('R0') // понижение подтверждения не требует
+  must((await refusal(opts)).includes('R2'), 'при R0 применение ctxkit не отвергнуто в main')
   await waitFor(() => levelIs('R0'), 'уровень вернулся в R0')
 
   // reduced motion → «FX: выкл» по умолчанию применяется при загрузке; здесь проверяем переключатель

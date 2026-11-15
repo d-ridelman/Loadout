@@ -6,6 +6,7 @@ import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CLIENTS, LEVEL_RANK } from '../shared/model'
 import type { ChangedEvent, ClientId, Intent, Result, ScanResponse, WriteLevel } from '../shared/model'
+import * as ctxkit from './ctxkit'
 import { Sidecar } from './sidecar'
 import {
   validateApplied,
@@ -385,6 +386,53 @@ void app.whenReady().then(() => {
       if (typeof batchSha !== 'string' || !SHA_RE.test(batchSha)) throw new Error('неверные параметры')
       const n = validateName(name)
       return validateBatchApplied(await writeCore().request('applyProfile', { name: n, batchSha, maxLevel: grantedLevel() }))
+    })
+  })
+  // ---- встроенный ctxkit (CONCEPT.md §13): бинарь лежит в составе приложения, путь зашит ----
+  const ctxBin = (): string =>
+    app.isPackaged ? join(process.resourcesPath, 'ctxkit.exe') : (envOf('LOADOUT_CTXKIT') ?? resolve(app.getAppPath(), 'build', 'ctxkit.exe'))
+  /** В разработке и проверках (`LOADOUT_HOME`) ctxkit работает в этом каталоге, а не в настоящем профиле. */
+  const ctxHome = (): string | undefined => envOf('LOADOUT_HOME')
+  const userHome = (): string => ctxHome() ?? app.getPath('home')
+  let lastSetupPreview: string | undefined
+
+  ipcMain.handle('ctxkit:status', (e) => {
+    guard(e)
+    return guarded(() =>
+      ctxkit.status(ctxBin(), join(userHome(), '.claude', 'hooks', 'ctxkit.exe'), join(userHome(), '.local', 'bin', 'ctxkit.exe')),
+    )
+  })
+  ipcMain.handle('ctxkit:doctor', (e) => {
+    guard(e)
+    return guarded(async () => {
+      // `doctor` выходит с кодом 1, когда есть находка уровня error: это нормальный ответ, разбираем stdout
+      const r = await ctxkit.run(ctxBin(), ['doctor', '--json', ...ctxkit.profileArgs(ctxHome())], 20_000)
+      return ctxkit.parseDoctor(r.stdout)
+    })
+  })
+  ipcMain.handle('ctxkit:report', (e, days: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (days !== 7 && days !== 14 && days !== 30) throw new Error('неверный период')
+      const r = await ctxkit.run(ctxBin(), ['report', '--json', '--days', String(days), ...ctxkit.profileArgs(ctxHome())], 90_000)
+      return ctxkit.parseReport(r.stdout)
+    })
+  })
+  ipcMain.handle('ctxkit:setup', (e, raw: unknown, dryRun: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (typeof dryRun !== 'boolean') throw new Error('неверные параметры')
+      const options = ctxkit.parseSetupOptions(raw)
+      const key = JSON.stringify(options)
+      if (!dryRun) {
+        // применение пишет в конфиги клиентов: нужен R2 и предпросмотр с точно такими же настройками
+        if (readWriteLevel() !== 'R2') throw new Error('для применения ctxkit нужен уровень R2: включите его в шапке окна')
+        if (lastSetupPreview !== key) throw new Error('сначала выполните предпросмотр с теми же настройками')
+      }
+      const r = await ctxkit.run(ctxBin(), ctxkit.setupArgs(options, dryRun, ctxHome()), 120_000)
+      if (dryRun && r.code === 0) lastSetupPreview = key
+      if (!dryRun) lastSetupPreview = undefined
+      return { dryRun, code: r.code, output: tidy(`${r.stdout}${r.stderr}`).slice(0, 20_000) }
     })
   })
   createWindow()

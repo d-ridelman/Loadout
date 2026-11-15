@@ -13,13 +13,14 @@ import { CopyDialog } from './views/CopyDialog'
 import { EditDialog } from './views/EditDialog'
 import { PlanDialog } from './views/PlanDialog'
 import { Profiles } from './views/Profiles'
+import { Ctxkit } from './views/Ctxkit'
 import { Matrix, keyOf } from './views/Matrix'
 import type { Filters, Sel } from './views/Matrix'
 import { Palette } from './views/Palette'
 import type { PaletteItem } from './views/Palette'
 import { Radar } from './views/Radar'
 
-type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal' | 'profiles'
+type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal' | 'profiles' | 'ctxkit'
 /** Что сейчас открыто поверх окна: форма, а затем предпросмотр записи. */
 type Flow = { type: 'plan'; entity: Entity; intent: Intent } | { type: 'edit'; entity: Entity } | { type: 'copy'; entity: Entity }
 type Fx = 'off' | 'low' | 'full'
@@ -35,9 +36,10 @@ const VIEWS: readonly { id: View; label: string }[] = [
   { id: 'doctor', label: 'Доктор' },
   { id: 'journal', label: 'Журнал' },
   { id: 'profiles', label: 'Профили' },
+  { id: 'ctxkit', label: 'ctxkit' },
 ]
 
-const LEVEL_LABEL: Record<WriteLevel, string> = { R0: 'R0 · только чтение', R1: 'R1 · флаги', R2: 'R2 · корзина и правка' }
+const LEVEL_LABEL: Record<WriteLevel, string> = { R0: 'R0 · только чтение', R1: 'R1 · флаги', R2: 'R2 · корзина, правка, ctxkit' }
 
 const DEFAULT_FILTERS: Filters = { q: '', group: 'all', state: 'all', hideUnknown: true, client: null }
 
@@ -250,7 +252,7 @@ export function App() {
       } else if ((e.code === 'Slash' || e.key === '/') && view === 'matrix') {
         e.preventDefault()
         searchRef.current?.focus()
-      } else if (/^[1-6]$/.test(e.key)) {
+      } else if (/^[1-7]$/.test(e.key)) {
         setView(VIEWS[Number(e.key) - 1]?.id ?? 'matrix')
       } else if (k === 'r' && !e.ctrlKey && !e.metaKey) {
         void load(true)
@@ -357,8 +359,10 @@ export function App() {
           <Doctor findings={findings} onShow={showEntity} />
         ) : view === 'journal' ? (
           <Journal level={level} refreshKey={rev} onNotice={say} />
-        ) : (
+        ) : view === 'profiles' ? (
           <Profiles level={level} refreshKey={rev} onNotice={say} />
+        ) : (
+          <Ctxkit level={level} onNotice={say} />
         )}
       </main>
 
@@ -395,7 +399,7 @@ export function App() {
             <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>строка вниз / вверх</dd>
             <dt><kbd>h</kbd> <kbd>l</kbd></dt><dd>клиент влево / вправо</dd>
             <dt><kbd>/</kbd></dt><dd>поиск</dd>
-            <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>разделы</dd>
+            <dt><kbd>1</kbd>–<kbd>7</kbd></dt><dd>разделы</dd>
             <dt><kbd>Space</kbd></dt><dd>включить / выключить выбранное (R1; без флага — R2)</dd>
             <dt><kbd>r</kbd></dt><dd>пересканировать</dd>
             <dt><kbd>Ctrl+K</kbd></dt><dd>палитра</dd>

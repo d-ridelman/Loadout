@@ -70,6 +70,17 @@ try {
   must((await page.getByLabel('Уровень записи').inputValue()) === 'R0', 'уровень записи по умолчанию должен быть R0')
   must((await page.locator('#scanlines').count()) === 0, 'в сборке остались сканлайны')
 
+  // встроенный ctxkit из resources: версия, диагностика и отчёт по настоящим транскриптам (только чтение, ничего не применяется)
+  must(existsSync(join(unpacked, 'resources', 'ctxkit.exe')), 'в сборке нет resources/ctxkit.exe')
+  await page.keyboard.press('7')
+  await page.getByText('ctxkit 0.', { exact: false }).first().waitFor({ timeout: 20_000 })
+  await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 30_000 })
+  await page.locator('table[aria-label="Ходы по дням"] tbody tr').first().waitFor({ timeout: 120_000 })
+  const ctxText = await page.locator('main').innerText()
+  console.log('ctxkit в сборке:', /ctxkit \d+\.\d+\.\d+/.exec(ctxText)?.[0], '| находок диагностики:', await page.locator('ul[aria-label="Находки диагностики"] li').count(), '| дней в отчёте:', await page.locator('table[aria-label="Ходы по дням"] tbody tr').count())
+  must(!/не удалось|не найден|неподдерживаемая/.test(ctxText), 'в разделе ctxkit ошибка')
+  await page.keyboard.press('1')
+
   const ps = procs()
   const core = ps.filter((p) => p.Name.toLowerCase() === 'loadout.exe' && /serve/.test(p.CommandLine ?? ''))
   must(core.length === 1, `ядро из resources должно быть одно, найдено: ${core.length}`)
