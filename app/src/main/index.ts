@@ -14,6 +14,7 @@ import * as ctxkit from './ctxkit'
 import { assertTrusted, grantedOf, parseBatch, parseLevel, parseOp, parseSha, trustedSender, validateIntent, validateName } from './gate'
 import { checkTreeSize, cloneArgs, findSkills, localMarketplaceOk, parseMarketplaceSource, parseSkillSource, readCatalog } from './install'
 import { Sidecar } from './sidecar'
+import { tidyHome } from './tidy'
 import {
   validateApplied,
   validateBatchApplied,
@@ -35,8 +36,7 @@ const envOf = (name: string): string | undefined => (envAllowed ? process.env[na
 
 /** Путь с домашним каталогом в тексте ошибки показываем как `~`. */
 function tidy(text: string): string {
-  const home = app.getPath('home')
-  return text.split(home).join('~').split(home.replaceAll('\\', '/')).join('~')
+  return tidyHome(text, app.getPath('home'))
 }
 
 /**
