@@ -240,7 +240,7 @@ function validateAdd(r: Record<string, unknown>): Intent {
   const pairs = env.map((p: unknown) => {
     const k = (p as Record<string, unknown> | null)?.['key']
     const v = (p as Record<string, unknown> | null)?.['value']
-    if (!isShort(k) || !isShort(v)) throw new Error('неверные переменные окружения')
+    if (!isShort(k) || !isShort(v) || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(k)) throw new Error('неверные переменные окружения')
     return { key: k, value: v }
   })
   return { op: 'add', to: to as ClientId, name, command, args: args as string[], url, env: pairs }

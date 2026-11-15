@@ -608,6 +608,7 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
     plan.client = dest;
     plan.pointer = match format {
         Format::Json | Format::Yaml => format!("/{root}/{key}"),
+        Format::Toml if key.contains('.') => format!("{root}.\"{key}\""),
         Format::Toml => format!("{root}.{key}"),
     };
     plan.from = "нет записи".into();
@@ -699,7 +700,8 @@ fn prep_add(
                     c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
                 });
             if !ok || !clean_arg(&p.value) || envm.contains_key(&p.key) {
-                return Err(format!("переменная окружения «{}»: имя из букв, цифр и `_`, значение без управляющих символов, без повторов", mask::scrub_words(&p.key)));
+                // имя в сообщение не выводим: туда мог попасть вставленный секрет
+                return Err("переменная окружения: имя из букв, цифр и `_` (до 64), значение без управляющих символов, без повторов".into());
             }
             envm.insert(p.key.clone(), json!(p.value));
         }
@@ -710,7 +712,17 @@ fn prep_add(
         shown.extend(args.iter().cloned());
     } else {
         let u = url.trim();
+        // Форма удалённого сервера сверена только для Claude Code (`type: http` + `url`) и Codex (`url`);
+        // shortcut: Desktop и Antigravity — после сверки с их документацией
+        if !matches!(dest, Client::ClaudeCode | Client::Codex) {
+            return Err("удалённый сервер можно добавить только в Claude Code и Codex: форма записи у остальных клиентов не проверена".into());
+        }
+        let host = u.split_once("://").map_or("", |(_, rest)| {
+            rest.split(['/', '?', '#']).next().unwrap_or("")
+        });
         let valid = (u.starts_with("https://") || u.starts_with("http://"))
+            && !host.is_empty()
+            && !host.starts_with(['@', ':'])
             && u.len() <= 500
             && !u.chars().any(|c| c.is_control() || c.is_whitespace());
         if !valid || !env.is_empty() {
@@ -758,6 +770,7 @@ fn prep_add(
         file: tilde(home, &file),
         pointer: match format {
             Format::Json | Format::Yaml => format!("/{root}/{name}"),
+            Format::Toml if name.contains('.') => format!("{root}.\"{name}\""),
             Format::Toml => format!("{root}.{name}"),
         },
         enable: true,
@@ -1123,6 +1136,10 @@ pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchP
     let scan = crate::scan_with(home, store);
     let (mut plans, mut skipped) = (Vec::new(), Vec::new());
     for i in items {
+        if matches!(i, Intent::Add { .. }) {
+            skipped.push("добавление не входит в пакет".to_owned());
+            continue;
+        }
         match prepare(home, store, &scan, i) {
             Ok(p) => plans.push(p.plan),
             Err(_) => skipped.push(
@@ -1160,6 +1177,10 @@ pub fn apply_batch(
     batch_sha: &str,
     max_level: &str,
 ) -> Result<(String, Vec<Applied>), String> {
+    // у добавления нет записи, по которой пакет сверяет шаги: оно выполняется только по одному
+    if items.iter().any(|i| matches!(i, Intent::Add { .. })) {
+        return Err("добавление нового сервера не входит в пакет".into());
+    }
     let bp = plan_batch(home, Some(store), items);
     if bp.batch_sha != batch_sha {
         return Err("состояние изменилось после предпросмотра: постройте план заново".into());

@@ -20,11 +20,14 @@ const KEY_OK = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
 export function AddDialog({ onSubmit, onClose }: Props) {
   const [to, setTo] = useState<ClientId>(TARGETS[0]?.id ?? 'claude-code')
   const [name, setName] = useState('')
-  const [remote, setRemote] = useState(false)
+  const [wantRemote, setRemote] = useState(false)
   const [command, setCommand] = useState('')
   const [args, setArgs] = useState('')
   const [url, setUrl] = useState('')
   const [env, setEnv] = useState('')
+  // форма удалённого сервера сверена только для Claude Code и Codex
+  const remoteOk = to === 'claude-code' || to === 'codex'
+  const remote = wantRemote && remoteOk
   const lines = args.split('\n').filter((l) => l !== '')
   const envLines = env.split('\n').filter((l) => l.trim() !== '')
   const pairs = envLines.map((l) => {
@@ -32,7 +35,8 @@ export function AddDialog({ onSubmit, onClose }: Props) {
     return { key: i < 0 ? l.trim() : l.slice(0, i).trim(), value: i < 0 ? '' : l.slice(i + 1) }
   })
   const envOk = pairs.every((p) => KEY_OK.test(p.key)) && pairs.length <= 30
-  const ok = NAME_OK.test(name) && envOk && (remote ? /^https?:\/\/\S+$/.test(url.trim()) : command.trim() !== '' && lines.length <= 64)
+  const ok =
+    NAME_OK.test(name) && envOk && (remote ? remoteOk && /^https?:\/\/[^\s/?#@:]\S*$/.test(url.trim()) : command.trim() !== '' && lines.length <= 64)
   return (
     <Modal label="Добавить MCP-сервер" onEscape={onClose}>
       <h2>
@@ -69,7 +73,9 @@ export function AddDialog({ onSubmit, onClose }: Props) {
         <fieldset className="choices">
           <legend className="mute small">Тип</legend>
           <label><input type="radio" name="kind" checked={!remote} onChange={() => setRemote(false)} /> локальный (команда)</label>
-          <label><input type="radio" name="kind" checked={remote} onChange={() => setRemote(true)} /> удалённый (адрес)</label>
+          <label title={remoteOk ? undefined : 'Только для Claude Code и Codex: у остальных клиентов форма записи не проверена'}>
+            <input type="radio" name="kind" checked={remote} disabled={!remoteOk} onChange={() => setRemote(true)} /> удалённый (адрес)
+          </label>
         </fieldset>
         {remote ? (
           <label>

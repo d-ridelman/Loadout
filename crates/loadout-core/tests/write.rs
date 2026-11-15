@@ -705,18 +705,43 @@ fn add_creates_a_server_in_json_and_toml_hides_env_values_and_rolls_back() {
     rollback(&e.home, &e.store, &done.op).unwrap();
     assert_eq!(fs::read(&cfg).unwrap(), original);
 
-    // Antigravity (JSON), удалённый сервер
-    let r = Intent::Add {
-        to: "antigravity".into(),
+    // Antigravity (JSON), локальный сервер
+    apply_i(&e, &add_local("antigravity", "local-ag")).unwrap();
+    assert_eq!(
+        read_json(&ag_cfg(&e))["mcpServers"]["local-ag"]["command"],
+        "npx"
+    );
+
+    // Claude Code, удалённый сервер: type http + url
+    let remote = |to: &str, url: &str| Intent::Add {
+        to: to.into(),
         name: "hosted".into(),
         command: String::new(),
         args: Vec::new(),
-        url: "https://example.com/mcp".into(),
+        url: url.into(),
         env: Vec::new(),
     };
-    apply_i(&e, &r).unwrap();
-    let v = read_json(&ag_cfg(&e));
+    apply_i(&e, &remote("claude-code", "https://example.com/mcp")).unwrap();
+    let v = read_json(&e.home.join(".claude.json"));
+    assert_eq!(v["mcpServers"]["hosted"]["type"], "http");
     assert_eq!(v["mcpServers"]["hosted"]["url"], "https://example.com/mcp");
+
+    // адрес без хоста и клиенты с непроверенной формой удалённого сервера — отказ
+    for bad in ["https://", "http://?x", "https://:80/x", "https://@h/"] {
+        assert!(plan_s(&e, &remote("codex", bad)).is_err(), "{bad}");
+    }
+    assert!(plan_s(&e, &remote("antigravity", "https://example.com/mcp")).is_err());
+    assert!(plan_s(&e, &remote("claude-desktop", "https://example.com/mcp")).is_err());
+
+    // точка в имени: указатель в плане заключает ключ в кавычки
+    let p = plan_s(&e, &add_local("codex", "my.server")).unwrap();
+    assert_eq!(p.pointer, "mcp_servers.\"my.server\"");
+
+    // добавление не входит в пакет
+    let items = [add_local("codex", "in-batch")];
+    let bp = write::plan_batch(&e.home, Some(&e.store), &items);
+    assert!(bp.plans.is_empty() && bp.skipped.len() == 1);
+    assert!(wbatch(&e.home, &e.store, &items, &bp.batch_sha).is_err());
 }
 
 #[test]
