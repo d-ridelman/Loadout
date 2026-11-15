@@ -79,8 +79,8 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--dsh" => opts.dsh = true,
             "--skip-version-check" => opts.skip_version_check = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
-            | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home" | "--hook-cmd"
-            | "--claude-json" | "--lang") => {
+            | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home"
+            | "--hook-cmd" | "--claude-json" | "--lang") => {
                 let Some(val) = args.get(i + 1) else {
                     eprintln!("ERR: missing value for {flag}");
                     return 2;
@@ -128,7 +128,11 @@ pub fn run_setup(args: &[String]) -> i32 {
         .or_else(|| env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from))
         .unwrap_or_else(|| home.join(".claude"));
 
-    let bin_name = if cfg!(windows) { "ctxkit.exe" } else { "ctxkit" };
+    let bin_name = if cfg!(windows) {
+        "ctxkit.exe"
+    } else {
+        "ctxkit"
+    };
     let hook_bin_path = profile.join("hooks").join(bin_name);
     let hook_cmd = opts.hook_cmd.clone().unwrap_or_else(|| {
         let s = hook_bin_path.to_string_lossy().replace('\\', "/");
@@ -143,7 +147,13 @@ pub fn run_setup(args: &[String]) -> i32 {
 
     // Install current binary into hooks/ and .local/bin/ unless explicit --hook-cmd
     if opts.hook_cmd.is_none() {
-        if let Err(e) = install_binary(&hook_bin_path, &home, bin_name, custom_profile, opts.dry_run) {
+        if let Err(e) = install_binary(
+            &hook_bin_path,
+            &home,
+            bin_name,
+            custom_profile,
+            opts.dry_run,
+        ) {
             eprintln!("ERR: binary install failed: {e}");
             return 1;
         }
@@ -151,13 +161,14 @@ pub fn run_setup(args: &[String]) -> i32 {
 
     let settings_path = profile.join("settings.json");
     let backup_dir = profile.join("backups");
-    let mut settings_root = match update_claude_settings(&settings_path, &backup_dir, &hook_cmd, &opts) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("ERR: {e}");
-            return 1;
-        }
-    };
+    let mut settings_root =
+        match update_claude_settings(&settings_path, &backup_dir, &hook_cmd, &opts) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ERR: {e}");
+                return 1;
+            }
+        };
 
     if !opts.no_agents {
         let agents_dir = profile.join("agents");
@@ -191,6 +202,24 @@ pub fn run_setup(args: &[String]) -> i32 {
             eprintln!("ERR: {e}");
             return 1;
         }
+        if opts.dsh {
+            let dsh_home = opts
+                .dsh_home
+                .clone()
+                .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
+                .unwrap_or_else(|| home.join(".dsh"));
+            let dsh_agents = dsh_home.join("AGENTS.md");
+            let dsh_backup = dsh_home.join("backups");
+            if let Err(e) = upsert_claude_md(
+                &dsh_agents,
+                &dsh_backup,
+                &rules_snippet(&opts),
+                opts.dry_run,
+            ) {
+                eprintln!("ERR: {e}");
+                return 1;
+            }
+        }
     }
 
     if opts.desktop {
@@ -207,7 +236,9 @@ pub fn run_setup(args: &[String]) -> i32 {
                     p.display()
                 );
             } else if p.exists() {
-                if let Err(e) = update_desktop_presets(&p, &opts.desktop_model, &opts.effort, opts.dry_run) {
+                if let Err(e) =
+                    update_desktop_presets(&p, &opts.desktop_model, &opts.effort, opts.dry_run)
+                {
                     eprintln!("ERR: {e}");
                     return 1;
                 }
@@ -241,6 +272,7 @@ pub fn run_setup(args: &[String]) -> i32 {
         let dsh_cmd = opts
             .hook_cmd
             .clone()
+            .map(|cmd| format_custom_dsh_command(&cmd, opts.lang))
             .unwrap_or_else(|| format_dsh_command(&hook_bin_path, opts.lang));
         if let Err(e) = update_dsh_hooks(&dsh_home, &dsh_cmd, opts.dry_run) {
             eprintln!("ERR: {e}");
@@ -283,7 +315,11 @@ fn default_desktop_presets_path(home: &Path) -> Option<PathBuf> {
                 .join("ccd-session-presets.json"),
         )
     } else {
-        Some(home.join(".config").join("Claude").join("ccd-session-presets.json"))
+        Some(
+            home.join(".config")
+                .join("Claude")
+                .join("ccd-session-presets.json"),
+        )
     }
 }
 
@@ -345,8 +381,7 @@ fn read_json_object(path: &Path) -> Result<Value, String> {
 }
 
 fn backup_file(path: &Path, backup_dir: &Path) -> Result<PathBuf, String> {
-    fs::create_dir_all(backup_dir)
-        .map_err(|e| format!("mkdir {}: {e}", backup_dir.display()))?;
+    fs::create_dir_all(backup_dir).map_err(|e| format!("mkdir {}: {e}", backup_dir.display()))?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -361,7 +396,8 @@ fn backup_file(path: &Path, backup_dir: &Path) -> Result<PathBuf, String> {
         dst = backup_dir.join(format!("{name}.{ts}.{seq}.bak"));
         seq += 1;
     }
-    fs::copy(path, &dst).map_err(|e| format!("backup {} -> {}: {e}", path.display(), dst.display()))?;
+    fs::copy(path, &dst)
+        .map_err(|e| format!("backup {} -> {}: {e}", path.display(), dst.display()))?;
     Ok(dst)
 }
 
@@ -382,21 +418,18 @@ fn write_json_if_changed(
         return Ok(());
     }
     if path.exists() {
-        if let Some(bdir) = backup_dir {
-            let b = backup_file(path, bdir)?;
-            println!("  backup -> {}", b.display());
-        } else {
+        let bdir = backup_dir.map(Path::to_path_buf).unwrap_or_else(|| {
             let parent = path.parent().unwrap_or_else(|| Path::new("."));
-            let b = backup_file(path, parent)?;
-            println!("  backup -> {}", b.display());
-        }
+            parent.join("backups")
+        });
+        let b = backup_file(path, &bdir)?;
+        println!("  backup -> {}", b.display());
     } else if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
     let pretty =
         serde_json::to_string_pretty(updated).map_err(|e| format!("serialize {label}: {e}"))?;
-    fs::write(path, format!("{pretty}\n"))
-        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    fs::write(path, format!("{pretty}\n")).map_err(|e| format!("write {}: {e}", path.display()))?;
     println!("  updated {label}: {}", path.display());
     Ok(())
 }
@@ -415,9 +448,15 @@ fn update_claude_settings(
     if opts.advisor.eq_ignore_ascii_case("none") {
         root.remove("advisorModel");
     } else {
-        root.insert("advisorModel".to_string(), Value::String(opts.advisor.clone()));
+        root.insert(
+            "advisorModel".to_string(),
+            Value::String(opts.advisor.clone()),
+        );
     }
-    root.insert("effortLevel".to_string(), Value::String(opts.effort.clone()));
+    root.insert(
+        "effortLevel".to_string(),
+        Value::String(opts.effort.clone()),
+    );
 
     let env_obj = ensure_object(root, "env")?;
     env_obj.insert(
@@ -437,10 +476,10 @@ fn update_claude_settings(
     upsert_claude_hook_event(
         hooks_obj,
         "PreToolUse",
-        "Bash|PowerShell|Write|Read",
+        "Bash|PowerShell|Write|Read|Edit|MultiEdit",
         hook_cmd,
     );
-    upsert_claude_hook_event(hooks_obj, "PostToolUse", "Edit|Write", hook_cmd);
+    upsert_claude_hook_event(hooks_obj, "PostToolUse", "Edit|Write|MultiEdit", hook_cmd);
 
     write_json_if_changed(
         path,
@@ -472,7 +511,9 @@ fn is_our_hook_group(group: &Value) -> bool {
     };
     arr.iter().any(|h| {
         let cmd = h.get("command").and_then(|c| c.as_str()).unwrap_or("");
-        cmd.contains("ctxkit") || cmd.contains("claude-guard") || cmd.contains("no-inline-backslash")
+        cmd.contains("ctxkit")
+            || cmd.contains("claude-guard")
+            || cmd.contains("no-inline-backslash")
     })
 }
 
@@ -570,7 +611,10 @@ fn upsert_claude_md(
 }
 
 fn marker_span(text: &str) -> Option<(usize, usize)> {
-    for (start_m, end_m) in [(MARKER_START, MARKER_END), (LEGACY_MARKER_START, LEGACY_MARKER_END)] {
+    for (start_m, end_m) in [
+        (MARKER_START, MARKER_END),
+        (LEGACY_MARKER_START, LEGACY_MARKER_END),
+    ] {
         if let (Some(s), Some(e)) = (text.find(start_m), text.find(end_m)) {
             if s < e {
                 return Some((s, e + end_m.len()));
@@ -592,9 +636,18 @@ fn append_block(existing: &str, block: &str) -> String {
 fn claude_desktop_running() -> bool {
     if cfg!(windows) {
         Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", "(Get-Process claude -ErrorAction SilentlyContinue).Path"])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(Get-Process claude -ErrorAction SilentlyContinue).Path",
+            ])
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(is_desktop_exe))
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .any(is_desktop_exe)
+            })
             .unwrap_or(false)
     } else if cfg!(target_os = "macos") {
         Command::new("pgrep")
@@ -612,7 +665,9 @@ fn claude_desktop_running() -> bool {
 fn is_desktop_exe(path: &str) -> bool {
     let p = path.trim().replace('/', "\\").to_ascii_lowercase();
     p.ends_with("\\claude.exe")
-        && (p.contains("\\anthropicclaude\\") || p.contains("\\windowsapps\\claude") || p.contains("\\programs\\claude\\"))
+        && (p.contains("\\anthropicclaude\\")
+            || p.contains("\\windowsapps\\claude")
+            || p.contains("\\programs\\claude\\"))
 }
 
 fn update_desktop_presets(
@@ -668,14 +723,16 @@ fn format_antigravity_command(hook_bin_path: &Path, lang: Lang) -> String {
 fn update_antigravity_hooks(path: &Path, command: &str, dry_run: bool) -> Result<(), String> {
     let orig = read_json_object(path)?;
     let mut next = orig.clone();
-    let root = next.as_object_mut().ok_or("hooks.json root is not object")?;
+    let root = next
+        .as_object_mut()
+        .ok_or("hooks.json root is not object")?;
     root.remove("claude-guard");
     root.insert(
         "ctxkit".to_string(),
         json!({
             "PreToolUse": [
                 {
-                    "matcher": "read_file|write_file|run_command",
+                    "matcher": "read_file|write_file|edit_file|run_command",
                     "hooks": [
                         {
                             "type": "command",
@@ -709,33 +766,79 @@ fn format_dsh_command(hook_bin_path: &Path, lang: Lang) -> String {
     }
 }
 
+fn format_custom_dsh_command(cmd: &str, lang: Lang) -> String {
+    let mut res = cmd.trim().to_string();
+    if !res.contains("--dsh") {
+        res.push_str(" --dsh");
+    }
+    if lang == Lang::Ru && !res.contains("--lang") {
+        res.push_str(" --lang ru");
+    }
+    if cfg!(windows) && res.starts_with('"') && !res.starts_with("& ") {
+        res = format!("& {res}");
+    }
+    res
+}
+
 /// Writes `<dsh_home>/ctxkit-hooks.json` and mounts the official Claude Code hook
 /// bridge on it from the desktop profile's `cordis.patch.yml`.
 fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(), String> {
     let profile = dsh_home.join("profiles").join("desktop");
+    if !profile.exists() {
+        println!("  skip DeepSeek Harness (not found: {})", profile.display());
+        return Ok(());
+    }
     let patch_path = profile.join("cordis.patch.yml");
     if !patch_path.exists() {
-        println!("  skip DeepSeek Harness (not found: {})", patch_path.display());
-        return Ok(());
+        if dry_run {
+            println!(
+                "  [dry-run] create DeepSeek Harness profile patch: {}",
+                patch_path.display()
+            );
+        } else {
+            fs::write(&patch_path, "# DeepSeek Harness profile patch\n")
+                .map_err(|e| format!("write {}: {e}", patch_path.display()))?;
+            println!(
+                "  created DeepSeek Harness profile patch: {}",
+                patch_path.display()
+            );
+        }
+    }
+
+    let global_patch = dsh_home.join("cordis.patch.yml");
+    if global_patch.exists() {
+        if let Ok(content) = fs::read_to_string(&global_patch) {
+            if content.contains(DSH_HOOKS_PLUGIN) || content.contains("orca-agent-hooks") {
+                println!(
+                    "  [warn] {} contains hook plugins (might conflict or duplicate hooks with profile desktop)",
+                    global_patch.display()
+                );
+            }
+        }
     }
 
     let hooks_path = dsh_home.join("ctxkit-hooks.json");
-    let group = |matcher: &str| {
-        json!([{ "matcher": matcher, "hooks": [{ "type": "command", "command": command, "timeout": 10 }] }])
-    };
+    let group = |matcher: &str| json!([{ "matcher": matcher, "hooks": [{ "type": "command", "command": command, "timeout": 10 }] }]);
     let hooks = json!({ "hooks": {
-        "PreToolUse": group("read|write|bash|pwsh"),
-        "PostToolUse": group("write|edit"),
+        "PreToolUse": group("read|write|edit|apply_patch|bash|pwsh"),
+        "PostToolUse": group("write|edit|apply_patch"),
     }});
     let orig = read_json_object(&hooks_path)?;
-    write_json_if_changed(&hooks_path, None, &orig, &hooks, dry_run, "DeepSeek Harness hooks")?;
+    write_json_if_changed(
+        &hooks_path,
+        None,
+        &orig,
+        &hooks,
+        dry_run,
+        "DeepSeek Harness hooks",
+    )?;
 
     let config_path = hooks_path.to_string_lossy().replace('\'', "''");
     let block = format!(
         "{DSH_MARKER_START}\n- insert:\n    - id: ctxkit-hooks\n      name: '{DSH_HOOKS_PLUGIN}'\n      config:\n        configPath: '{config_path}'\n{DSH_MARKER_END}"
     );
-    let existing =
-        fs::read_to_string(&patch_path).map_err(|e| format!("read {}: {e}", patch_path.display()))?;
+    let existing = fs::read_to_string(&patch_path)
+        .map_err(|e| format!("read {}: {e}", patch_path.display()))?;
     let updated = match existing.find(DSH_MARKER_START) {
         // Pair the start marker only with an end marker after it; guessing the span of a
         // half-deleted block would eat the user's own entries.
@@ -763,26 +866,45 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
         }
     };
     if existing == updated {
-        println!("  ok DeepSeek Harness profile patch (unchanged): {}", patch_path.display());
+        println!(
+            "  ok DeepSeek Harness profile patch (unchanged): {}",
+            patch_path.display()
+        );
     } else if dry_run {
-        println!("  [dry-run] update DeepSeek Harness profile patch: {}", patch_path.display());
+        println!(
+            "  [dry-run] update DeepSeek Harness profile patch: {}",
+            patch_path.display()
+        );
     } else {
         let b = backup_file(&patch_path, &profile)?;
         println!("  backup -> {}", b.display());
-        fs::write(&patch_path, updated).map_err(|e| format!("write {}: {e}", patch_path.display()))?;
-        println!("  updated DeepSeek Harness profile patch: {}", patch_path.display());
+        fs::write(&patch_path, updated)
+            .map_err(|e| format!("write {}: {e}", patch_path.display()))?;
+        println!(
+            "  updated DeepSeek Harness profile patch: {}",
+            patch_path.display()
+        );
     }
 
     // The bridge is not bundled with the desktop app; without it the insert loads nothing.
     // Its peer dependencies pin the exact app version, so an app update needs a matching reinstall.
     let json_str = |path: PathBuf, key: &str| {
-        let v = if path.exists() { read_json_object(&path).ok() } else { None };
+        let v = if path.exists() {
+            read_json_object(&path).ok()
+        } else {
+            None
+        };
         v.and_then(|v| v.get(key).and_then(|s| s.as_str()).map(String::from))
     };
-    let plugin_dir = DSH_HOOKS_PLUGIN.split('/').fold(profile.join("node_modules"), |p, s| p.join(s));
+    let plugin_dir = DSH_HOOKS_PLUGIN
+        .split('/')
+        .fold(profile.join("node_modules"), |p, s| p.join(s));
     let installed = json_str(plugin_dir.join("package.json"), "version");
     let app = json_str(
-        dsh_home.join("dsh-runtimes").join("dsh-primary-runtime").join("runtime.json"),
+        dsh_home
+            .join("dsh-runtimes")
+            .join("dsh-primary-runtime")
+            .join("runtime.json"),
         "desktopVersion",
     );
     let problem = match (&installed, &app) {
@@ -929,17 +1051,28 @@ fn print_diagnostics(
                         ver.0, ver.1, ver.2
                     );
                 } else {
-                    println!("  [ok]   claude CLI {}.{}.{} (>= 2.1.321)", ver.0, ver.1, ver.2);
+                    println!(
+                        "  [ok]   claude CLI {}.{}.{} (>= 2.1.321)",
+                        ver.0, ver.1, ver.2
+                    );
                 }
             }
-            None => println!("  [info] `claude` CLI not found in PATH (Desktop client uses bundled version)"),
+            None => println!(
+                "  [info] `claude` CLI not found in PATH (Desktop client uses bundled version)"
+            ),
         }
     }
 
     if let Some(enabled) = settings.get("enabledPlugins").and_then(|v| v.as_object()) {
         let on: Vec<&str> = enabled
             .iter()
-            .filter_map(|(k, v)| if v.as_bool() == Some(true) { Some(k.as_str()) } else { None })
+            .filter_map(|(k, v)| {
+                if v.as_bool() == Some(true) {
+                    Some(k.as_str())
+                } else {
+                    None
+                }
+            })
             .collect();
         if on.len() > 8 {
             println!(
@@ -964,7 +1097,12 @@ fn print_diagnostics(
                 kb
             );
         } else {
-            println!("  [ok]   {} is {} lines ({:.1} KB)", claude_md.display(), lines, kb);
+            println!(
+                "  [ok]   {} is {} lines ({:.1} KB)",
+                claude_md.display(),
+                lines,
+                kb
+            );
         }
     }
 
@@ -979,7 +1117,11 @@ fn print_diagnostics(
                     names.join(", ")
                 );
             } else {
-                println!("  [ok]   {} global MCP server(s) in {}", mcps.len(), claude_json.display());
+                println!(
+                    "  [ok]   {} global MCP server(s) in {}",
+                    mcps.len(),
+                    claude_json.display()
+                );
             }
         }
     }
@@ -991,11 +1133,99 @@ fn print_diagnostics(
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| home.join(".gemini").join("config"));
         let agy_cli_settings = if opts.agy_file.is_none() {
-            Some(home.join(".gemini").join("antigravity-cli").join("settings.json"))
+            Some(
+                home.join(".gemini")
+                    .join("antigravity-cli")
+                    .join("settings.json"),
+            )
         } else {
             None
         };
         print_antigravity_diagnostics(&agy_dir, agy_cli_settings.as_deref());
+    }
+
+    if opts.dsh {
+        let dsh_home = opts
+            .dsh_home
+            .clone()
+            .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
+            .unwrap_or_else(|| home.join(".dsh"));
+        print_dsh_diagnostics(&dsh_home);
+    }
+}
+
+fn print_dsh_diagnostics(dsh_home: &Path) {
+    println!("\nDeepSeek Harness Diagnostics:");
+    let agents_md = dsh_home.join("AGENTS.md");
+    if let Ok(raw) = fs::read_to_string(&agents_md) {
+        let lines = raw.lines().count();
+        let kb = raw.len() as f64 / 1024.0;
+        if lines > 200 || raw.len() > 8192 {
+            println!(
+                "  [warn] {} is {} lines ({:.1} KB) — trim below 200 lines / ~8 KB.",
+                agents_md.display(),
+                lines,
+                kb
+            );
+        } else {
+            println!(
+                "  [ok]   {} is {} lines ({:.1} KB)",
+                agents_md.display(),
+                lines,
+                kb
+            );
+        }
+    } else {
+        println!("  [info] no global {} found", agents_md.display());
+    }
+
+    let global_patch = dsh_home.join("cordis.patch.yml");
+    if global_patch.exists() {
+        if let Ok(raw) = fs::read_to_string(&global_patch) {
+            let mcps = raw
+                .lines()
+                .filter(|l| {
+                    l.trim_start().starts_with("- id: mcp-")
+                        || l.trim_start().starts_with("- id: rea-mcp")
+                })
+                .count();
+            if mcps > 2 {
+                println!(
+                    "  [warn] {} global MCP servers found in {}",
+                    mcps,
+                    global_patch.display()
+                );
+            } else if mcps > 0 {
+                println!(
+                    "  [ok]   {} global MCP server(s) in {}",
+                    mcps,
+                    global_patch.display()
+                );
+            }
+        }
+    }
+
+    let skills_dir = dsh_home.join("skills");
+    if skills_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&skills_dir) {
+            let count = entries
+                .filter_map(Result::ok)
+                .filter(|e| e.path().is_dir())
+                .count();
+            if count > 15 {
+                println!(
+                    "  [warn] {} global skills in {} — consider pruning unused skills",
+                    count,
+                    skills_dir.display()
+                );
+            } else {
+                println!(
+                    "  [ok]   {} global skill(s) in {}",
+                    count,
+                    skills_dir.display()
+                );
+            }
+        }
     }
 }
 
@@ -1054,10 +1284,18 @@ fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>
     if agy_dir.join("mcp_config.json").is_file() || total_mcps > 0 {
         let mut parts = Vec::new();
         if !global_mcps.is_empty() {
-            parts.push(format!("{} in mcp_config.json [{}]", global_mcps.len(), global_mcps.join(", ")));
+            parts.push(format!(
+                "{} in mcp_config.json [{}]",
+                global_mcps.len(),
+                global_mcps.join(", ")
+            ));
         }
         if !plugin_mcps.is_empty() {
-            parts.push(format!("{} in plugins [{}]", plugin_mcps.len(), plugin_mcps.join(", ")));
+            parts.push(format!(
+                "{} in plugins [{}]",
+                plugin_mcps.len(),
+                plugin_mcps.join(", ")
+            ));
         }
         let breakdown = if parts.is_empty() {
             String::new()
@@ -1070,7 +1308,10 @@ fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>
                 total_mcps
             );
         } else {
-            println!("  [ok]   Antigravity: {} active global MCP server(s){breakdown}", total_mcps);
+            println!(
+                "  [ok]   Antigravity: {} active global MCP server(s){breakdown}",
+                total_mcps
+            );
         }
     }
 
@@ -1143,7 +1384,9 @@ const AGY_PLUGIN_MANIFESTS: [&str; 4] = [
 ];
 
 fn looks_like_agy_plugin(dir: &Path) -> bool {
-    AGY_PLUGIN_MANIFESTS.iter().any(|rel| dir.join(rel).exists())
+    AGY_PLUGIN_MANIFESTS
+        .iter()
+        .any(|rel| dir.join(rel).exists())
         || ["mcp_config.json", "hooks.json", "rules", "skills"]
             .iter()
             .any(|rel| dir.join(rel).exists())
@@ -1217,7 +1460,10 @@ fn audit_agy_plugin_rules(plugins: &[(String, PathBuf)]) -> (usize, usize, Vec<(
 
 fn check_claude_version() -> Option<(u64, u64, u64)> {
     let out = if cfg!(windows) {
-        Command::new("cmd.exe").args(["/d", "/c", "claude", "--version"]).output().ok()?
+        Command::new("cmd.exe")
+            .args(["/d", "/c", "claude", "--version"])
+            .output()
+            .ok()?
     } else {
         Command::new("claude").arg("--version").output().ok()?
     };
@@ -1302,10 +1548,18 @@ mod tests {
                 }
             ]),
         );
-        upsert_claude_hook_event(&mut hooks, "PreToolUse", "Bash|PowerShell|Write|Read", "\"C:/h/ctxkit.exe\"");
+        upsert_claude_hook_event(
+            &mut hooks,
+            "PreToolUse",
+            "Bash|PowerShell|Write|Read",
+            "\"C:/h/ctxkit.exe\"",
+        );
         let arr = hooks["PreToolUse"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
-        assert!(arr[0]["hooks"][0]["command"].as_str().unwrap().contains("ctxkit.exe"));
+        assert!(arr[0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("ctxkit.exe"));
         assert_eq!(arr[1]["hooks"][0]["command"], "custom-other-hook");
     }
 
@@ -1355,16 +1609,23 @@ mod tests {
 
     #[test]
     fn tells_desktop_app_from_claude_cli() {
-        assert!(is_desktop_exe(r"C:\Users\a\AppData\Local\AnthropicClaude\app-5.11492.5\claude.exe"));
-        assert!(is_desktop_exe(r"C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe"));
+        assert!(is_desktop_exe(
+            r"C:\Users\a\AppData\Local\AnthropicClaude\app-5.11492.5\claude.exe"
+        ));
+        assert!(is_desktop_exe(
+            r"C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe"
+        ));
         assert!(!is_desktop_exe(r"C:\Users\a\.local\bin\claude.exe"));
-        assert!(!is_desktop_exe(r"C:\Users\a\AppData\Roaming\npm\node_modules\claude.exe"));
+        assert!(!is_desktop_exe(
+            r"C:\Users\a\AppData\Roaming\npm\node_modules\claude.exe"
+        ));
         assert!(!is_desktop_exe(""));
     }
 
     #[test]
     fn dsh_setup_is_idempotent_and_keeps_foreign_patch_entries() {
-        assert!(format_dsh_command(Path::new("/opt/ctxkit"), Lang::Ru).ends_with("/opt/ctxkit' --dsh --lang ru"));
+        assert!(format_dsh_command(Path::new("/opt/ctxkit"), Lang::Ru)
+            .ends_with("/opt/ctxkit' --dsh --lang ru"));
         let odd = format_dsh_command(Path::new("/Users/O'Brien Smith/ctxkit"), Lang::En);
         assert!(odd.ends_with("Brien Smith/ctxkit' --dsh") && !odd.contains("/O'Brien"));
 
@@ -1381,7 +1642,11 @@ mod tests {
         fs::write(&patch, foreign).unwrap();
 
         update_dsh_hooks(&home, "ctxkit --dsh", true).unwrap();
-        assert_eq!(fs::read_to_string(&patch).unwrap(), foreign, "dry-run must not write");
+        assert_eq!(
+            fs::read_to_string(&patch).unwrap(),
+            foreign,
+            "dry-run must not write"
+        );
 
         update_dsh_hooks(&home, "old-ctxkit --dsh", false).unwrap();
         update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
@@ -1400,13 +1665,21 @@ mod tests {
         }
         fs::write(&patch, "# only a comment\n").unwrap();
         update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
-        assert!(fs::read_to_string(&patch).unwrap().contains("id: ctxkit-hooks"));
+        assert!(fs::read_to_string(&patch)
+            .unwrap()
+            .contains("id: ctxkit-hooks"));
 
         // An orphan end marker above must not make the block multiply.
         fs::write(&patch, format!("{DSH_MARKER_END}\n{foreign}")).unwrap();
         update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
         update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
-        assert_eq!(fs::read_to_string(&patch).unwrap().matches("id: ctxkit-hooks").count(), 1);
+        assert_eq!(
+            fs::read_to_string(&patch)
+                .unwrap()
+                .matches("id: ctxkit-hooks")
+                .count(),
+            1
+        );
         // A start marker without its end is refused instead of guessing what to replace.
         let half = format!("{foreign}{DSH_MARKER_START}\n- id: user-later\n");
         fs::write(&patch, &half).unwrap();
@@ -1414,8 +1687,18 @@ mod tests {
         assert_eq!(fs::read_to_string(&patch).unwrap(), half);
 
         let hooks = read_json_object(&home.join("ctxkit-hooks.json")).unwrap();
-        assert_eq!(hooks["hooks"]["PreToolUse"][0]["matcher"], "read|write|bash|pwsh");
-        assert_eq!(hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"], "ctxkit --dsh");
+        assert_eq!(
+            hooks["hooks"]["PreToolUse"][0]["matcher"],
+            "read|write|edit|apply_patch|bash|pwsh"
+        );
+        assert_eq!(
+            hooks["hooks"]["PostToolUse"][0]["matcher"],
+            "write|edit|apply_patch"
+        );
+        assert_eq!(
+            hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            "ctxkit --dsh"
+        );
         let _ = fs::remove_dir_all(&home);
     }
 
@@ -1428,20 +1711,35 @@ mod tests {
         fs::create_dir_all(dir.join("plugins").join("disabled-manifest")).unwrap();
         fs::create_dir_all(dir.join("plugins").join("re-enabled")).unwrap();
 
-        fs::write(dir.join("plugins").join("active-one").join("plugin.json"), "{}").unwrap();
         fs::write(
-            dir.join("plugins").join("active-one").join("mcp_config.json"),
+            dir.join("plugins").join("active-one").join("plugin.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("plugins")
+                .join("active-one")
+                .join("mcp_config.json"),
             r#"{"mcpServers":{"s1":{},"off":{"disabled":true}}}"#,
         )
         .unwrap();
         fs::write(
-            dir.join("plugins").join("active-one").join("rules").join("AGENTS.md"),
+            dir.join("plugins")
+                .join("active-one")
+                .join("rules")
+                .join("AGENTS.md"),
             "x".repeat(25_000),
         )
         .unwrap();
-        fs::write(dir.join("plugins").join("disabled-cfg").join("plugin.json"), "{}").unwrap();
         fs::write(
-            dir.join("plugins").join("disabled-manifest").join("plugin.json"),
+            dir.join("plugins").join("disabled-cfg").join("plugin.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("plugins")
+                .join("disabled-manifest")
+                .join("plugin.json"),
             r#"{"disabled":true}"#,
         )
         .unwrap();
@@ -1464,15 +1762,25 @@ mod tests {
         let plugins = discover_enabled_agy_plugins(&dir);
         let pnames: Vec<&str> = plugins.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(pnames, vec!["active-one", "re-enabled"]);
-        assert_eq!(collect_active_mcp_names(&dir.join("mcp_config.json")), vec!["g1"]);
         assert_eq!(
-            collect_active_mcp_names(&dir.join("plugins").join("active-one").join("mcp_config.json")),
+            collect_active_mcp_names(&dir.join("mcp_config.json")),
+            vec!["g1"]
+        );
+        assert_eq!(
+            collect_active_mcp_names(
+                &dir.join("plugins")
+                    .join("active-one")
+                    .join("mcp_config.json")
+            ),
             vec!["s1"]
         );
         let (rcount, rbytes, oversized) = audit_agy_plugin_rules(&plugins);
         assert_eq!(rcount, 1);
         assert_eq!(rbytes, 25_000);
-        assert_eq!(oversized, vec![("active-one/AGENTS.md".to_string(), 25_000)]);
+        assert_eq!(
+            oversized,
+            vec![("active-one/AGENTS.md".to_string(), 25_000)]
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

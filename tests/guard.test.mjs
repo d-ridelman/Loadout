@@ -283,11 +283,20 @@ const cases = [
   [true, () => ps(`Get-Content "${bigFile}"`)],
   [false, () => ps(`Get-Content "${bigFile}" -TotalCount 20`)],
 
-  // Antigravity protocol: read_file, write_file, run_command & PostToolUse
+  // Chained command tests in shell_read_guard
+  [true, () => sh(`git status && cat "${bigFile}"`)],
+  [true, () => sh(`echo ok; cat "${bigFile}"`)],
+  [true, () => sh(`echo ok\ncat "${bigFile}"`)],
+  [true, () => sh(`true && rg foo src/`)],
+  [true, () => ps(`Write-Host 'hi'; Get-Content "${bigFile}"`)],
+  [true, () => ps(`git status && cat "${bigFile}"`)],
+
+  // Antigravity protocol: read_file, write_file, edit_file, run_command & PostToolUse
   ['deny', () => preAgy('read_file', { Path: bigFile }).decision],
   ['ask', () => preAgy('read_file', { Path: bigFile, StartLine: 1, EndLine: 200 }).decision],
   ['ask', () => preAgy('read_file', { Path: smallFile }).decision],
   ['ask', () => preAgy('read_file', { Path: bigImg }).decision],
+  ['deny', () => preAgy('read_file', { Path: bigFile, StartLine: 500, EndLine: 100 }).decision],
   ['deny', () => preAgy('run_command', { CommandLine: `cat "${bigFile}"` }).decision],
   ['deny', () => preAgy('run_command', { CommandLine: `Get-Content "${bigFile}"` }).decision],
   ['deny', () => preAgy('run_command', { CommandLine: `rg "foo" src/` }).decision],
@@ -295,6 +304,8 @@ const cases = [
   ['ask', () => preAgy('run_command', { CommandLine: 'git status' }).decision],
   ['deny', () => preAgy('write_file', { Path: `${TMP}patch.py`, Content: `s=open(p).read()\ns=s.replace("a${B}n","b")\nopen(p,'w').write(s)\n` }).decision],
   ['ask', () => preAgy('write_file', { Path: `${TMP}notes.md`, Content: 'ok\n' }).decision],
+  ['deny', () => preAgy('edit_file', { Path: `${TMP}patch.py`, Replacement: `s=s.replace("a${B}n","b")\nopen(p,'w').write(s)\n` }).decision],
+  ['ask', () => preAgy('edit_file', { Path: `${TMP}notes.md`, Replacement: 'ok\n' }).decision],
   ['{}', () => runHook({ toolCall: { name: 'run_command', args: { CommandLine: 'git status' } }, stepIdx: 2 }, ['--post'])],
 
   // DeepSeek Harness (dsh-hooks-claude-code bridge): Claude protocol with DSH tool names
@@ -303,6 +314,7 @@ const cases = [
   [true, () => preClaude('pwsh', { command: `Get-Content "${bigFile}"` })],
   [true, () => preClaude('bash', { command: `python -c "print('a${B}nb')"` })],
   [true, () => preClaude('write', { file_path: `${TMP}patch.py`, content: `s=open(p).read()\ns=s.replace("a${B}n","b")\nopen(p,'w').write(s)\n` })],
+  [true, () => preClaude('apply_patch', { input: `*** Begin Patch\n*** Add File: ${TMP}patch.py\n+s=open(p).read()\n+s=s.replace("a${B}n","b")\n+open(p,'w').write(s)\n` })],
   ['', () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'bash', tool_input: { command: 'git status' } }, ['--dsh'])],
   [true, () => {
     const out = runHook({ hook_event_name: 'PreToolUse', tool_name: 'read', tool_input: { file_path: bigFile } }, ['--dsh', '--lang', 'ru']);
@@ -314,6 +326,16 @@ const cases = [
     writeFileSync(file_path, '{"a": }');
     const out = runHook({ hook_event_name: 'PostToolUse', tool_name: 'edit', tool_input: { file_path } });
     return JSON.parse(out).decision === 'block' && out.includes('with edit:');
+  }],
+  [true, () => {
+    const brokenJs = join(dir, 'dsh-patch-broken.js');
+    writeFileSync(brokenJs, 'function broken( {');
+    const out = runHook({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'apply_patch',
+      tool_input: { input: `*** Begin Patch\n*** Update File: ${brokenJs}\n` },
+    });
+    return JSON.parse(out).decision === 'block' && out.includes('with apply_patch:');
   }],
 
   // CLI check mode

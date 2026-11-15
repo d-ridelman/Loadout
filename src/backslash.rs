@@ -34,7 +34,7 @@ pub fn pre_reason(
     lang: Lang,
 ) -> Option<String> {
     let why = match tool {
-        "Write" => write_reason(path, content, lang),
+        "Write" | "Edit" | "MultiEdit" | "apply_patch" => write_reason(path, content, lang),
         "Bash" if command.contains('\\') => bash_reason(command, lang),
         "PowerShell" if command.contains('\\') => ps_reason(command, lang),
         "run_command" if command.contains('\\') => {
@@ -189,7 +189,9 @@ fn has_heredoc_backslash(cmd: &str) -> bool {
         if !closed && cap.get(1).is_some() && rest.contains('\\') {
             let line_start = cmd[..tag.start()].rfind('\n').map_or(0, |p| p + 1);
             let before = &cmd[line_start..tag.start() - 1];
-            if before.matches('\'').count().is_multiple_of(2) && before.matches('"').count().is_multiple_of(2) {
+            if before.matches('\'').count().is_multiple_of(2)
+                && before.matches('"').count().is_multiple_of(2)
+            {
                 return true;
             }
         }
@@ -213,8 +215,7 @@ fn has_ps_herestring_backslash(cmd: &str) -> bool {
                 let mut offset = 0;
                 for line in rest.split('\n') {
                     let clean = line.trim_end_matches('\r');
-                    if clean.len() >= 2 && clean.as_bytes()[0] == q && clean.as_bytes()[1] == b'@'
-                    {
+                    if clean.len() >= 2 && clean.as_bytes()[0] == q && clean.as_bytes()[1] == b'@' {
                         if rest[..offset].contains('\\') {
                             return true;
                         }
@@ -247,7 +248,10 @@ fn bash_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     let re_sed = RE_SED.get_or_init(|| {
         // An escaped character (`\)` in an unquoted script) is part of the command.
         let seg = r#"(?:[^\n;|&'"`)\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")"#;
-        Regex::new(&format!(r"\bsed\b{seg}*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place){seg}*")).unwrap()
+        Regex::new(&format!(
+            r"\bsed\b{seg}*?\s(?:-[A-Za-z]*i[A-Za-z]*\b|--in-place){seg}*"
+        ))
+        .unwrap()
     });
     for m in re_sed.find_iter(cmd) {
         if m.as_str().contains('\\') {
@@ -274,17 +278,16 @@ fn bash_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
         }
     }
     static RE_AWK: OnceLock<Regex> = OnceLock::new();
-    let re_awk = RE_AWK.get_or_init(|| {
-        Regex::new(r#"(?:^|[\s;&|(])g?awk\s([^\n;&|]*)"#).unwrap()
-    });
+    let re_awk = RE_AWK.get_or_init(|| Regex::new(r#"(?:^|[\s;&|(])g?awk\s([^\n;&|]*)"#).unwrap());
     // Inside the awk program a redirect is `print ... > "file"`; `$3 > 100` is a comparison.
     static RE_AWK_PRINT: OnceLock<Regex> = OnceLock::new();
-    let re_print =
-        RE_AWK_PRINT.get_or_init(|| Regex::new(r#"printf?\b[^\n;}]*>>?\s*""#).unwrap());
+    let re_print = RE_AWK_PRINT.get_or_init(|| Regex::new(r#"printf?\b[^\n;}]*>>?\s*""#).unwrap());
     for cap in re_awk.captures_iter(cmd) {
         let arg = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         if arg.contains('\\')
-            && (has_unquoted_redirect(arg, true) || arg.contains("-i inplace") || re_print.is_match(arg))
+            && (has_unquoted_redirect(arg, true)
+                || arg.contains("-i inplace")
+                || re_print.is_match(arg))
         {
             return Some(t(
                 lang,
@@ -304,7 +307,9 @@ fn ps_reason(cmd: &str, lang: Lang) -> Option<&'static str> {
     let re_sink = RE_SINK.get_or_init(|| {
         Regex::new(r#"(?i)\b(?:node|python[\d.]*|py|perl|ruby|bash|Set-Content|Add-Content|Out-File|WriteAllText|WriteAllLines)\b"#).unwrap()
     });
-    if (re_sink.is_match(cmd) || has_unquoted_redirect(cmd, false)) && has_ps_herestring_backslash(cmd) {
+    if (re_sink.is_match(cmd) || has_unquoted_redirect(cmd, false))
+        && has_ps_herestring_backslash(cmd)
+    {
         return Some(t(
             lang,
             "PowerShell here-string contains backslashes.",
@@ -335,7 +340,7 @@ fn write_reason(path: &str, content: &str, lang: Lang) -> Option<&'static str> {
     static RE_EXT: OnceLock<Regex> = OnceLock::new();
     let re_ext =
         RE_EXT.get_or_init(|| Regex::new(r#"(?i)\.(?:py|m?js|cjs|ts|ps1|sh|pl|rb)$"#).unwrap());
-    if !re_ext.is_match(path) || !content.contains('\\') {
+    if (!path.is_empty() && !re_ext.is_match(path)) || !content.contains('\\') {
         return None;
     }
     static RE_DIR: OnceLock<Regex> = OnceLock::new();
@@ -352,15 +357,22 @@ fn write_reason(path: &str, content: &str, lang: Lang) -> Option<&'static str> {
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    let throwaway = re_dir.is_match(path) || re_base.is_match(base);
+    let throwaway = (path.is_empty()
+        && (content.contains("*** Update File:") || content.contains("*** Add File:")))
+        || re_dir.is_match(path)
+        || re_base.is_match(base);
     if !throwaway {
         return None;
     }
     let re_rw = RE_REWRITE.get_or_init(|| {
-        Regex::new(r#"writeFileSync|writeFile\(|write_text\(|\.write\(|WriteAllText|Set-Content|Out-File"#).unwrap()
+        Regex::new(
+            r#"writeFileSync|writeFile\(|write_text\(|\.write\(|WriteAllText|Set-Content|Out-File"#,
+        )
+        .unwrap()
     });
-    let re_sub = RE_SUB
-        .get_or_init(|| Regex::new(r#"\.replace\(|\.sub\(|-replace|\.split\([^)]*\)\.join\("#).unwrap());
+    let re_sub = RE_SUB.get_or_init(|| {
+        Regex::new(r#"\.replace\(|\.sub\(|-replace|\.split\([^)]*\)\.join\("#).unwrap()
+    });
     if re_rw.is_match(content) && re_sub.is_match(content) {
         return Some(t(
             lang,
@@ -375,8 +387,17 @@ fn re_dir_init(cell: &OnceLock<Regex>) -> &Regex {
     cell.get_or_init(|| Regex::new(r#"(?i)[\\/](?:te?mp|scratchpad)[\\/]"#).unwrap())
 }
 
-pub fn post_syntax_error(path: &str) -> Option<String> {
-    let p = Path::new(path);
+pub fn post_syntax_error(path: &str, cwd: Option<&Path>) -> Option<String> {
+    let p = if let Some(base) = cwd {
+        let p_rel = Path::new(path);
+        if p_rel.is_absolute() {
+            p_rel.to_path_buf()
+        } else {
+            base.join(p_rel)
+        }
+    } else {
+        Path::new(path).to_path_buf()
+    };
     let ext = p
         .extension()
         .and_then(|s| s.to_str())
@@ -387,18 +408,21 @@ pub fn post_syntax_error(path: &str) -> Option<String> {
     if !p.is_file() {
         return None;
     }
+    let p_str = p.to_str().unwrap_or(path);
     if ext == "json" {
         static RE_JSONC: OnceLock<Regex> = OnceLock::new();
         static RE_VSCODE: OnceLock<Regex> = OnceLock::new();
         let re_jsonc = RE_JSONC.get_or_init(|| {
-            Regex::new(r#"(?i)^(?:ts|js)config|^\.?eslintrc|^\.?devcontainer|\.code-workspace$"#).unwrap()
+            Regex::new(r#"(?i)^(?:ts|js)config|^\.?eslintrc|^\.?devcontainer|\.code-workspace$"#)
+                .unwrap()
         });
-        let re_vscode =
-            RE_VSCODE.get_or_init(|| Regex::new(r#"(?i)(?:^|[\\/])\.(?:vscode|devcontainer)[\\/]"#).unwrap());
+        let re_vscode = RE_VSCODE.get_or_init(|| {
+            Regex::new(r#"(?i)(?:^|[\\/])\.(?:vscode|devcontainer)[\\/]"#).unwrap()
+        });
         if re_jsonc.is_match(base) || re_vscode.is_match(path) {
             return None;
         }
-        let raw = fs::read_to_string(p).ok()?;
+        let raw = fs::read_to_string(&p).ok()?;
         let clean = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
         return match serde_json::from_str::<serde_json::Value>(clean) {
             Ok(_) => None,
@@ -406,18 +430,27 @@ pub fn post_syntax_error(path: &str) -> Option<String> {
         };
     }
 
+    let mut cmd_node = Command::new("node");
+    cmd_node.args(["--check", p_str]);
+    if let Some(c) = cwd {
+        cmd_node.current_dir(c);
+    }
+
+    let mut cmd_py = Command::new("python");
+    cmd_py.args([
+        "-I",
+        "-c",
+        // Print the error itself, not the traceback of this wrapper.
+        "import ast,sys\ntry: ast.parse(open(sys.argv[1],'rb').read(), sys.argv[1])\nexcept (SyntaxError, ValueError) as e: sys.exit(f'{type(e).__name__}: {getattr(e, \"msg\", e)}' + (f' (line {e.lineno})' if getattr(e, 'lineno', None) else '') + '\\n' + (getattr(e, 'text', None) or '').rstrip())",
+        p_str,
+    ]);
+    if let Some(c) = cwd {
+        cmd_py.current_dir(c);
+    }
+
     let out = match ext.as_str() {
-        "js" | "mjs" | "cjs" => Command::new("node").args(["--check", path]).output().ok()?,
-        "py" => Command::new("python")
-            .args([
-                "-I",
-                "-c",
-                // Print the error itself, not the traceback of this wrapper.
-                "import ast,sys\ntry: ast.parse(open(sys.argv[1],'rb').read(), sys.argv[1])\nexcept (SyntaxError, ValueError) as e: sys.exit(f'{type(e).__name__}: {getattr(e, \"msg\", e)}' + (f' (line {e.lineno})' if getattr(e, 'lineno', None) else '') + '\\n' + (getattr(e, 'text', None) or '').rstrip())",
-                path,
-            ])
-            .output()
-            .ok()?,
+        "js" | "mjs" | "cjs" => cmd_node.output().ok()?,
+        "py" => cmd_py.output().ok()?,
         _ => return None,
     };
 

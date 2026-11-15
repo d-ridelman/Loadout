@@ -2,7 +2,7 @@ use crate::{t, Client, Lang};
 use regex::Regex;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 const MAX_READ_BYTES: u64 = 28_000;
@@ -15,18 +15,18 @@ fn read_hint(client: Client, lang: Lang) -> &'static str {
     match client {
         Client::Claude => t(
             lang,
-            "search first via Grep/LSP or delegate to Explore (Haiku), or read a slice via Read with offset and limit (up to 250 lines).",
-            "найди нужное место через Grep/LSP или передай в Explore (Haiku), либо прочитай фрагмент через Read с offset и limit (до 250 строк).",
+            "search first via Grep/LSP or delegate to Explore (Haiku), or read a slice via Read with offset and limit (up to 450 lines).",
+            "найди нужное место через Grep/LSP или передай в Explore (Haiku), либо прочитай фрагмент через Read с offset и limit (до 450 строк).",
         ),
         Client::Antigravity => t(
             lang,
-            "search first via grep, then read a slice via read_file with StartLine and EndLine (up to 250 lines).",
-            "сначала найди нужное место через grep, затем прочитай фрагмент через read_file с StartLine и EndLine (до 250 строк).",
+            "search first via grep, then read a slice via read_file with StartLine and EndLine (up to 450 lines).",
+            "сначала найди нужное место через grep, затем прочитай фрагмент через read_file с StartLine и EndLine (до 450 строк).",
         ),
         Client::Dsh => t(
             lang,
-            "search first via the grep tool, then read a slice via read with offset and limit (up to 250 lines).",
-            "сначала найди нужное место инструментом grep, затем прочитай фрагмент через read с offset и limit (до 250 строк).",
+            "search first via the grep tool or delegate to subagent, then read a slice via read with offset and limit (up to 450 lines).",
+            "сначала найди нужное место инструментом grep или передай субагенту, затем прочитай фрагмент через read с offset и limit (до 450 строк).",
         ),
     }
 }
@@ -37,11 +37,37 @@ fn is_media_or_pdf(path: &str) -> bool {
     };
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "avif"
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "webp"
+            | "bmp"
+            | "ico"
+            | "avif"
             | "pdf"
-            | "mp3" | "wav" | "ogg" | "flac" | "m4a"
-            | "mp4" | "webm" | "mov" | "mkv"
+            | "mp3"
+            | "wav"
+            | "ogg"
+            | "flac"
+            | "m4a"
+            | "mp4"
+            | "webm"
+            | "mov"
+            | "mkv"
     )
+}
+
+/// Resolve a path against an optional working directory.
+pub fn resolve_path(path: &str, cwd: Option<&Path>) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else if let Some(base) = cwd {
+        base.join(p)
+    } else {
+        p.to_path_buf()
+    }
 }
 
 /// Blocks unbounded reads of large text files while allowing bounded slices and media/PDF.
@@ -51,6 +77,7 @@ pub fn read_guard(
     limit: Option<u64>,
     client: Client,
     lang: Lang,
+    cwd: Option<&Path>,
 ) -> Option<String> {
     if file_path.is_empty() || is_media_or_pdf(file_path) {
         return None;
@@ -60,7 +87,9 @@ pub fn read_guard(
             return None;
         }
     }
-    let meta = fs::metadata(file_path).ok()?;
+    let resolved = resolve_path(file_path, cwd);
+    let resolved_str = resolved.to_str().unwrap_or(file_path);
+    let meta = fs::metadata(&resolved).ok()?;
     if !meta.is_file() {
         return None;
     }
@@ -69,7 +98,7 @@ pub fn read_guard(
     let kb = (bytes + 512) / 1024;
 
     if bytes <= MAX_READ_BYTES {
-        let lines = count_lines(file_path)?;
+        let lines = count_lines(resolved_str)?;
         let start = offset.unwrap_or(1).saturating_sub(1) as usize;
         let rem = lines.saturating_sub(start);
         let eff = limit.map(|l| (l as usize).min(rem)).unwrap_or(rem);
@@ -94,11 +123,11 @@ pub fn read_guard(
     // The limit is absent or above the cap here, so only a short tail can pass. Count just far
     // enough past the offset to know whether more than the cap remains.
     if let Some(start) = offset.map(|o| (o - 1) as usize) {
-        if tail_fits(file_path, start)? {
+        if tail_fits(resolved_str, start)? {
             return None;
         }
     }
-    if let Some(lines) = count_lines_bounded(file_path, 5000) {
+    if let Some(lines) = count_lines_bounded(resolved_str, 5000) {
         let prefix = if lines >= 5000 { ">" } else { "" };
         return Some(match lang {
             Lang::En => format!("File is large ({prefix}{lines} lines, {kb} KB). Do not load it whole into main context: {hint}"),
@@ -163,42 +192,117 @@ fn count_lines_bounded(path: &str, cap: usize) -> Option<usize> {
     Some(count)
 }
 
-pub fn shell_read_guard(tool: &str, cmd: &str, client: Client, lang: Lang) -> Option<String> {
+fn split_command_chain(cmd: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut quote = None;
+    let mut start = 0;
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match quote {
+            Some(q) if b == q => quote = None,
+            Some(_) => {}
+            None if b == b'"' || b == b'\'' => quote = Some(b),
+            None if b == b';' || b == b'\n' => {
+                let sub = cmd[start..i].trim();
+                if !sub.is_empty() {
+                    parts.push(sub);
+                }
+                start = i + 1;
+            }
+            None if b == b'&' && i + 1 < bytes.len() && bytes[i + 1] == b'&' => {
+                let sub = cmd[start..i].trim();
+                if !sub.is_empty() {
+                    parts.push(sub);
+                }
+                i += 1;
+                start = i + 1;
+            }
+            None => {}
+        }
+        i += 1;
+    }
+    let sub = cmd[start..].trim();
+    if !sub.is_empty() {
+        parts.push(sub);
+    }
+    parts
+}
+
+pub fn shell_read_guard(
+    tool: &str,
+    cmd: &str,
+    client: Client,
+    lang: Lang,
+    cwd: Option<&Path>,
+) -> Option<String> {
     let trimmed = cmd.trim();
     if trimmed.is_empty() {
         return None;
     }
-    // Never interfere with pipelines, redirections, heredocs, git, tests, or chained scripts.
-    if trimmed.contains('|')
-        || trimmed.contains('>')
-        || trimmed.contains("<<")
-        || trimmed.contains('\n')
-        || trimmed.contains(';')
-        || trimmed.contains("&&")
-    {
-        return None;
-    }
 
-    let dump = match (client, tool) {
-        (Client::Claude | Client::Dsh, "Bash") => check_bash_inspect(trimmed, client, lang),
-        (Client::Claude | Client::Dsh, "PowerShell") => check_ps_inspect(trimmed, client, lang),
-        (Client::Claude | Client::Dsh, _) => return None,
-        (Client::Antigravity, _) => check_ps_inspect(trimmed, client, lang)
-            .or_else(|| check_bash_inspect(trimmed, client, lang)),
-    };
-    dump.or_else(|| check_recursive_grep(trimmed, client, lang))
+    let subcmds = split_command_chain(trimmed);
+    let mut current_cwd = cwd.map(Path::to_path_buf);
+
+    for sub in subcmds {
+        // Track cd directory changes inside chained commands (e.g. `cd src && cat big.ts`)
+        if let Some(rest) = sub.strip_prefix("cd ") {
+            let target = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+            if !target.is_empty() {
+                let p = Path::new(target);
+                let next = if p.is_absolute() {
+                    p.to_path_buf()
+                } else if let Some(ref base) = current_cwd {
+                    base.join(p)
+                } else {
+                    p.to_path_buf()
+                };
+                current_cwd = Some(next);
+            }
+            continue;
+        }
+
+        // Never interfere with pipelines, redirections, or heredocs in this subcmd
+        if sub.contains('|') || sub.contains('>') || sub.contains("<<") {
+            continue;
+        }
+
+        let dump = match (client, tool) {
+            (Client::Claude | Client::Dsh, "Bash") => {
+                check_bash_inspect(sub, client, lang, current_cwd.as_deref())
+            }
+            (Client::Claude | Client::Dsh, "PowerShell") => {
+                check_ps_inspect(sub, client, lang, current_cwd.as_deref())
+            }
+            (Client::Claude | Client::Dsh, _) => return None,
+            (Client::Antigravity, _) => check_ps_inspect(sub, client, lang, current_cwd.as_deref())
+                .or_else(|| check_bash_inspect(sub, client, lang, current_cwd.as_deref())),
+        };
+        if let Some(reason) =
+            dump.or_else(|| check_recursive_grep(sub, client, lang, current_cwd.as_deref()))
+        {
+            return Some(reason);
+        }
+    }
+    None
 }
 
 /// A path argument: quoted (may hold spaces) or a bare token.
 const PATH_ARG: &str = r#"("[^"]+"|'[^']+'|[^"'\s|><&;]+)"#;
 
-fn check_bash_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<String> {
+fn check_bash_inspect(
+    trimmed: &str,
+    client: Client,
+    lang: Lang,
+    cwd: Option<&Path>,
+) -> Option<String> {
     static RE_BARE_CAT: OnceLock<Regex> = OnceLock::new();
     let re_cat = RE_BARE_CAT
         .get_or_init(|| Regex::new(&format!(r"^cat\s+(?:-[A-Za-z]+\s+)*{PATH_ARG}$")).unwrap());
     if let Some(cap) = re_cat.captures(trimmed) {
         let target = cap[1].trim_matches(|c| c == '"' || c == '\'');
-        if is_big_file(target) {
+        if is_big_file(target, cwd) {
             let prefix = t(
                 lang,
                 "Do not read a large file via `cat` in shell:",
@@ -238,7 +342,12 @@ fn shell_tokens(cmd: &str) -> Vec<(String, bool)> {
 }
 
 /// Unbounded recursive search: `grep` with a recursive flag, or `rg` (recursive by default).
-fn check_recursive_grep(trimmed: &str, client: Client, lang: Lang) -> Option<String> {
+fn check_recursive_grep(
+    trimmed: &str,
+    client: Client,
+    lang: Lang,
+    cwd: Option<&Path>,
+) -> Option<String> {
     // Work on tokens: `-r` inside `user-manager.txt`, `--color` or a quoted pattern is not a flag.
     let toks = shell_tokens(trimmed);
     let is_rg = match toks.first().map(|(t, _)| t.as_str()) {
@@ -246,8 +355,11 @@ fn check_recursive_grep(trimmed: &str, client: Client, lang: Lang) -> Option<Str
         Some("grep") => false,
         _ => return None,
     };
-    let flags: Vec<&str> =
-        toks[1..].iter().filter(|(t, quoted)| !quoted && t.starts_with('-')).map(|(t, _)| t.as_str()).collect();
+    let flags: Vec<&str> = toks[1..]
+        .iter()
+        .filter(|(t, quoted)| !quoted && t.starts_with('-'))
+        .map(|(t, _)| t.as_str())
+        .collect();
     // A cluster of short flags, e.g. `-rn`; `allowed` keeps value-taking letters (`-tcpp`) out.
     let cluster = |f: &str, allowed: &str, any_of: &str| {
         let body = &f[1..];
@@ -266,15 +378,22 @@ fn check_recursive_grep(trimmed: &str, client: Client, lang: Lang) -> Option<Str
             || f.starts_with("--max-count")
             || (f.starts_with("-m") && f[2..].chars().all(|c| c.is_ascii_digit()))
             || cluster(f, BOOL_FLAGS, "lc")
-            || (is_rg && matches!(*f, "--version" | "--help" | "--files" | "--type-list" | "-V" | "-h"))
+            || (is_rg
+                && matches!(
+                    *f,
+                    "--version" | "--help" | "--files" | "--type-list" | "-V" | "-h"
+                ))
     });
     if !recursive || bounded {
         return None;
     }
     // One pattern and one path that is a file: not a recursive walk.
-    let positional: Vec<&str> =
-        toks[1..].iter().filter(|(t, quoted)| *quoted || !t.starts_with('-')).map(|(t, _)| t.as_str()).collect();
-    if positional.len() == 2 && Path::new(positional[1]).is_file() {
+    let positional: Vec<&str> = toks[1..]
+        .iter()
+        .filter(|(t, quoted)| *quoted || !t.starts_with('-'))
+        .map(|(t, _)| t.as_str())
+        .collect();
+    if positional.len() == 2 && resolve_path(positional[1], cwd).is_file() {
         return None;
     }
     Some(
@@ -299,7 +418,12 @@ fn check_recursive_grep(trimmed: &str, client: Client, lang: Lang) -> Option<Str
     )
 }
 
-fn check_ps_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<String> {
+fn check_ps_inspect(
+    trimmed: &str,
+    client: Client,
+    lang: Lang,
+    cwd: Option<&Path>,
+) -> Option<String> {
     static RE_BARE_GC: OnceLock<Regex> = OnceLock::new();
     // Flags that still dump the whole file; `-TotalCount` / `-Tail` after the path do not match.
     let re_gc = RE_BARE_GC.get_or_init(|| {
@@ -310,7 +434,7 @@ fn check_ps_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<String>
     });
     if let Some(cap) = re_gc.captures(trimmed) {
         let target = cap[1].trim_matches(|c| c == '"' || c == '\'');
-        if is_big_file(target) {
+        if is_big_file(target, cwd) {
             let prefix = t(
                 lang,
                 "Do not dump a large file in PowerShell:",
@@ -322,9 +446,9 @@ fn check_ps_inspect(trimmed: &str, client: Client, lang: Lang) -> Option<String>
     None
 }
 
-fn is_big_file(path: &str) -> bool {
-    let p = Path::new(path);
-    let Ok(meta) = fs::metadata(p) else {
+fn is_big_file(path: &str, cwd: Option<&Path>) -> bool {
+    let p = resolve_path(path, cwd);
+    let Ok(meta) = fs::metadata(&p) else {
         return false;
     };
     if !meta.is_file() {
@@ -333,7 +457,8 @@ fn is_big_file(path: &str) -> bool {
     if meta.len() > MAX_SHELL_CAT_BYTES {
         return true;
     }
-    count_lines_bounded(path, MAX_SHELL_CAT_LINES + 1).unwrap_or(0) > MAX_SHELL_CAT_LINES
+    let p_str = p.to_str().unwrap_or(path);
+    count_lines_bounded(p_str, MAX_SHELL_CAT_LINES + 1).unwrap_or(0) > MAX_SHELL_CAT_LINES
 }
 
 #[cfg(test)]
@@ -352,20 +477,48 @@ mod tests {
         }
         let path = big.to_str().unwrap();
 
-        assert!(read_guard(path, None, None, Client::Claude, Lang::En).unwrap().contains("File is large"));
-        assert!(read_guard(path, None, None, Client::Claude, Lang::Ru).unwrap().contains("Файл большой"));
-        assert!(read_guard(path, Some(1), Some(200), Client::Claude, Lang::En).is_none());
+        assert!(read_guard(path, None, None, Client::Claude, Lang::En, None)
+            .unwrap()
+            .contains("File is large"));
+        assert!(read_guard(path, None, None, Client::Claude, Lang::Ru, None)
+            .unwrap()
+            .contains("Файл большой"));
+        assert!(read_guard(path, Some(1), Some(200), Client::Claude, Lang::En, None).is_none());
 
-        let agy_deny = read_guard(path, None, None, Client::Antigravity, Lang::En).unwrap();
+        let agy_deny = read_guard(path, None, None, Client::Antigravity, Lang::En, None).unwrap();
         assert!(agy_deny.contains("read_file"));
         assert!(agy_deny.contains("StartLine"));
-        assert!(read_guard(path, Some(1), Some(250), Client::Antigravity, Lang::En).is_none());
+        assert!(read_guard(
+            path,
+            Some(1),
+            Some(250),
+            Client::Antigravity,
+            Lang::En,
+            None
+        )
+        .is_none());
 
         let img = dir.join("big-image.jpg");
         let mut img_f = fs::File::create(&img).unwrap();
         img_f.write_all(&vec![0u8; 300_000]).unwrap();
-        assert!(read_guard(img.to_str().unwrap(), None, None, Client::Antigravity, Lang::En).is_none());
-        assert!(read_guard(img.to_str().unwrap(), None, None, Client::Claude, Lang::Ru).is_none());
+        assert!(read_guard(
+            img.to_str().unwrap(),
+            None,
+            None,
+            Client::Antigravity,
+            Lang::En,
+            None
+        )
+        .is_none());
+        assert!(read_guard(
+            img.to_str().unwrap(),
+            None,
+            None,
+            Client::Claude,
+            Lang::Ru,
+            None
+        )
+        .is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -375,15 +528,25 @@ mod tests {
         let dir = std::env::temp_dir().join("cg_unit_guard_dsh");
         let _ = fs::create_dir_all(&dir);
         let big = dir.join("big.ts");
-        fs::write(&big, "export const v = 1; // padding bytes for size\n".repeat(700)).unwrap();
+        fs::write(
+            &big,
+            "export const v = 1; // padding bytes for size\n".repeat(700),
+        )
+        .unwrap();
         let path = big.to_str().unwrap();
 
-        let deny = read_guard(path, None, None, Client::Dsh, Lang::En).unwrap();
+        let deny = read_guard(path, None, None, Client::Dsh, Lang::En, None).unwrap();
         assert!(deny.contains("read with offset and limit") && !deny.contains("Explore"));
-        assert!(read_guard(path, Some(1), Some(200), Client::Dsh, Lang::En).is_none());
-        let grep = shell_read_guard("Bash", "rg foo src/", Client::Dsh, Lang::En).unwrap();
+        assert!(read_guard(path, Some(1), Some(200), Client::Dsh, Lang::En, None).is_none());
+        let grep = shell_read_guard("Bash", "rg foo src/", Client::Dsh, Lang::En, None).unwrap();
         assert!(grep.contains("`grep` tool") && !grep.contains("Haiku"));
-        let cat = shell_read_guard("PowerShell", &format!("Get-Content {path}"), Client::Dsh, Lang::En);
+        let cat = shell_read_guard(
+            "PowerShell",
+            &format!("Get-Content {path}"),
+            Client::Dsh,
+            Lang::En,
+            None,
+        );
         assert!(cat.unwrap().contains("read with offset"));
 
         let _ = fs::remove_dir_all(&dir);
@@ -391,10 +554,58 @@ mod tests {
 
     #[test]
     fn shell_guard_handles_antigravity_pwsh_and_bash() {
-        assert!(shell_read_guard("run_command", "rg foo src/", Client::Antigravity, Lang::En).is_some());
-        assert!(shell_read_guard("run_command", "rg -l foo src/", Client::Antigravity, Lang::En).is_none());
+        assert!(shell_read_guard(
+            "run_command",
+            "rg foo src/",
+            Client::Antigravity,
+            Lang::En,
+            None
+        )
+        .is_some());
+        assert!(shell_read_guard(
+            "run_command",
+            "rg -l foo src/",
+            Client::Antigravity,
+            Lang::En,
+            None
+        )
+        .is_none());
+        assert!(shell_read_guard(
+            "run_command",
+            "rg -n foo src/ | Select-Object -First 10",
+            Client::Antigravity,
+            Lang::En,
+            None
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn shell_guard_handles_chained_commands_and_cwd() {
+        let dir = std::env::temp_dir().join("cg_unit_guard_chain");
+        let _ = fs::create_dir_all(&dir);
+        let big = dir.join("big.ts");
+        fs::write(&big, "export const v = 1;\n".repeat(700)).unwrap();
+
+        let cmd1 = format!("git status && cat \"{}\"", big.display());
+        assert!(shell_read_guard("Bash", &cmd1, Client::Claude, Lang::En, None).is_some());
+
+        let cmd2 = format!("echo 'starting'; Get-Content \"{}\"", big.display());
+        assert!(shell_read_guard("PowerShell", &cmd2, Client::Claude, Lang::En, None).is_some());
+
+        // Relative path with cwd
         assert!(
-            shell_read_guard("run_command", "rg -n foo src/ | Select-Object -First 10", Client::Antigravity, Lang::En).is_none()
+            shell_read_guard("Bash", "cat big.ts", Client::Claude, Lang::En, Some(&dir)).is_some()
         );
+        assert!(shell_read_guard(
+            "Bash",
+            "true && rg foo src/",
+            Client::Claude,
+            Lang::En,
+            None
+        )
+        .is_some());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

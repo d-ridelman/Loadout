@@ -62,13 +62,20 @@ pub fn run_check(args: &[String]) -> i32 {
     if is_cargo {
         let diags = parse_cargo_json(&stdout);
         if !diags.is_empty() {
-            println!("FAIL exit={code} ({elapsed_ms} ms), top {} errors:", diags.len().min(MAX_ERRORS));
+            println!(
+                "FAIL exit={code} ({elapsed_ms} ms), top {} errors:",
+                diags.len().min(MAX_ERRORS)
+            );
             for (i, d) in diags.iter().take(MAX_ERRORS).enumerate() {
                 println!("[{}] {}", i + 1, d);
             }
             if diags.len() > MAX_ERRORS {
                 if let Some(log_path) = save_log(&stdout, &stderr) {
-                    println!("... +{} errors (full log: {})", diags.len() - MAX_ERRORS, log_path.display());
+                    println!(
+                        "... +{} errors (full log: {})",
+                        diags.len() - MAX_ERRORS,
+                        log_path.display()
+                    );
                 } else {
                     println!("... +{} more errors", diags.len() - MAX_ERRORS);
                 }
@@ -93,7 +100,11 @@ pub fn run_check(args: &[String]) -> i32 {
     }
     if lines.len() > compact.len() {
         if let Some(log_path) = save_log(&stdout, &stderr) {
-            println!("... ({} lines total; full log: {})", lines.len(), log_path.display());
+            println!(
+                "... ({} lines total; full log: {})",
+                lines.len(),
+                log_path.display()
+            );
         }
     }
     code
@@ -113,7 +124,9 @@ fn parse_cargo_json(stdout: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for line in stdout.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         if v["reason"] != "compiler-message" {
             continue;
         }
@@ -122,12 +135,17 @@ fn parse_cargo_json(stdout: &str) -> Vec<String> {
             continue;
         }
         let text = msg["message"].as_str().unwrap_or("").trim();
-        if text.is_empty() || text.starts_with("aborting due to") || text.starts_with("could not compile") {
+        if text.is_empty()
+            || text.starts_with("aborting due to")
+            || text.starts_with("could not compile")
+        {
             continue;
         }
-        let span = msg["spans"]
-            .as_array()
-            .and_then(|arr| arr.iter().find(|s| s["is_primary"] == true).or_else(|| arr.first()));
+        let span = msg["spans"].as_array().and_then(|arr| {
+            arr.iter()
+                .find(|s| s["is_primary"] == true)
+                .or_else(|| arr.first())
+        });
         let loc = match span {
             Some(s) => format!(
                 "{}:{}:{}",
@@ -174,7 +192,17 @@ fn extract_pass_summary(stdout: &str, stderr: &str) -> Option<String> {
     if parts.is_empty() {
         None
     } else {
-        Some(parts.into_iter().rev().take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | "))
+        Some(
+            parts
+                .into_iter()
+                .rev()
+                .take(2)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join(" | "),
+        )
     }
 }
 
@@ -215,9 +243,11 @@ fn save_log(stdout: &str, stderr: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or_else(env::temp_dir);
     let _ = fs::create_dir_all(&base);
-    let path = base.join("last-check.log");
+    let pid = std::process::id();
+    let path = base.join(format!("last-check-{pid}.log"));
     let body = format!("=== STDOUT ===\n{stdout}\n=== STDERR ===\n{stderr}\n");
-    fs::write(&path, body).ok()?;
+    fs::write(&path, &body).ok()?;
+    let _ = fs::write(base.join("last-check.log"), &body);
     Some(path)
 }
 
@@ -235,15 +265,27 @@ mod tests {
         );
         let diags = parse_cargo_json(sample);
         assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0], "src/main.rs:12:5 [E0308] — mismatched types (expected u32)");
+        assert_eq!(
+            diags[0],
+            "src/main.rs:12:5 [E0308] — mismatched types (expected u32)"
+        );
     }
 
     #[test]
     fn extracts_pass_summary_and_compacts_errors() {
         let out = "running 3 tests\n...\ntest result: ok. 3 passed; 0 failed\n";
-        assert_eq!(extract_pass_summary(out, "").as_deref(), Some("test result: ok. 3 passed; 0 failed"));
+        assert_eq!(
+            extract_pass_summary(out, "").as_deref(),
+            Some("test result: ok. 3 passed; 0 failed")
+        );
 
-        let lines = vec!["info: building", "Error: bad import", "at foo.ts:10", "line 4", "line 5"];
+        let lines = vec![
+            "info: building",
+            "Error: bad import",
+            "at foo.ts:10",
+            "line 4",
+            "line 5",
+        ];
         let c = compact_error_lines(&lines);
         assert_eq!(c, vec!["Error: bad import", "at foo.ts:10", "line 4"]);
     }
