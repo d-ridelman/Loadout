@@ -33,7 +33,7 @@ CLI args / stdin JSON
 ### 3. `check.rs`: compact build and test output (`ctxkit check <cmd>`)
 
 - For `cargo check`, `cargo clippy`, and `cargo build`, automatically injects `--message-format=json --quiet`, deduplicates diagnostics, and prints up to `3` unique root causes (`file:line:col [code] - message (label)`), dropping cascade noise.
-- For all other commands (`tsc`, `npm run typecheck`, `npm test`, `node --test`, `pytest`, `go test`), passing runs print `OK (<ms>)` plus a brief pass summary, while failing runs print up to `30` key lines and write full logs to `%TEMP%/last-check-<pid>.log` and `%TEMP%/last-check.log` (`/tmp/...` on Unix), avoiding race conditions between concurrent sessions.
+- For all other commands (`tsc`, `npm run typecheck`, `npm test`, `node --test`, `pytest`, `go test`), passing runs print `OK (<ms>)` plus a brief pass summary, while failing runs print up to `30` key lines and write the full log to `%TEMP%/last-check-<pid>.log` (`/tmp/...` on Unix; one file per run, so concurrent sessions do not overwrite each other, and logs older than a day are deleted on the next write).
 
 ### 4. `setup.rs`: idempotent setup and config audit (`ctxkit setup`)
 

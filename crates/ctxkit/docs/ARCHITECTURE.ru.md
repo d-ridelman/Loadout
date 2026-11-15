@@ -33,7 +33,7 @@ CLI args / stdin JSON
 ### 3. `check.rs`: сжатый вывод проверок (`ctxkit check <cmd>`)
 
 - Для `cargo check`, `cargo clippy` и `cargo build` добавляет `--message-format=json --quiet`, убирает дубликаты и каскад, оставляя до `3` уникальных первопричин (`file:line:col [code] - message (label)`).
-- Для остальных команд (`tsc`, `npm run typecheck`, `npm test`, `node --test`, `pytest`, `go test`) при успехе печатает `OK (<ms>)` с краткой сводкой числа тестов, а при ошибке выводит до `30` ключевых строк и сохраняет полный вывод в `%TEMP%/last-check-<pid>.log` и `%TEMP%/last-check.log` (`/tmp/...` на Unix), исключая гонки между процессами.
+- Для остальных команд (`tsc`, `npm run typecheck`, `npm test`, `node --test`, `pytest`, `go test`) при успехе печатает `OK (<ms>)` с краткой сводкой числа тестов, а при ошибке выводит до `30` ключевых строк и сохраняет полный вывод в `%TEMP%/last-check-<pid>.log` (`/tmp/...` на Unix; по файлу на запуск, поэтому параллельные сессии не затирают друг друга, а логи старше суток удаляются при следующей записи).
 
 ### 4. `setup.rs`: автонастройка и диагностика (`ctxkit setup`)
 
