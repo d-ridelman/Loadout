@@ -39,8 +39,12 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width
 #app { display: grid; height: 100vh; min-width: 1100px; min-height: 640px; grid-template: 48px 1fr 26px / 172px 1fr 348px; }
 /* Верхняя строка — заголовок окна (системной рамки нет): перетаскивается, элементы управления не перетаскиваются.
    Справа место под системные кнопки окна: `env(titlebar-area-*)` отдаёт их границы, запас 150 px — на случай без наложения. */
-header { grid-column: 1 / 4; display: flex; align-items: center; gap: 14px; padding: 0 max(14px, calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 150px)))) 0 14px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
+header { grid-column: 1 / 4; display: flex; align-items: center; gap: 10px; padding: 0 max(14px, calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 150px)))) 0 14px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
 header button, header select, header label, header input { -webkit-app-region: no-drag; }
+/* шапка в одну строку и по центру: подписи не переносятся (раньше «FX» и «Запись» прижимались кверху, кнопки шли в две строки), элементы не сжимаются */
+header { white-space: nowrap; }
+header > * { flex: none; }
+header label { display: inline-flex; align-items: center; gap: 6px; }
 /* подложка диалога и палитры перекрывает верхние 48 px: клик по ней закрывает диалог, а не тянет окно */
 .modal, .palette { -webkit-app-region: no-drag; }
 .brand { display: inline-flex; align-items: center; gap: 10px; }
@@ -152,7 +156,8 @@ html[data-fx='off'] .beam { display: none; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 6px 0 0; font: 12px var(--mono); }
 .kv dt { color: var(--mute); } .kv dd { margin: 0; }
 .kv .kvrow { display: contents; }
-.wrap { word-break: break-all; }
+/* пути переносятся по сегментам (`<Path>` ставит `<wbr>` после «/»), посреди слова режется только то, что не помещается (раньше `break-all` рвал «mcp_config.j / son») */
+.wrap { overflow-wrap: anywhere; }
 .strip { display: flex; gap: 8px; margin: 6px 0; }
 .instances { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .instances button { width: 100%; text-align: left; }

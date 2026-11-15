@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { Entity, Intent, Plan } from '../../shared/model'
 import { t } from '../../shared/i18n'
+import { Path } from '../ui'
 import { Modal } from './Modal'
 
 type PlanState =
@@ -103,7 +104,7 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
       ) : (
         <>
           <dl className="kv">
-            <dt>{t('файл', 'file')}</dt><dd className="wrap">{state.plan.file}</dd>
+            <dt>{t('файл', 'file')}</dt><dd className="wrap"><Path p={state.plan.file} /></dd>
             <dt>{t('ключ', 'key')}</dt><dd className="wrap">{state.plan.pointer}</dd>
             <dt>{t('было', 'before')}</dt><dd className="wrap mono">{state.plan.from}</dd>
             <dt>{t('станет', 'after')}</dt><dd className="wrap mono"><b>{state.plan.to}</b></dd>

@@ -54,7 +54,7 @@ const levelLabel = (l: WriteLevel): string =>
     ? t('R0 · только чтение', 'R0 · read-only')
     : l === 'R1'
       ? t('R1 · флаги', 'R1 · flags')
-      : t('R2 · корзина, правка, ctxkit', 'R2 · trash, edit, ctxkit')
+      : t('R2 · полная запись', 'R2 · full write')
 
 const fxLabel = (m: Fx): string => (m === 'off' ? t('выкл', 'off') : m === 'low' ? t('лёгкие', 'light') : t('полные', 'full'))
 
@@ -356,8 +356,8 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
             className={`mono level ${level === 'R0' ? 's-on' : 's-stale'}`}
             aria-label={t('Уровень записи', 'Write level')}
             title={t(
-              'R0 — только чтение; R1 — включать и выключать по флагам; R2 — ещё корзина, правка команд, копирование и профили. Повышение подтверждается окном системы',
-              'R0 — read-only; R1 — enable and disable by flags; R2 — also trash, command editing, copying and profiles. Raising the level is confirmed by a system dialog',
+              'R0 — только чтение; R1 — включать и выключать по флагам; R2 — ещё корзина, правка команд, копирование, профили и применение ctxkit. Повышение подтверждается окном системы',
+              'R0 — read-only; R1 — enable and disable by flags; R2 — also trash, command editing, copying, profiles and applying ctxkit. Raising the level is confirmed by a system dialog',
             )}
             value={level}
             onChange={(e) => void changeLevel(e.target.value as WriteLevel)}

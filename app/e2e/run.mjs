@@ -81,9 +81,19 @@ async function layout(page, label) {
     const misaligned = ths.length && cells.length === ths.length
       ? ths.filter((th, i) => Math.abs(th.getBoundingClientRect().left - cells[i].getBoundingClientRect().left) > 1.5).length
       : 0
-    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length }
+    // шапка: каждый элемент в одну строку (не выше 36 px) и по центру строки (±2 px); справа не заходят под кнопки окна
+    const h = document.querySelector('header')
+    const hr = h.getBoundingClientRect()
+    const kids = [...h.children].filter((c) => !c.classList.contains('sp')).map((c) => ({ c, r: c.getBoundingClientRect() }))
+    const area = navigator.windowControlsOverlay?.getTitlebarAreaRect()
+    const headerTall = kids.filter(({ r }) => r.height > 36).map(({ c }) => c.textContent.trim().slice(0, 20))
+    const headerOff = kids.filter(({ r }) => Math.abs(r.top + r.height / 2 - (hr.top + hr.height / 2)) > 2).map(({ c }) => c.textContent.trim().slice(0, 20))
+    const headerOver = area ? Math.round(Math.max(...kids.map(({ r }) => r.right)) - (area.x + area.width)) : 0
+    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length, headerTall, headerOff, headerOver }
   })
   log(`  замер ${label}:`, JSON.stringify(m))
+  must(m.headerTall.length === 0 && m.headerOff.length === 0, `${label}: шапка: перенос строк ${JSON.stringify(m.headerTall)}, не по центру ${JSON.stringify(m.headerOff)}`)
+  must(m.headerOver <= 0, `${label}: шапка заходит под кнопки окна на ${m.headerOver}px`)
   must(m.hscroll <= 0, `${label}: горизонтальная прокрутка страницы (${m.hscroll}px)`)
   must(m.clipped === 0, `${label}: обрезанных имён: ${m.clipped}`)
   must(m.misaligned === 0, `${label}: колонки шапки и ячеек смещены`)
@@ -501,7 +511,15 @@ try {
     return { n: b.length, lefts: new Set(r.map((x) => Math.round(x.left))).size, tops: new Set(r.map((x) => Math.round(x.top))).size }
   })
   must(col.n >= 4 && col.lefts === 1 && col.tops === col.n, `действия записи в инспекторе должны стоять столбцом, а не рядом: ${JSON.stringify(col)}`)
+  // длинный путь файла переносится по сегментам: ни один сегмент (`/…/`) не разорван между строками
   await shot(page, 'm4-inspector-1280')
+  const pathSplit = await page.evaluate(() => {
+    const dd = [...document.querySelectorAll('aside dd.wrap')].find((d) => d.querySelector('wbr'))
+    // верх первого и последнего знака сегмента: разные — сегмент перенесён внутри
+    const tops = (s) => { const n = s.lastChild, r = document.createRange(); const at = (i) => { r.setStart(n, i); r.setEnd(n, i + 1); return Math.round(r.getBoundingClientRect().top) }; return [at(0), at(n.length - 1)] }
+    return dd ? [...dd.querySelectorAll('span')].filter((s) => { const [a, b] = tops(s); return a !== b }).map((s) => s.textContent) : null
+  })
+  must(pathSplit !== null && pathSplit.length === 0, `путь файла в инспекторе разорван посреди сегмента: ${JSON.stringify(pathSplit)}`)
   await page.keyboard.press('Space')
   const trashText = await openPlan()
   must(trashText.includes('в корзине Loadout') && trashText.includes('R2'), `предпросмотр выноса в корзину: ${trashText}`)
@@ -598,6 +616,9 @@ try {
   const card = page.getByRole('region', { name: 'Профиль e2e' })
   await card.waitFor({ timeout: 8000 })
   await card.getByText('Записи профиля').click()
+  // сразу после открытия список виден с первой строки целиком (обрезка сверху на снимке — прокрутка от `uncheck()` ниже)
+  const plistOpen = await card.locator('details .plist').evaluate((ul) => ({ top: ul.scrollTop, gap: Math.round(ul.querySelector('li').getBoundingClientRect().top - ul.getBoundingClientRect().top) }))
+  must(plistOpen.top === 0 && plistOpen.gap >= 0, `список записей профиля открывается обрезанным: ${JSON.stringify(plistOpen)}`)
   await card.locator('li', { hasText: 'p1@bundled' }).getByRole('checkbox').uncheck()
   await card.getByRole('button', { name: 'Сохранить изменения' }).click()
   await waitFor(async () => !(await card.getByRole('button', { name: 'Сохранить изменения' }).isEnabled()), 'профиль сохранён')
@@ -605,6 +626,7 @@ try {
   must(profLayout.hscroll <= 0 && profLayout.main <= 1, `горизонтальная прокрутка в профилях: ${JSON.stringify(profLayout)}`)
   const v3 = await axeCheck(page, 'профили')
   must(v3.length === 0, `axe: профили: ${v3.map((x) => x.id).join(', ')}`)
+  await card.locator('details .plist').evaluate((ul) => { ul.scrollTop = 0 }) // `uncheck()` прокрутил список к p1: на снимке то, что видно при открытии
   await shot(page, 'm4-profiles-1280')
   await resize(app, 1920, 1080)
   await page.waitForTimeout(250)
@@ -785,6 +807,7 @@ try {
       must(bad.length === 0, `кириллица в английском интерфейсе:\n${bad.slice(0, 12).join('\n')}`)
     }
     await enOk('matrix')
+    await layout(en, 'en-matrix@1280')
     await shot(en, 'en-matrix-1280')
     for (const [key, name] of [['2', 'radar'], ['3', 'hooks'], ['4', 'doctor'], ['5', 'journal'], ['6', 'profiles'], ['7', 'ctxkit']]) {
       await en.keyboard.press(key)

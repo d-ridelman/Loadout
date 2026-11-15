@@ -3,7 +3,7 @@ import type { Entity, Level, WriteLevel } from '../../shared/model'
 import { t } from '../../shared/i18n'
 import { GLYPH } from '../aggregate'
 import type { Row } from '../aggregate'
-import { Glyph, KindBadge, Panel } from '../ui'
+import { Glyph, KindBadge, Panel, Path } from '../ui'
 import type { Sel } from './Matrix'
 
 /** Хватает ли текущего уровня записи для операции. */
@@ -101,7 +101,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
           <dt>{t('состояние', 'state')}</dt><dd className={`s-${e.state}`}>{GLYPH[e.state].ch} {GLYPH[e.state].label}</dd>
           <dt>{t('область', 'scope')}</dt><dd>{e.scope}</dd>
           {e.version ? (<><dt>{t('версия', 'version')}</dt><dd>{e.version}</dd></>) : null}
-          <dt>{t('файл', 'file')}</dt><dd className="wrap">{e.origin.file}</dd>
+          <dt>{t('файл', 'file')}</dt><dd className="wrap"><Path p={e.origin.file} /></dd>
           <dt>{t('указатель', 'pointer')}</dt><dd className="wrap">{e.origin.pointer}</dd>
         </dl>
       </Panel>
