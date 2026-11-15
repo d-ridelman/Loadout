@@ -27,7 +27,9 @@ Loadout reads all five clients, shows everything in one matrix and changes it **
 
 - **Matrix** of every entry across the five clients: enabled, disabled, broken, version drift. Plugins and MCP servers are separate groups. Inspector on the right.
 - **Toggle** an entry (level R1). **Trash an MCP server, edit its command, copy it to another client** (level R2); JSON ⇄ TOML ⇄ YAML is translated for you.
-- **Add an MCP server** and **install a Claude Code plugin** from the window. Environment values are never shown in the window, the preview or the journal.
+- **Add an MCP server** from the window. Environment values are never shown in the window, the preview or the journal.
+- **Install a Claude Code plugin from a marketplace.** You add a marketplace by GitHub `owner/repo`, an `https://` address or a folder. You pick the plugin from the marketplace catalog, with descriptions. Before `claude` runs, the window shows the exact command and what it will write.
+- **Install a skill** from a GitHub repository or a folder into `~/.claude/skills`. The window first tells you what will be downloaded and where. Then it shows a plan with the files and a warning about code. The installation goes into the journal and can be rolled back.
 - **Profiles**: snapshot a set of enabled entries, apply it as one batch, roll the whole batch back.
 - **Journal** of every write with one-click rollback. Before any write the file is copied to a backup.
 - **Doctor** finds broken links, drift, duplicates and stray backups.

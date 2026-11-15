@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { createHash } from 'node:crypto'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { _electron as electron } from 'playwright-core'
 
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -20,9 +20,11 @@ const SIZES = [
 ]
 
 /** Главная кнопка диалога называется по операции (или «Применить» у пакета профиля). */
-const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Добавить|Применить)/
+const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Добавить|Применить|Установить$)/
 
 const log = (...a) => console.log(...a)
+/** Путь так, как его показывает окно: домашний каталог свёрнут в `~`. */
+const tilde = (p) => p.split(homedir()).join('~')
 const must = (cond, msg) => {
   if (!cond) throw new Error(msg)
 }
@@ -227,13 +229,32 @@ try {
     writeFileSync(join(h, '.claude', 'projects', 'p', 'a.jsonl'), rows.join('\n') + '\n')
   })
   homes.push(home)
-  // подставной `claude`: ничего не скачивает, только записывает свои аргументы
-  const fakeClaude = join(home, 'fake-claude.mjs')
+  // подставной `claude`: ничего не скачивает, записывает свои аргументы и регистрирует локальный маркетплейс
+  const fakeClaude = join(appDir, 'e2e', 'fake-claude.mjs')
   const claudeCalls = join(home, 'claude-calls.txt')
-  writeFileSync(fakeClaude, `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(claudeCalls)}, process.argv.slice(2).join(' ') + '\\n')\nconsole.log('installed')\n`)
+  // источники без сети: локальный маркетплейс и git-репозиторий скила, который клонируется вместо GitHub
+  // каждый проход получает свои копии: `materialize` пересоздаёт тот же каталог
+  const sources = (h) => {
+    cpSync(join(repo, 'fixtures', 'marketplace'), join(h, 'src', 'market'), { recursive: true })
+    const skillRepo = join(h, 'gh', 'acme', 'skills.git')
+    cpSync(join(repo, 'fixtures', 'skill-src'), skillRepo, { recursive: true })
+    const git = (...a) => execFileSync('git', ['-c', 'user.name=e2e', '-c', 'user.email=e2e@loadout.invalid', '-c', 'commit.gpgsign=false', ...a], { cwd: skillRepo, stdio: 'ignore' })
+    git('init', '-q')
+    git('add', '-A')
+    git('commit', '-q', '-m', 'fixture')
+    return join(h, 'src', 'market')
+  }
+  const marketDir = sources(home)
+  const fakeEnv = (h, calls) => ({
+    LOADOUT_HOME: h,
+    LOADOUT_CLAUDE: process.execPath,
+    LOADOUT_CLAUDE_ARGS: JSON.stringify([fakeClaude]),
+    FAKE_CLAUDE_CALLS: calls,
+    LOADOUT_GITHUB_BASE: pathToFileURL(join(h, 'gh')).href + '/',
+  })
 
   // ---- основной сценарий ----
-  session = await launch({ LOADOUT_HOME: home, LOADOUT_CLAUDE: process.execPath, LOADOUT_CLAUDE_ARGS: JSON.stringify([fakeClaude]) })
+  session = await launch(fakeEnv(home, claudeCalls))
   let { app, page } = session
   const pageErrors = []
   page.on('pageerror', (e) => pageErrors.push(`pageerror: ${e.message.slice(0, 200)}`))
@@ -618,15 +639,69 @@ try {
   must((await pluginErr('x@y --scope local', true)) !== 'ok' && (await pluginErr('../x@y', true)) !== 'ok', 'имя плагина с пробелом или путём должно отвергаться')
   must((await pluginErr('only-name', true)) !== 'ok', 'имя без маркетплейса должно отвергаться')
   must((await pluginErr('demo@market', false)).includes('предпросмотр'), 'установка без предпросмотра должна отказывать')
+  // маркетплейс: ввод, который стал бы флагом, второй командой или чужой схемой git, отвергается до запуска
+  const mpErr = (s, dry) => page.evaluate(async ([x, d]) => (await window.loadout.marketplaceAdd(x, d)).error ?? 'ok', [s, dry])
+  for (const bad of ['a/b --scope local', '-x', 'ext::sh -c x', 'file:///C:/x', 'https://u:p@x.test/m', '\\\\srv\\share', join(home, 'nope')]) {
+    must((await mpErr(bad, true)) !== 'ok', `источник маркетплейса должен отвергаться: ${bad}`)
+  }
+  must((await mpErr(marketDir, false)).includes('предпросмотр'), 'добавление маркетплейса без предпросмотра должно отказывать')
+  // маркетплейс → каталог → установка выбором из списка
   await page.getByRole('button', { name: 'Установить плагин', exact: true }).click()
-  await dialog.getByLabel(/Плагин/).fill('demo@market')
+  await dialog.getByRole('button', { name: 'Добавить маркетплейс…' }).click()
+  await dialog.getByLabel('Источник маркетплейса').fill(marketDir)
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
-  await dialog.getByText('claude plugin install demo@market --scope user').waitFor({ timeout: 8000 })
+  // в предпросмотре домашний каталог свёрнут в `~`; снимка этого шага нет: в поле ввода полный путь с именем пользователя
+  await dialog.getByText(`claude plugin marketplace add --scope user ${tilde(marketDir)}`).waitFor({ timeout: 8000 })
   must(!existsSync(claudeCalls), 'предпросмотр не должен запускать claude')
+  await dialog.getByRole('button', { name: 'Добавить маркетплейс', exact: true }).click()
+  const catalog = dialog.getByRole('list', { name: 'Каталог e2e-market' })
+  await catalog.waitFor({ timeout: 8000 })
+  must(await catalog.getByRole('button', { name: /^tool-plugin/ }).isDisabled(), 'плагин с источником command отсюда не ставится')
+  await catalog.getByRole('button', { name: /^hello-plugin/ }).click()
+  await dialog.getByText('claude plugin install hello-plugin@e2e-market --scope user').waitFor({ timeout: 8000 })
+  const vCat = await axeCheck(page, 'каталог маркетплейса')
+  must(vCat.length === 0, `axe: каталог маркетплейса: ${vCat.map((x) => x.id).join(', ')}`)
   await shot(page, 'm4-plugin-dialog-1280')
   await dialog.getByRole('button', { name: 'Установить', exact: true }).click()
-  await waitFor(() => existsSync(claudeCalls) && readFileSync(claudeCalls, 'utf8').trim() === 'plugin install demo@market --scope user', 'claude вызван с точной командой установки')
+  const calls = () => (existsSync(claudeCalls) ? readFileSync(claudeCalls, 'utf8').trim().split('\n') : [])
+  await waitFor(() => calls().join('|') === `plugin marketplace add --scope user ${marketDir}|plugin install hello-plugin@e2e-market --scope user`, 'claude вызван с точными командами добавления и установки')
   await dialog.waitFor({ state: 'detached', timeout: 8000 })
+
+  // скил из «GitHub» (локальный git-репозиторий вместо сети): что и куда → скачать → выбрать → план ядра → журнал → откат
+  const skillErr = (s, dry) => page.evaluate(async ([x, d]) => (await window.loadout.skillFetch(x, d)).error ?? 'ok', [s, dry])
+  for (const bad of ['acme/skills --upload-pack=x', '-acme/x', 'acme/skills/../x', 'https://gitlab.com/a/b', 'relative\\dir']) {
+    must((await skillErr(bad, true)) !== 'ok', `источник скила должен отвергаться: ${bad}`)
+  }
+  must((await skillErr('acme/skills', false)).includes('скачано'), 'загрузка без показа «что будет скачано» должна отказывать')
+  const badPlan = await page.evaluate(async () => (await window.loadout.plan({ op: 'installSkill', stage: '../../x', sub: '', name: 'a' })).ok)
+  must(badPlan === false, 'план установки скила с путём вместо номера подготовки должен отвергаться')
+  const skillDir = join(home, '.claude', 'skills', 'web-search')
+  await page.getByRole('button', { name: 'Установить скил', exact: true }).click()
+  await dialog.getByLabel('Источник скила').fill('acme/skills')
+  await dialog.getByRole('button', { name: 'Что будет скачано' }).click()
+  await dialog.getByText(/Будет скачано:.*git .*clone --depth 1 .*acme\/skills\.git/).waitFor({ timeout: 8000 })
+  await dialog.getByRole('button', { name: 'Скачать и показать' }).click()
+  await dialog.getByRole('radio', { name: /web-search/ }).waitFor({ timeout: 20000 })
+  await dialog.getByRole('radio', { name: /web-search/ }).check()
+  const vSkill = await axeCheck(page, 'выбор скила')
+  must(vSkill.length === 0, `axe: выбор скила: ${vSkill.map((x) => x.id).join(', ')}`)
+  await shot(page, 'm6-skill-dialog-1280')
+  await dialog.getByRole('button', { name: 'Предпросмотр установки' }).click()
+  const skillPlan = await openPlan()
+  must(skillPlan.includes('~/.claude/skills/web-search/') && skillPlan.includes('helper.py') && skillPlan.includes('файлы кода'), `предпросмотр установки скила: ${skillPlan}`)
+  must(!existsSync(skillDir), 'до подтверждения скил не установлен')
+  await shot(page, 'm6-skill-plan-1280')
+  await applyDialog()
+  await waitFor(() => existsSync(join(skillDir, 'SKILL.md')) && existsSync(join(skillDir, 'helper.py')), 'скил установлен в ~/.claude/skills/web-search')
+  await dialog.waitFor({ state: 'detached', timeout: 8000 })
+  await page.keyboard.press('1')
+  const skillRow = page.locator('tbody tr', { has: page.locator('td.name b', { hasText: /^web-search$/ }) })
+  await waitFor(async () => (await skillRow.count()) === 1, 'установленный скил виден в матрице')
+  await page.keyboard.press('5')
+  await page.getByRole('row', { name: /установка скила/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
+  await waitFor(() => !existsSync(skillDir), 'откат убрал скил')
+  await page.keyboard.press('1')
+  await waitFor(async () => (await skillRow.count()) === 0, 'после отката скила нет в матрице')
 
   // профили: снять состояние, поправить, применить пакетом, откатить пакет целиком
   await page.keyboard.press('6')
@@ -846,7 +921,8 @@ try {
   homes.push(enHome)
   writeFileSync(join(profile, 'settings.json'), JSON.stringify({ writeLevel: 'R2' }))
   // журнал русских сценариев остаётся: записи, сделанные на другом языке, показываются на текущем (relang в ядре)
-  session = await launch({ LOADOUT_HOME: enHome, LOADOUT_LANG: 'en', LOADOUT_CLAUDE: process.execPath, LOADOUT_CLAUDE_ARGS: JSON.stringify([fakeClaude]) })
+  const enMarket = sources(enHome)
+  session = await launch({ ...fakeEnv(enHome, join(enHome, 'claude-calls.txt')), LOADOUT_LANG: 'en' })
   {
     const { app: enApp, page: en } = session
     const enErrors = []
@@ -914,11 +990,30 @@ try {
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
     // установка плагина: предпросмотр
     await en.getByRole('button', { name: 'Install plugin', exact: true }).click()
-    await enDialog.getByLabel(/Plugin/).fill('demo@market')
+    await enDialog.getByRole('button', { name: 'Add marketplace…' }).click()
+    await enDialog.getByLabel('Marketplace source').fill(enMarket)
     await enDialog.getByRole('button', { name: 'Preview' }).click()
-    await enDialog.getByText('claude plugin install demo@market --scope user').waitFor({ timeout: 8000 })
+    await enDialog.getByText(`claude plugin marketplace add --scope user ${tilde(enMarket)}`).waitFor({ timeout: 8000 })
+    await enOk('marketplace add')
+    await enDialog.getByRole('button', { name: 'Add marketplace', exact: true }).click()
+    await enDialog.getByRole('list', { name: 'Catalog e2e-market' }).getByRole('button', { name: /^hello-plugin/ }).click()
+    await enDialog.getByText('claude plugin install hello-plugin@e2e-market --scope user').waitFor({ timeout: 8000 })
     await enOk('plugin dialog')
     await shot(en, 'en-plugin-1280')
+    await enDialog.getByRole('button', { name: 'Close' }).click()
+    // скил: показ «что будет скачано», загрузка, выбор и план ядра
+    await en.getByRole('button', { name: 'Install skill', exact: true }).click()
+    await enDialog.getByLabel('Skill source').fill('acme/skills')
+    await enDialog.getByRole('button', { name: 'What will be downloaded' }).click()
+    await enDialog.getByText(/Will download:/).waitFor({ timeout: 8000 })
+    await enDialog.getByRole('button', { name: 'Download and show' }).click()
+    await enDialog.getByRole('radio', { name: /web-search/ }).check({ timeout: 20000 })
+    await enOk('skill dialog')
+    await shot(en, 'en-skill-1280')
+    await enDialog.getByRole('button', { name: 'Preview installation' }).click()
+    await enDialog.getByText('~/.claude/skills/web-search/').waitFor({ timeout: 8000 })
+    await enOk('skill plan')
+    await shot(en, 'en-skill-plan-1280')
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
     // запись из матрицы: корзина, правка и копирование (диалоги и планы ядра)
     const enCell = (row, idx) =>

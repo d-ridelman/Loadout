@@ -6,7 +6,7 @@ import { levelOk } from './Inspector'
 
 // t() только во время рендера, не при импорте модуля
 const opLabel = (op: JournalEntry['op']): string =>
-  ({ toggle: t('запись', 'write'), edit: t('правка', 'edit'), copy: t('копия', 'copy'), add: t('добавление', 'add'), rollback: t('откат', 'rollback') })[op]
+  ({ toggle: t('запись', 'write'), edit: t('правка', 'edit'), copy: t('копия', 'copy'), add: t('добавление', 'add'), installSkill: t('установка скила', 'skill install'), rollback: t('откат', 'rollback') })[op]
 
 type State = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; rows: JournalEntry[] }
 

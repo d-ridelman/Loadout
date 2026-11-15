@@ -232,4 +232,16 @@ pre.out { margin: 6px 0; padding: 10px 12px; max-height: 260px; overflow: auto; 
 .spin { display: inline-block; width: 0.85em; height: 0.85em; margin-right: 6px; vertical-align: -0.1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: sweep 0.8s linear infinite; }
 html[data-fx='off'] .spin { animation: none; border-right-color: currentColor; opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+/* каталог маркетплейса и выбор скила: строка-кнопка с именем, версией и описанием под ними */
+.row-inline { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.row-inline label { flex: 1; min-width: 0; }
+.row-inline select { max-width: none; width: 100%; }
+.form.sub { padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; }
+.catalog .pick { display: block; width: 100%; text-align: left; padding: 6px 8px; margin: 0 0 4px; }
+.catalog .pick[aria-pressed='true'] { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
+.catalog .pick .badge { margin: 0 0 0 8px; min-width: 0; }
+.desc { display: block; margin-top: 2px; overflow-wrap: anywhere; }
+.choices .plist li { margin-bottom: 8px; }
+.choices .plist label { align-items: flex-start; }
+.choices .plist input[type='radio'] { margin-top: 3px; }
 .help { position: fixed; right: 364px; bottom: 40px; padding: 12px; z-index: 80; width: 280px; }
