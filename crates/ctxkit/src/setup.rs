@@ -194,9 +194,9 @@ pub fn run_setup(args: &[String]) -> i32 {
     let preflight = || -> Result<(), String> {
         preflight_settings(&profile.join("settings.json"), true)?;
         if opts.with_rules {
-            readable_utf8(&profile.join("CLAUDE.md"))?;
+            preflight_rules_file(&profile.join("CLAUDE.md"))?;
             if opts.dsh {
-                readable_utf8(&dsh_home_dir().join("AGENTS.md"))?;
+                preflight_rules_file(&dsh_home_dir().join("AGENTS.md"))?;
             }
         }
         if opts.antigravity {
@@ -918,6 +918,7 @@ fn upsert_claude_md(
     } else {
         String::new()
     };
+    check_rules_markers(path, &existing)?;
 
     let updated = if let Some((s, end_idx)) = marker_span(&existing) {
         format!("{}{}{}", &existing[..s], block, &existing[end_idx..])
@@ -970,13 +971,58 @@ pub(crate) fn marker_span(text: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// Whether `m` stands alone on some line (how `marker_span` recognises a marker).
-pub(crate) fn has_marker_line(text: &str, m: &str) -> bool {
-    text.lines().any(|l| {
-        l.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-            .trim_end()
-            == m
-    })
+/// How many lines are `m` alone on the line (how `marker_span` recognises a marker).
+fn marker_lines(text: &str, m: &str) -> usize {
+    text.lines()
+        .filter(|l| {
+            l.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+                .trim_end()
+                == m
+        })
+        .count()
+}
+
+/// What is wrong with the rules markers in `text`, or `None` when there is one block, none, or one old
+/// `claude-guard` block that setup migrates. Wrong: a start without an end (or the reverse), more than one block,
+/// or an old and a new block together. Older versions of setup could leave such a file behind (they cut from a
+/// marker named inside a sentence); setup then adds a second block and the rollback removes only one.
+pub(crate) fn marker_problem(text: &str) -> Option<String> {
+    let new = (
+        marker_lines(text, MARKER_START),
+        marker_lines(text, MARKER_END),
+    );
+    let old = (
+        marker_lines(text, LEGACY_MARKER_START),
+        marker_lines(text, LEGACY_MARKER_END),
+    );
+    let broken = |(s, e): (usize, usize)| s != e || s > 1;
+    if !(broken(new) || broken(old) || (new.0 >= 1 && old.0 >= 1)) {
+        return None;
+    }
+    Some(format!(
+        "ctxkit markers: {} start / {} end lines, old claude-guard markers: {} start / {} end",
+        new.0, new.1, old.0, old.1
+    ))
+}
+
+/// `Err` when a rules file has the broken marker picture of `marker_problem`: setup must not add a second block.
+pub(crate) fn check_rules_markers(path: &Path, text: &str) -> Result<(), String> {
+    match marker_problem(text) {
+        Some(p) => Err(format!(
+            "{}: {p}; keep one block (the lines `{MARKER_START}` ... `{MARKER_END}`) or delete the markers and the old block by hand, then rerun",
+            path.display()
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The preflight of a rules file (`CLAUDE.md`, `AGENTS.md`): readable as UTF-8 and with sane markers.
+fn preflight_rules_file(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    check_rules_markers(path, &text)
 }
 
 /// `Ok` when the file is missing or readable as UTF-8: checked before a write that would read it later.
@@ -2128,6 +2174,39 @@ mod tests {
         .is_ok());
         assert!(preflight_settings(&d.join("none.json"), true).is_ok());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn marker_problem_finds_doubled_and_unpaired_blocks_only() {
+        let new = format!("{MARKER_START}\nr\n{MARKER_END}\n");
+        let old = format!("{LEGACY_MARKER_START}\nr\n{LEGACY_MARKER_END}\n");
+        for fine in [
+            String::new(),
+            "# mine\n".to_string(),
+            new.clone(),
+            old.clone(),
+            format!("a\r\n{MARKER_START}\r\nx\r\n{MARKER_END}\r\n"),
+            format!("see {MARKER_START} and {MARKER_END} here\n{new}"),
+            format!("\u{feff}{new}"),
+        ] {
+            assert_eq!(marker_problem(&fine), None, "{fine:?}");
+        }
+        for broken in [
+            format!("{new}\n{new}"),
+            format!("{new}{old}"),
+            format!("{MARKER_START}\nno end\n"),
+            format!("{MARKER_END}\n"),
+            format!("{MARKER_START}\n{new}"),
+            format!("{old}{old}"),
+        ] {
+            assert!(marker_problem(&broken).is_some(), "{broken:?}");
+        }
+        let err =
+            check_rules_markers(Path::new("/p/CLAUDE.md"), &format!("{new}{new}")).unwrap_err();
+        assert!(
+            err.contains("/p/CLAUDE.md") && err.contains("2 start / 2 end"),
+            "{err}"
+        );
     }
 
     #[test]

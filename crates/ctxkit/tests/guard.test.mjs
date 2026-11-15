@@ -626,6 +626,8 @@ const cases = [
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, 'c.json'), '{}');
     const hash =(f) => (existsSync(f) ? readFileSync(f).toString('hex') : 'none');
+    // a refused setup leaves no copied binary, no settings.json and no backup in the profile
+    const untouched = (profile) => !existsSync(join(profile, 'hooks')) && !existsSync(join(profile, 'settings.json')) && !existsSync(join(profile, 'backups'));
 
     // markers mentioned inside the user's own sentences
     const p1 = mk('prose');
@@ -666,12 +668,23 @@ const cases = [
     writeFileSync(join(p7, 'settings.json'), '{"modelSettings":{"claude-sonnet-5-5":"x"}}');
     if (run(p7, '--effort', 'high').status !== 1 || existsSync(join(p7, 'hooks'))) return false;
 
-    // a lone start marker line of the user's own does not make setup eat the lines after it, and a BOM does not hide our block
+    // a start marker without an end (or a doubled block, left by an older setup): setup refuses with the file path,
+    // before anything is copied or written, instead of adding a second block; the rollback still removes whole blocks
     const p8 = mk('lonemarker');
-    writeFileSync(join(p8, 'CLAUDE.md'), 'keep1\n<!-- ctxkit:start -->\nkeep2 no end\n');
-    if (run(p8, '--with-rules').status !== 0) return false;
-    const lone1 = readFileSync(join(p8, 'CLAUDE.md'), 'utf8');
-    if (run(p8, '--with-rules').status !== 0 || readFileSync(join(p8, 'CLAUDE.md'), 'utf8') !== lone1 || !lone1.includes('keep2 no end')) return false;
+    const loneText = 'keep1\n<!-- ctxkit:start -->\nkeep2 no end\n';
+    writeFileSync(join(p8, 'CLAUDE.md'), loneText);
+    const r8 = run(p8, '--with-rules');
+    if (r8.status !== 1 || !untouched(p8) || readFileSync(join(p8, 'CLAUDE.md'), 'utf8') !== loneText || !r8.stderr.includes(join(p8, 'CLAUDE.md'))) return `lone marker: ${r8.status} ${r8.stderr}`;
+    const p8b = mk('doubledblock');
+    const blockText = '<!-- ctxkit:start -->\nrules\n<!-- ctxkit:end -->\n';
+    const doubled = `# Mine\n\n${blockText}\n${blockText}`;
+    writeFileSync(join(p8b, 'CLAUDE.md'), doubled);
+    const r8b = run(p8b, '--with-rules');
+    if (r8b.status !== 1 || !untouched(p8b) || readFileSync(join(p8b, 'CLAUDE.md'), 'utf8') !== doubled) return `doubled block: ${r8b.status} ${r8b.stderr}`;
+    const u8b = run(p8b, '--uninstall');
+    if (u8b.status !== 0 || readFileSync(join(p8b, 'CLAUDE.md'), 'utf8').includes('ctxkit:')) return `uninstall of a doubled block: ${u8b.status} ${u8b.stdout}`;
+    const doctor8 = spawnSync(exe, ['doctor', '--profile', p8, '--lang', 'en'], { encoding: 'utf8' });
+    if (!doctor8.stdout.includes('rules_markers') || !doctor8.stdout.includes(join(p8, 'CLAUDE.md'))) return `doctor: ${doctor8.stdout}`;
     const p9 = mk('bom');
     run(p9, '--with-rules');
     const withBlock = readFileSync(join(p9, 'CLAUDE.md'), 'utf8');
@@ -682,7 +695,6 @@ const cases = [
 
     // the preflight covers the Desktop presets file and the DeepSeek Harness files too: a refusal happens
     // before the binary is copied, settings.json is written or any backup is made
-    const untouched = (profile) => !existsSync(join(profile, 'hooks')) && !existsSync(join(profile, 'settings.json')) && !existsSync(join(profile, 'backups'));
     const p11 = mk('badpresets');
     const badPresets = join(root, 'presets-bad.json');
     writeFileSync(badPresets, '{ broken');

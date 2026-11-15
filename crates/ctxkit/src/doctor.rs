@@ -1,4 +1,4 @@
-use crate::setup::{home_dir, marker_span, read_json_object};
+use crate::setup::{home_dir, marker_problem, marker_span, read_json_object};
 use crate::{detect_lang, parse_lang, t, Lang};
 use serde_json::{json, Value};
 use std::env;
@@ -254,6 +254,19 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
     }
 
     let md = fs::read(profile.join("CLAUDE.md")).map(|b| String::from_utf8_lossy(&b).into_owned());
+    if let Some(problem) = md.as_ref().ok().and_then(|m| marker_problem(m)) {
+        out.push(f(
+            "rules_markers",
+            "warn",
+            t(
+                lang,
+                "the ctxkit markers in CLAUDE.md are unbalanced or the block is doubled (an older setup could leave this): setup refuses to touch the file and the rollback removes only part of it. Keep one block between the markers, or delete the markers and the old block by hand, then rerun setup --with-rules",
+                "маркеры ctxkit в CLAUDE.md не сбалансированы или блок задвоен (так могла оставить прежняя версия setup): setup такой файл не трогает, а откат убирает только часть. Оставь один блок между маркерами или удали маркеры и старый блок вручную, затем снова запусти setup --with-rules",
+            ),
+            Some(format!("{}: {problem}", profile.join("CLAUDE.md").display())),
+            None,
+        ));
+    }
     match md {
         Ok(md) if marker_span(&md).is_some() => {
             out.push(f("rules_block", "ok", t(lang, "ctxkit rules block present", "блок правил ctxkit есть"), None, None));
@@ -491,6 +504,29 @@ mod tests {
         // an unnamed model (no key, an id setup cannot map) gives no such finding
         assert!(has(json!({})).is_none());
         assert!(has(json!({"model": "sonnet[1m]"})).is_none());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn doubled_or_unbalanced_markers_warn_with_the_path() {
+        let d = temp("ctxkit_doctor_markers");
+        let block = "<!-- ctxkit:start -->\nr\n<!-- ctxkit:end -->\n";
+        let find = |text: &str| {
+            fs::write(d.join("CLAUDE.md"), text).unwrap();
+            diagnose(&d, Lang::En)
+                .into_iter()
+                .find(|x| x.id == "rules_markers")
+        };
+        assert!(find(block).is_none());
+        assert!(
+            find("see <!-- ctxkit:start --> in text\n").is_none(),
+            "a mention in a sentence is not a marker"
+        );
+        let doubled = find(&format!("{block}\n{block}")).unwrap();
+        assert_eq!(doubled.severity, "warn");
+        assert!(doubled.detail.unwrap().contains("CLAUDE.md"));
+        assert!(find("a\n<!-- ctxkit:start -->\nno end\n").is_some());
+        assert!(find("<!-- ctxkit:end -->\n").is_some());
         let _ = fs::remove_dir_all(&d);
     }
 

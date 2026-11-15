@@ -81,6 +81,18 @@ fn strip_dsh_block(text: &str) -> Result<String, ()> {
     Ok(text)
 }
 
+/// Whether any rules marker line is still in the text (after every whole block was cut out of it).
+fn marker_lines_left(text: &str) -> bool {
+    [
+        MARKER_START,
+        MARKER_END,
+        LEGACY_MARKER_START,
+        LEGACY_MARKER_END,
+    ]
+    .iter()
+    .any(|m| marker_lines(text, m) > 0)
+}
+
 fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
     if !path.exists() {
         println!("  skip rules (not found): {}", path.display());
@@ -88,15 +100,15 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
     }
     let existing = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let updated = strip_rules_blocks(&existing);
+    // Markers that are still unbalanced after the whole blocks are gone (a start without an end).
+    if marker_lines_left(&updated) {
+        println!(
+            "  [warn] {}: a ctxkit start or end marker has no pair; remove the leftover block by hand",
+            path.display()
+        );
+    }
     if existing == updated {
-        if has_marker_line(&existing, MARKER_START)
-            || has_marker_line(&existing, LEGACY_MARKER_START)
-        {
-            println!(
-                "  [warn] {}: a ctxkit start marker has no end marker; remove the leftover block by hand",
-                path.display()
-            );
-        } else {
+        if !marker_lines_left(&updated) {
             println!("  ok rules block (not present): {}", path.display());
         }
     } else if dry_run {
