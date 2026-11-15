@@ -30,8 +30,8 @@ function applyLabel(p: Plan | undefined, intent: Intent): string {
   if (intent.op === 'add') return 'Добавить'
   if (intent.op === 'edit') return 'Записать команду'
   if (intent.op === 'copy') return 'Скопировать'
-  if (p?.from.includes('корзин')) return 'Вернуть из корзины'
-  if (!intent.enable && p?.to.includes('корзин')) return 'Вынести в корзину'
+  if (p?.trash === 'in') return 'Вернуть из корзины'
+  if (!intent.enable && p?.trash === 'out') return 'Вынести в корзину'
   return intent.enable ? 'Включить' : 'Выключить'
 }
 

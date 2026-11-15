@@ -9,6 +9,7 @@ pub mod diff;
 pub mod edit;
 pub mod facts;
 pub mod frontmatter;
+pub mod i18n;
 pub mod mask;
 pub mod model;
 pub mod profiles;

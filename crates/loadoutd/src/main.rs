@@ -24,14 +24,24 @@ fn serve_main(args: &[String]) -> ExitCode {
         match a.as_str() {
             "--home" => home = it.next().map(PathBuf::from),
             "--backups" => backups = it.next().map(PathBuf::from),
+            "--lang" => loadout_core::i18n::set_lang(it.next().map_or("ru", String::as_str)),
             other => {
-                eprintln!("неизвестный аргумент: {other}");
+                eprintln!(
+                    "{}",
+                    loadout_core::tr!("неизвестный аргумент: {other}", "unknown argument: {other}")
+                );
                 return ExitCode::from(2);
             }
         }
     }
     let Some(home) = home_or_default(home) else {
-        eprintln!("не удалось определить домашний каталог, укажите --home");
+        eprintln!(
+            "{}",
+            loadout_core::tr!(
+                "не удалось определить домашний каталог, укажите --home",
+                "cannot determine the home directory, pass --home"
+            )
+        );
         return ExitCode::from(2);
     };
     serve::run(&home, backups);

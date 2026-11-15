@@ -122,9 +122,9 @@ const opOf = (v: unknown): v is OpKind => v === 'toggle' || v === 'edit' || v ==
 /** Ответ `plan`: только поля плана, собранные заново. */
 export function validatePlan(raw: unknown): Plan {
   if (!isObj(raw)) bad('план')
-  const { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects, notes, baseSha } = raw
+  const { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects, notes, baseSha, trash } = raw
   if (
-    !opOf(op) || !levelOf(level) ||
+    !opOf(op) || !levelOf(level) || !(trash === '' || trash === 'out' || trash === 'in') ||
     !isStr(entity) || !known(client) || !kindOf(kind) || !isStr(name) || !isStr(file) || !isStr(pointer) ||
     typeof enable !== 'boolean' || !isStr(from) || !isStr(to) || typeof noop !== 'boolean' ||
     !Array.isArray(notes) || notes.length > 20 || !notes.every(isStr) ||
@@ -132,7 +132,7 @@ export function validatePlan(raw: unknown): Plan {
   ) {
     bad('план')
   }
-  return { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), notes: notes as string[], baseSha }
+  return { trash, op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), notes: notes as string[], baseSha }
 }
 
 export function validateBatchPlan(raw: unknown): BatchPlan {

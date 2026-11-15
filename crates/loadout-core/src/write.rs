@@ -168,6 +168,9 @@ pub struct Plan {
     pub affects: Vec<String>,
     /// Что стоит знать до подтверждения (что не переносится, какие ключи `env` копируются).
     pub notes: Vec<String>,
+    /// Корзина Loadout: `out` — запись выносится в неё, `in` — возвращается из неё, пусто — не затрагивается.
+    /// Окно выбирает по этому полю название кнопки, а не по тексту `from`/`to` (он зависит от языка).
+    pub trash: String,
     pub base_sha: String,
 }
 
@@ -247,6 +250,7 @@ fn plan_for(e: &Entity, op: &str, level: &str, file: String, old: &[u8]) -> Plan
         noop: false,
         affects: Vec::new(),
         notes: Vec::new(),
+        trash: String::new(),
         base_sha: sha(old),
     }
 }
@@ -324,6 +328,7 @@ fn prep_toggle(
             }
             .into();
             if !enable {
+                plan.trash = "out".into();
                 let (key, parent) = t.path.split_last().ok_or("пустой путь")?;
                 let stale = store.and_then(|s| trash::read(s, &e.id));
                 let mut anchor = None;
@@ -374,6 +379,9 @@ fn prep_toggle(
         TargetKind::Restore(src) => {
             plan.level = "R2".into();
             plan.noop = !enable;
+            if matches!(src, Source::Trash(_)) {
+                plan.trash = "in".into();
+            }
             plan.from = match src {
                 Source::Trash(_) => "в корзине Loadout",
                 Source::Stash(_) => "в стэше владельца",
@@ -779,6 +787,7 @@ fn prep_add(
         noop: false,
         affects: Vec::new(),
         notes,
+        trash: String::new(),
         base_sha: sha(&old),
     };
     Ok(Prepared {
