@@ -70,6 +70,24 @@ pub struct Origin {
     pub pointer: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Json,
+    Toml,
+}
+
+/// Куда писать, чтобы переключить запись (R1): булев ключ в известном файле клиента.
+/// Настоящий путь и сырые ключи; наружу не уходит (`#[serde(skip)]` у поля), в вывод идут только очищенные `origin`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    pub file: std::path::PathBuf,
+    pub format: Format,
+    /// Ключи от корня файла до булева значения.
+    pub path: Vec<String>,
+    /// `true` в файле значит «выключено» (`disableClaudeAiConnectors`).
+    pub inverted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entity {
@@ -91,6 +109,9 @@ pub struct Entity {
     /// иначе разные записи (`app-69f0dc45…` в каталоге Codex) сольются в одну строку `<masked>`.
     #[serde(skip)]
     pub fs_named: bool,
+    /// Как переключить запись; `None` — переключатель не поддержан (см. [`crate::write::why_not`]).
+    #[serde(skip)]
+    pub target: Option<Target>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
@@ -158,7 +179,13 @@ impl Entity {
             note: None,
             detail: json!({}),
             fs_named: false,
+            target: None,
         }
+    }
+
+    pub fn target(mut self, t: Target) -> Self {
+        self.target = Some(t);
+        self
     }
 
     /// Пометка «имя из файловой системы» (см. [`Entity::fs_named`]).

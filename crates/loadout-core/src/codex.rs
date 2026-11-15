@@ -1,7 +1,7 @@
 //! Адаптер ChatGPT / Codex (приложение `OpenAI.Codex`, конфиг `~/.codex`). Источники — таблица §2 CONCEPT.md.
 
 use crate::mask::{self, mcp_detail};
-use crate::model::{Client, Entity, Kind, State};
+use crate::model::{Client, Entity, Format, Kind, State, Target};
 use crate::{scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Value};
 
@@ -18,6 +18,18 @@ fn toml_key(name: &str) -> String {
         name.to_owned()
     } else {
         format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
+/// Ключ `enabled` в таблице `config.toml` (цель записи R1).
+fn flag(file: &std::path::Path, table: &[&str]) -> Target {
+    let mut path: Vec<String> = table.iter().map(|s| (*s).to_owned()).collect();
+    path.push("enabled".to_owned());
+    Target {
+        file: file.to_path_buf(),
+        format: Format::Toml,
+        path,
+        inverted: false,
     }
 }
 
@@ -69,7 +81,8 @@ fn config(c: &mut Ctx) {
             state,
             CONFIG,
             format!("plugins.{}", toml_key(name)),
-        );
+        )
+        .target(flag(&path, &["plugins", name]));
         if let Some(n) = note {
             e = e.note(n);
         }
@@ -113,6 +126,7 @@ fn config(c: &mut Ctx) {
             CONFIG,
             format!("mcp_servers.{}", toml_key(name)),
         )
+        .target(flag(&path, &["mcp_servers", name]))
         .detail(mcp_detail(m));
         c.push(e);
     }
@@ -142,7 +156,8 @@ fn config(c: &mut Ctx) {
             CONFIG,
             format!("apps.{}", toml_key(id)),
         )
-        .note("локальный переключатель приложения аккаунта; источник правды — аккаунт ChatGPT");
+        .note("локальный переключатель приложения аккаунта; источник правды — аккаунт ChatGPT")
+        .target(flag(&path, &["apps", id]));
         c.push(e);
     }
 }

@@ -6,6 +6,7 @@ pub mod claude_desktop;
 pub mod codex;
 pub mod deepseek;
 pub mod diff;
+pub mod edit;
 pub mod facts;
 pub mod frontmatter;
 pub mod mask;

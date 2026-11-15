@@ -1,7 +1,7 @@
 //! Адаптер Claude Code (CLI и вкладка Code в Claude Desktop). Источники — таблица §2 CONCEPT.md.
 
 use crate::mask::{self, mcp_detail};
-use crate::model::{Client, Entity, Kind, State};
+use crate::model::{Client, Entity, Format, Kind, State, Target};
 use crate::{esc_ptr, frontmatter, scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -39,6 +39,16 @@ pub fn scan(c: &mut Ctx) {
     md_dir(c, "commands", Kind::Command);
     if let Some(h) = settings.as_ref().and_then(|s| s.get("hooks")) {
         scan_hooks(c, CLIENT, "~/.claude/settings.json", "/hooks", "user", h);
+    }
+}
+
+/// Булев ключ в `~/.claude/settings.json` (цель записи R1).
+fn settings_flag(c: &Ctx, path: &[&str]) -> Target {
+    Target {
+        file: c.home.join(".claude/settings.json"),
+        format: Format::Json,
+        path: path.iter().map(|s| (*s).to_owned()).collect(),
+        inverted: false,
     }
 }
 
@@ -141,6 +151,9 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
             if let Some(n) = note {
                 e = e.note(n);
             }
+            if is_user && path_ok {
+                e = e.target(settings_flag(c, &["enabledPlugins", key]));
+            }
             c.push(e);
         }
     }
@@ -156,7 +169,8 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                 "~/.claude/settings.json",
                 format!("/enabledPlugins/{}", esc_ptr(key)),
             )
-            .note("включён в enabledPlugins, но не установлен");
+            .note("включён в enabledPlugins, но не установлен")
+            .target(settings_flag(c, &["enabledPlugins", key]));
             c.push(e);
         }
     }
@@ -215,6 +229,8 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
                 "в списке «когда-либо подключались»; источник правды — аккаунт claude.ai",
             )
         };
+        let mut t = settings_flag(c, &["disableClaudeAiConnectors"]);
+        t.inverted = true; // `true` в файле — коннекторы выключены, и это касается всех сразу
         found.push(
             Entity::new(
                 CLIENT,
@@ -225,7 +241,8 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
                 file,
                 format!("/claudeAiMcpEverConnected/{i}"),
             )
-            .note(note),
+            .note(note)
+            .target(t),
         );
     }
 
@@ -300,6 +317,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
         if denied.contains(&e.name) && e.state != State::Off {
             e.state = State::Off;
             e.note = Some("запрещён в deniedMcpServers (по имени)".to_owned());
+            e.target = None; // ключ `disableClaudeAiConnectors` запрет по имени не снимает
         }
         c.push(e);
     }
