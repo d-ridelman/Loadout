@@ -269,8 +269,8 @@ export function App() {
       <footer>
         <span>{entities.length} записей · {rows.length} строк · {CLIENTS.length} клиентов</span>
         {updatedAt ? (
-          <span title="Ядро следит за конфигами клиентов и присылает изменения само">
-            наблюдение за файлами · обновлено {updatedAt.toLocaleTimeString('ru-RU')}
+          <span title="Ядро следит за конфигами клиентов и присылает изменения само; если слежение не поднялось, обновляйте вручную">
+            обновлено {updatedAt.toLocaleTimeString('ru-RU')}
           </span>
         ) : null}
         {problems > 0 ? <span className="s-broken">✕ сломано: {problems}</span> : null}

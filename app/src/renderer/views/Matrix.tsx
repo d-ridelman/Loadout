@@ -40,7 +40,9 @@ interface Props {
 }
 
 export function Matrix({ rows, total, filters, setFilters, sel, onSelect, searchRef, fresh }: Props) {
-  const curRow = Math.max(0, sel ? rows.findIndex((r) => r.key === sel.rowKey) : 0)
+  // Выбранная строка могла исчезнуть (обновление с диска, фильтр): тогда выбранной ячейки нет, а движение идёт с первой строки.
+  const foundRow = sel ? rows.findIndex((r) => r.key === sel.rowKey) : -1
+  const curRow = Math.max(0, foundRow)
   const curCol = Math.max(0, sel ? CLIENTS.findIndex((c) => c.id === sel.client) : 0)
 
   const pick = (ri: number, ci: number) => {
@@ -119,7 +121,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
           tabIndex={0}
           aria-label="Матрица сущностей по клиентам"
           aria-rowcount={rows.length + 1}
-          aria-activedescendant={sel ? `cell-${curRow}-${curCol}` : undefined}
+          aria-activedescendant={foundRow >= 0 ? `cell-${curRow}-${curCol}` : undefined}
           onKeyDown={onKeyDown}
         >
           <thead>
@@ -140,7 +142,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
                 {CLIENTS.map((c, ci) => {
                   const cell = r.cells[c.id]
                   const state = cell?.state ?? 'none'
-                  const active = ri === curRow && ci === curCol && sel !== null
+                  const active = ri === foundRow && ci === curCol
                   const more = (cell?.instances.length ?? 0) - 1
                   const isFresh = cell?.instances.some((i) => fresh.has(i.id)) ?? false
                   return (

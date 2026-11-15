@@ -11,7 +11,7 @@ import { validateDiff, validateScan } from './validate'
  * Переменные окружения (`LOADOUT_BIN`, `LOADOUT_HOME`, `LOADOUT_USER_DATA`, `ELECTRON_RENDERER_URL`) нужны разработке
  * и проверкам окна. В установленной сборке они игнорируются, иначе чужое окружение подменило бы ядро или страницу.
  */
-const envAllowed = !app.isPackaged || process.env.APP_QA === '1'
+const envAllowed = !app.isPackaged
 const envOf = (name: string): string | undefined => (envAllowed ? process.env[name] : undefined)
 
 /** Путь с домашним каталогом в тексте ошибки показываем как `~`. */
@@ -43,6 +43,8 @@ function sidecarPath(): string {
 
 let sidecar: Sidecar | undefined
 let lastWindow: BrowserWindow | undefined
+/** Скан не удался: окно показывает ошибку, и первый же `ready` перезапущенного ядра должен её сменить данными. */
+let needCatchUp = false
 
 /** Постоянное ядро: `loadout serve` по JSON-RPC. Падает — поднимается заново (см. sidecar.ts). */
 function ensureSidecar(): Sidecar | string {
@@ -61,9 +63,11 @@ function ensureSidecar(): Sidecar | string {
     onNotification: (method, params) => {
       if (method === 'changed') void pushChanged(params)
       else if (method === 'ready') {
-        // Повторный `ready` значит, что ядро перезапустилось: за время паузы файлы могли измениться, окно догоняем
-        if (readySeen) void pushChanged(undefined)
+        // Повторный `ready` значит, что ядро перезапустилось: за время паузы файлы могли измениться, окно догоняем.
+        // То же, если первый запрос не удался (ядро упало до первого `ready`): окно тогда показывает ошибку.
+        if (readySeen || needCatchUp) void pushChanged(undefined)
         readySeen = true
+        needCatchUp = false
       }
     },
   })
@@ -81,6 +85,7 @@ async function runScan(): Promise<ScanResponse> {
   try {
     return { ok: true, data: validateScan(await s.request('scan')), ms: Date.now() - started }
   } catch (e) {
+    needCatchUp = true
     return { ok: false, error: tidy(e instanceof Error ? e.message : 'не удалось разобрать ответ ядра') }
   }
 }
@@ -105,7 +110,13 @@ async function pushChanged(params: unknown): Promise<void> {
 /** Принимаем вызовы только от нашей страницы: файл из сборки или адрес dev-сервера. */
 function trusted(e: IpcMainInvokeEvent): boolean {
   const url = e.senderFrame?.url ?? ''
-  return url.split('#')[0] === INDEX_URL || (DEV_URL !== undefined && url.startsWith(DEV_URL))
+  if (url.split('#')[0] === INDEX_URL) return true
+  // dev-сервер: тот же источник целиком, а не префикс строки (`http://localhost:5173.evil.test` не подходит)
+  try {
+    return DEV_URL !== undefined && new URL(url).origin === new URL(DEV_URL).origin
+  } catch {
+    return false
+  }
 }
 
 /** Окно проверок не мешает владельцу: за экраном, без кнопки на панели задач (`LOADOUT_QA_VISIBLE=1` возвращает на экран). */

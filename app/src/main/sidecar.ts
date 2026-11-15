@@ -35,17 +35,21 @@ export class Sidecar {
   private restartTimer: NodeJS.Timeout | undefined
   private stopping = false
   private dead = false
+  /** После `stop()` запрос не поднимает ядро заново: приложение закрывается. Снимает только явный `start()`. */
+  private closed = false
 
   constructor(private readonly o: SidecarOptions) {}
 
   start(): void {
     this.stopping = false
+    this.closed = false
     this.dead = false
     this.spawnChild()
   }
 
   /** Запрос без аргументов: у страницы нет способа передать ядру путь. */
   request(method: string): Promise<unknown> {
+    if (this.closed) return Promise.reject(new Error('ядро остановлено'))
     if (this.dead || (!this.child && !this.restartTimer)) {
       // исчерпанные или не начатые попытки: повторный запрос (кнопка «Повторить») начинает заново
       this.attempts = 0
@@ -65,6 +69,7 @@ export class Sidecar {
   /** Закрывает stdin (по EOF ядро выходит само) и добивает процесс, если он завис. */
   stop(): void {
     this.stopping = true
+    this.closed = true
     clearTimeout(this.restartTimer)
     this.restartTimer = undefined
     this.failAll('ядро остановлено')

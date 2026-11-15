@@ -33,14 +33,14 @@ pub struct Facts {
 }
 
 /// Каталоги, где хозяйничают сторонние установщики и копятся резервные копии (проверено на этой машине).
-const BACKUP_DIRS: [(Client, &str); 4] = [
+pub const BACKUP_DIRS: [(Client, &str); 4] = [
     (Client::ClaudeCode, ".claude"),
     (Client::Codex, ".codex"),
     (Client::Antigravity, ".gemini/config"),
     (Client::DeepSeek, ".dsh"),
 ];
 
-fn is_backup_name(name: &str) -> bool {
+pub fn is_backup_name(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     n.contains(".bak")
         || n.ends_with(".backup")

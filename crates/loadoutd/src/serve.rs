@@ -9,7 +9,8 @@
 use loadout_core::diff::diff;
 use loadout_core::model::ScanResult;
 use loadout_core::watch::Targets;
-use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::ModifyKind;
+use notify::{recommended_watcher, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
@@ -58,15 +59,30 @@ impl Server {
             watched: BTreeMap::new(),
             seq: 0,
         };
-        s.sync_watches();
+        s.sync_watches(false);
         s
     }
 
+    /// Каталог из набора исчез или переименован: его подписка мертва, даже если каталог тут же создали заново.
+    fn forget_watch(&mut self, path: &Path) {
+        if self.watched.remove(path).is_some() {
+            if let Some(w) = self.watcher.as_mut() {
+                let _ = w.unwatch(path);
+            }
+        }
+    }
+
     /// Приводит набор слушаемых каталогов к `targets`. Ошибка слежения не фатальна: путь мог исчезнуть.
-    fn sync_watches(&mut self) {
+    /// `reset` сбрасывает все подписки: после ошибки сторожа неизвестно, какие из них живы.
+    fn sync_watches(&mut self, reset: bool) {
         let Some(w) = self.watcher.as_mut() else {
             return;
         };
+        if reset {
+            for path in std::mem::take(&mut self.watched).into_keys() {
+                let _ = w.unwatch(&path);
+            }
+        }
         let want: BTreeMap<PathBuf, RecursiveMode> = self
             .targets
             .dirs
@@ -109,15 +125,16 @@ impl Server {
     }
 
     /// Новый скан; события шлются только при смысловом отличии от прошлого.
-    fn rescan(&mut self, announce: bool) {
+    fn rescan(&mut self, announce: bool, reset: bool) {
         let new = loadout_core::scan(&self.home);
+        // набор путей пересобирается на каждом скане, даже без смысловых изменений: каталог мог появиться или исчезнуть
+        self.targets = Targets::from_scan(&self.home, &new);
+        self.sync_watches(reset);
         let d = diff(&self.last, &new);
         if d.is_empty() {
             return;
         }
         self.last = new;
-        self.targets = Targets::from_scan(&self.home, &self.last);
-        self.sync_watches();
         if announce {
             self.seq += 1;
             // в событии только id записей и признаки изменений: путей и значений в нём нет
@@ -136,7 +153,7 @@ impl Server {
         let reply = match req.get("method").and_then(Value::as_str) {
             // `scan` и `snapshot` отдают одно и то же; `scan` сначала перечитывает диск и не шлёт `changed` тому, кто спросил сам
             Some("scan") => {
-                self.rescan(false);
+                self.rescan(false, false);
                 json!({ "result": &self.last })
             }
             Some("snapshot") => json!({ "result": &self.last }),
@@ -158,9 +175,13 @@ impl Server {
 
 fn spawn_stdin_reader(tx: Sender<Msg>) {
     std::thread::spawn(move || {
-        for line in std::io::stdin().lock().lines() {
+        // побайтово: невалидный UTF-8 в строке — ошибка запроса, а не конец работы
+        for line in std::io::stdin().lock().split(b'\n') {
             let Ok(l) = line else { break };
-            if tx.send(Msg::Request(l)).is_err() {
+            if tx
+                .send(Msg::Request(String::from_utf8_lossy(&l).into_owned()))
+                .is_err()
+            {
                 break;
             }
         }
@@ -183,10 +204,24 @@ pub fn run(home: &Path) {
         &json!({ "jsonrpc": "2.0", "method": "ready", "params": { "watching": server.watched.len() } }),
     );
 
-    // (когда пришло первое событие пачки, когда последнее)
-    let mut dirty: Option<(Instant, Instant)> = None;
+    // (когда пришло первое событие пачки, когда последнее, нужно ли пересоздать все подписки)
+    let mut dirty: Option<(Instant, Instant, bool)> = None;
+    let mark = |dirty: &mut Option<(Instant, Instant, bool)>, reset: bool| {
+        let now = Instant::now();
+        let (first, _, was) = dirty.unwrap_or((now, now, false));
+        *dirty = Some((first, now, was || reset));
+    };
     loop {
-        let wait = dirty.map_or(IDLE, |(first, last)| {
+        // срок проверяем в начале каждого шага: поток запросов не должен откладывать скан дольше MAX_WAIT
+        if let Some((first, last, reset)) = dirty {
+            let due = (last + DEBOUNCE).min(first + MAX_WAIT);
+            if due <= Instant::now() {
+                dirty = None;
+                server.rescan(true, reset);
+                continue;
+            }
+        }
+        let wait = dirty.map_or(IDLE, |(first, last, _)| {
             (last + DEBOUNCE)
                 .min(first + MAX_WAIT)
                 .saturating_duration_since(Instant::now())
@@ -195,22 +230,31 @@ pub fn run(home: &Path) {
             Ok(Msg::Request(line)) => server.handle(&line),
             Ok(Msg::Eof) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(Msg::Fs(Ok(ev))) => {
-                if !ev.kind.is_access() && ev.paths.iter().any(|p| server.targets.is_relevant(p)) {
-                    let now = Instant::now();
-                    dirty = Some((dirty.map_or(now, |(first, _)| first), now));
+                if ev.kind.is_access() {
+                    continue;
+                }
+                // каталог создан, удалён или переименован: подписка на удалённый мертва, даже если его создали заново
+                let structural = ev.kind.is_create()
+                    || ev.kind.is_remove()
+                    || matches!(ev.kind, EventKind::Modify(ModifyKind::Name(_)));
+                if ev.kind.is_remove() || matches!(ev.kind, EventKind::Modify(ModifyKind::Name(_)))
+                {
+                    for p in &ev.paths {
+                        server.forget_watch(p);
+                    }
+                }
+                if ev.paths.iter().any(|p| {
+                    server.targets.is_relevant(p) || (structural && server.targets.is_fixed(p))
+                }) {
+                    mark(&mut dirty, false);
                 }
             }
-            // любая ошибка сторожа — повод перечитать диск: событие могло потеряться
+            // любая ошибка сторожа — повод перечитать диск: событие могло потеряться, а подписки — умереть
             Ok(Msg::Fs(Err(e))) => {
                 eprintln!("сторож: {e}");
-                let now = Instant::now();
-                dirty = Some((dirty.map_or(now, |(first, _)| first), now));
+                mark(&mut dirty, true);
             }
-            Err(RecvTimeoutError::Timeout) => {
-                if dirty.take().is_some() {
-                    server.rescan(true);
-                }
-            }
+            Err(RecvTimeoutError::Timeout) => {}
         }
     }
 }

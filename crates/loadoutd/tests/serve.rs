@@ -40,6 +40,11 @@ struct Server {
 
 impl Server {
     fn start() -> Server {
+        Server::start_with(|_| {})
+    }
+
+    /// `prep` правит копию фикстуры до запуска ядра (например, убирает каталог клиента).
+    fn start_with(prep: impl FnOnce(&Path)) -> Server {
         // имя без случайных букв и цифр: ядро скрывает токеноподобные сегменты путей
         let home = std::env::temp_dir().join(format!(
             "loadout-serve-{}-{}",
@@ -49,6 +54,7 @@ impl Server {
         let _ = fs::remove_dir_all(&home);
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/home");
         copy_tree(&root, &home, &home.to_string_lossy().replace('\\', "/"));
+        prep(&home);
 
         let mut child = Command::new(env!("CARGO_BIN_EXE_loadout"))
             .args(["serve", "--home"])
@@ -107,6 +113,19 @@ impl Server {
                 Some(m) if m["method"] == method => return Some(m),
                 Some(m) => self.parked.push(m),
                 None => break,
+            }
+        }
+        None
+    }
+
+    /// Ждёт `changed`, у которого `field` — непустой список (или `true`); прочие `changed` пропускает.
+    fn wait_changed_with(&mut self, field: &str, within: Duration) -> Option<Value> {
+        let end = Instant::now() + within;
+        while let Some(left) = end.checked_duration_since(Instant::now()) {
+            let ev = self.wait_method("changed", left)?;
+            let v = &ev["params"][field];
+            if v.as_array().is_some_and(|a| !a.is_empty()) || v == &json!(true) {
+                return Some(ev);
             }
         }
         None
@@ -229,6 +248,99 @@ fn new_skill_directory_is_noticed() {
     assert!(
         !ev["params"]["added"].as_array().unwrap().is_empty(),
         "{ev}"
+    );
+}
+
+const SKILL: &str = "---\nname: fresh-skill\ndescription: новый\n---\n";
+
+#[test]
+fn recreated_directory_stays_watched() {
+    let mut s = Server::start();
+    let skills = s.home.join(".claude/skills");
+    // каталог скилов исчез и тут же вернулся с тем же содержимым (как при `git checkout`): скан тот же, `changed` нет,
+    // но подписка на старый каталог мертва, и сторож обязан подписаться снова
+    let aside = s.home.join("skills-aside"); // вне слушаемых каталогов
+    copy_tree(&skills, &aside, "");
+    fs::remove_dir_all(&skills).unwrap();
+    copy_tree(&aside, &skills, "");
+    std::thread::sleep(Duration::from_millis(800));
+    fs::create_dir_all(skills.join("first")).unwrap();
+    fs::write(skills.join("first/SKILL.md"), SKILL).unwrap();
+    assert!(
+        s.wait_changed_with("added", Duration::from_secs(10))
+            .is_some(),
+        "скил в пересозданном каталоге замечен"
+    );
+    fs::create_dir_all(skills.join("second")).unwrap();
+    fs::write(
+        skills.join("second/SKILL.md"),
+        SKILL.replace("fresh", "second"),
+    )
+    .unwrap();
+    assert!(
+        s.wait_changed_with("added", Duration::from_secs(10))
+            .is_some(),
+        "и следующий скил тоже: подписка живая"
+    );
+}
+
+#[test]
+fn client_directory_created_after_start_is_noticed() {
+    let mut saved = String::new();
+    let mut s = Server::start_with(|h| {
+        saved = fs::read_to_string(h.join(".codex/config.toml")).unwrap();
+        fs::remove_dir_all(h.join(".codex")).unwrap();
+    });
+    let dir = s.home.join(".codex");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("config.toml"), saved).unwrap();
+    assert!(
+        s.wait_changed_with("added", Duration::from_secs(10))
+            .is_some(),
+        "клиент, поставленный после запуска ядра, замечен"
+    );
+}
+
+#[test]
+fn new_remote_catalog_entry_is_noticed() {
+    let mut s = Server::start();
+    fs::create_dir_all(
+        s.home
+            .join(".codex/plugins/cache/openai-curated-remote/gmail"),
+    )
+    .unwrap();
+    assert!(
+        s.wait_changed_with("added", Duration::from_secs(10))
+            .is_some(),
+        "новая запись каталога удалённых плагинов замечена"
+    );
+}
+
+#[test]
+fn new_backup_file_changes_facts() {
+    let mut s = Server::start();
+    fs::write(s.home.join(".codex/config.toml.bak-extra"), "x").unwrap();
+    assert!(
+        s.wait_changed_with("factsChanged", Duration::from_secs(10))
+            .is_some(),
+        "новая резервная копия меняет факты"
+    );
+}
+
+#[test]
+fn invalid_utf8_line_does_not_kill_the_server() {
+    let mut s = Server::start();
+    let stdin = s.stdin.as_mut().unwrap();
+    stdin.write_all(b"\xff\xfe{\n").unwrap();
+    stdin.flush().unwrap();
+    assert!(
+        s.call("snapshot")["result"].is_object(),
+        "процесс жив и отвечает"
+    );
+    assert!(
+        s.parked.iter().any(|m| m["error"]["message"].is_string()),
+        "битая строка получила ошибку: {:?}",
+        s.parked
     );
 }
 

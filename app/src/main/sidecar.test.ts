@@ -100,6 +100,16 @@ describe('Sidecar', () => {
     expect(starts()).toBe(1)
   })
 
+  it('после stop запрос не поднимает ядро заново', async () => {
+    const { s, starts } = setup()
+    s.start()
+    await s.request('snapshot')
+    s.stop()
+    await expect(s.request('snapshot')).rejects.toThrow('ядро остановлено')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(starts()).toBe(1)
+  })
+
   it('запрос без ответа падает по таймауту', async () => {
     const { s } = setup({ requestTimeoutMs: 200 })
     s.start()
@@ -134,6 +144,20 @@ describe('validate', () => {
     expect(() => validateScan({ ...ok, facts: undefined })).toThrow()
     expect(() => validateScan({ ...ok, facts: { backups: [{ client: 'codex', dir: 1, count: 1 }], brokenLinks: [] } })).toThrow('факты')
     expect(() => validateScan(null)).toThrow()
+    expect(() => validateScan({ ...ok, facts: { backups: [{ client: 'evil', dir: 'd', count: 1 }], brokenLinks: [] } })).toThrow('факты')
+  })
+
+  it('в окно уходят пересобранные объекты без лишних полей', () => {
+    const dirty = {
+      ...ok,
+      extra: 'x',
+      entities: [{ ...ok.entities[0], secret: 'S', version: '1.0', note: 'n', origin: { file: '~/f', pointer: '/p', leak: 'L' } }],
+    }
+    const out = validateScan(dirty)
+    expect(Object.keys(out).sort()).toEqual(['entities', 'facts', 'warnings'])
+    expect(out.entities[0]).not.toHaveProperty('secret')
+    expect(out.entities[0]?.origin).toEqual({ file: '~/f', pointer: '/p' })
+    expect(out.entities[0]).toMatchObject({ version: '1.0', note: 'n' })
   })
 
   it('событие `changed` — только id и признаки', () => {
