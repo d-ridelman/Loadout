@@ -53,12 +53,17 @@ fn remove_from_settings(orig: &Value, hook_cmd: &str) -> Value {
 
 /// `before` and `after` a removed block, joined the way `append_block` laid them out.
 fn join_cut(before: &str, after: &str) -> String {
+    let eol = if before.contains("\r\n") || after.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
     let (before, after) = (before.trim_end(), after.trim_start());
     match (before.is_empty(), after.is_empty()) {
         (true, true) => String::new(),
         (true, false) => after.to_string(),
-        (false, true) => format!("{before}\n"),
-        (false, false) => format!("{before}\n\n{after}"),
+        (false, true) => format!("{before}{eol}"),
+        (false, false) => format!("{before}{eol}{eol}{after}"),
     }
 }
 
@@ -93,6 +98,70 @@ fn marker_lines_left(text: &str) -> bool {
     .any(|m| marker_lines(text, m) > 0)
 }
 
+/// A backup and its bytes.
+type Saved = (PathBuf, Vec<u8>);
+
+/// Reads the backups of `name` in `dir` (oldest first). Taken before the rollback writes anything,
+/// so the backup the rollback itself makes is never among them.
+fn read_backups(dir: &Path, name: &str) -> Vec<Saved> {
+    list_backups_of(dir, name)
+        .into_iter()
+        .filter_map(|p| fs::read(&p).ok().map(|b| (p, b)))
+        .collect()
+}
+
+/// What "the same text" means when a backup is compared with the rolled-back file: line breaks unified,
+/// trailing whitespace dropped (setup trims the end of the file before it appends its block).
+fn text_key(s: &str) -> String {
+    s.replace("\r\n", "\n").trim_end().to_string()
+}
+
+/// The latest backup that is the text as it was before setup (no ctxkit block in it, `clean`) and equals
+/// the rolled-back `result` apart from line breaks and trailing whitespace: restoring its bytes gives the
+/// user's file back byte for byte (CRLF, a missing final newline, extra blank lines at the end).
+fn exact_text_backup<'a>(
+    result: &str,
+    backups: &'a [Saved],
+    clean: impl Fn(&str) -> bool,
+) -> Option<&'a Saved> {
+    backups.iter().rev().find(|(_, bytes)| {
+        std::str::from_utf8(bytes)
+            .is_ok_and(|text| clean(text) && text_key(text) == text_key(result))
+    })
+}
+
+/// Writes `bytes` over `path`, after a backup of what is there now (made by this run).
+fn restore_bytes(
+    path: &Path,
+    backup_dir: &Path,
+    bytes: &[u8],
+    what: &str,
+    dry_run: bool,
+) -> Result<(), String> {
+    if dry_run {
+        println!("  [dry-run] {what}: {}", path.display());
+        return Ok(());
+    }
+    let b = backup_file(path, backup_dir)?;
+    println!("  backup -> {}", b.display());
+    write_atomic(path, bytes)?;
+    println!("  {what}: {}", path.display());
+    Ok(())
+}
+
+/// Deletes a file that setup created (after a backup of it), so a rollback leaves no empty husk.
+fn delete_created(path: &Path, backup_dir: &Path, what: &str, dry_run: bool) -> Result<(), String> {
+    if dry_run {
+        println!("  [dry-run] {what}: {}", path.display());
+        return Ok(());
+    }
+    let b = backup_file(path, backup_dir)?;
+    println!("  backup -> {}", b.display());
+    fs::remove_file(path).map_err(|e| format!("remove {}: {e}", path.display()))?;
+    println!("  {what}: {}", path.display());
+    Ok(())
+}
+
 fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
     if !path.exists() {
         println!("  skip rules (not found): {}", path.display());
@@ -111,15 +180,95 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
         if !marker_lines_left(&updated) {
             println!("  ok rules block (not present): {}", path.display());
         }
-    } else if dry_run {
-        println!("  [dry-run] remove rules block: {}", path.display());
-    } else {
-        let b = backup_file(path, backup_dir)?;
-        println!("  backup -> {}", b.display());
-        write_atomic(path, updated.as_bytes())?;
-        println!("  removed rules block: {}", path.display());
+        return Ok(());
     }
-    Ok(())
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let backups = read_backups(backup_dir, name);
+    if let Some((from, bytes)) = exact_text_backup(&updated, &backups, |t| !marker_lines_left(t)) {
+        let what = format!(
+            "removed rules block (restored byte for byte from {})",
+            from.display()
+        );
+        return restore_bytes(path, backup_dir, bytes, &what, dry_run);
+    }
+    // Setup made the file when no backup exists, or every backup holds nothing but our block (a second
+    // setup run backs up the first one's file): with only the block in it, the rollback deletes the file.
+    let ours_only =
+        |text: &str| marker_lines_left(text) && strip_rules_blocks(text).trim().is_empty();
+    let made_by_setup = backups
+        .iter()
+        .all(|(_, b)| std::str::from_utf8(b).is_ok_and(ours_only));
+    if updated.trim().is_empty() && made_by_setup {
+        return delete_created(
+            path,
+            backup_dir,
+            "removed rules file (setup had created it)",
+            dry_run,
+        );
+    }
+    restore_bytes(
+        path,
+        backup_dir,
+        updated.as_bytes(),
+        "removed rules block",
+        dry_run,
+    )
+}
+
+/// Settings with the empty `hooks` / `env` objects dropped: setup creates them and the rollback removes
+/// them again, so a pre-setup file with an empty `"hooks": {}` still counts as the same settings.
+fn canon_settings(v: &Value) -> Value {
+    let mut v = v.clone();
+    if let Some(root) = v.as_object_mut() {
+        for k in ["hooks", "env"] {
+            if root
+                .get(k)
+                .and_then(Value::as_object)
+                .is_some_and(Map::is_empty)
+            {
+                root.remove(k);
+            }
+        }
+    }
+    v
+}
+
+fn parse_settings(bytes: &[u8]) -> Option<Value> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    let v: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    v.is_object().then_some(v)
+}
+
+/// What the rollback does with settings.json.
+#[derive(Debug, PartialEq)]
+enum SettingsOutcome {
+    /// Rewrite the cleaned settings (the usual case).
+    Write,
+    /// A backup holds the file as the user had it and nothing else changed since: put its bytes back.
+    Restore(PathBuf, Vec<u8>),
+    /// Setup created the file and nothing of the user's is in it: delete it, not leave `{}`.
+    Delete,
+}
+
+fn settings_outcome(next: &Value, backups: &[Saved], hook_cmd: &str) -> SettingsOutcome {
+    let ours = |v: &Value| remove_from_settings(v, hook_cmd) != *v;
+    let exact = backups.iter().rev().find(|(_, bytes)| {
+        parse_settings(bytes)
+            .is_some_and(|v| !ours(&v) && canon_settings(&v) == canon_settings(next))
+    });
+    if let Some((path, bytes)) = exact {
+        return SettingsOutcome::Restore(path.clone(), bytes.clone());
+    }
+    // Every earlier backup is a file of ours only (or there is none): the user's settings never existed.
+    let created = backups.iter().all(|(_, bytes)| {
+        parse_settings(bytes).is_some_and(|v| {
+            ours(&v) && canon_settings(&remove_from_settings(&v, hook_cmd)) == json!({})
+        })
+    });
+    if created && canon_settings(next) == json!({}) {
+        return SettingsOutcome::Delete;
+    }
+    SettingsOutcome::Write
 }
 
 fn remove_antigravity_hooks(path: &Path, dry_run: bool) -> Result<(), String> {
@@ -180,37 +329,51 @@ fn remove_dsh(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
             patch.display()
         );
     } else {
-        let b = backup_file(&patch, &profile)?;
-        println!("  backup -> {}", b.display());
-        write_atomic(&patch, updated.as_bytes())?;
-        println!(
-            "  removed ctxkit block from DeepSeek Harness profile patch: {}",
-            patch.display()
-        );
+        let backups = read_backups(&profile, "cordis.patch.yml");
+        let exact = exact_text_backup(&updated, &backups, |t| !t.contains(DSH_MARKER_START));
+        let (bytes, what) = match exact {
+            Some((from, b)) => (
+                b.clone(),
+                format!(
+                    "removed ctxkit block from DeepSeek Harness profile patch (restored byte for byte from {})",
+                    from.display()
+                ),
+            ),
+            None => (
+                updated.into_bytes(),
+                "removed ctxkit block from DeepSeek Harness profile patch".to_string(),
+            ),
+        };
+        restore_bytes(&patch, &profile, &bytes, &what, false)?;
     }
     Ok(())
 }
 
-/// `settings.json.*.bak` in `dir`, oldest first.
-fn list_backups(dir: &Path) -> Vec<PathBuf> {
-    let mut found: Vec<(SystemTime, PathBuf)> = fs::read_dir(dir)
+/// The `<name>.<timestamp>[.<n>].bak` files of `name` in `dir`, oldest first (by the timestamp in the name).
+fn list_backups_of(dir: &Path, name: &str) -> Vec<PathBuf> {
+    let prefix = format!("{name}.");
+    let mut found: Vec<((u64, u64), PathBuf)> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|e| {
-            let n = e.file_name().to_string_lossy().to_string();
-            n.starts_with("settings.json.") && n.ends_with(".bak")
-        })
-        .map(|e| {
-            let mtime = e
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(UNIX_EPOCH);
-            (mtime, e.path())
+        .filter_map(|e| {
+            let file = e.file_name().to_string_lossy().to_string();
+            let middle = file
+                .strip_prefix(&prefix)?
+                .strip_suffix(".bak")?
+                .to_string();
+            let mut parts = middle.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+            let key = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+            Some((key, e.path()))
         })
         .collect();
     found.sort();
     found.into_iter().map(|(_, p)| p).collect()
+}
+
+/// `settings.json.*.bak` in `dir`, oldest first.
+fn list_backups(dir: &Path) -> Vec<PathBuf> {
+    list_backups_of(dir, "settings.json")
 }
 
 fn show(v: &Value) -> String {
@@ -408,14 +571,38 @@ pub(super) fn run(
         }
         let orig = read_json_object(&settings_path)?;
         let next = remove_from_settings(&orig, hook_cmd);
-        write_json_if_changed(
-            &settings_path,
-            Some(&backup_dir),
-            &orig,
-            &next,
-            opts.dry_run,
-            "settings.json",
-        )?;
+        let saved = read_backups(&backup_dir, "settings.json");
+        let outcome = if orig == next {
+            SettingsOutcome::Write // nothing to remove: write_json_if_changed reports "unchanged"
+        } else {
+            settings_outcome(&next, &saved, hook_cmd)
+        };
+        match outcome {
+            SettingsOutcome::Write => write_json_if_changed(
+                &settings_path,
+                Some(&backup_dir),
+                &orig,
+                &next,
+                opts.dry_run,
+                "settings.json",
+            )?,
+            SettingsOutcome::Restore(from, bytes) => restore_bytes(
+                &settings_path,
+                &backup_dir,
+                &bytes,
+                &format!(
+                    "restored settings.json byte for byte from {}",
+                    from.display()
+                ),
+                opts.dry_run,
+            )?,
+            SettingsOutcome::Delete => delete_created(
+                &settings_path,
+                &backup_dir,
+                "removed settings.json (setup had created it)",
+                opts.dry_run,
+            )?,
+        }
         remove_rules_block(&profile.join("CLAUDE.md"), &backup_dir, opts.dry_run)?;
         let dsh_home = || {
             opts.dsh_home
@@ -571,6 +758,122 @@ mod tests {
             strip_dsh_block(&format!("a\n{DSH_MARKER_START}\nb\n")),
             Err(())
         );
+    }
+
+    fn saved(name: &str, text: &str) -> Saved {
+        (
+            PathBuf::from(format!("/b/{name}.bak")),
+            text.as_bytes().to_vec(),
+        )
+    }
+
+    #[test]
+    fn exact_text_backup_needs_a_clean_backup_with_the_same_text() {
+        let block = format!("{MARKER_START}\nrules\n{MARKER_END}");
+        let clean = |t: &str| !marker_lines_left(t);
+        let original = "# Mine\r\nkeep\r\n";
+        let backups = [
+            saved("CLAUDE.md.1", original),
+            saved("CLAUDE.md.2", &append_block(original, &block)),
+        ];
+        // the one with the block in it is never a restore source; the clean one matches modulo CRLF / trailing blanks
+        let hit = exact_text_backup("# Mine\nkeep", &backups, clean).unwrap();
+        assert_eq!(hit.1, original.as_bytes());
+        assert!(exact_text_backup("# Mine\nchanged", &backups, clean).is_none());
+        assert!(exact_text_backup("anything", &backups[1..], clean).is_none());
+        // an empty original file matches an empty result
+        assert!(exact_text_backup("", &[saved("a.1", "")], clean).is_some());
+        // the latest of several matching backups wins
+        let two = [saved("a.1", "x\n"), saved("a.2", "x\r\n")];
+        assert_eq!(exact_text_backup("x", &two, clean).unwrap().1, b"x\r\n");
+    }
+
+    #[test]
+    fn settings_outcome_restores_deletes_or_writes() {
+        let ours = "\"C:/h/ctxkit.exe\"";
+        let setup_made = r#"{"hooks":{"Stop":[{"hooks":[{"command":"\"C:/h/ctxkit.exe\""}]}]}}"#;
+        let users = "{\r\n  \"zeta\": 1,\r\n  \"hooks\": {}\r\n}";
+        let b = |t: &str| saved("settings.json.1", t);
+        // the user's file, nothing else changed since: its bytes come back (the empty "hooks" included)
+        let next = json!({"zeta": 1});
+        assert_eq!(
+            settings_outcome(&next, &[b(users)], ours),
+            SettingsOutcome::Restore(
+                PathBuf::from("/b/settings.json.1.bak"),
+                users.as_bytes().to_vec()
+            )
+        );
+        // the user changed a value since: a plain write
+        assert_eq!(
+            settings_outcome(&json!({"zeta": 2}), &[b(users)], ours),
+            SettingsOutcome::Write
+        );
+        // no backup, or only backups of files made by setup: the empty result means the file goes
+        assert_eq!(
+            settings_outcome(&json!({}), &[], ours),
+            SettingsOutcome::Delete
+        );
+        assert_eq!(
+            settings_outcome(&json!({}), &[b(setup_made)], ours),
+            SettingsOutcome::Delete
+        );
+        // a user's own `{}` is restored, not deleted; a result with content is never deleted
+        assert!(matches!(
+            settings_outcome(&json!({}), &[b("{}")], ours),
+            SettingsOutcome::Restore(..)
+        ));
+        assert_eq!(
+            settings_outcome(&json!({"a": 1}), &[], ours),
+            SettingsOutcome::Write
+        );
+        // a backup that already holds our hook is no restore source
+        assert_eq!(
+            settings_outcome(&json!({}), &[b(setup_made), b(users)], ours),
+            SettingsOutcome::Write
+        );
+    }
+
+    #[test]
+    fn backups_are_listed_by_the_timestamp_in_their_name() {
+        let d = std::env::temp_dir().join(format!("ctxkit-baklist-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        for n in [
+            "settings.json.200.bak",
+            "settings.json.100.1.bak",
+            "settings.json.100.bak",
+            "settings.json.1000.bak",
+            "CLAUDE.md.50.bak",
+            "settings.json.notes",
+        ] {
+            fs::write(d.join(n), "x").unwrap();
+        }
+        let names = |v: Vec<PathBuf>| -> Vec<String> {
+            v.iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+                .collect()
+        };
+        assert_eq!(
+            names(list_backups(&d)),
+            [
+                "settings.json.100.bak",
+                "settings.json.100.1.bak",
+                "settings.json.200.bak",
+                "settings.json.1000.bak"
+            ]
+        );
+        assert_eq!(
+            names(list_backups_of(&d, "CLAUDE.md")),
+            ["CLAUDE.md.50.bak"]
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn join_cut_keeps_the_line_break_of_the_file() {
+        assert_eq!(join_cut("a", "\r\nb\r\n"), "a\r\n\r\nb\r\n");
+        assert_eq!(join_cut("a\r\nkeep", ""), "a\r\nkeep\r\n");
+        assert_eq!(join_cut("a", "b"), "a\n\nb");
     }
 
     #[test]

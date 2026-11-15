@@ -740,6 +740,72 @@ const cases = [
     return r4.status === 1 && hash(join(p4, 'settings.json')) === sBefore && existsSync(join(p4, 'hooks', BIN_NAME));
   }],
 
+  // The rollback gives the user's files back byte for byte (CRLF, a missing final newline, an empty "hooks": {},
+  // the key order), and removes the files setup created instead of leaving an empty CLAUDE.md or a `{}`
+  [true, () => {
+    const root = join(dir, 'bytes-test');
+    mkdirSync(root, { recursive: true });
+    const cj = join(root, 'c.json');
+    writeFileSync(cj, '{}');
+    let n = 0;
+    const mk = () => {
+      const p = join(root, `p${n++}`);
+      mkdirSync(p, { recursive: true });
+      return p;
+    };
+    const run = (p, ...a) => spawnSync(exe, ['setup', '--profile', p, '--claude-json', cj, '--skip-version-check', ...a], { encoding: 'utf8' });
+    const hex = (f) => (existsSync(f) ? readFileSync(f).toString('hex') : null);
+    const hexOf = (s) => Buffer.from(s).toString('hex');
+
+    // 1) odd user files survive a setup and the rollback unchanged
+    const settingsOdd = '{\r\n    "zeta": 1,\r\n    "model": "opus",\r\n  "hooks": {}\r\n}';
+    for (const md of ['# Mine\r\nkeep\r\n', 'no final newline', 'two blank\r\n\r\n\r\n', '# LF only\n', '', '﻿# bom\r\nx\r\n']) {
+      const p = mk();
+      writeFileSync(join(p, 'CLAUDE.md'), md);
+      writeFileSync(join(p, 'settings.json'), settingsOdd);
+      if (run(p, '--with-rules').status !== 0 || readFileSync(join(p, 'CLAUDE.md'), 'utf8') === md) return `setup on ${JSON.stringify(md)}`;
+      const u = run(p, '--uninstall');
+      if (u.status !== 0) return `uninstall on ${JSON.stringify(md)}: ${u.stderr}`;
+      if (hex(join(p, 'CLAUDE.md')) !== hexOf(md)) return `CLAUDE.md not restored byte for byte: ${JSON.stringify(md)} -> ${JSON.stringify(readFileSync(join(p, 'CLAUDE.md'), 'utf8'))}`;
+      if (hex(join(p, 'settings.json')) !== hexOf(settingsOdd)) return `settings.json not restored byte for byte: ${JSON.stringify(readFileSync(join(p, 'settings.json'), 'utf8'))}`;
+    }
+    // a user's own `{}` stays a file with `{}`
+    const pe = mk();
+    writeFileSync(join(pe, 'settings.json'), '{}');
+    run(pe);
+    run(pe, '--uninstall');
+    if (hex(join(pe, 'settings.json')) !== hexOf('{}')) return 'a user {} was not kept';
+
+    // 2) files setup created are deleted, also when a second setup run backed them up in between
+    const pc = mk();
+    if (run(pc, '--with-rules').status !== 0 || !existsSync(join(pc, 'settings.json')) || !existsSync(join(pc, 'CLAUDE.md'))) return 'setup made no files';
+    if (run(pc, '--with-rules', '--lang', 'ru').status !== 0) return 'second setup';
+    const uc = run(pc, '--uninstall');
+    if (uc.status !== 0 || existsSync(join(pc, 'settings.json')) || existsSync(join(pc, 'CLAUDE.md'))) return `created files are left: ${uc.stdout}`;
+    if (run(pc, '--uninstall').status !== 0) return 'a second rollback failed';
+
+    // 3) when the user changed the file after setup there is nothing exact to restore: what they changed stays
+    const pm = mk();
+    writeFileSync(join(pm, 'settings.json'), '{"model":"opus"}');
+    run(pm);
+    const edited = JSON.parse(readFileSync(join(pm, 'settings.json'), 'utf8'));
+    edited.model = 'sonnet';
+    writeFileSync(join(pm, 'settings.json'), JSON.stringify(edited, null, 2));
+    run(pm, '--uninstall');
+    const kept = JSON.parse(readFileSync(join(pm, 'settings.json'), 'utf8'));
+    if (kept.model !== 'sonnet' || kept.hooks !== undefined) return `edited settings: ${JSON.stringify(kept)}`;
+    // ...and a CRLF CLAUDE.md keeps its line breaks all the way
+    const pl = mk();
+    writeFileSync(join(pl, 'CLAUDE.md'), '# Mine\r\nkeep\r\n');
+    run(pl, '--with-rules');
+    const withBlock = readFileSync(join(pl, 'CLAUDE.md'), 'utf8');
+    if (/(^|[^\r])\n/.test(withBlock)) return `setup wrote a bare LF into a CRLF file: ${JSON.stringify(withBlock)}`;
+    writeFileSync(join(pl, 'CLAUDE.md'), withBlock + 'extra\r\n');
+    run(pl, '--uninstall');
+    const crlf = readFileSync(join(pl, 'CLAUDE.md'), 'utf8');
+    return !/(^|[^\r])\n/.test(crlf) && crlf.includes('extra') && !crlf.includes('ctxkit:') || `CRLF lost: ${JSON.stringify(crlf)}`;
+  }],
+
   // Safe failure: broken or odd hook input is a silent pass (exit 0, empty stdout), never a block or a crash
   [true, () => {
     const raw = (input, args = [], env = {}) => {

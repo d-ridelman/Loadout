@@ -921,6 +921,7 @@ fn upsert_claude_md(
     check_rules_markers(path, &existing)?;
 
     let updated = if let Some((s, end_idx)) = marker_span(&existing) {
+        let block = block.replace('\n', eol_of(&existing));
         format!("{}{}{}", &existing[..s], block, &existing[end_idx..])
     } else {
         append_block(&existing, block)
@@ -1071,11 +1072,22 @@ pub(crate) fn preflight_settings(path: &Path, for_setup: bool) -> Result<(), Str
     Ok(())
 }
 
-fn append_block(existing: &str, block: &str) -> String {
-    if existing.trim().is_empty() {
-        format!("{block}\n")
+/// The line break of a text: CRLF when it has any, else LF (the blocks below are written in the file's own).
+pub(crate) fn eol_of(text: &str) -> &'static str {
+    if text.contains("\r\n") {
+        "\r\n"
     } else {
-        format!("{}\n\n{block}\n", existing.trim_end())
+        "\n"
+    }
+}
+
+fn append_block(existing: &str, block: &str) -> String {
+    let eol = eol_of(existing);
+    let block = block.replace('\n', eol);
+    if existing.trim().is_empty() {
+        format!("{block}{eol}")
+    } else {
+        format!("{}{eol}{eol}{block}{eol}", existing.trim_end())
     }
 }
 
