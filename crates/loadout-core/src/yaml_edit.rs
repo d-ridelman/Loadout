@@ -163,6 +163,45 @@ fn guard(text: &str) -> Result<(), String> {
     }
 }
 
+/// Опора для возврата: `id` соседней записи той же операции (следующей, а у последней предыдущей); `None`, если запись
+/// в операции была единственной. Номера записей и операций в файле сдвигаются (установщики добавляют и убирают операции),
+/// а соседа по `id` можно найти снова.
+pub fn anchor_of(text: &str, oi: usize, ei: usize) -> Result<Option<String>, String> {
+    let ents = entries_of(text)?;
+    let list = ents.get(oi).ok_or("нет такой операции")?;
+    let Some(n) = list
+        .get(ei + 1)
+        .or_else(|| ei.checked_sub(1).and_then(|i| list.get(i)))
+    else {
+        return Ok(None);
+    };
+    n["id"]
+        .as_str()
+        .map(|s| Some(s.to_owned()))
+        .ok_or_else(|| "соседняя запись без id: вынос по строкам отказан".into())
+}
+
+/// Перед возвратом: в операции `oi` всё ещё стоит опорная запись (или операция пуста, если опоры не было).
+/// Иначе файл изменился так, что прежнее место неизвестно, и запись молча встала бы в чужую операцию.
+pub fn check_anchor(text: &str, oi: usize, anchor: Option<&str>) -> Result<(), String> {
+    let ents = entries_of(text)?;
+    let list = ents
+        .get(oi)
+        .ok_or("операции нет: вернуть запись на прежнее место нельзя")?;
+    let ok = match anchor {
+        Some(a) => list.iter().any(|e| e["id"].as_str() == Some(a)),
+        None => list.is_empty(),
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(
+            "операция в файле изменилась с момента выноса: вернуть запись на прежнее место нельзя"
+                .into(),
+        )
+    }
+}
+
 /// Вырезает запись `ei` операции `oi`. Возвращает новый текст и вырезанные строки как есть.
 pub fn cut(text: &str, oi: usize, ei: usize) -> Result<(String, String), String> {
     guard(text)?;

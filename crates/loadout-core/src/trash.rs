@@ -19,6 +19,9 @@ pub struct Item {
     /// `json` (значение записи) или `yaml` (её строки в `cordis.patch.yml`, `parent`/`key` — номера операции и записи).
     #[serde(default = "json_format")]
     pub format: String,
+    /// Только `yaml`: `id` соседней записи операции, по которому возврат убеждается, что место прежнее.
+    #[serde(default)]
+    pub anchor: Option<String>,
     pub client: String,
     pub scope: String,
     /// Имя и указатель для показа (уже очищенные сканом).

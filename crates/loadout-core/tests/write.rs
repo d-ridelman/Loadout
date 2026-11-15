@@ -918,6 +918,98 @@ fn copy_refuses_an_entry_that_would_be_dead_at_the_receiver() {
 }
 
 #[test]
+fn different_value_under_the_same_trash_id_is_never_overwritten() {
+    let e = env();
+    let id = id_in(&e, Client::Antigravity, "tool-b");
+    let original = fs::read_to_string(ag_cfg(&e)).unwrap();
+    apply_i(&e, &tog(&id, false)).unwrap();
+    // запись вернули руками, но уже с другой командой: старая копия в корзине — единственное место прежнего значения
+    fs::write(
+        ag_cfg(&e),
+        original.replace("\"command\": \"node\"", "\"command\": \"NEWNODE\""),
+    )
+    .unwrap();
+    let err = plan_s(&e, &tog(&id, false)).unwrap_err();
+    assert!(err.contains("другая запись"), "{err}");
+    let kept = fs::read_to_string(e.store.join("trash").join(format!("{id}.json"))).unwrap();
+    assert!(kept.contains("FAKE-SECRET-AG-ENV") && !kept.contains("NEWNODE"));
+}
+
+#[test]
+fn rollback_of_a_trash_operation_does_not_pick_another_entry_by_name() {
+    let e = env();
+    let id = id_in(&e, Client::Antigravity, "tool-b");
+    let done = apply_i(&e, &tog(&id, false)).unwrap();
+    fs::remove_file(e.store.join("trash").join(format!("{id}.json"))).unwrap();
+    let before = fs::read(ag_cfg(&e)).unwrap();
+    assert!(rollback(&e.home, &e.store, &done.op).is_err());
+    assert_eq!(fs::read(ag_cfg(&e)).unwrap(), before, "файл не тронут");
+}
+
+#[test]
+fn batch_rollback_checks_every_level_before_undoing_anything() {
+    let e = env();
+    let b = id_in(&e, Client::Antigravity, "tool-b"); // R2
+    let p1 = id_of(
+        &loadout_core::scan(&e.home),
+        Client::Codex,
+        Kind::Plugin,
+        "p1@bundled",
+    ); // R1
+    let items = vec![tog(&p1, false), tog(&b, false)];
+    let bp = write::plan_batch(&e.home, Some(&e.store), &items);
+    let (batch, applied) = wbatch(&e.home, &e.store, &items, &bp.batch_sha).unwrap();
+    assert_eq!(applied.len(), 2);
+    assert!(write::rollback_batch(&e.home, &e.store, &batch, "R1").is_err());
+    assert!(
+        journal(&e.home, &e.store)
+            .iter()
+            .all(|j| !j.rolled_back && j.op != "rollback"),
+        "пакет не откатился наполовину"
+    );
+    assert!(write::rollback_batch(&e.home, &e.store, &batch, "R2").is_ok());
+}
+
+#[test]
+fn deepseek_entry_returns_only_to_the_same_place() {
+    let e = env();
+    let patch = e.home.join(".dsh/cordis.patch.yml");
+    let id = id_in(&e, Client::DeepSeek, "demo");
+    apply_i(&e, &tog(&id, false)).unwrap();
+    // установщик дописал новую операцию в начало файла: номера операций сдвинулись
+    let text = fs::read_to_string(&patch).unwrap();
+    fs::write(
+        &patch,
+        format!("- insert:\n    - id: newop\n      name: \"@deepseek-ai/other\"\n{text}"),
+    )
+    .unwrap();
+    let err = plan_s(&e, &tog(&id, true)).unwrap_err();
+    assert!(err.contains("изменилась"), "{err}");
+    assert!(
+        !fs::read_to_string(&patch).unwrap().contains("mcp-demo"),
+        "в чужую операцию запись не вставлена"
+    );
+}
+
+#[test]
+fn deepseek_entry_without_a_simple_id_is_not_writable() {
+    let e = env();
+    let patch = e.home.join(".dsh/cordis.patch.yml");
+    let text = fs::read_to_string(&patch).unwrap();
+    fs::write(&patch, text.replace("id: mcp-demo", "id: bad/id")).unwrap();
+    let r = loadout_core::scan_with(&e.home, Some(&e.store));
+    let ds = r
+        .entities
+        .iter()
+        .find(|x| x.client == Client::DeepSeek && x.kind == Kind::Mcp && x.name == "demo")
+        .unwrap();
+    assert!(
+        !ds.can_toggle,
+        "запись без простого id по строкам не выносится"
+    );
+}
+
+#[test]
 fn stale_trash_item_does_not_block_the_next_removal() {
     let e = env();
     let id = id_in(&e, Client::Antigravity, "tool-b");

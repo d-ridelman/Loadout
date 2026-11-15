@@ -85,6 +85,7 @@ function ensureSidecar(): Sidecar | string {
       else if (method === 'ready') {
         // Повторный `ready` значит, что ядро перезапустилось: за время паузы файлы могли измениться, окно догоняем.
         // То же, если первый запрос не удался (ядро упало до первого `ready`): окно тогда показывает ошибку.
+        coreProtocolOk = undefined // после перезапуска ядра версию сверяем заново
         if (readySeen || needCatchUp) void pushChanged(undefined)
         readySeen = true
         needCatchUp = false
@@ -184,6 +185,24 @@ function writeCore(): Sidecar {
   const s = ensureSidecar()
   if (typeof s === 'string') throw new Error(s)
   return s
+}
+
+/** Версия протокола ядра, с которой работает это окно (crates/loadoutd: `PROTOCOL`). */
+const CORE_PROTOCOL = 1
+let coreProtocolOk: boolean | undefined
+
+/**
+ * Запрос к ядру для записи. Перед первым такая версия протокола сверяется: старое ядро (несобранный `target/release`,
+ * подсунутый `LOADOUT_BIN`) не знает `maxLevel` и пропустило бы запись R2 при уровне R1.
+ */
+async function core(method: string, params?: Record<string, unknown>): Promise<unknown> {
+  const s = writeCore()
+  if (coreProtocolOk !== true) {
+    const st = await s.request('status')
+    coreProtocolOk = typeof st === 'object' && st !== null && (st as Record<string, unknown>)['protocol'] === CORE_PROTOCOL
+    if (!coreProtocolOk) throw new Error('ядро другой версии: запись отключена. Пересоберите ядро (cargo build --release)')
+  }
+  return s.request(method, params)
 }
 
 /**
@@ -318,7 +337,7 @@ void app.whenReady().then(() => {
   ipcMain.handle('plan', (e, raw: unknown) => {
     guard(e)
     return guarded(async () => {
-      const plan = validatePlan(await writeCore().request('plan', validateIntent(raw)))
+      const plan = validatePlan(await core('plan', validateIntent(raw)))
       return { ...plan, running: await runningOf(plan.client) }
     })
   })
@@ -328,25 +347,25 @@ void app.whenReady().then(() => {
       const intent = validateIntent(raw)
       if (typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) throw new Error('неверные параметры')
       // нужный операции уровень (флаг — R1, корзина, правка, копирование — R2) знает и проверяет ядро
-      return validateApplied(await writeCore().request('apply', { ...intent, baseSha, maxLevel: grantedLevel() }))
+      return validateApplied(await core('apply', { ...intent, baseSha, maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('journal', (e) => {
     guard(e)
-    return guarded(async () => validateJournal(await writeCore().request('journal')))
+    return guarded(async () => validateJournal(await core('journal')))
   })
   ipcMain.handle('rollback', (e, op: unknown) => {
     guard(e)
     return guarded(async () => {
       if (typeof op !== 'string' || !OP_RE.test(op)) throw new Error('неверный номер операции')
-      return validateApplied(await writeCore().request('rollback', { op, maxLevel: grantedLevel() }))
+      return validateApplied(await core('rollback', { op, maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('rollbackBatch', (e, batch: unknown) => {
     guard(e)
     return guarded(async () => {
       if (typeof batch !== 'string' || !BATCH_RE.test(batch)) throw new Error('неверный номер пакета')
-      const done: unknown = await writeCore().request('rollbackBatch', { batch, maxLevel: grantedLevel() })
+      const done: unknown = await core('rollbackBatch', { batch, maxLevel: grantedLevel() })
       if (!Array.isArray(done)) throw new Error('ядро вернуло ответ неожиданной формы')
       return done.map(validateApplied)
     })
@@ -354,7 +373,7 @@ void app.whenReady().then(() => {
   // Профили лежат в хранилище Loadout и в конфиги клиентов не пишут: читать и менять их можно на любом уровне.
   ipcMain.handle('profiles', (e) => {
     guard(e)
-    return guarded(async () => validateProfiles(await writeCore().request('profiles')))
+    return guarded(async () => validateProfiles(await core('profiles')))
   })
   ipcMain.handle('profileSave', (e, name: unknown, items: unknown) => {
     guard(e)
@@ -364,17 +383,17 @@ void app.whenReady().then(() => {
         // проверка формы записей профиля и повторная сборка: лишние поля до ядра не доходят
         params['items'] = validateProfiles([{ name: 'x', items }])[0]?.items
       }
-      return validateProfiles(await writeCore().request('profileSave', params))
+      return validateProfiles(await core('profileSave', params))
     })
   })
   ipcMain.handle('profileDelete', (e, name: unknown) => {
     guard(e)
-    return guarded(async () => validateProfiles(await writeCore().request('profileDelete', { name: validateName(name) })))
+    return guarded(async () => validateProfiles(await core('profileDelete', { name: validateName(name) })))
   })
   ipcMain.handle('planProfile', (e, name: unknown) => {
     guard(e)
     return guarded(async () => {
-      const bp = validateBatchPlan(await writeCore().request('planProfile', { name: validateName(name) }))
+      const bp = validateBatchPlan(await core('planProfile', { name: validateName(name) }))
       const clients = [...new Set(bp.plans.filter((p) => !p.noop).map((p) => p.client))]
       const running = [...new Set((await Promise.all(clients.map(runningOf))).flat())]
       return { ...bp, running }
@@ -385,7 +404,7 @@ void app.whenReady().then(() => {
     return guarded(async () => {
       if (typeof batchSha !== 'string' || !SHA_RE.test(batchSha)) throw new Error('неверные параметры')
       const n = validateName(name)
-      return validateBatchApplied(await writeCore().request('applyProfile', { name: n, batchSha, maxLevel: grantedLevel() }))
+      return validateBatchApplied(await core('applyProfile', { name: n, batchSha, maxLevel: grantedLevel() }))
     })
   })
   // ---- встроенный ctxkit (CONCEPT.md §13): бинарь лежит в составе приложения, путь зашит ----

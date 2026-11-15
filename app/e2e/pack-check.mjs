@@ -11,6 +11,11 @@ const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = resolve(appDir, '..')
 // `PACK_DIR` — каталог установленной копии (проверка после тихой установки), по умолчанию распакованная сборка
 const unpacked = process.env.PACK_DIR ?? join(appDir, 'dist', 'win-unpacked')
+// каталог идёт в команду PowerShell: только обычный путь Windows без кавычек и спецсимволов
+if (!/^[A-Za-z]:[\\/][\w .\\/()-]+$/.test(unpacked)) {
+  console.error('FAILED: PACK_DIR содержит недопустимые символы')
+  process.exit(1)
+}
 const exe = join(unpacked, 'Loadout.exe')
 const profile = join(repo, 'state', 'loadout-qa-pack')
 const port = 9341
@@ -28,7 +33,8 @@ function procs() {
     [
       '-NoProfile',
       '-Command',
-      `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '${unpacked.replaceAll('/', '\\')}\\*' } | Select-Object ProcessId, Name, CommandLine, WorkingSetSize, PrivatePageCount, KernelModeTime, UserModeTime | ConvertTo-Json -Compress`,
+      // и по пути сборки, и по своему профилю: запущенный у владельца настоящий Loadout под тем же каталогом не трогаем
+      `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '${unpacked.replaceAll('/', '\\')}\\*' -and $_.CommandLine -like '*loadout-qa-pack*' } | Select-Object ProcessId, Name, CommandLine, WorkingSetSize, PrivatePageCount, KernelModeTime, UserModeTime | ConvertTo-Json -Compress`,
     ],
     { encoding: 'utf8' },
   ).trim()

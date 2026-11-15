@@ -62,15 +62,35 @@ fn patch(c: &mut Ctx, path: &Path, scope: &str) {
         let Some(entries) = op["insert"].as_vec() else {
             continue;
         };
-        for (ei, entry) in entries.iter().enumerate() {
-            // В указателе (а с ним и в id записи) стоит `id` записи, а не её номер: после выноса соседней записи номера
-            // сдвигаются, и позиционный id менялся бы посреди пакета.
-            let key = entry["id"]
+        // `id` записи годится для стабильного указателя, только если он простой и не повторяется в операции
+        let stable = |e: &Yaml| {
+            e["id"]
                 .as_str()
-                .and_then(mask::safe_name)
-                .map_or_else(|| ei.to_string(), str::to_owned);
-            let ptr = format!("/{oi}/insert/{key}");
-            insert_entry(c, &file, &ptr, scope, entry, (path, oi, ei));
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                })
+                .map(str::to_owned)
+        };
+        for (ei, entry) in entries.iter().enumerate() {
+            let sid = stable(entry);
+            let unique = sid.as_ref().is_some_and(|s| {
+                entries
+                    .iter()
+                    .filter(|o| stable(o).as_deref() == Some(s.as_str()))
+                    .count()
+                    == 1
+            });
+            // В указателе (а с ним и в id записи) стоит `id` записи, а не её номер: после выноса соседней записи номера
+            // сдвигаются, и позиционный id менялся бы посреди пакета. Записи без простого уникального `id` остаются
+            // позиционными и не получают цели записи: вынести их по строкам нельзя без риска промахнуться.
+            let key = sid
+                .clone()
+                .filter(|_| unique)
+                .unwrap_or_else(|| ei.to_string());
+            let ptr = format!("/{oi}/insert/{}", crate::esc_ptr(&key));
+            insert_entry(c, &file, &ptr, scope, entry, (path, oi, ei), unique);
         }
     }
 }
@@ -83,6 +103,8 @@ fn insert_entry(
     entry: &Yaml,
     // файл, номер операции и номер записи в её списке `insert`: по ним запись выносится в корзину
     loc: (&Path, usize, usize),
+    // у записи есть простой уникальный `id`: только тогда её можно выносить в корзину
+    writable: bool,
 ) {
     let plugin = entry["name"].as_str().unwrap_or("");
     let id = entry["id"]
@@ -104,16 +126,18 @@ fn insert_entry(
         if let Some(t) = cfg.get("transport").and_then(Value::as_str) {
             cfg["type"] = Value::from(if t == "streamable-http" { "http" } else { t });
         }
-        let e = Entity::new(CLIENT, Kind::Mcp, scope, server, State::On, file, ptr)
+        let mut e = Entity::new(CLIENT, Kind::Mcp, scope, server, State::On, file, ptr)
             .detail(mcp_detail(&cfg))
-            .note("запись плагина dsh-mcp-client; признака «выключено» у записи нет: выключение выносит её строки в корзину Loadout")
-            .target(Target {
+            .note("запись плагина dsh-mcp-client; признака «выключено» у записи нет: выключение выносит её строки в корзину Loadout");
+        if writable {
+            e = e.target(Target {
                 file: loc.0.to_path_buf(),
                 format: Format::Yaml,
                 path: vec![loc.1.to_string(), "insert".to_owned(), loc.2.to_string()],
                 inverted: false,
                 kind: TargetKind::Cut,
             });
+        }
         c.push(e);
     } else if let Some(kind) = plugin.strip_prefix(HOOKS_PREFIX) {
         hooks_file(

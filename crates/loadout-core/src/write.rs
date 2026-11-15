@@ -293,21 +293,27 @@ fn prep_toggle(
             .into();
             if !enable {
                 let (key, parent) = t.path.split_last().ok_or("пустой путь")?;
-                // Запись с таким id в корзине, пока живая в файле, устаревшая (её заново добавили руками или возврат
-                // не дочистил корзину): перезаписываем, прежнюю копию храним в манифесте.
                 let stale = store.and_then(|s| trash::read(s, &e.id));
+                let mut anchor = None;
                 let (nt, raw) = match t.format {
                     Format::Yaml => {
                         let (oi, ei) = yaml_pos(&t.path)?;
+                        anchor = yaml_edit::anchor_of(&text, oi, ei)?;
                         yaml_edit::cut(&text, oi, ei)?
                     }
                     _ => edit::cut_json(&text, &t.path)?,
                 };
+                // Копия с этим id в корзине, пока запись жива в файле, — след прежнего выноса (запись вернули руками).
+                // Тот же текст можно перезаписать (прежняя копия остаётся в манифесте), другой — нельзя: он пропал бы.
+                if stale.as_ref().is_some_and(|s| s.value != raw) {
+                    return Err("в корзине уже лежит другая запись с этим id: верните её (включите) или разберитесь вручную, иначе она потеряется".into());
+                }
                 new = nt.into_bytes();
                 trash = Some(TrashChange {
                     id: e.id.clone(),
                     before: stale,
                     after: Some(trash::Item {
+                        anchor,
                         id: e.id.clone(),
                         format: if t.format == Format::Yaml {
                             "yaml"
@@ -361,6 +367,8 @@ fn prep_toggle(
                         if it.format == "yaml" {
                             // возврат строк DeepSeek на прежнее место списка (`yaml_edit::put` сверяет результат)
                             let (oi, ei) = yaml_pos(&t.path)?;
+                            yaml_edit::check_anchor(&text, oi, it.anchor.as_deref())
+                                .map_err(|e| format!("вернуть запись нельзя: {e}"))?;
                             let put = yaml_edit::put(&text, oi, ei, &raw)
                                 .map_err(|e| format!("вернуть запись нельзя: {e}"))?;
                             trash = Some(TrashChange {
@@ -1053,7 +1061,13 @@ fn manifests(store: &Path) -> Vec<Manifest> {
 /// Запись, к которой относилась операция. Возврат из стэша владельца меняет указатель, а с ним и id
 /// (`/_disabledMcpServers/x` → `/mcpServers/x`), поэтому после поиска по id ищем по клиенту, типу и имени.
 fn resolve_entity<'a>(scan: &'a ScanResult, m: &Manifest) -> Option<&'a Entity> {
-    scan.entities.iter().find(|e| e.id == m.entity).or_else(|| {
+    let by_id = scan.entities.iter().find(|e| e.id == m.entity);
+    // Запись из корзины Loadout имеет стабильный id: по имени её искать нельзя, нашлась бы другая запись с тем же
+    // именем (например, живая в `mcpServers` или другая в стэше), и откат вернул бы чужое.
+    if m.trash_id.is_some() {
+        return by_id;
+    }
+    by_id.or_else(|| {
         scan.entities.iter().find(|e| {
             e.client.slug() == m.client
                 && kind_name(e.kind) == m.kind
@@ -1198,12 +1212,16 @@ pub fn rollback_batch(
     batch: &str,
     max_level: &str,
 ) -> Result<Vec<Applied>, String> {
-    let ops: Vec<String> = manifests(store)
-        .into_iter()
-        .filter(|m| m.batch.as_deref() == Some(batch) && m.op != "rollback")
-        .map(|m| m.id)
-        .collect(); // manifests() отдаёт новые первыми, это и нужный порядок отката
     let all = manifests(store);
+    let members: Vec<&Manifest> = all
+        .iter()
+        .filter(|m| m.batch.as_deref() == Some(batch) && m.op != "rollback")
+        .collect();
+    // уровень всех операций пакета проверяется до первого отката: пакет не должен откатиться наполовину
+    for m in &members {
+        need_level(&m.level, max_level)?;
+    }
+    let ops: Vec<String> = members.iter().map(|m| m.id.clone()).collect(); // новые первыми: нужный порядок отката
     let mut done = Vec::new();
     for id in ops {
         if all.iter().any(|x| x.of.as_deref() == Some(id.as_str())) {

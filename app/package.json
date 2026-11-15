@@ -9,11 +9,12 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "e2e": "electron-vite build && node e2e/run.mjs",
+    "core": "cargo build --release --manifest-path ../Cargo.toml",
+    "e2e": "npm run core && electron-vite build && node e2e/run.mjs",
     "bundle:ctxkit": "node scripts/bundle-ctxkit.mjs",
-    "pack": "node scripts/bundle-ctxkit.mjs && electron-vite build && electron-builder --win --dir",
+    "pack": "npm run core && node scripts/bundle-ctxkit.mjs && electron-vite build && electron-builder --win --dir",
     "pack:check": "node e2e/pack-check.mjs",
-    "dist": "node scripts/bundle-ctxkit.mjs && electron-vite build && electron-builder --win"
+    "dist": "npm run core && node scripts/bundle-ctxkit.mjs && electron-vite build && electron-builder --win"
   },
   "author": "Loadout",
   "build": {

@@ -583,6 +583,17 @@ fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() 
         denied["error"]["message"].as_str().unwrap().contains("R2"),
         "{denied}"
     );
+    // мусорное значение уровня — отказ, а не молчаливое R1
+    for bad in [json!("R0"), json!("r2"), json!(2), json!("")] {
+        let r = s.call_with(
+            "apply",
+            json!({ "op": "toggle", "entity": id, "enable": false, "baseSha": plan["result"]["baseSha"], "maxLevel": bad }),
+        );
+        assert!(
+            r["error"]["message"].as_str().unwrap().contains("maxLevel"),
+            "{bad}: {r}"
+        );
+    }
     let done = s.call_with(
         "apply",
         json!({ "op": "toggle", "entity": id, "enable": false, "baseSha": plan["result"]["baseSha"], "maxLevel": "R2" }),

@@ -154,7 +154,9 @@ impl Server {
     }
 
     /// Методы записи (R1). Принимают только id записи и желаемое состояние: путей от страницы нет, цель ядро находит само.
-    /// Без `--backups` изменять файлы нельзя: окно передаёт каталог бэкапов только при включённом уровне R1.
+    /// Без `--backups` изменять файлы нельзя. Окно передаёт каталог всегда, а право писать даёт `maxLevel`
+    /// (R1 или R2), который main присылает в том же запросе, что и запись; ядро само отказывает, если операции нужен
+    /// уровень выше.
     fn write_method(&mut self, method: &str, p: &Value) -> Result<Value, String> {
         let str_of = |k: &str| {
             p.get(k)
@@ -178,11 +180,13 @@ impl Server {
             serde_json::from_value(v).map_err(|_| "неверные параметры намерения".to_owned())
         };
         // Наибольший уровень записи, который main разрешил для этого вызова; без параметра — только флаги (R1).
-        let max_level = || {
-            p.get("maxLevel")
-                .and_then(Value::as_str)
-                .filter(|l| matches!(*l, "R1" | "R2"))
-                .unwrap_or("R1")
+        // Присланное неизвестное значение (`R0`, `r2`, число) — отказ: ошибка уровня не должна открывать запись.
+        let max_level = || -> Result<&str, String> {
+            match p.get("maxLevel") {
+                None | Some(Value::Null) => Ok("R1"),
+                Some(Value::String(l)) if l == "R1" || l == "R2" => Ok(l.as_str()),
+                Some(_) => Err("неверный maxLevel".to_owned()),
+            }
         };
         let profile_name = || {
             str_of("name").and_then(|n| {
@@ -205,19 +209,19 @@ impl Server {
                 &store()?,
                 &intent()?,
                 str_of("baseSha")?,
-                max_level(),
+                max_level()?,
             )?)?,
             "rollback" => json(&write::rollback(
                 &self.home,
                 &store()?,
                 str_of("op")?,
-                max_level(),
+                max_level()?,
             )?)?,
             "rollbackBatch" => json(&write::rollback_batch(
                 &self.home,
                 &store()?,
                 str_of("batch")?,
-                max_level(),
+                max_level()?,
             )?)?,
             "profiles" => json(&loadout_core::profiles::list(&store()?))?,
             "profileSave" => {
@@ -253,7 +257,7 @@ impl Server {
                 let (items, _) =
                     loadout_core::profiles::intents(&self.home, &st, &profile_name()?)?;
                 let (batch, applied) =
-                    write::apply_batch(&self.home, &st, &items, str_of("batchSha")?, max_level())?;
+                    write::apply_batch(&self.home, &st, &items, str_of("batchSha")?, max_level()?)?;
                 json(&json!({ "batch": batch, "applied": applied }))?
             }
             _ => return Err("неизвестный метод".into()),
