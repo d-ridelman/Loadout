@@ -740,8 +740,7 @@ try {
   const enHome = materialize(() => {})
   homes.push(enHome)
   writeFileSync(join(profile, 'settings.json'), JSON.stringify({ writeLevel: 'R2' }))
-  // журнал прежних сценариев (русский) не нужен: тексты откатов хранятся на языке операции, это известный предел
-  rmSync(join(profile, 'backups'), { recursive: true, force: true })
+  // журнал русских сценариев остаётся: записи, сделанные на другом языке, показываются на текущем (relang в ядре)
   session = await launch({ LOADOUT_HOME: enHome, LOADOUT_LANG: 'en', LOADOUT_CLAUDE: process.execPath, LOADOUT_CLAUDE_ARGS: JSON.stringify([fakeClaude]) })
   {
     const { app: enApp, page: en } = session

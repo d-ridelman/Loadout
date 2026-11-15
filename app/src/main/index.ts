@@ -220,16 +220,24 @@ let verifiedGeneration: number | undefined
  * привязана к поколению сверенного процесса: если ядро перезапустилось (в том числе пока запрос стоял в очереди),
  * новому процессу она не уходит.
  */
+/** Запросы к ядру, которые идут сейчас: пока они не закончились, язык не меняется (смена останавливает ядро). */
+let coreInFlight = 0
+
 async function core(method: string, params?: Record<string, unknown>): Promise<unknown> {
-  const s = writeCore()
-  if (verifiedGeneration !== s.generation) {
-    const g = s.generation
-    const st = await s.request('status', undefined, g)
-    const ok = typeof st === 'object' && st !== null && (st as Record<string, unknown>)['protocol'] === CORE_PROTOCOL
-    if (!ok) throw new Error(t('ядро другой версии: запись отключена. Пересоберите ядро (cargo build --release)', 'the core is a different version: writing is disabled. Rebuild the core (cargo build --release)'))
-    verifiedGeneration = g
+  coreInFlight++
+  try {
+    const s = writeCore()
+    if (verifiedGeneration !== s.generation) {
+      const g = s.generation
+      const st = await s.request('status', undefined, g)
+      const ok = typeof st === 'object' && st !== null && (st as Record<string, unknown>)['protocol'] === CORE_PROTOCOL
+      if (!ok) throw new Error(t('ядро другой версии: запись отключена. Пересоберите ядро (cargo build --release)', 'the core is a different version: writing is disabled. Rebuild the core (cargo build --release)'))
+      verifiedGeneration = g
+    }
+    return await s.request(method, params, verifiedGeneration)
+  } finally {
+    coreInFlight--
   }
-  return s.request(method, params, verifiedGeneration)
 }
 
 /**
@@ -357,11 +365,17 @@ void app.whenReady().then(() => {
     guard(e)
     if (!isLang(lang)) throw new Error('invalid language')
     if (lang !== getLang()) {
+      // остановка ядра посреди записи (пакет профиля) оставила бы пакет применённым наполовину
+      if (coreInFlight > 0 || setupBusy || pluginBusy) {
+        throw new Error(t('идёт запись или установка: дождитесь окончания и повторите', 'a write or an install is in progress: wait for it to finish and try again'))
+      }
       setLang(lang)
       saveSetting('lang', lang)
-      // сообщения ядра на языке процесса: ядро перезапускается с новым `--lang`, следующий запрос поднимет его заново
+      // сообщения ядра на языке процесса: ядро перезапускается с новым `--lang`, следующий запрос поднимет его заново;
+      // версия протокола нового процесса сверяется заново (у него счёт поколений начинается с нуля)
       sidecar?.stop()
       sidecar = undefined
+      verifiedGeneration = undefined
     }
     return lang
   })

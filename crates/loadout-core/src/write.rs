@@ -1450,6 +1450,60 @@ fn resolve_entity<'a>(scan: &'a ScanResult, m: &Manifest) -> Option<&'a Entity> 
     })
 }
 
+/// Слова, которыми ядро пишет `from`/`to` в манифест (на языке операции). Запись, сделанная до смены языка, показывается
+/// на текущем: стандартные слова и префиксы переводятся, введённая пользователем команда после префикса остаётся как есть.
+const CANNED: [(&str, &str); 6] = [
+    ("включено", "enabled"),
+    ("выключено", "disabled"),
+    ("не задан", "not set"),
+    ("в корзине Loadout", "in Loadout trash"),
+    ("в стэше владельца", "in the owner's stash"),
+    ("нет записи", "no entry"),
+];
+const CANNED_PREFIX: [(&str, &str); 2] = [("копия: ", "copy: "), ("добавить: ", "add: ")];
+
+fn relang(s: &str) -> String {
+    fn pick<'a>((ru, en): (&'a str, &'a str), to_en: bool) -> (&'a str, &'a str) {
+        if to_en {
+            (ru, en)
+        } else {
+            (en, ru)
+        }
+    }
+    let en = crate::i18n::is_en();
+    for p in CANNED {
+        let (from, to) = pick(p, en);
+        if s == from {
+            return to.to_owned();
+        }
+    }
+    for p in CANNED_PREFIX {
+        let (from, to) = pick(p, en);
+        if let Some(rest) = s.strip_prefix(from) {
+            return format!("{to}{rest}");
+        }
+    }
+    s.to_owned()
+}
+
+#[cfg(test)]
+mod relang_tests {
+    use super::relang;
+
+    /// Язык процесса в тестах русский: английские слова из манифеста, записанного при `--lang en`, показываются по-русски,
+    /// а введённая команда после префикса и неизвестный текст не меняются.
+    #[test]
+    fn manifest_words_follow_the_process_language() {
+        assert_eq!(relang("enabled"), "включено");
+        assert_eq!(relang("in Loadout trash"), "в корзине Loadout");
+        assert_eq!(relang("no entry"), "нет записи");
+        assert_eq!(relang("add: npx -y pkg"), "добавить: npx -y pkg");
+        assert_eq!(relang("copy: tool"), "копия: tool");
+        assert_eq!(relang("включено"), "включено");
+        assert_eq!(relang("npx -y custom"), "npx -y custom");
+    }
+}
+
 /// Журнал наших операций, новые первыми. Изменения клиентов извне в него не попадают.
 pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
     let all = manifests(store);
@@ -1490,8 +1544,8 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
                 name: m.name.clone(),
                 pointer: m.pointer.clone(),
                 file: m.file.clone(),
-                from: m.from.clone(),
-                to: m.to.clone(),
+                from: relang(&m.from),
+                to: relang(&m.to),
                 rolled_back,
                 can_rollback,
             }

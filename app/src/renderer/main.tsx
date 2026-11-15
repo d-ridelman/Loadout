@@ -18,10 +18,15 @@ const root = createRoot(container)
 function Root({ initial }: { initial: Lang }) {
   const [lang, setCurrent] = useState<Lang>(initial)
   const change = async (next: Lang): Promise<void> => {
-    const applied = await window.loadout.setLang(next)
-    setLang(applied)
-    document.documentElement.lang = applied
-    setCurrent(applied)
+    try {
+      const applied = await window.loadout.setLang(next)
+      setLang(applied)
+      document.documentElement.lang = applied
+      setCurrent(applied)
+    } catch (e) {
+      // отказ main (идёт запись): язык остаётся прежним, причина — в сообщении
+      window.alert(e instanceof Error ? e.message : String(e))
+    }
   }
   return (
     <ErrorBoundary key={lang}>
@@ -31,7 +36,7 @@ function Root({ initial }: { initial: Lang }) {
 }
 
 // язык задаёт main (сохранённый выбор или локаль системы): сначала он, потом первая отрисовка
-void window.loadout.getLang().then((lang) => {
+const start = (lang: Lang): void => {
   setLang(lang)
   document.documentElement.lang = lang
   root.render(
@@ -39,4 +44,6 @@ void window.loadout.getLang().then((lang) => {
       <Root initial={lang} />
     </StrictMode>,
   )
-})
+}
+// при сбое IPC окно всё равно открывается, на русском
+void window.loadout.getLang().then(start, () => start('ru'))

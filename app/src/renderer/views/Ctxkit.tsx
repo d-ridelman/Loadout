@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
-import { t } from '../../shared/i18n'
+import { getLang, t } from '../../shared/i18n'
 import { chars, daysDesc, pct, segments, summarize } from '../ctxkit-stats'
 
 // t() только во время рендера: язык выбирается до первой отрисовки, а не при импорте модуля
@@ -24,7 +24,8 @@ const copyText = (k: CtxkitStatus['hook']): string =>
 
 const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'var(--orange)', other: 'var(--deco)' } as const
 
-const DEFAULTS: SetupOptions = { withRules: true, desktop: false, antigravity: false, dsh: false, lang: 'ru', advisor: 'fable' }
+/** Язык хуков по умолчанию — язык интерфейса (потом настройка независима); функция, а не константа: язык выбирается после импорта. */
+const defaults = (): SetupOptions => ({ withRules: true, desktop: false, antigravity: false, dsh: false, lang: getLang(), advisor: 'fable' })
 
 type Loaded<T> = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; data: T }
 
@@ -57,7 +58,7 @@ export function Ctxkit({ level, onNotice }: Props) {
   const [doctor, reloadDoctor] = useLoaded<CtxkitDoctor>(() => window.loadout.ctxkitDoctor(), [])
   const [days, setDays] = useState<7 | 14 | 30>(14)
   const [report, reloadReport] = useLoaded<CtxkitReport>(() => window.loadout.ctxkitReport(days), [days])
-  const [opts, setOpts] = useState<SetupOptions>(DEFAULTS)
+  const [opts, setOpts] = useState<SetupOptions>(defaults)
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [result, setResult] = useState<SetupResult | null>(null)
   const [busy, setBusy] = useState(false)
