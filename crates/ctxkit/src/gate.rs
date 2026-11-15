@@ -2,7 +2,7 @@
 //! a turn that edited code and nothing independent looked at the result afterwards.
 //!
 //! Only facts from the transcript are used (no regex over the answer text, no commands run), so the
-//! hook stays far below the 20 ms budget. Every doubt (unreadable file, odd rows, a cut-off turn)
+//! hook stays cheap (about 50 ms including process start on a 300 MB transcript). Every doubt (unreadable file, odd rows, a cut-off turn)
 //! ends in "allow": a missed block costs one unchecked turn, a false block costs a full context pass.
 
 use crate::Lang;
@@ -99,7 +99,11 @@ fn note_block(turn: &mut Turn, b: &Value) {
 
 /// A real user prompt starts a new turn. Tool results, hook feedback and meta rows do not.
 fn is_prompt(row: &Value) -> bool {
-    if row["isMeta"].as_bool() == Some(true) {
+    // A compaction summary or a sidechain row in the middle of a turn is not the user's next prompt.
+    if ["isMeta", "isCompactSummary", "isSidechain"]
+        .iter()
+        .any(|k| row[*k].as_bool() == Some(true))
+    {
         return false;
     }
     match &row["message"]["content"] {
@@ -117,10 +121,10 @@ fn is_prompt(row: &Value) -> bool {
 fn counts_as_code(path: &str) -> bool {
     let p = path.replace('\\', "/").to_ascii_lowercase();
     let docs = [".md", ".txt", ".rst", ".log"];
+    // Worktrees live under <repo>/.claude/worktrees/: that is code, unlike the rest of the profile.
     !docs.iter().any(|e| p.ends_with(e))
-        && !["/temp/", "/tmp/", "/.claude/"]
-            .iter()
-            .any(|d| p.contains(d))
+        && !["/temp/", "/tmp/"].iter().any(|d| p.contains(d))
+        && (!p.contains("/.claude/") || p.contains("/.claude/worktrees/"))
 }
 
 fn block_reason(turn: &Turn, lang: Lang) -> Option<String> {
@@ -233,6 +237,32 @@ mod tests {
             edit("/p/b.rs"),
         ];
         assert!(reason(&rows).is_some());
+    }
+
+    #[test]
+    fn worktree_files_count_but_profile_files_do_not() {
+        let rows = [
+            user("go"),
+            edit("D:\\x\\.claude\\worktrees\\w\\src\\a.rs"),
+            edit("D:\\x\\.claude\\worktrees\\w\\src\\b.rs"),
+        ];
+        assert!(reason(&rows).is_some());
+    }
+
+    #[test]
+    fn compaction_summary_and_sidechain_rows_do_not_reset_the_turn() {
+        for flag in ["isCompactSummary", "isSidechain"] {
+            let mut row =
+                json!({"type": "user", "message": {"content": "This session is being continued"}});
+            row[flag] = json!(true);
+            let rows = [
+                user("go"),
+                edit("/p/a.rs"),
+                row.to_string(),
+                edit("/p/b.rs"),
+            ];
+            assert!(reason(&rows).is_some(), "{flag}");
+        }
     }
 
     #[test]

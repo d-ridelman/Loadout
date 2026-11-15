@@ -1018,6 +1018,22 @@ fn rules_snippet(opts: &SetupOpts) -> String {
     } else {
         Some(opts.advisor.as_str())
     };
+    // The gate sentence must match what setup really wires (--no-stop-gate) and what is configured (--advisor none).
+    let gate = match (opts.no_stop_gate, adv.is_some(), opts.lang) {
+        (true, _, _) => "",
+        (false, true, Lang::Ru) => {
+            "; хук Stop один раз вернёт тебя, если правки остались без `checker` или advisor"
+        }
+        (false, false, Lang::Ru) => {
+            "; хук Stop один раз вернёт тебя, если правки остались без `checker`"
+        }
+        (false, true, Lang::En) => {
+            "; the Stop hook sends you back once if edits were left without `checker` or advisor"
+        }
+        (false, false, Lang::En) => {
+            "; the Stop hook sends you back once if edits were left without `checker`"
+        }
+    };
     match opts.lang {
         Lang::Ru => {
             let adv_line = match adv {
@@ -1035,7 +1051,7 @@ fn rules_snippet(opts: &SetupOpts) -> String {
 ## Команда моделей и экономия контекста (ctxkit)\n\n\
 {adv_line}\
 - Поиск по коду, греп и чтение документации отправляй в `Explore` ({sub}); правку одного файла без изменения логики делай сам.\n\
-- Не объявляй задачу готовой без `checker` (Opus), кроме правки одного файла без изменения логики; хук Stop один раз вернёт тебя, если правки остались без `checker` или advisor.\n\
+- Не объявляй задачу готовой без `checker` (Opus), кроме правки одного файла без изменения логики{gate}.\n\
 - Группируй независимые `Read`/`Edit`; не читай длинные файлы целиком: сначала `Grep` или LSP, затем диапазон.\n\
 - Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `ctxkit check <cmd>`.\n\
 - Закрывай длинную задачу через `/clear`, не тяни одну сессию дальше ~100-150 ходов.\n\
@@ -1056,7 +1072,7 @@ fn rules_snippet(opts: &SetupOpts) -> String {
 ## Model Team & Context Discipline (ctxkit)\n\n\
 {adv_line}\
 - Delegate codebase search/grep/docs reading to `Explore` ({sub}); keep a one-file fix with no logic change local.\n\
-- Do not declare work done without `checker` (Opus), except a one-file change with no logic change; the Stop hook sends you back once if edits were left without `checker` or advisor.\n\
+- Do not declare work done without `checker` (Opus), except a one-file change with no logic change{gate}.\n\
 - Batch independent `Read`/`Edit` calls; locate symbols via `Grep`/LSP first, then read tight line ranges.\n\
 - Run `ctxkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n\
 - Clear finished tasks with `/clear` instead of dragging sessions past ~100-150 turns.\n\
@@ -1596,6 +1612,25 @@ mod tests {
             .unwrap()
             .contains("ctxkit.exe"));
         assert_eq!(arr[1]["hooks"][0]["command"], "custom-other-hook");
+    }
+
+    #[test]
+    fn rules_mention_the_gate_and_advisor_only_when_configured() {
+        let with = |no_gate: bool, advisor: &str, lang: Lang| {
+            rules_snippet(&SetupOpts {
+                no_stop_gate: no_gate,
+                advisor: advisor.to_string(),
+                lang,
+                ..SetupOpts::default()
+            })
+        };
+        for lang in [Lang::Ru, Lang::En] {
+            let full = with(false, "fable", lang);
+            assert!(full.contains("Stop") && full.contains("advisor"));
+            assert!(!with(true, "fable", lang).contains("Stop"));
+            let none = with(false, "none", lang);
+            assert!(none.contains("Stop") && !none.contains("advisor"));
+        }
     }
 
     #[test]
