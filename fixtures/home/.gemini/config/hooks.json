@@ -1,0 +1,10 @@
+{
+  "ctxkit": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [ { "type": "command", "command": "{HOME}/hooks/guard.exe --lang ru", "timeout": 5 } ]
+      }
+    ]
+  }
+}

@@ -116,6 +116,35 @@ fn config(c: &mut Ctx) {
         .detail(mcp_detail(m));
         c.push(e);
     }
+    // `[apps.<id>] enabled`: приложения (коннекторы) аккаунта. Ключ описан в справочнике конфигурации Codex;
+    // `apps._default` — значение по умолчанию для остальных, самостоятельной записью не считается.
+    let default_on = root
+        .pointer("/apps/_default/enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    for (id, a) in root
+        .get("apps")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| !id.starts_with('_'))
+    {
+        let on = a
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(default_on);
+        let e = Entity::new(
+            CLIENT,
+            Kind::Connector,
+            "cloud",
+            id.clone(),
+            if on { State::On } else { State::Off },
+            CONFIG,
+            format!("apps.{}", toml_key(id)),
+        )
+        .note("локальный переключатель приложения аккаунта; источник правды — аккаунт ChatGPT");
+        c.push(e);
+    }
 }
 
 /// Кеш каталога удалённых плагинов: это не подтверждённое подключение, а то, что приложение скачало (CONCEPT.md §5.1, C0).

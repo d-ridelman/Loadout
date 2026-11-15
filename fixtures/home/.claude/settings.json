@@ -1,5 +1,9 @@
 {
   "disableClaudeAiConnectors": true,
+  "deniedMcpServers": [
+    { "serverName": "local" },
+    { "serverUrl": "https://*.untrusted.example.com/*" }
+  ],
   "enabledPlugins": {
     "alpha@mp": true,
     "beta@mp": false,

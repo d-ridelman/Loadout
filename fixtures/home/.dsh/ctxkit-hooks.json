@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "read|write|edit|bash",
+        "hooks": [ { "type": "command", "command": "& '{HOME}/.claude/hooks/ctxkit.exe' --dsh --lang ru", "timeout": 30 } ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write|edit",
+        "hooks": [ { "type": "command", "command": "& '{HOME}/.claude/hooks/ctxkit.exe' --dsh --lang ru", "timeout": 30 } ]
+      }
+    ]
+  }
+}

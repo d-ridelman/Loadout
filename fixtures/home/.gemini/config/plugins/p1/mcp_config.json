@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "p1-server": {
+      "command": "p1-server",
+      "args": ["--api-key=FAKE-SECRET-AGPLUGIN"]
+    }
+  }
+}

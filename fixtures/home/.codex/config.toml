@@ -26,6 +26,12 @@ url = "https://user:FAKE-SECRET-URLPW@h.example.com/mcp?key=FAKE-SECRET-CXQUERY"
 [mcp_servers.remote.http_headers]
 Authorization = "Bearer FAKE-SECRET-CXHDR"
 
+[apps._default]
+enabled = true
+
+[apps.demo-app]
+enabled = false
+
 [mcp_servers.off]
 command = "x"
 enabled = false

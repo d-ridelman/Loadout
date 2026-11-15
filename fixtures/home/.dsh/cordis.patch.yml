@@ -1,0 +1,28 @@
+- insert:
+    - id: mcp-demo
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: demo
+        transport: stdio
+        command: C:\tools\uvx.exe
+        args:
+          - demo-mcp
+          - --token
+          - FAKE-SECRET-DSARG
+        cwd: !!js process.cwd()
+        toolCallTimeoutMs: 120000
+        env:
+          API_KEY: FAKE-SECRET-DSENV
+        reconnect:
+          enabled: true
+          maxAttempts: 3
+- insert:
+    - id: demo-hooks
+      name: "@deepseek-ai/dsh-hooks-claude-code"
+      config:
+        configPath: "{HOME}/.dsh/ctxkit-hooks.json"
+- insert:
+    - id: some-plugin
+      name: "@deepseek-ai/dsh-something"
+      config:
+        flag: true

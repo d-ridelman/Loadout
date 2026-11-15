@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "tool-a": { "command": "npx", "args": ["-y", "tool-a-mcp"] },
+    "tool-b": {
+      "command": "node",
+      "args": ["{HOME}/srv/b.js", "--token", "FAKE-SECRET-AG-ARG"],
+      "env": { "API_KEY": "FAKE-SECRET-AG-ENV" }
+    }
+  }
+}

@@ -7,7 +7,37 @@ use serde_json::{json, Value};
 #[serde(rename_all = "kebab-case")]
 pub enum Client {
     ClaudeCode,
+    ClaudeDesktop,
     Codex,
+    Antigravity,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+}
+
+impl Client {
+    pub const ALL: [Client; 5] = [
+        Client::ClaudeCode,
+        Client::ClaudeDesktop,
+        Client::Codex,
+        Client::Antigravity,
+        Client::DeepSeek,
+    ];
+
+    /// Короткое имя для CLI и JSON (совпадает с `serde`).
+    pub fn slug(self) -> &'static str {
+        match self {
+            Client::ClaudeCode => "claude-code",
+            Client::ClaudeDesktop => "claude-desktop",
+            Client::Codex => "codex",
+            Client::Antigravity => "antigravity",
+            Client::DeepSeek => "deepseek",
+        }
+    }
+
+    /// Обратное к [`Client::slug`].
+    pub fn from_slug(s: &str) -> Option<Client> {
+        Client::ALL.into_iter().find(|c| c.slug() == s)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]

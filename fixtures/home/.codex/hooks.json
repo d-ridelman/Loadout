@@ -1,7 +1,7 @@
 {
   "hooks": {
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "notify.cmd", "timeout": 3 } ] }
+      { "hooks": [ { "type": "command", "command": "{HOME}/.orca/agent-hooks/codex-hook.cmd", "timeout": 3 } ] }
     ],
     "PreToolUse": [
       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node {HOME}/hooks/guard.mjs", "timeout": 5 } ] }

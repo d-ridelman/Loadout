@@ -1,4 +1,4 @@
-//! `loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|codex]` — только чтение.
+//! `loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek]` — только чтение.
 
 use loadout_core::model::{Client, ScanResult};
 use std::collections::BTreeMap;
@@ -8,7 +8,7 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) != Some("scan") {
-        eprintln!("использование: loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|codex]");
+        eprintln!("использование: loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek]");
         return ExitCode::from(2);
     }
     let (mut json, mut pretty) = (false, false);
@@ -37,13 +37,9 @@ fn main() -> ExitCode {
 
     let mut res: ScanResult = loadout_core::scan(&home);
     if let Some(want) = client {
-        let want = match want.as_str() {
-            "claude-code" => Client::ClaudeCode,
-            "codex" => Client::Codex,
-            other => {
-                eprintln!("неизвестный клиент: {other}");
-                return ExitCode::from(2);
-            }
+        let Some(want) = Client::from_slug(&want) else {
+            eprintln!("неизвестный клиент: {want}");
+            return ExitCode::from(2);
         };
         res.entities.retain(|e| e.client == want);
     }

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "desk-tool": {
+      "command": "desk-tool",
+      "args": ["--password", "FAKE-SECRET-DESKARG"],
+      "env": { "TOKEN": "FAKE-SECRET-DESKENV" }
+    }
+  },
+  "preferences": { "sidebarMode": "chat", "bypassPermissionsOptInByAccount": { "acct": true } }
+}

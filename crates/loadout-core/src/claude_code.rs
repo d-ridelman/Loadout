@@ -20,7 +20,19 @@ pub fn scan(c: &mut Ctx) {
         .and_then(|s| s.get("disableClaudeAiConnectors"))
         .and_then(Value::as_bool)
         == Some(true);
-    mcp(c, connectors_off);
+    // `deniedMcpServers`: `[{serverName | serverCommand | serverUrl: …}]`, действует из любого файла настроек
+    // (документация Claude Code, managed-mcp.md). Сопоставляем только по `serverName`: так же называются
+    // коннекторы claude.ai (`claude.ai Slack`). По команде и URL M1 не сопоставляет.
+    let denied: HashSet<String> = settings
+        .as_ref()
+        .and_then(|s| s.get("deniedMcpServers"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.get("serverName").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    mcp(c, connectors_off, &denied);
     let skills = c.home.join(".claude/skills");
     scan_skills(c, CLIENT, &skills, "user");
     md_dir(c, "agents", Kind::Agent);
@@ -178,7 +190,7 @@ fn marketplaces(c: &mut Ctx) {
     }
 }
 
-fn mcp(c: &mut Ctx, connectors_off: bool) {
+fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
     let Some(v) = c.read_json(&c.home.join(".claude.json")) else {
         return;
     };
@@ -284,7 +296,11 @@ fn mcp(c: &mut Ctx, connectors_off: bool) {
             );
         }
     }
-    for e in found {
+    for mut e in found {
+        if denied.contains(&e.name) && e.state != State::Off {
+            e.state = State::Off;
+            e.note = Some("запрещён в deniedMcpServers (по имени)".to_owned());
+        }
         c.push(e);
     }
 }

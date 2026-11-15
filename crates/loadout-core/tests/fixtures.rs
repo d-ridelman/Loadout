@@ -100,8 +100,19 @@ fn claude_code_inventory() {
     );
     assert_eq!(
         count(&r, c, Kind::Mcp, State::On),
-        4,
-        "github, local, pm и pu (проектные)"
+        3,
+        "github, pm и pu; local запрещён в deniedMcpServers"
+    );
+    let local = r
+        .entities
+        .iter()
+        .find(|e| e.client == c && e.kind == Kind::Mcp && e.name == "local")
+        .expect("local");
+    assert_eq!(local.state, State::Off, "запрет по serverName");
+    assert_eq!(
+        count(&r, c, Kind::Mcp, State::Off),
+        3,
+        "old и old2 из стэша плюс local"
     );
     assert!(
         r.entities
@@ -109,10 +120,9 @@ fn claude_code_inventory() {
             .any(|e| e.name == "pu" && e.scope == "project:~/work/up"),
         "путь проекта в другом регистре приведён к ~"
     );
-    assert_eq!(
-        count(&r, c, Kind::Mcp, State::Off),
-        2,
-        "old и old2 из стэша; `_note` не сервер"
+    assert!(
+        !r.entities.iter().any(|e| e.name == "_note"),
+        "`_note` в стэше не сервер"
     );
 
     assert_eq!(
@@ -164,6 +174,17 @@ fn codex_inventory() {
         ".system → builtin"
     );
     assert_eq!(count(&r, c, Kind::Connector, State::Cloud), 1);
+    assert_eq!(
+        count(&r, c, Kind::Connector, State::Off),
+        1,
+        "[apps.demo-app] enabled = false; `apps._default` не запись"
+    );
+    assert!(
+        r.entities
+            .iter()
+            .any(|e| e.client == c && e.kind == Kind::Hook && e.logical_key == "orca-agent-hooks"),
+        "хук-обёртка в каталоге agent-hooks получает групповой logicalKey"
+    );
 }
 
 #[test]
@@ -214,8 +235,111 @@ fn same_hook_links_across_clients() {
         .collect();
     assert_eq!(
         clients.len(),
+        3,
+        "хук guard найден в Claude Code, Codex и Antigravity под одним logicalKey"
+    );
+}
+
+#[test]
+fn antigravity_inventory() {
+    let h = fixture_home();
+    let r = loadout_core::scan(&h.0);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let c = Client::Antigravity;
+
+    assert_eq!(
+        count(&r, c, Kind::Mcp, State::On),
+        3,
+        "tool-a, tool-b и p1-server из плагина"
+    );
+    assert!(r
+        .entities
+        .iter()
+        .any(|e| e.client == c && e.name == "p1-server" && e.scope == "plugin:p1"));
+    assert_eq!(
+        count(&r, c, Kind::Hook, State::On),
+        1,
+        "hooks.json: группа → событие → хуки"
+    );
+    let p1 = r
+        .entities
+        .iter()
+        .find(|e| e.client == c && e.kind == Kind::Plugin)
+        .expect("плагин p1");
+    assert_eq!(
+        (p1.name.as_str(), p1.version.as_deref()),
+        ("p1", Some("1.2.0"))
+    );
+    assert_eq!(
+        count(&r, c, Kind::Skill, State::On),
+        3,
+        "user, плагин, встроенный"
+    );
+    assert!(r
+        .entities
+        .iter()
+        .any(|e| e.client == c && e.kind == Kind::Skill && e.scope == "builtin"));
+}
+
+#[test]
+fn claude_desktop_inventory() {
+    let h = fixture_home();
+    let r = loadout_core::scan(&h.0);
+    let c = Client::ClaudeDesktop;
+    assert_eq!(count(&r, c, Kind::Mcp, State::On), 1);
+    assert_eq!(
+        r.entities.iter().filter(|e| e.client == c).count(),
+        1,
+        "настройки `preferences` не сущности"
+    );
+}
+
+/// Файл dsh содержит `cwd: !!js process.cwd()`. Тег не исполняется и не должен ронять разбор.
+#[test]
+fn deepseek_inventory_with_js_tag() {
+    let h = fixture_home();
+    let r = loadout_core::scan(&h.0);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let c = Client::DeepSeek;
+
+    let mcp: Vec<_> = r
+        .entities
+        .iter()
+        .filter(|e| e.client == c && e.kind == Kind::Mcp)
+        .collect();
+    assert_eq!(mcp.len(), 1);
+    assert_eq!(mcp[0].name, "demo", "имя берётся из config.serverName");
+    assert_eq!(mcp[0].detail["transport"], "stdio");
+    assert_eq!(
+        count(&r, c, Kind::Hook, State::On),
         2,
-        "хук guard найден и в Claude Code, и в Codex под одним logicalKey"
+        "хуки из файла, на который указывает configPath"
+    );
+    assert_eq!(
+        count(&r, c, Kind::Plugin, State::On),
+        1,
+        "прочие плагины dsh"
+    );
+    assert_eq!(count(&r, c, Kind::Skill, State::On), 1);
+}
+
+#[test]
+fn deepseek_hook_path_outside_home_is_refused() {
+    let h = fixture_home();
+    let cfg = h.0.join(".dsh/cordis.patch.yml");
+    let text = fs::read_to_string(&cfg).unwrap();
+    // configPath, который выводит из домашнего каталога через `..`
+    fs::write(
+        &cfg,
+        text.replace("/.dsh/ctxkit-hooks.json", "/../../etc/hooks.json"),
+    )
+    .unwrap();
+    let r = loadout_core::scan(&h.0);
+    assert_eq!(count(&r, Client::DeepSeek, Kind::Hook, State::On), 0);
+    assert!(
+        r.warnings.iter().any(|w| w.contains("вне домашнего")),
+        "{:?}",
+        r.warnings
     );
 }
 

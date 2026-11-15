@@ -1,7 +1,10 @@
-//! Ядро Loadout, этап M0: только чтение (R0). Сканер Claude Code и Codex.
+//! Ядро Loadout: только чтение (R0). Сканер пяти клиентов: Claude Code, Claude Desktop, Codex, Antigravity, DeepSeek.
 
+pub mod antigravity;
 pub mod claude_code;
+pub mod claude_desktop;
 pub mod codex;
+pub mod deepseek;
 pub mod frontmatter;
 pub mod mask;
 pub mod model;
@@ -71,6 +74,35 @@ impl Ctx {
 /// Имя ключа в JSON Pointer (RFC 6901): `~` → `~0`, `/` → `~1`.
 pub(crate) fn esc_ptr(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
+}
+
+/// Объект `mcpServers` в формате `{имя: {command, args, env?, url?}}` (Antigravity, Claude Desktop, плагины Antigravity).
+pub(crate) fn scan_mcp_servers(
+    c: &mut Ctx,
+    client: Client,
+    file: &str,
+    root_ptr: &str,
+    scope: &str,
+    servers: Option<&Value>,
+) {
+    for (name, cfg) in servers.and_then(Value::as_object).into_iter().flatten() {
+        let Some(shown) = mask::safe_name(name) else {
+            c.warnings
+                .push(format!("{file}: MCP-сервер с недопустимым именем пропущен"));
+            continue;
+        };
+        let e = Entity::new(
+            client,
+            Kind::Mcp,
+            scope,
+            shown,
+            State::On,
+            file,
+            format!("{root_ptr}/{}", esc_ptr(name)),
+        )
+        .detail(mask::mcp_detail(cfg));
+        c.push(e);
+    }
 }
 
 /// Каталоги `<корень>/<имя>/SKILL.md`. Каталоги без `SKILL.md` (служебные вроде `synced/`) пропускаем.
@@ -148,7 +180,7 @@ pub(crate) fn scan_hooks(c: &mut Ctx, client: Client, file: &str, root_ptr: &str
                     file,
                     format!("{root_ptr}/{}/{gi}/hooks/{hi}", esc_ptr(event)),
                 )
-                .logical(label)
+                .logical(agent_hooks_group(&tokens).unwrap_or(label))
                 .detail(json!({
                     "event": ev,
                     "matcher": matcher.and_then(mask::safe_matcher),
@@ -203,6 +235,20 @@ fn hook_label(tokens: &[String]) -> String {
         .map(stem)
         .find(|s| !RUNNERS.contains(&s.to_ascii_lowercase().as_str()))
         .unwrap_or_else(|| "hook".to_owned())
+}
+
+/// Хуки, которые одна внешняя программа ставит сразу в несколько клиентов, лежат в каталоге `<программа>/agent-hooks`
+/// (у владельца `~/.orca/agent-hooks/codex-hook.cmd`, `dsh-hook.cmd`) и называются по клиенту. Для сопоставления между
+/// клиентами берём не имя файла, а группу: `orca-agent-hooks`.
+fn agent_hooks_group(tokens: &[String]) -> Option<String> {
+    tokens.iter().find_map(|t| {
+        let norm = t.replace('\\', "/");
+        let parts: Vec<&str> = norm.split('/').collect();
+        let i = parts.iter().position(|p| *p == "agent-hooks")?;
+        let owner = parts.get(i.checked_sub(1)?)?.trim_start_matches('.');
+        (!owner.is_empty() && mask::safe_name(owner).is_some())
+            .then(|| format!("{owner}-agent-hooks"))
+    })
 }
 
 /// Вложенная командная строка (`bash -c "tool --x"`) приходит одним токеном с пробелами:
@@ -327,7 +373,10 @@ pub fn scan(home: &Path) -> ScanResult {
         warnings: Vec::new(),
     };
     claude_code::scan(&mut c);
+    claude_desktop::scan(&mut c);
     codex::scan(&mut c);
+    antigravity::scan(&mut c);
+    deepseek::scan(&mut c);
 
     // Последний рубеж: путь домашнего каталога не должен остаться ни в одном строковом поле.
     let forms = home_forms(home);
@@ -382,6 +431,20 @@ mod tests {
         );
         assert_eq!(label("cmd /c notify.cmd"), "notify");
         assert_eq!(label(""), "hook");
+    }
+
+    #[test]
+    fn wrapper_hooks_share_a_group_across_clients() {
+        let t = |s: &str| mask::mask_args(&mask::split_shell(s));
+        assert_eq!(
+            agent_hooks_group(&t("C:/Users/x/.orca/agent-hooks/codex-hook.cmd")).as_deref(),
+            Some("orca-agent-hooks")
+        );
+        assert_eq!(
+            agent_hooks_group(&t("C:\\Users\\x\\.orca\\agent-hooks\\dsh-hook.cmd")).as_deref(),
+            Some("orca-agent-hooks")
+        );
+        assert_eq!(agent_hooks_group(&t("C:/x/hooks/ctxkit.exe")), None);
     }
 
     #[test]
