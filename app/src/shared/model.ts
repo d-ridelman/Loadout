@@ -40,8 +40,10 @@ export type Intent =
   | { op: 'toggle'; entity: string; enable: boolean }
   | { op: 'edit'; entity: string; command: string; args: string[] }
   | { op: 'copy'; entity: string; to: ClientId }
+  /** Новый MCP-сервер: локальный (`command`) или удалённый (`url`). Значения env уходят только в ядро. */
+  | { op: 'add'; to: ClientId; name: string; command: string; args: string[]; url: string; env: { key: string; value: string }[] }
 
-export type OpKind = 'toggle' | 'edit' | 'copy'
+export type OpKind = 'toggle' | 'edit' | 'copy' | 'add'
 export type Level = 'R1' | 'R2'
 
 /** Предпросмотр: ключ и старое/новое значение (команды замаскированы), содержимого файла в нём нет. */

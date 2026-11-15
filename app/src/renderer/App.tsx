@@ -9,6 +9,7 @@ import { Doctor } from './views/Doctor'
 import { Hooks } from './views/Hooks'
 import { Inspector, levelOk } from './views/Inspector'
 import { Journal } from './views/Journal'
+import { AddDialog } from './views/AddDialog'
 import { CopyDialog } from './views/CopyDialog'
 import { EditDialog } from './views/EditDialog'
 import { PlanDialog } from './views/PlanDialog'
@@ -22,7 +23,11 @@ import { Radar } from './views/Radar'
 
 type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal' | 'profiles' | 'ctxkit'
 /** Что сейчас открыто поверх окна: форма, а затем предпросмотр записи. */
-type Flow = { type: 'plan'; entity: Entity; intent: Intent } | { type: 'edit'; entity: Entity } | { type: 'copy'; entity: Entity }
+type Flow =
+  | { type: 'plan'; entity: Entity | null; intent: Intent }
+  | { type: 'edit'; entity: Entity }
+  | { type: 'copy'; entity: Entity }
+  | { type: 'add' }
 type Fx = 'off' | 'low' | 'full'
 type ScanState =
   | { status: 'loading' }
@@ -124,6 +129,11 @@ export function App() {
     },
     [level, say],
   )
+
+  const requestAdd = useCallback(() => {
+    if (!levelOk(level, 'R2')) return say(`Запись выключена (${level}): включите уровень R2 в шапке окна`)
+    setFlow({ type: 'add' })
+  }, [level, say])
 
   /** Записи, изменившиеся при последнем обновлении с диска (подсвечиваются на несколько секунд). */
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set())
@@ -272,6 +282,7 @@ export function App() {
     () => [
       ...VIEWS.map((v) => ({ label: `Раздел: ${v.label}`, hint: 'раздел', run: () => setView(v.id) })),
       { label: 'Пересканировать', hint: 'действие', run: () => void load(true) },
+      { label: 'Добавить MCP-сервер', hint: 'действие', run: requestAdd },
       ...(['R0', 'R1', 'R2'] as const)
         .filter((l) => l !== level)
         .map((l) => ({ label: `Уровень записи: ${LEVEL_LABEL[l]}`, hint: 'действие', run: () => void changeLevel(l) })),
@@ -285,7 +296,7 @@ export function App() {
       ...(['off', 'low', 'full'] as const).map((m) => ({ label: `Эффекты: ${m === 'off' ? 'выкл' : m === 'low' ? 'лёгкие' : 'полные'}`, hint: 'действие', run: () => setFx(m) })),
       ...rows.map((r) => ({ label: r.name, hint: r.kinds.join('+'), run: () => showRow(r) })),
     ],
-    [rows, load, showRow, level, changeLevel, selEntity, requestToggle],
+    [rows, load, showRow, level, changeLevel, selEntity, requestToggle, requestAdd],
   )
 
   const problems = findings.filter((f) => f.severity === 'error').length
@@ -325,6 +336,7 @@ export function App() {
             ))}
           </select>
         </label>
+        <button onClick={requestAdd} title="Записать новый MCP-сервер в конфиг клиента (R2)">Добавить MCP</button>
         <button onClick={() => void load(scan.status === 'ready')} aria-label="Пересканировать (клавиша R)">Скан</button>
         <button onClick={() => setPalette(true)} aria-label="Палитра команд">Ctrl+K</button>
       </header>
@@ -422,6 +434,9 @@ export function App() {
       ) : null}
       {flow?.type === 'edit' ? (
         <EditDialog entity={flow.entity} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent })} />
+      ) : null}
+      {flow?.type === 'add' ? (
+        <AddDialog onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: null, intent })} />
       ) : null}
       {flow?.type === 'copy' ? (
         <CopyDialog entity={flow.entity} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent })} />

@@ -229,10 +229,28 @@ const BATCH_RE = /^[0-9]{13}$/
 const NAME_RE = /^[\p{L}\p{N} _.-]{1,40}$/u
 const isShort = (v: unknown): v is string => typeof v === 'string' && v.length <= 500 && !/\p{Cc}/u.test(v)
 
+/** Новый MCP: поля пересобираются, окончательные правила имени, адреса и env проверяет ядро. */
+function validateAdd(r: Record<string, unknown>): Intent {
+  const { to, name, command, args, url, env } = r
+  if (typeof to !== 'string' || !CLIENT_IDS.includes(to) || !isShort(name) || !isShort(command) || !isShort(url)) {
+    throw new Error('неверные параметры')
+  }
+  if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error('неверные аргументы')
+  if (!Array.isArray(env) || env.length > 30) throw new Error('неверные переменные окружения')
+  const pairs = env.map((p: unknown) => {
+    const k = (p as Record<string, unknown> | null)?.['key']
+    const v = (p as Record<string, unknown> | null)?.['value']
+    if (!isShort(k) || !isShort(v)) throw new Error('неверные переменные окружения')
+    return { key: k, value: v }
+  })
+  return { op: 'add', to: to as ClientId, name, command, args: args as string[], url, env: pairs }
+}
+
 /** Разбор намерения от страницы: только id записи и то, что с ней сделать. Всё остальное отбрасывается. */
 function validateIntent(raw: unknown): Intent {
   if (typeof raw !== 'object' || raw === null) throw new Error('неверные параметры')
   const r = raw as Record<string, unknown>
+  if (r['op'] === 'add') return validateAdd(r)
   const entity = r['entity']
   if (typeof entity !== 'string' || !ENTITY_RE.test(entity)) throw new Error('неверные параметры')
   if (r['op'] === 'toggle' && typeof r['enable'] === 'boolean') return { op: 'toggle', entity, enable: r['enable'] }

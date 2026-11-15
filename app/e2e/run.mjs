@@ -20,7 +20,7 @@ const SIZES = [
 ]
 
 /** Главная кнопка диалога называется по операции (или «Применить» у пакета профиля). */
-const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Применить)/
+const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Добавить|Применить)/
 
 const log = (...a) => console.log(...a)
 const must = (cond, msg) => {
@@ -538,6 +538,25 @@ try {
   await page.keyboard.press('5')
   await page.getByRole('row', { name: /копия/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
   await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'откат копии вернул config.toml побайтово')
+
+  // добавление нового MCP: значения env уходят только в ядро, откат возвращает файл побайтово
+  await page.keyboard.press('1')
+  await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
+  await dialog.getByLabel('Клиент').selectOption({ label: 'ChatGPT / Codex' })
+  await dialog.getByLabel('Имя', { exact: true }).fill('e2e-added')
+  await dialog.getByLabel('Команда', { exact: true }).fill('npx')
+  await dialog.getByLabel('Аргументы, по одному в строке').fill('-y\nsome-mcp')
+  await dialog.getByLabel(/Переменные окружения/).fill('API_TOKEN=FAKE-SECRET-ADDED')
+  await shot(page, 'm4-add-dialog-1280')
+  await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
+  const addText = await openPlan()
+  must(addText.includes('~/.codex/config.toml') && addText.includes('API_TOKEN') && !addText.includes('FAKE-SECRET'), `предпросмотр добавления: ${addText}`)
+  await applyDialog()
+  await waitFor(() => readFileSync(cfg, 'utf8').includes('[mcp_servers.e2e-added]'), 'новый сервер записан в config.toml Codex')
+  await noSecretOnPage('добавление')
+  await page.keyboard.press('5')
+  await page.getByRole('row', { name: /добавление/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
+  await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'откат добавления вернул config.toml побайтово')
 
   // профили: снять состояние, поправить, применить пакетом, откатить пакет целиком
   await page.keyboard.press('6')

@@ -665,6 +665,101 @@ fn copy_translates_between_json_and_toml_keeps_secrets_inside_the_core() {
     assert!(v["mcpServers"]["remote"].get("http_headers").is_none());
 }
 
+fn add_local(to: &str, name: &str) -> Intent {
+    Intent::Add {
+        to: to.into(),
+        name: name.into(),
+        command: "npx".into(),
+        args: vec!["-y".into(), "some-mcp".into()],
+        url: String::new(),
+        env: vec![write::EnvPair {
+            key: "API_TOKEN".into(),
+            value: "FAKE-SECRET-ADDED".into(),
+        }],
+    }
+}
+
+#[test]
+fn add_creates_a_server_in_json_and_toml_hides_env_values_and_rolls_back() {
+    let e = env();
+    // Codex (TOML)
+    let cfg = codex_cfg(&e);
+    let original = fs::read(&cfg).unwrap();
+    let i = add_local("codex", "brand-new");
+    let p = plan_s(&e, &i).unwrap();
+    assert_eq!((p.op.as_str(), p.level.as_str()), ("add", "R2"));
+    assert!(!format!("{p:?}").contains("FAKE-SECRET-ADDED"), "{p:?}");
+    assert!(
+        p.notes.iter().any(|n| n.contains("API_TOKEN")),
+        "{:?}",
+        p.notes
+    );
+    let done = wapply(&e.home, &e.store, &i, &p.base_sha).unwrap();
+    let t: toml::Table = fs::read_to_string(&cfg).unwrap().parse().unwrap();
+    let s = &t["mcp_servers"]["brand-new"];
+    assert_eq!(s["command"].as_str(), Some("npx"));
+    assert_eq!(s["env"]["API_TOKEN"].as_str(), Some("FAKE-SECRET-ADDED"));
+    assert!(plan_s(&e, &i).unwrap_err().contains("уже есть"));
+    let j = serde_json::to_string(&write::journal(&e.home, &e.store)).unwrap();
+    assert!(!j.contains("FAKE-SECRET-ADDED"), "{j}");
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert_eq!(fs::read(&cfg).unwrap(), original);
+
+    // Antigravity (JSON), удалённый сервер
+    let r = Intent::Add {
+        to: "antigravity".into(),
+        name: "hosted".into(),
+        command: String::new(),
+        args: Vec::new(),
+        url: "https://example.com/mcp".into(),
+        env: Vec::new(),
+    };
+    apply_i(&e, &r).unwrap();
+    let v = read_json(&ag_cfg(&e));
+    assert_eq!(v["mcpServers"]["hosted"]["url"], "https://example.com/mcp");
+}
+
+#[test]
+fn add_refuses_bad_names_both_kinds_unknown_client_and_deepseek() {
+    let e = env();
+    let bad = |i: Intent| plan_s(&e, &i).is_err();
+    for name in ["", "a b", "../x", "x\"y", &"n".repeat(65)] {
+        assert!(bad(add_local("codex", name)), "{name:?}");
+    }
+    assert!(bad(add_local("nonsense", "ok")));
+    assert!(bad(add_local("deepseek", "ok")));
+    let both = Intent::Add {
+        to: "codex".into(),
+        name: "ok".into(),
+        command: "x".into(),
+        args: Vec::new(),
+        url: "https://e.com".into(),
+        env: Vec::new(),
+    };
+    let none = Intent::Add {
+        to: "codex".into(),
+        name: "ok".into(),
+        command: String::new(),
+        args: Vec::new(),
+        url: String::new(),
+        env: Vec::new(),
+    };
+    let bad_url = Intent::Add {
+        to: "codex".into(),
+        name: "ok".into(),
+        command: String::new(),
+        args: Vec::new(),
+        url: "file:///etc/passwd".into(),
+        env: Vec::new(),
+    };
+    assert!(bad(both) && bad(none) && bad(bad_url));
+    let mut ctrl = add_local("codex", "ok");
+    if let Intent::Add { env, .. } = &mut ctrl {
+        env[0].key = "BAD-KEY".into();
+    }
+    assert!(bad(ctrl));
+}
+
 #[test]
 fn copy_refuses_same_client_deepseek_and_taken_names() {
     let e = env();

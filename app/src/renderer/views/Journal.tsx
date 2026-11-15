@@ -3,7 +3,7 @@ import { CLIENTS } from '../../shared/model'
 import type { JournalEntry, WriteLevel } from '../../shared/model'
 import { levelOk } from './Inspector'
 
-const OP_LABEL: Record<JournalEntry['op'], string> = { toggle: 'запись', edit: 'правка', copy: 'копия', rollback: 'откат' }
+const OP_LABEL: Record<JournalEntry['op'], string> = { toggle: 'запись', edit: 'правка', copy: 'копия', add: 'добавление', rollback: 'откат' }
 
 type State = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; rows: JournalEntry[] }
 

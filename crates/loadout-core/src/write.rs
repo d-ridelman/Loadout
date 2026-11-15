@@ -111,6 +111,26 @@ pub enum Intent {
     },
     /// Скопировать MCP в другой клиент (`to` — короткое имя клиента).
     Copy { entity: String, to: String },
+    /// Добавить новый MCP-сервер клиенту: локальный (`command`, `args`, `env`) или удалённый (`url`).
+    /// Значения `env` вводит пользователь; в план и журнал они не попадают, только имена ключей.
+    Add {
+        to: String,
+        name: String,
+        #[serde(default)]
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        url: String,
+        #[serde(default)]
+        env: Vec<EnvPair>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EnvPair {
+    pub key: String,
+    pub value: String,
 }
 
 impl Intent {
@@ -119,6 +139,7 @@ impl Intent {
             Intent::Toggle { entity, .. }
             | Intent::Edit { entity, .. }
             | Intent::Copy { entity, .. } => entity,
+            Intent::Add { .. } => "",
         }
     }
 }
@@ -631,6 +652,133 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
     })
 }
 
+fn prep_add(
+    home: &Path,
+    scan: &ScanResult,
+    a: (&str, &str, &str, &[String], &str, &[EnvPair]),
+) -> Result<Prepared, String> {
+    let (to, name, command, args, url, env) = a;
+    let dest = Client::from_slug(to).ok_or("неизвестный клиент")?;
+    let (file, format, root) = client_target(home, dest)
+        .ok_or("в этого клиента добавлять нельзя: формат файла не поддержан")?;
+    guard_file(home, &file)?;
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        || mask::safe_name(name).is_none()
+    {
+        return Err("имя: до 64 знаков из букв, цифр, `-`, `_` и `.`".into());
+    }
+    let remote = !url.trim().is_empty();
+    let local = !command.trim().is_empty();
+    if remote == local {
+        return Err(
+            "нужен либо command (локальный сервер), либо url (удалённый), но не оба сразу".into(),
+        );
+    }
+    let mut value = serde_json::Map::new();
+    let mut shown: Vec<String>;
+    if local {
+        if !clean_arg(command) || args.len() > 64 || !args.iter().all(|a| clean_arg(a)) {
+            return Err("команда и аргументы: до 500 знаков, без управляющих символов, аргументов не больше 64".into());
+        }
+        value.insert("command".into(), json!(command.trim()));
+        if !args.is_empty() {
+            value.insert("args".into(), json!(args));
+        }
+        if env.len() > 30 {
+            return Err("слишком много переменных окружения".into());
+        }
+        let mut envm = serde_json::Map::new();
+        for p in env {
+            let ok = !p.key.is_empty()
+                && p.key.len() <= 64
+                && p.key.chars().enumerate().all(|(i, c)| {
+                    c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
+                });
+            if !ok || !clean_arg(&p.value) || envm.contains_key(&p.key) {
+                return Err(format!("переменная окружения «{}»: имя из букв, цифр и `_`, значение без управляющих символов, без повторов", mask::scrub_words(&p.key)));
+            }
+            envm.insert(p.key.clone(), json!(p.value));
+        }
+        if !envm.is_empty() {
+            value.insert("env".into(), Value::Object(envm));
+        }
+        shown = vec![command.trim().to_owned()];
+        shown.extend(args.iter().cloned());
+    } else {
+        let u = url.trim();
+        let valid = (u.starts_with("https://") || u.starts_with("http://"))
+            && u.len() <= 500
+            && !u.chars().any(|c| c.is_control() || c.is_whitespace());
+        if !valid || !env.is_empty() {
+            return Err(
+                "адрес: http:// или https:// без пробелов, для удалённого сервера env не задаётся"
+                    .into(),
+            );
+        }
+        value.insert("url".into(), json!(u));
+        if dest == Client::ClaudeCode {
+            value.insert("type".into(), json!("http"));
+        }
+        shown = vec![u.to_owned()];
+    }
+    let (old, text) = read_text(&file)
+        .map_err(|_| "файл клиента-получателя не найден: клиент не установлен".to_owned())?;
+    let path = vec![root.to_owned(), name.to_owned()];
+    if edit::get_value(format, &text, &path)?.is_some()
+        || scan
+            .entities
+            .iter()
+            .any(|o| o.client == dest && o.kind == Kind::Mcp && o.scope == "user" && o.name == name)
+    {
+        return Err("у этого клиента уже есть запись с таким именем".into());
+    }
+    let new_text = edit::put_value(format, &text, &path, &Value::Object(value.clone()), false)?;
+    let env_keys: Vec<String> = env.iter().map(|p| mask::scrub_words(&p.key)).collect();
+    let mut notes = vec![
+        "Новая запись добавляется в конфиг клиента; клиент подхватит её при следующем запуске."
+            .to_owned(),
+    ];
+    if !env_keys.is_empty() {
+        notes.push(format!(
+            "Переменные окружения: {}. Значения записываются как введены и в окне больше не показываются.",
+            env_keys.join(", ")
+        ));
+    }
+    let plan = Plan {
+        op: "add".into(),
+        level: "R2".into(),
+        entity: String::new(),
+        client: dest,
+        kind: Kind::Mcp,
+        name: name.to_owned(),
+        file: tilde(home, &file),
+        pointer: match format {
+            Format::Json | Format::Yaml => format!("/{root}/{name}"),
+            Format::Toml => format!("{root}.{name}"),
+        },
+        enable: true,
+        from: "нет записи".into(),
+        to: format!("добавить: {}", masked_line(&shown)),
+        noop: false,
+        affects: Vec::new(),
+        notes,
+        base_sha: sha(&old),
+    };
+    Ok(Prepared {
+        plan,
+        entity: String::new(),
+        file,
+        old,
+        new: new_text.into_bytes(),
+        trash: None,
+        inverse_enable: None,
+    })
+}
+
 fn prepare(
     home: &Path,
     store: Option<&Path>,
@@ -662,6 +810,14 @@ fn prepare_raw(
             args,
         } => prep_edit(home, scan, entity, command, args),
         Intent::Copy { entity, to } => prep_copy(home, scan, entity, to),
+        Intent::Add {
+            to,
+            name,
+            command,
+            args,
+            url,
+            env,
+        } => prep_add(home, scan, (to, name, command, args, url, env)),
     }
 }
 
@@ -898,6 +1054,7 @@ fn op_name(i: &Intent) -> &'static str {
         Intent::Toggle { .. } => "toggle",
         Intent::Edit { .. } => "edit",
         Intent::Copy { .. } => "copy",
+        Intent::Add { .. } => "add",
     }
 }
 

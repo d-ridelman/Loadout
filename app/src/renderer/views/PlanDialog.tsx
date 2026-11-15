@@ -9,7 +9,8 @@ type PlanState =
   | { status: 'ready'; plan: Plan & { running: string[] } }
 
 interface Props {
-  entity: Entity
+  /** `null` у добавления нового сервера: записи ещё нет. */
+  entity: Entity | null
   intent: Intent
   onClose: () => void
   /** Запись выполнена: окно получит новые данные от сторожа, здесь — только сообщение. */
@@ -18,6 +19,7 @@ interface Props {
 
 function title(p: Plan | undefined, intent: Intent): string {
   const op = p?.op ?? intent.op
+  if (op === 'add') return 'Добавить MCP-сервер'
   if (op === 'edit') return 'Правка команды'
   if (op === 'copy') return 'Копирование в другой клиент'
   return intent.op === 'toggle' && intent.enable ? 'Включить' : 'Выключить'
@@ -25,6 +27,7 @@ function title(p: Plan | undefined, intent: Intent): string {
 
 /** Название главной кнопки по операции, а не общее «Применить»: видно, что именно произойдёт. */
 function applyLabel(p: Plan | undefined, intent: Intent): string {
+  if (intent.op === 'add') return 'Добавить'
   if (intent.op === 'edit') return 'Записать команду'
   if (intent.op === 'copy') return 'Скопировать'
   if (p?.from.includes('корзин')) return 'Вернуть из корзины'
@@ -35,6 +38,7 @@ function applyLabel(p: Plan | undefined, intent: Intent): string {
 /** Предпросмотр любой записи (CONCEPT.md §5, шаги 1–2): что именно поменяется, и только после подтверждения запись. */
 export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
   const [state, setState] = useState<PlanState>({ status: 'loading' })
+  const shown = entity?.name ?? (intent.op === 'add' ? intent.name : '')
   const [busy, setBusy] = useState(false)
   const [applyError, setApplyError] = useState<string | null>(null)
   const applyRef = useRef<HTMLButtonElement>(null)
@@ -68,7 +72,7 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
     setApplyError(null)
     try {
       const r = await window.loadout.apply(intent, state.plan.baseSha)
-      if (r.ok) onDone(`${title(state.plan, intent)}: ${entity.name}. Откат — в журнале`)
+      if (r.ok) onDone(`${title(state.plan, intent)}: ${shown}. Откат — в журнале`)
       else setApplyError(r.error)
     } catch (e) {
       setApplyError(e instanceof Error ? e.message : 'запись не удалась')
@@ -78,16 +82,17 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
   }
 
   const plan = state.status === 'ready' ? state.plan : undefined
-  const client = CLIENTS.find((c) => c.id === (plan?.client ?? entity.client))?.name ?? entity.client
+  const clientId = plan?.client ?? entity?.client ?? (intent.op === 'add' ? intent.to : undefined)
+  const client = CLIENTS.find((c) => c.id === clientId)?.name ?? clientId ?? ''
   return (
-    <Modal label={`${title(plan, intent)}: ${entity.name}`} onEscape={onClose}>
+    <Modal label={`${title(plan, intent)}: ${shown}`} onEscape={onClose}>
       <h2>
         {title(plan, intent)} {plan ? <span className="lvl">{plan.level}</span> : null}
       </h2>
       <p>
-        <b>{entity.name}</b>{' '}
+        <b>{shown}</b>{' '}
         <span className="mute">
-          · {plan?.op === 'copy' ? `${CLIENTS.find((c) => c.id === entity.client)?.name ?? entity.client} → ${client}` : client}
+          · {plan?.op === 'copy' && entity ? `${CLIENTS.find((c) => c.id === entity.client)?.name ?? entity.client} → ${client}` : client}
         </span>
       </p>
       {state.status === 'loading' ? (
