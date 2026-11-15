@@ -17,7 +17,6 @@
 - [ ] Нет повторной сверки sha перед `rename` в commit и rollback: `crates/loadout-core/src/write.rs:1152-1190`, `write.rs:1603-1638`.
 - [ ] Нет тестов на IPC-ворота главного процесса (`validateIntent`, `trusted`): `app/src/main/index.ts:260-310`.
 - [ ] Дубли: разворот `~` (`crates/loadout-core/src/write.rs:107-118` и `crates/loadout-core/src/lib.rs:42-54`) и поиск домашнего каталога (`crates/loadoutd/src/main.rs`).
-- [ ] Шлюз Stop при `--advisor none` без `checker` всё равно просит вызвать «их»: `crates/ctxkit/src/gate.rs:130-146`.
 - [ ] Таблица алиасов `canonical_model_id` устареет (`crates/ctxkit/src/setup.rs`, около строки 540); `doctor` не замечает отсутствия `modelSettings` для основной модели.
 - [ ] Кнопка отката ctxkit в окне Loadout (следующий шаг после `ctxkit setup --uninstall`).
 - [ ] Сравнение advisor и `checker` по дням не раньше 22.11.2026 (остаётся как есть, см. раздел про шлюз Stop выше).

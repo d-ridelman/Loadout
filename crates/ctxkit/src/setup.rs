@@ -649,9 +649,28 @@ fn update_claude_settings(
         println!("  Stop gate: off (--no-stop-gate); our Stop hook is removed if present");
     } else {
         upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd);
-        println!(
-            "  Stop gate: on, hook Stop sends the model back once per turn if code edits lack checker/advisor; remove with --no-stop-gate"
-        );
+        let advisor_set = root
+            .get("advisorModel")
+            .and_then(Value::as_str)
+            .is_some_and(|m| !m.is_empty());
+        let checker = !opts.no_agents
+            || path
+                .parent()
+                .is_some_and(|p| p.join("agents").join("checker.md").is_file());
+        if advisor_set || checker {
+            println!(
+                "  Stop gate: on, hook Stop sends the model back once per turn if code edits lack {}; remove with --no-stop-gate",
+                match (checker, advisor_set) {
+                    (true, true) => "checker/advisor",
+                    (true, false) => "checker",
+                    _ => "advisor",
+                }
+            );
+        } else {
+            println!(
+                "  Stop gate: on, but there is no `checker` agent and no advisor, so it stays silent until one exists (--advisor <model>, or setup without --no-agents)"
+            );
+        }
     }
 
     write_json_if_changed(

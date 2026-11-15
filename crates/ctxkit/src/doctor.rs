@@ -118,7 +118,20 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
     let has_gate = settings["hooks"]["Stop"]
         .as_array()
         .is_some_and(|a| a.iter().any(|g| crate::setup::is_our_hook_group(g, None)));
-    out.push(if has_gate {
+    let helpers = crate::gate::Helpers::find(profile, None);
+    out.push(if has_gate && !helpers.checker && !helpers.advisor {
+        f(
+            "stop_gate",
+            "info",
+            t(
+                lang,
+                "Stop gate installed, but there is neither a checker agent nor an advisorModel: it stays silent",
+                "шлюз Stop установлен, но нет ни агента checker, ни advisorModel: он молчит",
+            ),
+            None,
+            Some("ctxkit setup"),
+        )
+    } else if has_gate {
         f("stop_gate", "ok", t(lang, "Stop gate installed", "шлюз Stop установлен"), None, None)
     } else {
         f(
@@ -420,6 +433,21 @@ mod tests {
         assert_eq!(lang_arg(&a(&["--lang", "--json"]), 0), None);
         assert_eq!(lang_arg(&a(&["--lang"]), 0), None);
         assert_eq!(lang_arg(&a(&["--lang", "xx"]), 0), None);
+    }
+
+    #[test]
+    fn stop_gate_without_checker_and_advisor_is_called_silent() {
+        let d = temp("ctxkit_doctor_gate");
+        let stop = json!({"hooks": {"Stop": [{"hooks": [{"command": "C:/x/ctxkit.exe"}]}]}});
+        fs::write(d.join("settings.json"), stop.to_string()).unwrap();
+        let msg = |d: &Path| {
+            let v = diagnose(d, Lang::En);
+            v.iter().find(|x| x.id == "stop_gate").unwrap().message
+        };
+        assert!(msg(&d).contains("stays silent"));
+        fs::write(d.join("agents").join("checker.md"), "x").unwrap();
+        assert_eq!(msg(&d), "Stop gate installed");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

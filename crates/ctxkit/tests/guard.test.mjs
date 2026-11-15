@@ -51,13 +51,23 @@ const postClaude = (name, content) => {
 };
 
 // Stop gate: a transcript whose last turn edits two code files, optionally followed by checker
-const stopGate = ({ checker = false, active = false, env = {} } = {}) => {
+// ...in a profile that has the checker agent and an advisor, only one of them, or neither
+const gateProfile = (kind) => {
+  const p = join(dir, `gate-profile-${kind}`);
+  if (!existsSync(p)) {
+    mkdirSync(join(p, 'agents'), { recursive: true });
+    if (kind === 'both' || kind === 'checker') writeFileSync(join(p, 'agents', 'checker.md'), 'x');
+    writeFileSync(join(p, 'settings.json'), JSON.stringify(kind === 'both' || kind === 'advisor' ? { advisorModel: 'fable' } : {}));
+  }
+  return p;
+};
+const stopGate = ({ checker = false, active = false, env = {}, profile = 'both' } = {}) => {
   const edit = (p) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: p } }] } });
   const rows = [{ type: 'user', message: { content: 'go' } }, edit('/p/a.rs'), edit('/p/b.rs')];
   if (checker) rows.push({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', input: { subagent_type: 'checker' } }] } });
   const transcript_path = join(dir, 'turn.jsonl');
   writeFileSync(transcript_path, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
-  return runHook({ hook_event_name: 'Stop', transcript_path, stop_hook_active: active }, [], env);
+  return runHook({ hook_event_name: 'Stop', transcript_path, stop_hook_active: active }, [], { CLAUDE_CONFIG_DIR: gateProfile(profile), ...env });
 };
 
 const TMP = `C:${B}Users${B}u${B}AppData${B}Local${B}Temp${B}agents${B}x${B}`;
@@ -761,6 +771,16 @@ const cases = [
   [true, () => stopGate({ active: true }) === ''],
   [true, () => stopGate({ checker: true }) === ''],
   [true, () => stopGate({ env: { CTXKIT_GATE: '0' } }) === ''],
+  // ...the message follows what is configured (--advisor none, no checker.md): never names a missing helper
+  [true, () => {
+    const only = (profile) => JSON.parse(stopGate({ profile })).reason;
+    const c = only('checker');
+    const a = only('advisor');
+    if (!c.includes('`checker`') || c.includes('advisor')) return `checker-only: ${c}`;
+    if (!a.includes('advisor') || a.includes('checker')) return `advisor-only: ${a}`;
+    if (!only('both').includes('neither `checker` nor the advisor')) return 'both';
+    return stopGate({ profile: 'none' }) === '' || 'nothing configured must not block';
+  }],
 ];
 
 let failed = 0;
