@@ -672,13 +672,6 @@ fn prep_add(
     {
         return Err("имя: до 64 знаков из букв, цифр, `-`, `_` и `.`".into());
     }
-    // Codex превращает всё, кроме [A-Za-z0-9_-], в `_` (имя инструмента для модели): `a.b` и `a_b` столкнулись бы
-    if dest == Client::Codex && name.contains('.') {
-        return Err(
-            "для Codex в имени допустимы буквы, цифры, `-` и `_`: точка заменяется им на `_`"
-                .into(),
-        );
-    }
     let remote = !url.trim().is_empty();
     let local = !command.trim().is_empty();
     if remote == local {
