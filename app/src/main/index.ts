@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, session } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -226,9 +226,27 @@ void app.whenReady().then(() => {
     if (!trusted(e)) throw new Error('untrusted sender')
   }
   ipcMain.handle('writeLevel:get', (e) => (guard(e), readWriteLevel()))
-  ipcMain.handle('writeLevel:set', (e, level: unknown) => {
+  ipcMain.handle('writeLevel:set', async (e, level: unknown) => {
     guard(e)
     if (level !== 'R0' && level !== 'R1') throw new Error('неизвестный уровень')
+    // Повышение до R1 подтверждает человек в окне самой ОС, которое страница не может нажать за него:
+    // иначе скомпрометированная страница включила бы запись и тут же вызвала `apply`. Понижение подтверждения не требует.
+    // В проверочном режиме (только разработка, `APP_QA=1`) окна нет: сценарий не может его нажать.
+    if (level === 'R1' && readWriteLevel() !== 'R1' && !qa) {
+      const opts = {
+        type: 'warning' as const,
+        title: 'Loadout: включить запись?',
+        message: 'Разрешить Loadout включать и выключать записи в конфигах клиентов?',
+        detail: 'Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.',
+        buttons: ['Отмена', 'Включить запись'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      }
+      const win = BrowserWindow.fromWebContents(e.sender)
+      const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+      if (r.response !== 1) return readWriteLevel()
+    }
     saveWriteLevel(level)
     return level
   })

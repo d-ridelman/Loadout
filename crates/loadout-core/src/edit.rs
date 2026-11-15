@@ -184,6 +184,12 @@ fn insert_json(
 
 fn set_toml(text: &str, path: &[String], value: bool) -> Result<String, String> {
     let (last, parents) = path.split_last().ok_or_else(|| "пустой путь".to_owned())?;
+    let crlf = text.contains("\r\n");
+    let only_crlf = crlf && !text.replace("\r\n", "").contains('\n');
+    if crlf && !only_crlf {
+        // toml_edit пишет новые и перенесённые строки через `\n`: в смешанном файле поменялись бы байты вне правки
+        return Err("в файле смешанные переводы строк (CRLF и LF): правка отказана".to_owned());
+    }
     let mut doc: DocumentMut = text.parse().map_err(|_| "не TOML".to_owned())?;
     let mut t: &mut dyn TableLike = doc.as_table_mut();
     for (i, k) in parents.iter().enumerate() {
@@ -214,7 +220,7 @@ fn set_toml(text: &str, path: &[String], value: bool) -> Result<String, String> 
     }
     let out = doc.to_string();
     // новые строки toml_edit пишет через `\n`: в файле с одними CRLF приводим всё к CRLF
-    if text.contains("\r\n") && !text.replace("\r\n", "").contains('\n') {
+    if only_crlf {
         return Ok(out.replace("\r\n", "\n").replace('\n', "\r\n"));
     }
     Ok(out)
@@ -353,5 +359,10 @@ mod tests {
         assert!(set_bool(Format::Toml, "a = 1", &p(&["a"]), true).is_err());
         assert!(set_bool(Format::Toml, "a = 1", &p(&["a", "b"]), true).is_err());
         assert!(set_bool(Format::Toml, "a = [", &p(&["a"]), true).is_err());
+        // смешанные переводы строк: отказ, а не молчаливая порча байтов вне правки
+        let mixed = "[a]\r\nx = 1\n[b]\r\ny = 2\r\n";
+        assert!(set_bool(Format::Toml, mixed, &p(&["a", "enabled"]), true)
+            .unwrap_err()
+            .contains("смешанные"));
     }
 }

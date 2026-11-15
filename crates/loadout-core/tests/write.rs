@@ -283,6 +283,78 @@ fn plan_and_journal_carry_no_file_contents() {
     );
 }
 
+#[test]
+fn denied_connector_is_not_toggleable_even_when_already_off_by_the_global_key() {
+    let e = env();
+    let sj = e.home.join(".claude/settings.json");
+    let text = fs::read_to_string(&sj).unwrap();
+    assert!(text.contains("\"disableClaudeAiConnectors\": true"));
+    fs::write(
+        &sj,
+        text.replace(
+            "{ \"serverName\": \"local\" }",
+            "{ \"serverName\": \"local\" }, { \"serverName\": \"claude.ai Demo\" }",
+        ),
+    )
+    .unwrap();
+    let r = loadout_core::scan(&e.home);
+    let c = r
+        .entities
+        .iter()
+        .find(|x| x.kind == Kind::Connector && x.client == Client::ClaudeCode)
+        .unwrap();
+    assert!(
+        !c.can_toggle,
+        "запрет по имени ключом disableClaudeAiConnectors не снять"
+    );
+    assert!(plan(&e.home, &c.id, true)
+        .unwrap_err()
+        .contains("deniedMcpServers"));
+}
+
+#[test]
+fn repeated_toggle_and_rollback_chain_returns_identical_bytes() {
+    let e = env();
+    let id = id_of(
+        &loadout_core::scan(&e.home),
+        Client::Codex,
+        Kind::Plugin,
+        "p1@bundled",
+    );
+    let original = fs::read(codex_cfg(&e)).unwrap();
+    for _ in 0..2 {
+        let p = plan(&e.home, &id, false).unwrap();
+        let done = apply(&e.home, &e.store, &id, false, &p.base_sha).unwrap();
+        rollback(&e.home, &e.store, &done.op).unwrap();
+        assert_eq!(fs::read(codex_cfg(&e)).unwrap(), original);
+    }
+    let j = journal(&e.home, &e.store);
+    assert_eq!(j.len(), 4);
+    assert_eq!(j.iter().filter(|x| x.rolled_back).count(), 2);
+    assert!(j.iter().all(|x| !x.can_rollback), "все операции откатаны");
+}
+
+#[test]
+fn codex_app_flag_toggles_through_the_apps_table() {
+    let e = env();
+    // `apps.demo-app` выключен в фикстуре, `apps._default` включён: запись включается явным ключом в своей таблице
+    let id = id_of(
+        &loadout_core::scan(&e.home),
+        Client::Codex,
+        Kind::Connector,
+        "demo-app",
+    );
+    let p = plan(&e.home, &id, true).unwrap();
+    assert_eq!((p.from.as_str(), p.to.as_str()), ("false", "true"));
+    apply(&e.home, &e.store, &id, true, &p.base_sha).unwrap();
+    assert_eq!(state_of(&e.home, &id), Some(State::On));
+    let text = fs::read_to_string(codex_cfg(&e)).unwrap();
+    assert!(
+        text.contains("[apps._default]\nenabled = true"),
+        "общий ключ не тронут"
+    );
+}
+
 /// Сухой прогон на настоящих конфигах (`cargo test -- --ignored`): только `plan`, ничего не пишется.
 /// Каждая переключаемая запись даёт план, файлы клиентов после прогона не изменились.
 #[test]

@@ -314,10 +314,13 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
         }
     }
     for mut e in found {
-        if denied.contains(&e.name) && e.state != State::Off {
-            e.state = State::Off;
-            e.note = Some("запрещён в deniedMcpServers (по имени)".to_owned());
-            e.target = None; // ключ `disableClaudeAiConnectors` запрет по имени не снимает
+        if denied.contains(&e.name) {
+            // ключ `disableClaudeAiConnectors` запрет по имени не снимает, и когда коннектор уже выключен этим ключом
+            e.target = None;
+            if e.state != State::Off || e.kind == Kind::Connector {
+                e.state = State::Off;
+                e.note = Some("запрещён в deniedMcpServers (по имени)".to_owned());
+            }
         }
         c.push(e);
     }

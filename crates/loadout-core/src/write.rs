@@ -90,6 +90,7 @@ fn build(home: &Path, scan: &ScanResult, id: &str, enable: bool) -> Result<Built
     if !allowed(home, &t.file) {
         return Err("файл не входит в список разрешённых для записи".into());
     }
+    refuse_symlink(&t.file)?;
     let old = std::fs::read(&t.file).map_err(|_| "файл клиента не прочитан".to_owned())?;
     let text = std::str::from_utf8(&old).map_err(|_| "файл клиента не в UTF-8".to_owned())?;
     let cur = edit::get_bool(t.format, text, &t.path)?;
@@ -237,9 +238,27 @@ fn atomic_write(file: &Path, bytes: &[u8]) -> Result<(), String> {
     res.map_err(|e| format!("запись не удалась: {e}"))
 }
 
+/// Запись с `sync_all`: бэкап и манифест должны дойти до диска раньше, чем меняется файл клиента.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
 fn write_manifest(dir: &Path, m: &Manifest) -> Result<(), String> {
     let json = serde_json::to_vec_pretty(m).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join("manifest.json"), json).map_err(|e| format!("манифест не записан: {e}"))
+    write_synced(&dir.join("manifest.json"), &json).map_err(|e| format!("манифест не записан: {e}"))
+}
+
+/// Запись через символьную ссылку заменила бы саму ссылку, а не файл за ней.
+fn refuse_symlink(file: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(file) {
+        Ok(m) if m.file_type().is_symlink() => {
+            Err("файл клиента — символьная ссылка: запись заменила бы ссылку, а не файл".into())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn kind_str(k: Kind) -> String {
@@ -269,7 +288,7 @@ pub fn apply(
         let _ = std::fs::remove_dir_all(&dir);
         Err(e)
     };
-    if let Err(e) = std::fs::write(dir.join("before"), &b.old) {
+    if let Err(e) = write_synced(&dir.join("before"), &b.old) {
         return fail(format!("бэкап не записан: {e}"));
     }
     // второй раз перед самой записью: между планом и бэкапом клиент мог переписать файл
@@ -299,10 +318,10 @@ pub fn apply(
     if let Err(e) = atomic_write(&b.target.file, &b.new) {
         return fail(e);
     }
-    // проверка: перечитали и получили ровно «исходник + план»
+    // Проверка: перечитали и получили ровно «исходник + план». Несовпадение значит, что клиент записал файл сразу после нас:
+    // возвращать исходный нельзя (затёрли бы его свежую запись), поэтому операция остаётся в журнале, а бэкап цел.
     if std::fs::read(&b.target.file).ok().as_deref() != Some(b.new.as_slice()) {
-        let _ = atomic_write(&b.target.file, &b.old);
-        return fail("после записи файл не совпал с планом: восстановлен исходный".into());
+        return Err("файл изменён другим процессом сразу после записи: проверьте результат, бэкап и строка журнала сохранены".into());
     }
     Ok(Applied {
         op,
@@ -387,6 +406,7 @@ pub fn rollback(home: &Path, store: &Path, op: &str) -> Result<Applied, String> 
     if !allowed(home, &file) {
         return Err("файл не входит в список разрешённых для записи".into());
     }
+    refuse_symlink(&file)?;
     let current = std::fs::read(&file).map_err(|_| "файл клиента не прочитан".to_owned())?;
     if sha(&current) != m.sha_after {
         return Err("файл изменился после операции: откат затёр бы чужие правки".into());
@@ -401,7 +421,7 @@ pub fn rollback(home: &Path, store: &Path, op: &str) -> Result<Applied, String> 
         let _ = std::fs::remove_dir_all(&dir);
         Err(e)
     };
-    if let Err(e) = std::fs::write(dir.join("before"), &current) {
+    if let Err(e) = write_synced(&dir.join("before"), &current) {
         return fail(format!("бэкап не записан: {e}"));
     }
     let r = Manifest {
@@ -421,9 +441,9 @@ pub fn rollback(home: &Path, store: &Path, op: &str) -> Result<Applied, String> 
     if let Err(e) = atomic_write(&file, &before) {
         return fail(e);
     }
+    // как и после записи: чужую свежую запись не затираем, запись об откате остаётся
     if file_sha(&file).as_deref() != Some(m.sha_before.as_str()) {
-        let _ = atomic_write(&file, &current);
-        return fail("после отката файл не совпал с бэкапом: возвращено прежнее".into());
+        return Err("файл изменён другим процессом сразу после отката: проверьте результат".into());
     }
     Ok(Applied {
         op: id,
