@@ -1,9 +1,25 @@
 #!/usr/bin/env pwsh
+# -DryRun: builds nothing, copies nothing, changes no PATH; only prints what would happen.
+param([switch]$DryRun)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'user-path.ps1')
 
 # ctxkit лежит в Cargo-воркспейсе Loadout (crates/ctxkit): lock и target — в корне репозитория
 $CrateRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $CrateRoot)
+
+$Bin = Join-Path $RepoRoot 'target\release\ctxkit.exe'
+$HookDir = Join-Path $env:USERPROFILE '.claude\hooks'
+$LocalBin = Join-Path $env:USERPROFILE '.local\bin'
+$InstalledExe = Join-Path $LocalBin 'ctxkit.exe'
+
+if ($DryRun) {
+  Write-Host "[dry-run] would build $Bin"
+  Write-Host "[dry-run] would copy it to $(Join-Path $HookDir 'ctxkit.exe') and $InstalledExe"
+  [void](Add-UserPathSegment -Segment $LocalBin -DryRun)
+  return
+}
+
 Push-Location $RepoRoot
 try {
   if (Test-Path (Join-Path $RepoRoot 'Cargo.lock')) {
@@ -15,20 +31,11 @@ try {
   Pop-Location
 }
 
-$Bin = Join-Path $RepoRoot 'target\release\ctxkit.exe'
-$HookDir = Join-Path $env:USERPROFILE '.claude\hooks'
-$LocalBin = Join-Path $env:USERPROFILE '.local\bin'
-
 New-Item -ItemType Directory -Force $HookDir, $LocalBin | Out-Null
 Copy-Item -Force $Bin (Join-Path $HookDir 'ctxkit.exe')
-Copy-Item -Force $Bin (Join-Path $LocalBin 'ctxkit.exe')
+Copy-Item -Force $Bin $InstalledExe
 
-$InstalledExe = Join-Path $LocalBin 'ctxkit.exe'
-$UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-$Segments = @($UserPath -split ';' | Where-Object { $_.Trim() -ne '' })
-if ($Segments -notcontains $LocalBin) {
-  $NextPath = if ($UserPath -and -not $UserPath.EndsWith(';')) { "$UserPath;$LocalBin" } elseif ($UserPath) { "$UserPath$LocalBin" } else { $LocalBin }
-  [Environment]::SetEnvironmentVariable('Path', $NextPath, 'User')
+if (Add-UserPathSegment -Segment $LocalBin) {
   Write-Host "Added $LocalBin to User PATH (restart terminal to invoke 'ctxkit' directly)."
 }
 

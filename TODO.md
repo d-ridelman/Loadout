@@ -15,7 +15,6 @@
 - [ ] Битый `profiles.json` превращается в «профилей нет», и следующее сохранение его затирает: `crates/loadout-core/src/profiles.rs:35-41`, `profiles.rs:86-91`.
 - [ ] Нет `requestSingleInstanceLock` (`app/src/main/index.ts:350`); временный файл `.loadout.tmp` без pid в имени.
 - [ ] Нет повторной сверки sha перед `rename` в commit и rollback: `crates/loadout-core/src/write.rs:1152-1190`, `write.rs:1603-1638`.
-- [ ] `install.ps1` перезаписывает пользовательский `PATH` раскрытыми значениями: `crates/ctxkit/scripts/install.ps1:27-31`.
 - [ ] Нет тестов на IPC-ворота главного процесса (`validateIntent`, `trusted`): `app/src/main/index.ts:260-310`.
 - [ ] Дубли: разворот `~` (`crates/loadout-core/src/write.rs:107-118` и `crates/loadout-core/src/lib.rs:42-54`) и поиск домашнего каталога (`crates/loadoutd/src/main.rs`).
 - [ ] Шлюз Stop при `--advisor none` без `checker` всё равно просит вызвать «их»: `crates/ctxkit/src/gate.rs:130-146`.

@@ -38,9 +38,10 @@
 ```powershell
 git clone https://github.com/d-ridelman/Loadout.git
 cd Loadout/crates/ctxkit
-.\scripts\install.ps1
+.\scripts\install.ps1            # -DryRun: только показать, ничего не собирать, не копировать и не менять в PATH
 
-# Скрипт добавит %USERPROFILE%\.local\bin в User PATH; для текущего окна укажи путь явно:
+# Скрипт добавит %USERPROFILE%\.local\bin в User PATH, не раскрывая остальные записи (%USERPROFILE%\go\bin
+# остаётся как есть; значение пишется как REG_EXPAND_SZ). Для текущего окна укажи путь явно:
 & "$env:USERPROFILE\.local\bin\ctxkit.exe" setup --lang ru --dry-run
 & "$env:USERPROFILE\.local\bin\ctxkit.exe" setup --lang ru --with-rules --desktop --antigravity
 ```
@@ -161,6 +162,7 @@ ctxkit report [--json] [--days 14] [--profile <dir>]   # по дням: ходы
 cargo test
 cargo build --release
 node tests/guard.test.mjs
+pwsh -NoProfile -File scripts/user-path.test.ps1   # PATH-функция install.ps1, на временном ключе реестра
 ```
 
 Проверить распределение моделей и размер ответов инструментов по вашим локальным транскриптам Claude Code:

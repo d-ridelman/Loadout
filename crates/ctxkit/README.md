@@ -38,9 +38,11 @@ Findings from 30 recorded sessions (`26,256` turns; full breakdown in [the resea
 ```powershell
 git clone https://github.com/d-ridelman/Loadout.git
 cd Loadout/crates/ctxkit
-.\scripts\install.ps1
+.\scripts\install.ps1            # -DryRun: only print; builds, copies and changes nothing
 
-# Open a new terminal so User PATH picks up %USERPROFILE%\.local\bin, or call it directly:
+# The script adds %USERPROFILE%\.local\bin to the User PATH without expanding the other entries
+# (%USERPROFILE%\go\bin stays as it is; the value is written as REG_EXPAND_SZ).
+# Open a new terminal so User PATH picks up the folder, or call it directly:
 & "$env:USERPROFILE\.local\bin\ctxkit.exe" setup --dry-run
 & "$env:USERPROFILE\.local\bin\ctxkit.exe" setup --with-rules --desktop --antigravity
 ```
@@ -161,6 +163,7 @@ ctxkit report [--json] [--days 14] [--profile <dir>]   # per day: turns by model
 cargo test
 cargo build --release
 node tests/guard.test.mjs
+pwsh -NoProfile -File scripts/user-path.test.ps1   # the PATH function of install.ps1, on a throwaway registry key
 ```
 
 Measure model distribution and tool output sizes across your own Claude Code transcripts:
