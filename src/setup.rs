@@ -288,7 +288,7 @@ pub fn run_setup(args: &[String]) -> i32 {
     0
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     env::var_os("USERPROFILE")
         .or_else(|| env::var_os("HOME"))
         .map(PathBuf::from)
@@ -366,7 +366,7 @@ fn same_file_bytes(a: &Path, b: &Path) -> bool {
     matches!((fs::read(a), fs::read(b)), (Ok(ba), Ok(bb)) if ba == bb)
 }
 
-fn read_json_object(path: &Path) -> Result<Value, String> {
+pub(crate) fn read_json_object(path: &Path) -> Result<Value, String> {
     if !path.exists() {
         return Ok(Value::Object(Map::new()));
     }
@@ -505,7 +505,7 @@ fn ensure_object<'a>(
         .ok_or_else(|| format!("'{key}' is not a JSON object"))
 }
 
-fn is_our_hook_group(group: &Value) -> bool {
+pub(crate) fn is_our_hook_group(group: &Value) -> bool {
     let Some(arr) = group.get("hooks").and_then(|h| h.as_array()) else {
         return false;
     };
@@ -610,7 +610,7 @@ fn upsert_claude_md(
     Ok(())
 }
 
-fn marker_span(text: &str) -> Option<(usize, usize)> {
+pub(crate) fn marker_span(text: &str) -> Option<(usize, usize)> {
     for (start_m, end_m) in [
         (MARKER_START, MARKER_END),
         (LEGACY_MARKER_START, LEGACY_MARKER_END),

@@ -1,6 +1,8 @@
 mod backslash;
 mod check;
+mod doctor;
 mod guard;
+mod report;
 mod setup;
 
 use serde_json::{json, Value};
@@ -67,6 +69,8 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("check") => std::process::exit(check::run_check(&args[1..])),
         Some("setup") => std::process::exit(setup::run_setup(&args[1..])),
+        Some("doctor") => std::process::exit(doctor::run_doctor(&args[1..])),
+        Some("report") => std::process::exit(report::run_report(&args[1..])),
         Some("--version" | "-V") => {
             println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
             return;
