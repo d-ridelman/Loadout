@@ -71,14 +71,14 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
             <tbody>
               {state.rows.map((j) => (
                 <tr key={j.id}>
-                  <td className="mono">{new Date(j.time).toLocaleString('ru-RU')}</td>
-                  <td>{j.op === 'toggle' ? 'переключение' : 'откат'}</td>
+                  <td className="mono nw">{new Date(j.time).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                  <td className="nw">{j.op === 'toggle' ? 'запись' : 'откат'}</td>
                   <td className="name">
                     <b>{j.name}</b>
                     <div className="mute small">{CLIENTS.find((c) => c.id === j.client)?.name} · {j.pointer}</div>
                   </td>
-                  <td className="mono">{j.from} → {j.to}</td>
-                  <td>{j.rolledBack ? '↺ откатано' : j.op === 'rollback' ? 'откат записан' : j.canRollback ? 'можно откатить' : 'файл менялся после'}</td>
+                  <td className="mono nw">{j.from} → {j.to}</td>
+                  <td className="nw">{j.rolledBack ? '↺ откатано' : j.op === 'rollback' ? 'откат записан' : j.canRollback ? 'можно откатить' : 'файл менялся после'}</td>
                   <td>
                     <button
                       disabled={!j.canRollback || level !== 'R1' || busy !== null}

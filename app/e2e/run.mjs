@@ -232,6 +232,8 @@ try {
   must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'палитра не закрылась')
   must((await page.locator('aside').innerText()).includes('tool-b'), 'палитра не выбрала tool-b')
   await page.keyboard.press('Control+k')
+  await page.getByRole('combobox', { name: 'Команда' }).waitFor() // Esc обрабатывает поле ввода: ждём, пока оно получит фокус
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Команда')
   await page.keyboard.press('Escape')
   must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'Esc не закрыл палитру')
 
@@ -290,6 +292,92 @@ try {
   writeFileSync(cfg, original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false'))
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'сторож нового ядра работает')
   writeFileSync(cfg, original)
+
+  // ---- запись R1: переключил → глиф сменился → откат → глиф вернулся; всё на копии фикстуры и в профиле проверок ----
+  await resize(app, 1280, 800)
+  await page.keyboard.press('1')
+  const clickCell = async (rowName, idx) => {
+    await page
+      .locator('tbody tr', { has: page.locator('td.name b', { hasText: new RegExp(`^${rowName}$`) }) })
+      .locator('td')
+      .nth(idx + 1)
+      .click()
+  }
+  const levelBtn = page.getByRole('button', { name: 'Уровень записи' })
+  const dialog = page.locator('[role=dialog][aria-modal=true]')
+  const asOff = original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false')
+  must(asOff !== original, 'фикстура: у p1 нет enabled = true')
+
+  await clickCell('p1', 2)
+  must((await levelBtn.innerText()).startsWith('R0'), 'по умолчанию уровень R0')
+  await page.keyboard.press('Space')
+  must((await dialog.count()) === 0, 'при R0 предпросмотр не открывается')
+  must((await page.locator('#notice').innerText()).includes('R0'), 'при R0 нет объяснения')
+  must(readFileSync(cfg, 'utf8') === original, 'при R0 файл не должен меняться')
+  must(await page.getByRole('button', { name: 'Выключить', exact: true }).isDisabled(), 'при R0 кнопка в инспекторе неактивна')
+
+  await levelBtn.click()
+  await waitFor(async () => (await levelBtn.innerText()).startsWith('R1'), 'уровень переключился на R1')
+  await clickCell('p1', 2)
+  await page.keyboard.press('Space')
+  await dialog.waitFor({ timeout: 8000 })
+  await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
+  const dText = await dialog.innerText()
+  must(dText.includes('~/.codex/config.toml') && dText.includes('true') && dText.includes('false'), `предпросмотр без файла и значений: ${dText}`)
+  must(!dText.includes('FAKE-SECRET') && !dText.includes(home.replaceAll('\\', '/')), 'в предпросмотре секрет или путь дома')
+  const v1 = await axeCheck(page, 'предпросмотр')
+  must(v1.length === 0, `axe: предпросмотр: ${v1.map((x) => x.id).join(', ')}`)
+  const footerOk = () => page.evaluate(() => { const f = document.querySelector('footer'); return f.scrollHeight <= f.clientHeight + 1 && f.scrollWidth <= f.clientWidth + 1 })
+  must(await footerOk(), 'подвал с сообщением не помещается в одну строку')
+  await shot(page, 'm3-dialog-1280')
+  await page.keyboard.press('Escape')
+  must((await dialog.count()) === 0, 'Esc не закрыл предпросмотр')
+  must(readFileSync(cfg, 'utf8') === original, 'отмена не должна менять файл')
+
+  // файл изменился между предпросмотром и записью: запись отказывает, чужая правка цела
+  await page.locator('#grid').focus()
+  await page.keyboard.press('Space')
+  await dialog.getByRole('button', { name: 'Применить' }).waitFor({ timeout: 8000 })
+  await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
+  const touched = `${original}\n# дописал клиент\n`
+  writeFileSync(cfg, touched)
+  await dialog.getByRole('button', { name: 'Применить' }).click()
+  await dialog.locator('[role=alert]').waitFor({ timeout: 8000 })
+  must((await dialog.locator('[role=alert]').innerText()).includes('изменился'), 'устаревший план должен быть отвергнут')
+  must(readFileSync(cfg, 'utf8') === touched, 'отказ не должен трогать файл')
+  await dialog.getByRole('button', { name: 'Отмена' }).click()
+  writeFileSync(cfg, original)
+  await page.waitForTimeout(600) // сторож заметил возврат файла, прежде чем строить новый план
+
+  // обычная запись
+  await page.locator('#grid').focus()
+  await page.keyboard.press('Space')
+  await dialog.getByRole('button', { name: 'Применить' }).waitFor({ timeout: 8000 })
+  await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
+  await dialog.getByRole('button', { name: 'Применить' }).click()
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'после записи глиф p1 «выключено»')
+  must(readFileSync(cfg, 'utf8') === asOff, 'записан не только enabled у p1')
+  must((await dialog.count()) === 0, 'предпросмотр не закрылся после записи')
+  must((await page.locator('#notice').innerText()).includes('Откат'), 'нет сообщения о записи')
+  must(existsSync(join(profile, 'backups')), 'бэкапы должны лежать в профиле приложения')
+
+  // журнал и откат
+  await page.keyboard.press('5')
+  await page.locator('table[aria-label="Журнал операций"] tbody tr').first().waitFor({ timeout: 8000 })
+  must((await page.locator('table[aria-label="Журнал операций"] tbody tr').count()) === 1, 'в журнале должна быть одна операция')
+  const v2 = await axeCheck(page, 'журнал')
+  must(v2.length === 0, `axe: журнал: ${v2.map((x) => x.id).join(', ')}`)
+  must(await footerOk(), 'подвал в журнале не помещается в одну строку')
+  const wrapped = await page.evaluate(() => [...document.querySelectorAll('table[aria-label="Журнал операций"] td.nw')].filter((td) => { const r = document.createRange(); r.selectNodeContents(td); return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size > 1 }).length)
+  must(wrapped === 0, `в журнале перенесены значения: ${wrapped}`)
+  await shot(page, 'm3-journal-1280')
+  await page.getByRole('button', { name: 'Откатить' }).click()
+  await waitFor(async () => (await page.locator('table[aria-label="Журнал операций"] tbody tr').count()) === 2, 'откат записан в журнал')
+  must(readFileSync(cfg, 'utf8') === original, 'после отката файл побайтово как до записи')
+  await page.keyboard.press('1')
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'после отката глиф p1 вернулся')
+  await levelBtn.click() // обратно в R0
+  await waitFor(async () => (await levelBtn.innerText()).startsWith('R0'), 'уровень вернулся в R0')
 
   // reduced motion → «FX: выкл» по умолчанию применяется при загрузке; здесь проверяем переключатель
   await page.getByLabel('Уровень эффектов').selectOption('off')

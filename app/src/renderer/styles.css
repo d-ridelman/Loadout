@@ -45,6 +45,12 @@ nav small { color: var(--mute); }
 main { overflow: auto; padding: 14px 16px; position: relative; outline: none; }
 aside { background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 14px; }
 footer { grid-column: 1 / 4; display: flex; gap: 18px; align-items: center; padding: 0 14px; background: var(--panel); border-top: 1px solid var(--line); font: 11px var(--mono); color: var(--mute); }
+/* подвал в одну строку: длинное сообщение или подсказка усекаются, а не переносят строку и не режут соседей */
+footer > span { white-space: nowrap; flex: none; }
+footer > span.sp { flex: 1; min-width: 0; }
+footer > #notice { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+footer > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+td.nw { white-space: nowrap; }
 .logo { font: 700 15px var(--mono); letter-spacing: 0.28em; color: var(--cyan); text-shadow: 0 0 10px rgba(139, 233, 253, 0.55); }
 .logo i { color: var(--pink); font-style: normal; }
 
