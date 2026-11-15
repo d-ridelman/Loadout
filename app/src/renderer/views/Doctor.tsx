@@ -1,17 +1,23 @@
+import { plural, t } from '../../shared/i18n'
 import type { Entity } from '../../shared/model'
 import type { Finding, Severity } from '../doctor'
 
+/** Подпись — геттер: `t()` вычисляется при обращении, а не при импорте модуля. */
 const SEV: Record<Severity, { ch: string; cls: string; label: string }> = {
-  error: { ch: '✕', cls: 's-broken', label: 'ошибка' },
-  warn: { ch: '◐', cls: 's-stale', label: 'предупреждение' },
-  info: { ch: 'i', cls: 's-cloud', label: 'к сведению' },
+  error: { ch: '✕', cls: 's-broken', get label() { return t('ошибка', 'error') } },
+  warn: { ch: '◐', cls: 's-stale', get label() { return t('предупреждение', 'warning') } },
+  info: { ch: 'i', cls: 's-cloud', get label() { return t('к сведению', 'info') } },
 }
 
 export function Doctor({ findings, onShow }: { findings: Finding[]; onShow: (e: Entity) => void }) {
   return (
     <>
-      <h2>Доктор · {findings.length} находок</h2>
-      {findings.length === 0 ? <p className="mute">Всё чисто: сломанных записей, расхождений и перекрытий нет.</p> : null}
+      <h2>
+        {t(`Доктор · ${findings.length} находок`, `Doctor · ${findings.length} ${plural(findings.length, ['находка', 'находки', 'находок'], ['finding', 'findings'])}`)}
+      </h2>
+      {findings.length === 0 ? (
+        <p className="mute">{t('Всё чисто: сломанных записей, расхождений и перекрытий нет.', 'All clear: no broken entries, mismatches or overlaps.')}</p>
+      ) : null}
       {findings.map((f) => (
         <div key={f.id} className="hud find">
           <span className={`sev ${SEV[f.severity].cls}`} role="img" aria-label={SEV[f.severity].label}>
@@ -21,7 +27,7 @@ export function Doctor({ findings, onShow }: { findings: Finding[]; onShow: (e: 
             <b>{f.title}</b>
             <p>{f.detail}</p>
           </div>
-          {f.entity ? <button onClick={() => onShow(f.entity!)}>Показать</button> : null}
+          {f.entity ? <button onClick={() => onShow(f.entity!)}>{t('Показать', 'Show')}</button> : null}
         </div>
       ))}
     </>

@@ -29,12 +29,16 @@ const day = {
 }
 
 describe('ctxkit: параметры setup', () => {
-  const ok = { withRules: true, desktop: false, antigravity: true, dsh: false, lang: 'ru', advisor: 'fable' }
+  const ok = { withRules: true, desktop: false, antigravity: true, dsh: false, noStopGate: false, lang: 'ru', advisor: 'fable' }
 
   it('принимает только булевы флаги и перечисления', () => {
     expect(parseSetupOptions(ok)).toEqual(ok)
+    expect(() => parseSetupOptions({ ...ok, noStopGate: 'no' })).toThrow()
+    expect(() => parseSetupOptions({ ...ok, noStopGate: undefined })).toThrow()
     expect(() => parseSetupOptions({ ...ok, lang: 'de' })).toThrow()
     expect(() => parseSetupOptions({ ...ok, advisor: '--hook-cmd evil.exe' })).toThrow()
+    expect(parseSetupOptions({ ...ok, advisor: 'keep' }).advisor).toBe('keep')
+    expect(() => parseSetupOptions({ ...ok, advisor: 'KEEP' })).toThrow()
     expect(() => parseSetupOptions({ ...ok, desktop: 'yes' })).toThrow()
     expect(() => parseSetupOptions(null)).toThrow()
   })
@@ -42,7 +46,11 @@ describe('ctxkit: параметры setup', () => {
   it('аргументы: предпросмотр с --dry-run, без путей страницы; в разработке пути уходят в LOADOUT_HOME', () => {
     const a = setupArgs(parseSetupOptions(ok), true)
     expect(a).toEqual(['setup', '--dry-run', '--with-rules', '--antigravity', '--lang', 'ru', '--advisor', 'fable'])
+    // «не менять»: --advisor не передаётся вовсе, остальное как было
+    expect(setupArgs(parseSetupOptions({ ...ok, advisor: 'keep' }), true)).toEqual(['setup', '--dry-run', '--with-rules', '--antigravity', '--lang', 'ru'])
     expect(setupArgs(parseSetupOptions(ok), false)).not.toContain('--dry-run')
+    expect(setupArgs(parseSetupOptions({ ...ok, noStopGate: true }), true)).toContain('--no-stop-gate')
+    expect(a).not.toContain('--no-stop-gate')
     const dev = setupArgs(parseSetupOptions(ok), false, 'C:/tmp/h')
     expect(dev).toContain('--profile')
     expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(5) // профиль, пресеты Desktop, hooks.json Antigravity, каталог DSH, .claude.json

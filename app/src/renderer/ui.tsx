@@ -25,6 +25,20 @@ export function Panel({ title, children, className = '' }: { title?: string; chi
   )
 }
 
+/** Путь с местами переноса после `/` и `\`: длинный путь делится по сегментам, а не посреди имени файла. */
+export function Path({ p }: { p: string }) {
+  return (
+    <>
+      {p.split(/(?<=[/\\])/).map((s, i) => (
+        <span key={i}>
+          {i > 0 ? <wbr /> : null}
+          {s}
+        </span>
+      ))}
+    </>
+  )
+}
+
 export const clientShort: Record<string, string> = {
   'claude-code': 'Claude Code',
   'claude-desktop': 'Claude Desktop',

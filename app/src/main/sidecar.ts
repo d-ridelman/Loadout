@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import { t } from '../shared/i18n'
 
 export interface SidecarOptions {
   bin: string
@@ -50,21 +51,22 @@ export class Sidecar {
 
   /** Параметры собирает main-процесс из проверенных значений (id, флаг, хеш): у страницы нет способа передать ядру путь. */
   request(method: string, params?: Record<string, unknown>, onlyGeneration?: number): Promise<unknown> {
-    if (this.closed) return Promise.reject(new Error('ядро остановлено'))
+    if (this.closed) return Promise.reject(new Error(t('ядро остановлено', 'the core was stopped')))
     if (onlyGeneration !== undefined && onlyGeneration !== this.gen) {
-      return Promise.reject(new Error('ядро перезапустилось: повторите операцию'))
+      return Promise.reject(new Error(t('ядро перезапустилось: повторите операцию', 'the core restarted: repeat the operation')))
     }
     if (this.dead || (!this.child && !this.restartTimer)) {
       // исчерпанные или не начатые попытки: повторный запрос (кнопка «Повторить») начинает заново
       this.attempts = 0
       this.start()
-      if (onlyGeneration !== undefined) return Promise.reject(new Error('ядро перезапустилось: повторите операцию'))
+      if (onlyGeneration !== undefined) return Promise.reject(new Error(t('ядро перезапустилось: повторите операцию', 'the core restarted: repeat the operation')))
     }
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`ядро не ответило: нет ответа на ${method} за ${(this.o.requestTimeoutMs ?? 20_000) / 1000} с`))
+        const sec = (this.o.requestTimeoutMs ?? 20_000) / 1000
+        reject(new Error(t(`ядро не ответило: нет ответа на ${method} за ${sec} с`, `the core did not respond: no reply to ${method} within ${sec} s`)))
       }, this.o.requestTimeoutMs ?? 20_000)
       this.pending.set(id, { resolve, reject, timer })
       this.write(JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }), id, onlyGeneration)
@@ -82,7 +84,7 @@ export class Sidecar {
     this.closed = true
     clearTimeout(this.restartTimer)
     this.restartTimer = undefined
-    this.failAll('ядро остановлено')
+    this.failAll(t('ядро остановлено', 'the core was stopped'))
     const child = this.child
     if (!child) return
     child.stdin?.end()
@@ -106,7 +108,7 @@ export class Sidecar {
     try {
       child = spawn(this.o.bin, this.o.args, { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true })
     } catch (e) {
-      this.onGone(e instanceof Error ? e.message : 'не удалось запустить')
+      this.onGone(e instanceof Error ? e.message : t('не удалось запустить', 'failed to start'))
       return
     }
     this.child = child
@@ -115,14 +117,14 @@ export class Sidecar {
     child.stdin?.on('error', () => undefined) // запись в закрытый канал: процесс уже выходит, разберёт `exit`
     // `error` и `exit` могут прийти оба: учитываем только того процесса, который ещё текущий
     child.once('error', (e) => this.onGone(e.message, child))
-    child.once('exit', (code, signal) => this.onGone(`процесс завершился (${code ?? signal})`, child))
+    child.once('exit', (code, signal) => this.onGone(t(`процесс завершился (${code ?? signal})`, `the process exited (${code ?? signal})`), child))
     for (const q of this.queue.splice(0)) {
       if (q.gen !== undefined && q.gen !== this.gen) {
         const p = q.id === undefined ? undefined : this.pending.get(q.id)
         if (p && q.id !== undefined) {
           this.pending.delete(q.id)
           clearTimeout(p.timer)
-          p.reject(new Error('ядро перезапустилось: повторите операцию'))
+          p.reject(new Error(t('ядро перезапустилось: повторите операцию', 'the core restarted: repeat the operation')))
         }
         continue
       }
@@ -142,7 +144,7 @@ export class Sidecar {
       if (!p) return
       this.pending.delete(msg.id)
       clearTimeout(p.timer)
-      if (msg.error) p.reject(new Error(`ядро не ответило: ${String(msg.error.message ?? 'ошибка')}`))
+      if (msg.error) p.reject(new Error(t(`ядро не ответило: ${String(msg.error.message ?? 'ошибка')}`, `the core did not respond: ${String(msg.error.message ?? 'error')}`)))
       else p.resolve(msg.result)
     } else if (typeof msg.method === 'string') {
       this.o.onNotification(msg.method, msg.params)
@@ -153,7 +155,7 @@ export class Sidecar {
     if (who && this.child !== who) return // этот процесс уже обработан или заменён
     const ranFor = Date.now() - this.startedAt
     this.child = undefined
-    this.failAll(`ядро не ответило: ${reason}`)
+    this.failAll(t(`ядро не ответило: ${reason}`, `the core did not respond: ${reason}`))
     if (this.stopping) return
     if (ranFor > (this.o.stableMs ?? 30_000)) this.attempts = 0
     if (this.attempts >= (this.o.maxRestarts ?? 5)) {

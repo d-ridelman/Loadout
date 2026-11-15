@@ -131,7 +131,13 @@ impl Server {
                 Ok(()) => {
                     self.watched.insert(path, mode);
                 }
-                Err(e) => eprintln!("сторож: не удалось слушать каталог: {e}"),
+                Err(e) => eprintln!(
+                    "{}",
+                    loadout_core::tr!(
+                        "сторож: не удалось слушать каталог: {e}",
+                        "watcher: cannot watch the directory: {e}"
+                    )
+                ),
             }
         }
     }
@@ -164,12 +170,15 @@ impl Server {
         let str_of = |k: &str| {
             p.get(k)
                 .and_then(Value::as_str)
-                .ok_or_else(|| format!("нет параметра {k}"))
+                .ok_or_else(|| loadout_core::tr!("нет параметра {k}", "missing parameter {k}"))
         };
         let store = || {
-            self.backups
-                .clone()
-                .ok_or("запись выключена: ядро запущено без каталога бэкапов")
+            self.backups.clone().ok_or_else(|| {
+                loadout_core::tr!(
+                    "запись выключена: ядро запущено без каталога бэкапов",
+                    "writing is off: the core was started without a backups directory"
+                )
+            })
         };
         fn json<T: serde::Serialize>(v: &T) -> Result<Value, String> {
             serde_json::to_value(v).map_err(|e| e.to_string())
@@ -180,7 +189,9 @@ impl Server {
             if let Some(o) = v.as_object_mut() {
                 o.entry("op").or_insert(json!("toggle"));
             }
-            serde_json::from_value(v).map_err(|_| "неверные параметры намерения".to_owned())
+            serde_json::from_value(v).map_err(|_| {
+                loadout_core::tr!("неверные параметры намерения", "invalid intent parameters")
+            })
         };
         // Наибольший уровень записи, который main разрешил для этого вызова; без параметра — только флаги (R1).
         // Присланное неизвестное значение (`R0`, `r2`, число) — отказ: ошибка уровня не должна открывать запись.
@@ -188,7 +199,7 @@ impl Server {
             match p.get("maxLevel") {
                 None | Some(Value::Null) => Ok("R1"),
                 Some(Value::String(l)) if l == "R1" || l == "R2" => Ok(l.as_str()),
-                Some(_) => Err("неверный maxLevel".to_owned()),
+                Some(_) => Err(loadout_core::tr!("неверный maxLevel", "invalid maxLevel")),
             }
         };
         let profile_name = || {
@@ -196,7 +207,10 @@ impl Server {
                 if loadout_core::profiles::valid_name(n) {
                     Ok(n.to_owned())
                 } else {
-                    Err("недопустимое имя профиля".to_owned())
+                    Err(loadout_core::tr!(
+                        "недопустимое имя профиля",
+                        "invalid profile name"
+                    ))
                 }
             })
         };
@@ -236,8 +250,9 @@ impl Server {
                     }
                     Some(items) => loadout_core::profiles::Profile {
                         name,
-                        items: serde_json::from_value(items.clone())
-                            .map_err(|_| "неверные записи профиля".to_owned())?,
+                        items: serde_json::from_value(items.clone()).map_err(|_| {
+                            loadout_core::tr!("неверные записи профиля", "invalid profile entries")
+                        })?,
                     },
                 };
                 loadout_core::profiles::save(&store()?, profile)?;
@@ -263,7 +278,7 @@ impl Server {
                     write::apply_batch(&self.home, &st, &items, str_of("batchSha")?, max_level()?)?;
                 json(&json!({ "batch": batch, "applied": applied }))?
             }
-            _ => return Err("неизвестный метод".into()),
+            _ => return Err(loadout_core::tr!("неизвестный метод", "unknown method")),
         };
         if matches!(
             method,
@@ -277,7 +292,9 @@ impl Server {
 
     fn handle(&mut self, line: &str) {
         let Ok(req) = serde_json::from_str::<Value>(line) else {
-            send(&json!({ "jsonrpc": "2.0", "id": null, "error": { "message": "не JSON" } }));
+            send(
+                &json!({ "jsonrpc": "2.0", "id": null, "error": { "message": loadout_core::tr!("не JSON", "not JSON") } }),
+            );
             return;
         };
         let id = req.get("id").cloned().unwrap_or(Value::Null);
@@ -299,9 +316,9 @@ impl Server {
                 Err(e) => json!({ "error": { "message": e } }),
             },
             Some(other) => {
-                json!({ "error": { "message": format!("неизвестный метод: {other:.40}") } })
+                json!({ "error": { "message": loadout_core::tr!("неизвестный метод: {other:.40}", "unknown method: {other:.40}") } })
             }
-            None => json!({ "error": { "message": "нет метода" } }),
+            None => json!({ "error": { "message": loadout_core::tr!("нет метода", "no method") } }),
         };
         let mut msg = json!({ "jsonrpc": "2.0", "id": id });
         if let (Some(m), Some(r)) = (msg.as_object_mut(), reply.as_object()) {
@@ -333,7 +350,12 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
     let watcher = recommended_watcher(move |res| {
         let _ = tx_fs.send(Msg::Fs(res));
     })
-    .map_err(|e| eprintln!("сторож не запущен: {e}"))
+    .map_err(|e| {
+        eprintln!(
+            "{}",
+            loadout_core::tr!("сторож не запущен: {e}", "watcher not started: {e}")
+        )
+    })
     .ok();
     spawn_stdin_reader(tx);
 
@@ -408,7 +430,7 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
             }
             // любая ошибка сторожа — повод перечитать диск: событие могло потеряться, а подписки — умереть
             Ok(Msg::Fs(Err(e))) => {
-                eprintln!("сторож: {e}");
+                eprintln!("{}", loadout_core::tr!("сторож: {e}", "watcher: {e}"));
                 mark(&mut dirty, true, false);
             }
             Err(RecvTimeoutError::Timeout) => {}

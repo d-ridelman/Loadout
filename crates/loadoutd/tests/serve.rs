@@ -53,7 +53,16 @@ impl Server {
         Server::launch(prep, false)
     }
 
+    /// Ядро с английскими сообщениями (`--lang en`) и каталогом бэкапов.
+    fn start_en() -> Server {
+        Server::launch_lang(|_| {}, true, "en")
+    }
+
     fn launch(prep: impl FnOnce(&Path), writable: bool) -> Server {
+        Server::launch_lang(prep, writable, "ru")
+    }
+
+    fn launch_lang(prep: impl FnOnce(&Path), writable: bool, lang: &str) -> Server {
         // имя без случайных букв и цифр: ядро скрывает токеноподобные сегменты путей
         let home = std::env::temp_dir().join(format!(
             "loadout-serve-{}-{}",
@@ -66,7 +75,7 @@ impl Server {
         prep(&home);
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_loadout"));
-        cmd.args(["serve", "--home"]).arg(&home);
+        cmd.args(["serve", "--lang", lang, "--home"]).arg(&home);
         if writable {
             cmd.arg("--backups").arg(home.with_extension("backups"));
         }
@@ -365,6 +374,61 @@ fn new_backup_file_changes_facts() {
     );
 }
 
+/// Английский язык ядра (`--lang en`): ошибки, примечания плана и слова `from`/`to` без единой кириллической буквы,
+/// мусорное значение языка не роняет процесс и даёт русский.
+#[test]
+fn english_core_speaks_english_and_a_bad_lang_falls_back_to_russian() {
+    let has_cyr = |v: &Value| {
+        v.to_string()
+            .chars()
+            .any(|c| ('а'..='я').contains(&c) || ('А'..='Я').contains(&c) || c == 'ё')
+    };
+    let mut s = Server::start_en();
+    // ошибка ядра: параметры плана неверны
+    let bad = s.call_with(
+        "plan",
+        json!({"op": "toggle", "entity": "nope", "enable": true}),
+    );
+    assert!(bad["error"]["message"].is_string(), "{bad}");
+    assert!(!has_cyr(&bad), "ошибка по-английски: {bad}");
+    let unknown = s.call("no_such_method");
+    assert!(!has_cyr(&unknown), "{unknown}");
+    // план реальной записи: слова from/to и примечания
+    let snap = s.call("snapshot");
+    let id = snap["result"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "mcp" && e["canToggle"] == true)
+        .and_then(|e| e["id"].as_str())
+        .expect("есть MCP, который можно переключить")
+        .to_owned();
+    let plan = s.call_with(
+        "plan",
+        json!({"op": "toggle", "entity": id, "enable": false}),
+    );
+    assert!(plan["result"].is_object(), "{plan}");
+    assert!(!has_cyr(&plan), "план по-английски: {plan}");
+    drop(s);
+
+    // мусорное значение языка: русский, процесс жив
+    let home = std::env::temp_dir().join("loadout-serve-badlang");
+    let _ = fs::remove_dir_all(&home);
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/home"),
+        &home,
+        &home.to_string_lossy().replace('\\', "/"),
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_loadout"))
+        .args(["serve", "--lang", "xx", "--home"])
+        .arg(&home)
+        .stdin(Stdio::null())
+        .output()
+        .expect("запускается");
+    assert!(out.status.success(), "мусорный --lang не роняет процесс");
+    let _ = fs::remove_dir_all(&home);
+}
+
 #[test]
 fn invalid_utf8_line_does_not_kill_the_server() {
     let mut s = Server::start();
@@ -387,14 +451,30 @@ fn request_flood_does_not_postpone_the_rescan() {
     let mut s = Server::start();
     let cfg = s.home.join(".codex/config.toml");
     let text = fs::read_to_string(&cfg).unwrap();
-    // очередь запросов не пустеет несколько секунд: скан обязан пройти по сроку, а не после неё
+    // Запросы идут непрерывно секунды: скан обязан пройти по сроку (300 мс тишины или 2 с), а не после потока. Запрос
+    // тяжёлый для ядра (план записи — полный скан, десятки мс), ответ короткий; поступают они чуть быстрее, чем
+    // обрабатываются, но не залпом: событие файла встаёт в ту же очередь, и залп из сотен запросов, пришедший раньше
+    // него, законно обработался бы раньше (очередь одна, порядок прихода). Лёгкий `status` на быстрой машине кончал поток
+    // раньше срока скана, и проверка ничего не проверяла.
+    let id = s.call("snapshot")["result"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "mcp" && e["canToggle"] == true)
+        .and_then(|e| e["id"].as_str())
+        .expect("есть MCP, который можно переключить")
+        .to_owned();
     let mut stdin = s.stdin.take().unwrap();
     let flood = std::thread::spawn(move || {
-        let line = b"{\"id\":1,\"method\":\"status\"}\n".repeat(1000);
-        for _ in 0..100 {
-            if stdin.write_all(&line).is_err() {
+        let line = format!(
+            "{{\"id\":1,\"method\":\"plan\",\"params\":{{\"op\":\"toggle\",\"entity\":\"{id}\",\"enable\":false}}}}\n"
+        )
+        .into_bytes();
+        for _ in 0..150 {
+            if stdin.write_all(&line).is_err() || stdin.flush().is_err() {
                 break;
             }
+            std::thread::sleep(Duration::from_millis(10));
         }
         let _ = stdin.write_all(b"{\"id\":999999999,\"method\":\"status\"}\n");
         let _ = stdin.flush();
@@ -418,10 +498,8 @@ fn request_flood_does_not_postpone_the_rescan() {
         }
     }
     s.stdin = flood.join().ok();
-    let (c, l) = (
-        changed_at.expect("`changed` пришёл"),
-        last_at.expect("ответ на последний запрос пришёл"),
-    );
+    let l = last_at.expect("ответ на последний запрос пришёл");
+    let c = changed_at.expect("`changed` пришёл");
     assert!(
         c < l,
         "`changed` (сообщение {c}) пришёл только после всего потока запросов (последний ответ {l})"

@@ -24,7 +24,7 @@
 
 | Утечка в базовой настройке | Что делает `ctxkit` |
 |---|---|
-| `95.3%` ходов шли на `Opus` / `Fable` (включая Desktop-пресеты и поиск) | `ctxkit setup` переводит рутину на `Sonnet`, поиск в `Haiku` (`Explore`), оставляя `Fable` на редкие консультации и `Opus` на `checker` |
+| `95.3%` ходов шли на `Opus` / `Fable` (включая Desktop-пресеты и поиск) | `ctxkit setup --main-model sonnet --advisor fable` переводит рутину на `Sonnet`, оставляя `Fable` на редкие консультации; setup добавляет также поиск на `Haiku` (`Explore`) и `Opus` для `checker` |
 | `60.5%` `tool_result` уходило на загрузку длинных файлов и нефильтрованный `rg`/`cat` | `PreToolUse`-хук пропускает только чтения диапазонами (до `450` строк), направляя в `Grep`/`LSP` или `Explore` |
 | `11.2%` занимали простыни компиляторов и тестов | `ctxkit check <cmd>` при успехе возвращает `OK (<ms>)`, при ошибке выделяет первопричины |
 | Ошибки экранирования `\` в однострочниках давали холостые циклы перезаписи | Перехватывает `\` в `node -e`, `python -c`, heredoc и here-string до выполнения, а на `PostToolUse` проверяет синтаксис |
@@ -74,26 +74,77 @@ cd Loadout/crates/ctxkit
 | `guard.rs` | Защита чтения и поиска | Блокирует целиком файлы крупнее `28 KB` / `450` строк (и `> 250 KB` без диапазона) в `Read`, `read_file` и `read` (DSH), не трогая изображения, видео, аудио и PDF. Чтение хвоста от смещения проходит, только если остаток укладывается в оба порога. Останавливает голые `cat`, `Get-Content` и широкий `grep -r`/`rg` без фильтров (поиск в одном названном файле разрешён), не мешая пайпам и `&&`. |
 | `backslash.rs` | Контроль `\` и синтаксиса | На `PreToolUse` ловит `\` в inline-коде (`node -e`, `python -c`, `perl -e`, `php -r`, `bash -c`), `sed -i`, heredoc, here-string и patch-скриптах; флаги проверки синтаксиса вроде `node -c` не трогает. На `PostToolUse` проверяет `.json` (с исключением для JSONC вроде `tsconfig`, `.vscode/` и `.devcontainer/`), `.js/.mjs/.cjs` (`node --check`) и `.py` (`ast.parse`). |
 | `check.rs` | Сжатие логов (`ctxkit check`) | Для `cargo check`/`clippy`/`build` читает JSON-вывод и выводит до 3 уникальных первопричин `file:line:col`. Для `tsc`, `npm test`, `node --test`, `pytest`, `go test` при успехе даёт `OK (<ms>)`, при ошибке до 30 строк и полный лог в `%TEMP%/last-check.log` (`/tmp/last-check.log` на Unix). |
-| `setup.rs` | Автонастройка (`ctxkit setup`) | Ставит схему `sonnet` + `advisorModel: fable` + `haiku` + `effortLevel: high`, создаёт `Explore.md` (`haiku`) и `checker.md` (`opus`), диагностирует CLI (`< 2.1.321`), плагины, `CLAUDE.md`, глобальные MCP и конфиги Antigravity. |
+| `setup.rs` | Автонастройка (`ctxkit setup`) | Подключает хуки, создаёт `Explore.md` (`haiku`) и `checker.md` (`opus`), с `--with-rules` добавляет блок правил, диагностирует CLI (`< 2.1.321`), плагины, `CLAUDE.md`, глобальные MCP и конфиги Antigravity. Модель, советник и effort ставятся **только флагами** `--main-model`, `--advisor`, `--effort` (прежняя схема: `ctxkit setup --main-model sonnet --advisor fable --effort high`); `CLAUDE_CODE_SUBAGENT_MODEL` пишется только при `--subagent`. Каждый запуск, в том числе с `--dry-run`, печатает «было -> стало» (или «kept») по каждой настройке. |
 
 ## Флаги `setup`
 
-По умолчанию используются значения под схему с советником (`fable` и `claude-sonnet-5-5`). Если в твоём аккаунте или клиенте доступны другие модели, их легко переопределить флагами `--advisor` (например, `opus` или `none`) и `--desktop-model <id>`.
+`setup` сам не меняет твой выбор моделей: `model`, `advisorModel` и effort пишутся, только когда передан флаг, иначе остаются как есть (отсутствующий ключ остаётся отсутствующим), а в выводе стоит строка вида `model: opus (kept; pass --main-model sonnet to set)`. Для схемы, под которую настроен ctxkit (советник `fable` и основная `claude-sonnet-5-5`), запусти `ctxkit setup --main-model sonnet --advisor fable --effort high`. Окно Loadout передаёт `--advisor`, только если советник выбран в форме (по умолчанию «не менять»), и никогда не передаёт `--main-model` и `--effort`.
 
 | Флаг | Назначение |
 |---|---|
 | `--dry-run` | Показать план правок и диагностику без записи на диск |
 | `--profile <dir>` | Выбрать отдельный профиль (например, `~/.claude-work`) |
-| `--advisor <name>` | Указать советника (`fable` по умолчанию, `opus`, либо `none`) |
-| `--desktop` | Перевести пресеты Claude Desktop (`ccd-session-presets.json`) на `--desktop-model`. Запускать при полностью закрытом Claude Desktop, включая значок в трее: открытое приложение держит пресеты в памяти и перезаписывает файл, поэтому setup в этом случае ничего не пишет и предупреждает |
+| `--main-model <name>` | Записать `model` (например, `sonnet`) |
+| `--advisor <name>` | Записать `advisorModel` (`fable`, `opus`, либо `none`, чтобы убрать) |
+| `--effort <level>` | Записать effort: `modelSettings.<модель>.effortLevel` для `--main-model` или твоей `model` (известная модель, `low`/`medium`/`high`/`xhigh`), верхнеуровневый `effortLevel` и effort пресетов Desktop при `--desktop` |
+| `--desktop` | Записать `modelId` (`--desktop-model`) в пресеты Claude Desktop (`ccd-session-presets.json`); effort пресета меняется только с `--effort`. Запускать при полностью закрытом Claude Desktop, включая значок в трее: открытое приложение держит пресеты в памяти и перезаписывает файл, поэтому setup в этом случае ничего не пишет и предупреждает |
 | `--desktop-model <id>` | Идентификатор модели в пресетах Desktop (по умолчанию `claude-sonnet-5-5`) |
 | `--antigravity` | Зарегистрировать `ctxkit` в `~/.gemini/config/hooks.json` и проверить MCP, плагины и модель `agy` CLI |
 | `--dsh` | Записать `~/.dsh/ctxkit-hooks.json` и подключить к нему мост `@deepseek-ai/dsh-hooks-claude-code` в профиле `desktop` DeepSeek Harness (`--dsh-home <path>` заменяет `~/.dsh`); если пакета моста нет, выводит точную команду `pnpm add` |
 | `--with-rules` | Добавить в `CLAUDE.md` блок правил (включая триггер `/advisor` и `/clear`) между маркерами `ctxkit` |
 | `--force-agents` | Перезаписать уже существующие `Explore.md` и `checker.md` |
+| `--no-stop-gate` | Не подключать шлюз Stop и убрать наш, если он есть. По умолчанию `setup` добавляет хук `Stop`: если за ход правились два и более файла с кодом (или сделано пять и более правок), а после последней не вызван ни `checker`, ни advisor, модель один раз возвращается к работе. Два раза подряд не срабатывает; `CTXKIT_GATE=0` отключает на сессию |
 | `--lang <en\|ru>` | Язык шаблонов и хуков (`en` по умолчанию; при `ru` пишет `CTXKIT_LANG=ru` в `settings.json` и `--lang ru` в `hooks.json`) |
 
 Язык сообщений самих хуков задаётся переменной `CTXKIT_LANG` (`en` по умолчанию, `ru` для русского) или флагом `--lang`. Полная справка вызывается через `ctxkit setup --help`. В [`examples/`](examples/) лежат шаблоны конфигов с POSIX-заглушками путей; для реальной установки надёжнее запускать `ctxkit setup`, который подставляет точный абсолютный путь под вашу ОС.
+
+## Как откатить
+
+```powershell
+ctxkit setup --uninstall --dry-run     # что будет убрано
+ctxkit setup --uninstall               # убрать (с теми же --profile / --antigravity / --dsh, что были у setup)
+```
+
+`--uninstall` убирает только то, что добавил `ctxkit setup`: наши элементы в хуках `PreToolUse` / `PostToolUse` / `Stop` в `settings.json` (хук наш, если его команда запускает файл `ctxkit`, `claude-guard` или `no-inline-backslash`: первое слово либо второе после `node`/`bun`/`deno`/`npx`/`python`; поэтому `node C:/x/no-inline-backslash.mjs` наш, а `node C:/tools/ctxkit-helper/stop.js` и `logger.exe ctxkit` нет; чужие хуки, в том числе из той же группы, остаются; хук, который вы написали сами и который вызывает `ctxkit`, например `ctxkit report` в хуке Stop, тоже считается нашим, так что держите такие команды в скрипте с другим именем), `env.CTXKIT_LANG`, блок правил между маркерами `ctxkit` в `CLAUDE.md` и свой бинарь `hooks/ctxkit` (последним, чтобы не осталось хука на несуществующий файл). С `--antigravity` / `--agy-file` убирает запись `ctxkit` из `hooks.json`; с `--dsh` / `--dsh-home` убирает `ctxkit-hooks.json`, блок ctxkit в `cordis.patch.yml` и блок правил в `AGENTS.md`. Перед каждой записью делается бэкап; повторный запуск ничего не меняет. `~/.local/bin/ctxkit` удаляется, только если это побайтовая копия текущего бинаря или `hooks/ctxkit`, иначе печатается путь. Если запущенный бинарь не может удалить сам себя (Windows), он печатает `удалите вручную: <путь>` и всё равно завершается с кодом `0`.
+
+Откат **не трогает** `model`, `advisorModel`, `effortLevel`, `modelSettings`, `env.CLAUDE_CODE_SUBAGENT_MODEL`, пресеты Claude Desktop и файлы агентов `Explore.md` / `checker.md`: прежние значения неизвестны, а в `modelSettings` бывают записи самого Claude Code. Он печатает их текущие значения и пути к последнему и самому раннему `backups/settings.json.*.bak` (самый ранний, скорее всего, хранит состояние до первого setup), чтобы вернуть старое вручную. Опции, нужные только для установки (`--no-agents`, `--effort`, `--main-model` и т. д.), вместе с `--uninstall` отвергаются.
+
+## Безопасный отказ
+
+Хук не должен мешать работе. В режиме хука `ctxkit` при любом сбое завершается с кодом `0` и пустым stdout (вызов идёт дальше): пустой или битый JSON, нет полей или они не того типа, неизвестное событие, нет транскрипта для шлюза Stop, ввод больше 64 МиБ, не-UTF-8, даже паника. Блокирует только осознанное срабатывание правила (`deny` для `PreToolUse`, `block` для `PostToolUse` / `Stop`); с кодом `2` не выходит никогда. `ctxkit setup` пишет `"timeout": 10` у каждого добавленного хука (Claude Code, Antigravity, DeepSeek Harness).
+
+Аварийные выключатели: `CTXKIT_GUARD=0` заставляет хуки `PreToolUse` / `PostToolUse` сразу выходить без вывода; `CTXKIT_GATE=0` делает то же для шлюза Stop. Задавай в окружении сессии (например, `CTXKIT_GUARD=0 claude`). Убрать хуки совсем: «Как откатить».
+
+Что делает сам Claude Code, когда хук ведёт себя плохо (справочник по хукам, https://code.claude.com/docs/en/hooks, прочитан 2026-11-16; таблица — это документация, наш живой прогон во второй таблице ниже):
+
+| Сценарий | Блокирует ли вызов инструмента | Документация Claude Code |
+|---|---|---|
+| Бинарь хука не найден / не запускается | Нет, неблокирующая ошибка, вызов идёт дальше | "Non-blocking error: your hook exits with any other code, or fails in some other way, such as not starting or printing invalid JSON. The action goes ahead"; "Without onFailure set, the same missing script is a non-blocking error and ls runs." |
+| Код выхода `1` (или любой, кроме `0` / `2`) | Нет | "Exit code 1 without valid JSON output is a non-blocking error unless the hook is one whose failure blocks the action, even though 1 is the conventional Unix failure code." |
+| Код выхода `2` | Да, на `PreToolUse` вызов блокируется, причина берётся из stderr | "Blocking error: your hook exits 2. On events that can block, Claude Code stops the action." |
+| Таймаут | На `PreToolUse` нет | "On PreToolUse, a timed-out command, http, or mcp_tool hook doesn't block the tool call, except for hooks whose failure blocks the action. The call continues through the normal permission flow, so don't count on a stalled hook to act as a gate." |
+| Любой сбой при `"onFailure": "block"` у хука (v2.1.295+, включается явно) | Да | "With "block" set, a failure does what exit code 2 does on that event" |
+| Windows без Git Bash, `PreToolUse`-хук в shell-форме, `onFailure` не задан | Может блокировать | "On Windows without Git Bash, a shell-form PreToolUse or PermissionRequest command hook that fails with onFailure unset can instead block the tool call." |
+
+Две находки. Во-первых, неверный путь к хуку работу не останавливает (его показывает находка `hooks` уровня `error` в `doctor`: «хук указывает на несуществующий бинарь»); цена в том, что защита молча перестаёт работать. Во-вторых, строка про Windows без Git Bash (только документация, вживую не проверена): команда хука, которую пишет `ctxkit setup` (`"C:/…/ctxkit.exe"`), состоит только из строки в кавычках, и по документации PowerShell её печатает, а не запускает («PowerShell started no program»; лечится `"shell": "powershell"` и `& ` перед путём в кавычках либо формой exec). На такой машине защита не работает, а упавший хук может блокировать вызовы. `ctxkit setup` форму команды для этого случая пока не меняет: поставь Git for Windows (обычная схема Claude Code на Windows) или примени исправление из документации вручную.
+
+Проверено вживую на `claude` 2.1.325, Windows 11 с Git for Windows, 2026-11-16. Каждый прогон: `claude -p "Run with Bash exactly: echo marker-sN" --model haiku --max-turns 3 --settings <файл> --allowedTools Bash --output-format stream-json --verbose`; в файле один хук `PreToolUse` (`matcher: Bash`), результат читается из `tool_result` в потоке. `claude` во всех прогонах завершился с кодом `0`; 9-11 с общего времени — это обмен с моделью, а не хук. Собственные хуки профиля владельца (ctxkit, ponytail) тоже работали.
+
+| № | Команда хука | Вызов выполнился? | Что увидела модель | Совпадает с документацией |
+|---|---|---|---|---|
+| 0 | `exit 0` (контроль) | Да, `marker-s0` | Ничего лишнего | — |
+| 1 | `"C:/no/such/ctxkit.exe"` (нет exe) | Да, `marker-s1` | Ошибки нет, в stderr пусто | Да |
+| 2 | `node -e "process.exit(1)"` (код 1) | Да, `marker-s2` | Ошибки нет | Да |
+| 3 | `node -e "console.error('stop-test');process.exit(2)"` (код 2, контроль блокировки) | **Нет** | `tool_result` с `is_error`: `PreToolUse:Bash hook error: [...]: stop-test`; модель сообщила, что вызов заблокирован | Да |
+| 4 | `node -e "setTimeout(()=>{},8000)"` при `timeout: 2` | Да, `marker-s4` | Ошибки нет; прогон занял 10,6 с против 9,0 с у контроля, значит хук оборвали примерно на 2 с, а не ждали все 8 | Да |
+| 5 | Форма из `ctxkit setup`: `"<worktree>/target/release/ctxkit.exe"` (одна строка в кавычках, режим хука) | Да, `marker-s5` | Ничего лишнего, защита не мешала | Да |
+| 6 | Тот же хук с `CTXKIT_GUARD=0` | Да, `marker-s6` | Ничего лишнего | — |
+
+Строка 3 доказывает, что хуки из `--settings` подгружаются, поэтому строки 1, 2 и 4 — настоящие результаты «не блокирует». Строки 5 и 6 на одном `echo` не показывают, что наш хук вообще отработал, поэтому сделано ещё два прогона с командой, которую защита запрещает (heredoc с обратным слешем), и с отключёнными настройками пользователя через `--setting-sources project` (иначе тот же отказ даст хук профиля): с формой `ctxkit.exe` вызов заблокирован собственным сообщением защиты («Heredoc contains backslashes...»), с `CTXKIT_GUARD=0` та же команда выполнилась. Значит команда в виде одной строки в кавычках под Claude Code на этой машине запускается, а выключатель работает.
+
+Не проверено: строка «Windows без Git Bash» (на этой машине Git Bash есть) и `"onFailure": "block"`.
+
+Расхождений с документацией ни в одной строке таблицы нет. Побочная находка прогона: `ctxkit.exe` из профиля (`~/.claude/hooks/ctxkit.exe`, от 2026-11-15) не содержит строки `CTXKIT_GUARD`, и при заданном выключателе его защита продолжала блокировать; выключателю нужна сборка, где он есть (`ctxkit setup` копирует текущую).
 
 ## Диагностика и отчёт (`doctor`, `report`)
 

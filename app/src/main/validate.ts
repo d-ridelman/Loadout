@@ -15,6 +15,7 @@ import type {
   ScanDiff,
   ScanResult,
 } from '../shared/model'
+import { t } from '../shared/i18n'
 
 const CLIENTS = ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek']
 const KINDS = ['plugin', 'mcp', 'skill', 'hook', 'agent', 'command', 'marketplace', 'connector']
@@ -27,10 +28,10 @@ const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFin
 /** Всё, что приходит от ядра, проходит эту проверку до того, как попадёт в окно: и ответ на запрос, и push. */
 export function validateScan(raw: unknown): ScanResult {
   if (!isObj(raw) || !Array.isArray(raw['entities']) || !Array.isArray(raw['warnings']) || !isObj(raw['facts'])) {
-    throw new Error('ядро вернуло данные неожиданной формы')
+    throw new Error(t('ядро вернуло данные неожиданной формы', 'the core returned data of an unexpected shape'))
   }
   const { entities, warnings, facts } = raw
-  if (entities.length > 100_000) throw new Error('ядро вернуло слишком много записей')
+  if (entities.length > 100_000) throw new Error(t('ядро вернуло слишком много записей', 'the core returned too many entries'))
   // В окно уходят заново собранные объекты: лишние поля ядра (и чужие) до страницы не доходят.
   const clean: Entity[] = (entities as unknown[]).map((e) => {
     const ok =
@@ -46,7 +47,7 @@ export function validateScan(raw: unknown): ScanResult {
       isObj(e['detail']) &&
       typeof e['canToggle'] === 'boolean' &&
       typeof e['canEdit'] === 'boolean'
-    if (!ok) throw new Error('в ответе ядра есть запись неожиданной формы')
+    if (!ok) throw new Error(t('в ответе ядра есть запись неожиданной формы', 'the core response contains an entry of an unexpected shape'))
     const o = e['origin'] as Record<string, string>
     return {
       id: e['id'] as string,
@@ -66,7 +67,7 @@ export function validateScan(raw: unknown): ScanResult {
       ...(e['toggleLevel'] === 'R1' || e['toggleLevel'] === 'R2' ? { toggleLevel: e['toggleLevel'] as Level } : {}),
     }
   })
-  if (!(warnings as unknown[]).every(isStr)) throw new Error('предупреждения ядра неожиданной формы')
+  if (!(warnings as unknown[]).every(isStr)) throw new Error(t('предупреждения ядра неожиданной формы', 'the core warnings have an unexpected shape'))
   const f = facts as Record<string, unknown>
   const backups = f['backups']
   const links = f['brokenLinks']
@@ -76,7 +77,7 @@ export function validateScan(raw: unknown): ScanResult {
     backups.every((b) => isObj(b) && known(b['client']) && isStr(b['dir']) && isNum(b['count'])) &&
     Array.isArray(links) &&
     links.every((l) => isObj(l) && known(l['client']) && isStr(l['dir']) && isNum(l['broken']) && isNum(l['total']))
-  if (!factsOk) throw new Error('факты ядра неожиданной формы')
+  if (!factsOk) throw new Error(t('факты ядра неожиданной формы', 'the core facts have an unexpected shape'))
   return {
     entities: clean,
     warnings: warnings as string[],
@@ -93,13 +94,13 @@ export function validateScan(raw: unknown): ScanResult {
 }
 
 function ids(v: unknown): string[] {
-  if (!Array.isArray(v) || v.length > 100_000 || !v.every(isStr)) throw new Error('список id неожиданной формы')
+  if (!Array.isArray(v) || v.length > 100_000 || !v.every(isStr)) throw new Error(t('список id неожиданной формы', 'the id list has an unexpected shape'))
   return v
 }
 
 /** Разбор `params` уведомления `changed`: только id и признаки. */
 export function validateDiff(raw: unknown): ScanDiff {
-  if (!isObj(raw)) throw new Error('событие ядра неожиданной формы')
+  if (!isObj(raw)) throw new Error(t('событие ядра неожиданной формы', 'the core event has an unexpected shape'))
   return {
     added: ids(raw['added']),
     removed: ids(raw['removed']),
@@ -112,8 +113,8 @@ export function validateDiff(raw: unknown): ScanDiff {
 const known = (v: unknown): v is ClientId => isStr(v) && CLIENTS.includes(v)
 const kindOf = (v: unknown): v is Kind => isStr(v) && KINDS.includes(v)
 
-function bad(what: string): never {
-  throw new Error(`ядро вернуло ${what} неожиданной формы`)
+function bad(ru: string, en: string): never {
+  throw new Error(t(`ядро вернуло ${ru} неожиданной формы`, `the core returned an unexpected ${en} shape`))
 }
 
 const levelOf = (v: unknown): v is Level => v === 'R1' || v === 'R2'
@@ -121,24 +122,24 @@ const opOf = (v: unknown): v is OpKind => v === 'toggle' || v === 'edit' || v ==
 
 /** Ответ `plan`: только поля плана, собранные заново. */
 export function validatePlan(raw: unknown): Plan {
-  if (!isObj(raw)) bad('план')
-  const { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects, notes, baseSha } = raw
+  if (!isObj(raw)) bad('план', 'plan')
+  const { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects, notes, baseSha, trash } = raw
   if (
-    !opOf(op) || !levelOf(level) ||
+    !opOf(op) || !levelOf(level) || !(trash === '' || trash === 'out' || trash === 'in') ||
     !isStr(entity) || !known(client) || !kindOf(kind) || !isStr(name) || !isStr(file) || !isStr(pointer) ||
     typeof enable !== 'boolean' || !isStr(from) || !isStr(to) || typeof noop !== 'boolean' ||
     !Array.isArray(notes) || notes.length > 20 || !notes.every(isStr) ||
     !isStr(baseSha) || !/^[0-9a-f]{64}$/.test(baseSha)
   ) {
-    bad('план')
+    bad('план', 'plan')
   }
-  return { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), notes: notes as string[], baseSha }
+  return { trash, op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), notes: notes as string[], baseSha }
 }
 
 export function validateBatchPlan(raw: unknown): BatchPlan {
   if (!isObj(raw) || !Array.isArray(raw['plans']) || raw['plans'].length > 5000 || !Array.isArray(raw['skipped']) ||
     !raw['skipped'].every(isStr) || !levelOf(raw['level']) || !isStr(raw['batchSha']) || !/^[0-9a-f]{64}$/.test(raw['batchSha'])) {
-    bad('план пакета')
+    bad('план пакета', 'batch plan')
   }
   return {
     plans: (raw['plans'] as unknown[]).map(validatePlan),
@@ -149,17 +150,17 @@ export function validateBatchPlan(raw: unknown): BatchPlan {
 }
 
 export function validateBatchApplied(raw: unknown): BatchApplied {
-  if (!isObj(raw) || !isStr(raw['batch']) || !Array.isArray(raw['applied'])) bad('результат пакета')
+  if (!isObj(raw) || !isStr(raw['batch']) || !Array.isArray(raw['applied'])) bad('результат пакета', 'batch result')
   return { batch: raw['batch'], applied: (raw['applied'] as unknown[]).map(validateApplied) }
 }
 
 export function validateProfiles(raw: unknown): Profile[] {
-  if (!Array.isArray(raw) || raw.length > 200) bad('список профилей')
+  if (!Array.isArray(raw) || raw.length > 200) bad('список профилей', 'profile list')
   return raw.map((p: unknown) => {
-    if (!isObj(p) || !isStr(p['name']) || !Array.isArray(p['items']) || p['items'].length > 2000) bad('профиль')
+    if (!isObj(p) || !isStr(p['name']) || !Array.isArray(p['items']) || p['items'].length > 2000) bad('профиль', 'profile')
     const items = (p['items'] as unknown[]).map((i) => {
       if (!isObj(i) || !known(i['client']) || !kindOf(i['kind']) || !isStr(i['scope']) || !isStr(i['name']) || typeof i['enable'] !== 'boolean') {
-        bad('запись профиля')
+        bad('запись профиля', 'profile entry')
       }
       return { client: i['client'], kind: i['kind'], scope: i['scope'], name: i['name'], enable: i['enable'] }
     })
@@ -169,13 +170,13 @@ export function validateProfiles(raw: unknown): Profile[] {
 
 export function validateApplied(raw: unknown): Applied {
   if (!isObj(raw) || !isStr(raw['op']) || !isStr(raw['entity']) || !isStr(raw['from']) || !isStr(raw['to'])) {
-    bad('результат записи')
+    bad('результат записи', 'write result')
   }
   return { op: raw['op'], entity: raw['entity'], from: raw['from'], to: raw['to'] }
 }
 
 export function validateJournal(raw: unknown): JournalEntry[] {
-  if (!Array.isArray(raw) || raw.length > 1000) bad('журнал')
+  if (!Array.isArray(raw) || raw.length > 1000) bad('журнал', 'journal')
   return raw.map((r: unknown) => {
     if (
       !isObj(r) || !isStr(r['id']) || typeof r['time'] !== 'number' || !isNum(r['time']) ||
@@ -184,7 +185,7 @@ export function validateJournal(raw: unknown): JournalEntry[] {
       !known(r['client']) || !kindOf(r['kind']) || !isStr(r['name']) || !isStr(r['pointer']) || !isStr(r['file']) ||
       !isStr(r['from']) || !isStr(r['to']) || typeof r['rolledBack'] !== 'boolean' || typeof r['canRollback'] !== 'boolean'
     ) {
-      bad('строку журнала')
+      bad('строку журнала', 'journal row')
     }
     return {
       id: r['id'], time: r['time'], op: r['op'], of: r['of'], batch: r['batch'], level: r['level'], client: r['client'], kind: r['kind'],

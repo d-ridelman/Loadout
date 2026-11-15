@@ -104,33 +104,44 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
             let (state, note) = if !path_ok {
                 (
                     State::Broken,
-                    Some("installPath не существует на диске".to_owned()),
+                    Some(crate::tr!(
+                        "installPath не существует на диске",
+                        "installPath does not exist on disk"
+                    )),
                 )
             } else if !is_user {
                 (
                     State::Unknown,
-                    Some(format!(
-                        "флаг включения лежит в настройках области «{scope}», M0 их не читает"
+                    Some(crate::tr!(
+                        "флаг включения лежит в настройках области «{scope}», M0 их не читает",
+                        "the enable flag is in the settings of scope “{scope}”, M0 does not read them"
                     )),
                 )
             } else {
                 match flag {
                     Some(true) if user_versions.len() > 1 => (
                         State::Stale,
-                        Some(format!(
+                        Some(crate::tr!(
                             "в области user записано {} версий",
+                            "{} versions are recorded in scope user",
                             user_versions.len()
                         )),
                     ),
                     Some(true) if all_versions.len() > 1 => (
                         State::On,
-                        Some("в другой области (project/local) стоит другая версия".to_owned()),
+                        Some(crate::tr!(
+                            "в другой области (project/local) стоит другая версия",
+                            "another scope (project/local) has a different version"
+                        )),
                     ),
                     Some(true) => (State::On, None),
                     Some(false) => (State::Off, None),
                     None => (
                         State::Unknown,
-                        Some("нет записи в enabledPlugins".to_owned()),
+                        Some(crate::tr!(
+                            "нет записи в enabledPlugins",
+                            "no entry in enabledPlugins"
+                        )),
                     ),
                 }
             };
@@ -170,7 +181,10 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                 "~/.claude/settings.json",
                 format!("/enabledPlugins/{}", esc_ptr(key)),
             )
-            .note("включён в enabledPlugins, но не установлен")
+            .note(crate::tr!(
+                "включён в enabledPlugins, но не установлен",
+                "enabled in enabledPlugins but not installed"
+            ))
             .target(settings_flag(c, &["enabledPlugins", key]));
             c.push(e);
         }
@@ -182,8 +196,10 @@ fn marketplaces(c: &mut Ctx) {
         return;
     };
     let Some(map) = v.as_object() else {
-        c.warnings
-            .push("~/.claude/plugins/known_marketplaces.json: ожидался объект".into());
+        c.warnings.push(crate::tr!(
+            "~/.claude/plugins/known_marketplaces.json: ожидался объект",
+            "~/.claude/plugins/known_marketplaces.json: an object was expected"
+        ));
         return;
     };
     for (name, m) in map {
@@ -224,11 +240,20 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
         .enumerate()
     {
         let (state, note) = if connectors_off {
-            (State::Off, "выключены в Claude Code ключом disableClaudeAiConnectors (все сразу); аккаунт и Desktop не затронуты")
+            (
+                State::Off,
+                crate::tr!(
+                    "выключены в Claude Code ключом disableClaudeAiConnectors (все сразу); аккаунт и Desktop не затронуты",
+                    "turned off in Claude Code by the disableClaudeAiConnectors key (all at once); the account and Desktop are not affected"
+                ),
+            )
         } else {
             (
                 State::Cloud,
-                "в списке «когда-либо подключались»; источник правды — аккаунт claude.ai",
+                crate::tr!(
+                    "в списке «когда-либо подключались»; источник правды — аккаунт claude.ai",
+                    "in the “ever connected” list; the source of truth is the claude.ai account"
+                ),
             )
         };
         let mut t = settings_flag(c, &["disableClaudeAiConnectors"]);
@@ -296,7 +321,10 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
                     file,
                     format!("/{key}/{}", esc_ptr(name)),
                 )
-                .note("лежит вне mcpServers, Claude Code его не запускает (стэш, не штатный ключ)")
+                .note(crate::tr!(
+                    "лежит вне mcpServers, Claude Code его не запускает (стэш, не штатный ключ)",
+                    "lies outside mcpServers, Claude Code does not launch it (owner's stash, not a standard key)"
+                ))
                 .detail(mcp_detail(cfg))
                 // включение переносит запись обратно в mcpServers внутри того же файла
                 .target(Target {
@@ -343,7 +371,10 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
             e.target = None;
             if e.state != State::Off || e.kind == Kind::Connector {
                 e.state = State::Off;
-                e.note = Some("запрещён в deniedMcpServers (по имени)".to_owned());
+                e.note = Some(crate::tr!(
+                    "запрещён в deniedMcpServers (по имени)",
+                    "denied in deniedMcpServers (by name)"
+                ));
             }
         }
         c.push(e);

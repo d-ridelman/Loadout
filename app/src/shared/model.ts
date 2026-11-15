@@ -1,4 +1,5 @@
 /** Форма вывода `loadout scan --json` (crates/loadout-core/src/model.rs). Менять только вместе с ядром. */
+import type { Lang } from './i18n'
 
 export type ClientId = 'claude-code' | 'claude-desktop' | 'codex' | 'antigravity' | 'deepseek'
 
@@ -48,6 +49,8 @@ export type Level = 'R1' | 'R2'
 
 /** Предпросмотр: ключ и старое/новое значение (команды замаскированы), содержимого файла в нём нет. */
 export interface Plan {
+  /** Корзина Loadout: `out` — вынос в неё, `in` — возврат, пусто — не затрагивается (по нему выбирается название кнопки). */
+  trash: '' | 'out' | 'in'
   op: OpKind
   level: Level
   entity: string
@@ -168,8 +171,11 @@ export interface SetupOptions {
   desktop: boolean
   antigravity: boolean
   dsh: boolean
+  /** true — не ставить хук Stop (шлюз) и убрать наш, если он есть */
+  noStopGate: boolean
   lang: 'en' | 'ru'
-  advisor: 'fable' | 'opus' | 'none'
+  /** 'keep' — `--advisor` не передаётся: advisorModel остаётся как есть (значение по умолчанию не выбор пользователя) */
+  advisor: 'keep' | 'fable' | 'opus' | 'none'
 }
 
 export interface SetupResult {
@@ -226,6 +232,9 @@ export interface LoadoutApi {
   scan: () => Promise<ScanResponse>
   copyText: (text: string) => Promise<void>
   /** Уровень записи хранит main; страница может его только прочитать и попросить сменить. */
+  /** Язык интерфейса (сохранённый или по локали системы) и его смена: ядро перезапускается с новым языком сообщений. */
+  getLang: () => Promise<Lang>
+  setLang: (lang: Lang) => Promise<Lang>
   getWriteLevel: () => Promise<WriteLevel>
   setWriteLevel: (level: WriteLevel) => Promise<WriteLevel>
   plan: (intent: Intent) => Promise<PlanResponse>

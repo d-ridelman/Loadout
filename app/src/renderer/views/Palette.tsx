@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { t } from '../../shared/i18n'
 
 export interface PaletteItem {
   label: string
@@ -35,17 +36,20 @@ export function Palette({ items, onClose }: { items: PaletteItem[]; onClose: () 
     if (!i) return
     i.run()
     // выбранное в палитре сразу доступно с клавиатуры: фокус на таблицу, если она есть на новом экране
-    requestAnimationFrame(() => document.getElementById('grid')?.focus())
+    // кадр может прийти поздно (окно не на переднем плане): если за это время открылся диалог или палитра снова, фокус у них забирать нельзя
+    requestAnimationFrame(() => {
+      if (!document.querySelector('[role=dialog]')) document.getElementById('grid')?.focus()
+    })
   }
 
   return (
-    <div className="palette" role="dialog" aria-modal="true" aria-label="Палитра команд" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+    <div className="palette" role="dialog" aria-modal="true" aria-label={t('Палитра команд', 'Command palette')} onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div className="hud box">
         <input
           ref={input}
           value={q}
-          placeholder="Сущность, раздел или действие…"
-          aria-label="Команда"
+          placeholder={t('Сущность, раздел или действие…', 'Entity, section or action…')}
+          aria-label={t('Команда', 'Command')}
           role="combobox"
           aria-expanded="true"
           aria-controls="pal-list"
@@ -75,7 +79,7 @@ export function Palette({ items, onClose }: { items: PaletteItem[]; onClose: () 
               <span className="mute mono">{i.hint}</span>
             </li>
           ))}
-          {shown.length === 0 ? <li className="mute" aria-disabled="true">Ничего не найдено</li> : null}
+          {shown.length === 0 ? <li className="mute" aria-disabled="true">{t('Ничего не найдено', 'Nothing found')}</li> : null}
         </ul>
       </div>
     </div>

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getLang, t } from '../shared/i18n'
+import type { Lang } from '../shared/i18n'
 import { CLIENTS } from '../shared/model'
 import type { ClientId, Entity, Intent, ScanResult, WriteLevel } from '../shared/model'
 import { buildRows, groupOf, onlyUnknown } from './aggregate'
@@ -36,17 +38,25 @@ type ScanState =
   | { status: 'error'; error: string }
   | { status: 'ready'; data: ScanResult; ms: number }
 
-const VIEWS: readonly { id: View; label: string }[] = [
-  { id: 'matrix', label: 'Матрица' },
-  { id: 'radar', label: 'Радар' },
-  { id: 'hooks', label: 'Хуки' },
-  { id: 'doctor', label: 'Доктор' },
-  { id: 'journal', label: 'Журнал' },
-  { id: 'profiles', label: 'Профили' },
+/** Функции, а не константы: подписи зависят от языка, который выбран уже после импорта модуля. */
+const views = (): readonly { id: View; label: string }[] => [
+  { id: 'matrix', label: t('Матрица', 'Matrix') },
+  { id: 'radar', label: t('Радар', 'Radar') },
+  { id: 'hooks', label: t('Хуки', 'Hooks') },
+  { id: 'doctor', label: t('Доктор', 'Doctor') },
+  { id: 'journal', label: t('Журнал', 'Journal') },
+  { id: 'profiles', label: t('Профили', 'Profiles') },
   { id: 'ctxkit', label: 'ctxkit' },
 ]
 
-const LEVEL_LABEL: Record<WriteLevel, string> = { R0: 'R0 · только чтение', R1: 'R1 · флаги', R2: 'R2 · корзина, правка, ctxkit' }
+const levelLabel = (l: WriteLevel): string =>
+  l === 'R0'
+    ? t('R0 · только чтение', 'R0 · read-only')
+    : l === 'R1'
+      ? t('R1 · флаги', 'R1 · flags')
+      : t('R2 · полная запись', 'R2 · full write')
+
+const fxLabel = (m: Fx): string => (m === 'off' ? t('выкл', 'off') : m === 'low' ? t('лёгкие', 'light') : t('полные', 'full'))
 
 const DEFAULT_FILTERS: Filters = { q: '', group: 'all', state: 'all', hideUnknown: true, client: null }
 
@@ -72,7 +82,7 @@ function applyFilters(rows: Row[], f: Filters): Row[] {
   })
 }
 
-export function App() {
+export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void }) {
   const [scan, setScan] = useState<ScanState>({ status: 'loading' })
   const [view, setView] = useState<View>('matrix')
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
@@ -101,7 +111,7 @@ export function App() {
       try {
         setLevel(await window.loadout.setWriteLevel(next))
       } catch {
-        say('Не удалось сменить уровень записи')
+        say(t('Не удалось сменить уровень записи', 'Could not change the write level'))
       }
     },
     [say],
@@ -116,29 +126,35 @@ export function App() {
 
   const requestToggle = useCallback(
     (e: Entity, enable: boolean) => {
-      if (!e.canToggle) return say(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}`)
+      if (!e.canToggle) return say(t(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}`, `Cannot toggle: ${e.toggleWhy ?? 'not supported'}`))
       const need = e.toggleLevel ?? 'R1'
-      if (!levelOk(level, need)) return say(`Запись выключена (${level}): для этой записи включите уровень ${need} в шапке окна`)
+      if (!levelOk(level, need))
+        return say(
+          t(
+            `Запись выключена (${level}): для этой записи включите уровень ${need} в шапке окна`,
+            `Writing is off (${level}): enable level ${need} in the window header for this entry`,
+          ),
+        )
       setFlow({ type: 'plan', entity: e, intent: { op: 'toggle', entity: e.id, enable } })
     },
     [level, say],
   )
   const requestForm = useCallback(
     (type: 'edit' | 'copy', e: Entity) => {
-      if (!e.canEdit) return say('Эту запись править и копировать нельзя: она не в файле клиента')
-      if (!levelOk(level, 'R2')) return say(`Запись выключена (${level}): включите уровень R2 в шапке окна`)
+      if (!e.canEdit) return say(t('Эту запись править и копировать нельзя: она не в файле клиента', 'This entry cannot be edited or copied: it is not in a client file'))
+      if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
       setFlow({ type, entity: e })
     },
     [level, say],
   )
 
   const requestAdd = useCallback(() => {
-    if (!levelOk(level, 'R2')) return say(`Запись выключена (${level}): включите уровень R2 в шапке окна`)
+    if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
     setFlow({ type: 'add' })
   }, [level, say])
 
   const requestPlugin = useCallback(() => {
-    if (!levelOk(level, 'R2')) return say(`Запись выключена (${level}): включите уровень R2 в шапке окна`)
+    if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
     setFlow({ type: 'plugin' })
   }, [level, say])
 
@@ -158,7 +174,7 @@ export function App() {
         setRev((n) => n + 1)
       }
     } catch (e) {
-      setScan({ status: 'error', error: e instanceof Error ? e.message : 'не удалось запросить скан' })
+      setScan({ status: 'error', error: e instanceof Error ? e.message : t('не удалось запросить скан', 'could not request the scan') })
     }
   }, [])
   useEffect(() => {
@@ -257,11 +273,11 @@ export function App() {
         setHelp(false)
         return
       }
-      const t = e.target
-      if (t instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return
+      const tg = e.target
+      if (tg instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(tg.tagName)) return
       if (palette) return
       // Space на кнопке нажимает кнопку, а не переключает выбранную запись; прочие клавиши от фокуса на кнопке не зависят
-      if (e.key === ' ' && view === 'matrix' && selEntity && !(t instanceof HTMLButtonElement)) {
+      if (e.key === ' ' && view === 'matrix' && selEntity && !(tg instanceof HTMLButtonElement)) {
         e.preventDefault() // иначе пробел прокрутит страницу
         requestToggle(selEntity, selEntity.state === 'off' || selEntity.state === 'unknown')
       } else if (e.key === '?' || (e.code === 'Slash' && e.shiftKey)) {
@@ -270,7 +286,7 @@ export function App() {
         e.preventDefault()
         searchRef.current?.focus()
       } else if (/^[1-7]$/.test(e.key)) {
-        setView(VIEWS[Number(e.key) - 1]?.id ?? 'matrix')
+        setView(views()[Number(e.key) - 1]?.id ?? 'matrix')
       } else if (k === 'r' && !e.ctrlKey && !e.metaKey) {
         void load(true)
       } else if (view === 'matrix' && /^[jkhl]$/.test(k)) {
@@ -287,27 +303,29 @@ export function App() {
 
   const paletteItems = useMemo<PaletteItem[]>(
     () => [
-      ...VIEWS.map((v) => ({ label: `Раздел: ${v.label}`, hint: 'раздел', run: () => setView(v.id) })),
-      { label: 'Пересканировать', hint: 'действие', run: () => void load(true) },
-      { label: 'Добавить MCP-сервер', hint: 'действие', run: requestAdd },
-      { label: 'Установить плагин Claude Code', hint: 'действие', run: requestPlugin },
+      ...views().map((v) => ({ label: t(`Раздел: ${v.label}`, `Section: ${v.label}`), hint: t('раздел', 'section'), run: () => setView(v.id) })),
+      { label: t('Пересканировать', 'Rescan'), hint: t('действие', 'action'), run: () => void load(true) },
+      { label: t('Добавить MCP-сервер', 'Add MCP server'), hint: t('действие', 'action'), run: requestAdd },
+      { label: t('Установить плагин Claude Code', 'Install Claude Code plugin'), hint: t('действие', 'action'), run: requestPlugin },
       ...(['R0', 'R1', 'R2'] as const)
         .filter((l) => l !== level)
-        .map((l) => ({ label: `Уровень записи: ${LEVEL_LABEL[l]}`, hint: 'действие', run: () => void changeLevel(l) })),
+        .map((l) => ({ label: t(`Уровень записи: ${levelLabel(l)}`, `Write level: ${levelLabel(l)}`), hint: t('действие', 'action'), run: () => void changeLevel(l) })),
       ...(selEntity
         ? [{
-            label: `${selEntity.state === 'off' || selEntity.state === 'unknown' ? 'Включить' : 'Выключить'}: ${selEntity.name}`,
-            hint: 'действие',
+            label: (selEntity.state === 'off' || selEntity.state === 'unknown' ? t('Включить', 'Enable') : t('Выключить', 'Disable')) + `: ${selEntity.name}`,
+            hint: t('действие', 'action'),
             run: () => requestToggle(selEntity, selEntity.state === 'off' || selEntity.state === 'unknown'),
           }]
         : []),
-      ...(['off', 'low', 'full'] as const).map((m) => ({ label: `Эффекты: ${m === 'off' ? 'выкл' : m === 'low' ? 'лёгкие' : 'полные'}`, hint: 'действие', run: () => setFx(m) })),
+      ...(['off', 'low', 'full'] as const).map((m) => ({ label: t(`Эффекты: ${fxLabel(m)}`, `Effects: ${fxLabel(m)}`), hint: t('действие', 'action'), run: () => setFx(m) })),
       ...rows.map((r) => ({ label: r.name, hint: r.kinds.join('+'), run: () => showRow(r) })),
     ],
     [rows, load, showRow, level, changeLevel, selEntity, requestToggle, requestAdd, requestPlugin],
   )
 
   const problems = findings.filter((f) => f.severity === 'error').length
+  const scanText =
+    scan.status === 'ready' ? t(`скан: ${scan.ms} мс`, `scan: ${scan.ms} ms`) : scan.status === 'loading' ? t('скан…', 'scan…') : t('скан не удался', 'scan failed')
 
   return (
     <div id="app" className={view === 'matrix' ? undefined : 'noaside'}>
@@ -318,40 +336,45 @@ export function App() {
             LOAD<i>/</i>OUT
           </span>
         </span>
-        <span className="mute mono" id="scanInfo">
-          {scan.status === 'ready' ? `скан: ${scan.ms} мс` : scan.status === 'loading' ? 'скан…' : 'скан не удался'}
-        </span>
+        <span className="mute mono" id="scanInfo" title={scanText} data-ready={scan.status === 'ready' || undefined}>{scanText}</span>
         <span className="sp" />
         <label className="mute">
           FX{' '}
-          <select aria-label="Уровень эффектов" value={fx} onChange={(e) => setFx(e.target.value as Fx)}>
-            <option value="off">выкл</option>
-            <option value="low">лёгкие</option>
-            <option value="full">полные</option>
+          <select aria-label={t('Уровень эффектов', 'Effects level')} value={fx} onChange={(e) => setFx(e.target.value as Fx)}>
+            <option value="off">{fxLabel('off')}</option>
+            <option value="low">{fxLabel('low')}</option>
+            <option value="full">{fxLabel('full')}</option>
           </select>
         </label>
         <label className="mute">
-          Запись{' '}
+          {t('Запись', 'Write')}{' '}
           <select
             className={`mono level ${level === 'R0' ? 's-on' : 's-stale'}`}
-            aria-label="Уровень записи"
-            title="R0 — только чтение; R1 — включать и выключать по флагам; R2 — ещё корзина, правка команд, копирование и профили. Повышение подтверждается окном системы"
+            aria-label={t('Уровень записи', 'Write level')}
+            title={t(
+              'R0 — только чтение; R1 — включать и выключать по флагам; R2 — ещё корзина, правка команд, копирование, профили и применение ctxkit. Повышение подтверждается окном системы',
+              'R0 — read-only; R1 — enable and disable by flags; R2 — also trash, command editing, copying, profiles and applying ctxkit. Raising the level is confirmed by a system dialog',
+            )}
             value={level}
             onChange={(e) => void changeLevel(e.target.value as WriteLevel)}
           >
             {(['R0', 'R1', 'R2'] as const).map((l) => (
-              <option key={l} value={l}>{LEVEL_LABEL[l]}</option>
+              <option key={l} value={l}>{levelLabel(l)}</option>
             ))}
           </select>
         </label>
-        <button onClick={requestAdd} title="Записать новый MCP-сервер в конфиг клиента (R2)">Добавить MCP</button>
-        <button onClick={requestPlugin} title="Установить плагин Claude Code из добавленного маркетплейса (R2)">Установить плагин</button>
-        <button onClick={() => void load(scan.status === 'ready')} aria-label="Пересканировать (клавиша R)">Скан</button>
-        <button onClick={() => setPalette(true)} aria-label="Палитра команд">Ctrl+K</button>
+        <button onClick={requestAdd} title={t('Записать новый MCP-сервер в конфиг клиента (R2)', 'Write a new MCP server to the client config (R2)')}>{t('Добавить MCP', 'Add MCP')}</button>
+        <button onClick={requestPlugin} title={t('Установить плагин Claude Code из добавленного маркетплейса (R2)', 'Install a Claude Code plugin from an added marketplace (R2)')}>{t('Установить плагин', 'Install plugin')}</button>
+        <button onClick={() => void load(scan.status === 'ready')} aria-label={t('Пересканировать (клавиша R)', 'Rescan (key R)')}>{t('Скан', 'Scan')}</button>
+        <button onClick={() => setPalette(true)} aria-label={t('Палитра команд', 'Command palette')}>Ctrl+K</button>
+        <select aria-label={t('Язык', 'Language')} title={t('Язык', 'Language')} className="mono" value={lang} onChange={(e) => onLang(e.target.value as Lang)}>
+          <option value="ru">RU</option>
+          <option value="en">EN</option>
+        </select>
       </header>
 
-      <nav aria-label="Разделы">
-        {VIEWS.map((v, i) => (
+      <nav aria-label={t('Разделы', 'Sections')}>
+        {views().map((v, i) => (
           <button key={v.id} aria-current={view === v.id ? 'page' : undefined} onClick={() => setView(v.id)}>
             <span>{v.label}</span>
             <small>{i + 1}</small>
@@ -362,13 +385,13 @@ export function App() {
       <main tabIndex={-1}>
         {scan.status === 'loading' ? (
           <div className="state" role="status">
-            <span className="pulse">◌</span> Сканирование конфигов клиентов…
+            <span className="pulse">◌</span> {t('Сканирование конфигов клиентов…', 'Scanning client configs…')}
           </div>
         ) : scan.status === 'error' ? (
           <div className="hud state error" role="alert">
-            <h2>Не удалось получить данные</h2>
+            <h2>{t('Не удалось получить данные', 'Could not get the data')}</h2>
             <p>{scan.error}</p>
-            <button onClick={() => void load()}>Повторить</button>
+            <button onClick={() => void load()}>{t('Повторить', 'Retry')}</button>
           </div>
         ) : view === 'matrix' ? (
           <Matrix rows={visible} total={rows.length} filters={filters} setFilters={setFilters} sel={sel} onSelect={setSel} searchRef={searchRef} fresh={fresh} />
@@ -388,7 +411,7 @@ export function App() {
       </main>
 
       {/* инспектор показывает запись матрицы: в других разделах он не относится к экрану и скрыт */}
-      <aside aria-label="Инспектор" hidden={view !== 'matrix'}>
+      <aside aria-label={t('Инспектор', 'Inspector')} hidden={view !== 'matrix'}>
         <Inspector
           row={selRow}
           sel={sel}
@@ -401,31 +424,36 @@ export function App() {
       </aside>
 
       <footer>
-        <span>{entities.length} записей · {rows.length} строк · {CLIENTS.length} клиентов</span>
+        <span>
+          {t(
+            `${entities.length} записей · ${rows.length} строк · ${CLIENTS.length} клиентов`,
+            `${entities.length} entries · ${rows.length} rows · ${CLIENTS.length} clients`,
+          )}
+        </span>
         {updatedAt ? (
-          <span title="Ядро следит за конфигами клиентов и присылает изменения само; если слежение не поднялось, обновляйте вручную">
-            обновлено {updatedAt.toLocaleTimeString('ru-RU')}
+          <span title={t('Ядро следит за конфигами клиентов и присылает изменения само; если слежение не поднялось, обновляйте вручную', 'The core watches client configs and pushes changes by itself; if watching did not start, refresh manually')}>
+            {t('обновлено', 'updated')} {updatedAt.toLocaleTimeString(getLang() === 'en' ? 'en-US' : 'ru-RU')}
           </span>
         ) : null}
         {notice ? <span role="status" id="notice" className="s-stale">{notice}</span> : null}
-        {problems > 0 ? <span className="s-broken">✕ сломано: {problems}</span> : null}
-        {warnings.length > 0 ? <span className="s-stale">◐ предупреждений: {warnings.length}</span> : null}
+        {problems > 0 ? <span className="s-broken">✕ {t('сломано', 'broken')}: {problems}</span> : null}
+        {warnings.length > 0 ? <span className="s-stale">◐ {t('предупреждений', 'warnings')}: {warnings.length}</span> : null}
         <span className="sp" />
-        <span>? — клавиши · данные читаются с диска, ничего не отправляется</span>
+        <span>{t('? — клавиши · данные читаются с диска, ничего не отправляется', '? — shortcuts · data is read from disk, nothing is sent')}</span>
       </footer>
 
       {help ? (
-        <div className="hud help" role="dialog" aria-label="Клавиши">
-          <h2>Клавиши</h2>
+        <div className="hud help" role="dialog" aria-label={t('Клавиши', 'Shortcuts')}>
+          <h2>{t('Клавиши', 'Shortcuts')}</h2>
           <dl className="kv">
-            <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>строка вниз / вверх</dd>
-            <dt><kbd>h</kbd> <kbd>l</kbd></dt><dd>клиент влево / вправо</dd>
-            <dt><kbd>/</kbd></dt><dd>поиск</dd>
-            <dt><kbd>1</kbd>–<kbd>7</kbd></dt><dd>разделы</dd>
-            <dt><kbd>Space</kbd></dt><dd>включить / выключить выбранное (R1; без флага — R2)</dd>
-            <dt><kbd>r</kbd></dt><dd>пересканировать</dd>
-            <dt><kbd>Ctrl+K</kbd></dt><dd>палитра</dd>
-            <dt><kbd>?</kbd> <kbd>Esc</kbd></dt><dd>справка / закрыть</dd>
+            <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>{t('строка вниз / вверх', 'row down / up')}</dd>
+            <dt><kbd>h</kbd> <kbd>l</kbd></dt><dd>{t('клиент влево / вправо', 'client left / right')}</dd>
+            <dt><kbd>/</kbd></dt><dd>{t('поиск', 'search')}</dd>
+            <dt><kbd>1</kbd>–<kbd>7</kbd></dt><dd>{t('разделы', 'sections')}</dd>
+            <dt><kbd>Space</kbd></dt><dd>{t('включить / выключить выбранное (R1; без флага — R2)', 'enable / disable the selection (R1; without a flag — R2)')}</dd>
+            <dt><kbd>r</kbd></dt><dd>{t('пересканировать', 'rescan')}</dd>
+            <dt><kbd>Ctrl+K</kbd></dt><dd>{t('палитра', 'palette')}</dd>
+            <dt><kbd>?</kbd> <kbd>Esc</kbd></dt><dd>{t('справка / закрыть', 'help / close')}</dd>
           </dl>
         </div>
       ) : null}

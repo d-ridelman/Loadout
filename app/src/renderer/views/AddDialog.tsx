@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { ClientId, Intent } from '../../shared/model'
+import { t } from '../../shared/i18n'
 import { Modal } from './Modal'
 
 interface Props {
@@ -38,9 +39,9 @@ export function AddDialog({ onSubmit, onClose }: Props) {
   const ok =
     NAME_OK.test(name) && envOk && (remote ? remoteOk && /^https?:\/\/[^\s/?#@:]\S*$/.test(url.trim()) : command.trim() !== '' && lines.length <= 64)
   return (
-    <Modal label="Добавить MCP-сервер" onEscape={onClose}>
+    <Modal label={t('Добавить MCP-сервер', 'Add MCP server')} onEscape={onClose}>
       <h2>
-        Добавить MCP-сервер <span className="lvl">R2</span>
+        {t('Добавить MCP-сервер', 'Add MCP server')} <span className="lvl">R2</span>
       </h2>
       <form
         className="form"
@@ -59,7 +60,7 @@ export function AddDialog({ onSubmit, onClose }: Props) {
         }}
       >
         <label>
-          Клиент
+          {t('Клиент', 'Client')}
           <select value={to} onChange={(e) => setTo(e.target.value as ClientId)}>
             {TARGETS.map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
@@ -67,43 +68,46 @@ export function AddDialog({ onSubmit, onClose }: Props) {
           </select>
         </label>
         <label>
-          Имя
+          {t('Имя', 'Name')}
           <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" maxLength={64} spellCheck={false} />
         </label>
         <fieldset className="choices">
-          <legend className="mute small">Тип</legend>
-          <label><input type="radio" name="kind" checked={!remote} onChange={() => setRemote(false)} /> локальный (команда)</label>
-          <label title={remoteOk ? undefined : 'Только для Claude Code и Codex: у остальных клиентов форма записи не проверена'}>
-            <input type="radio" name="kind" checked={remote} disabled={!remoteOk} onChange={() => setRemote(true)} /> удалённый (адрес)
+          <legend className="mute small">{t('Тип', 'Type')}</legend>
+          <label><input type="radio" name="kind" checked={!remote} onChange={() => setRemote(false)} /> {t('локальный (команда)', 'local (command)')}</label>
+          <label title={remoteOk ? undefined : t('Только для Claude Code и Codex: у остальных клиентов форма записи не проверена', 'Only for Claude Code and Codex: the entry format is not verified for other clients')}>
+            <input type="radio" name="kind" checked={remote} disabled={!remoteOk} onChange={() => setRemote(true)} /> {t('удалённый (адрес)', 'remote (URL)')}
           </label>
         </fieldset>
         {remote ? (
           <label>
-            Адрес
+            {t('Адрес', 'URL')}
             <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/mcp" maxLength={500} spellCheck={false} />
           </label>
         ) : (
           <>
             <label>
-              Команда
+              {t('Команда', 'Command')}
               <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" maxLength={500} spellCheck={false} />
             </label>
             <label>
-              Аргументы, по одному в строке
-              <textarea value={args} onChange={(e) => setArgs(e.target.value)} rows={3} placeholder={'-y\nпакет@1.2.3'} spellCheck={false} />
+              {t('Аргументы, по одному в строке', 'Arguments, one per line')}
+              <textarea value={args} onChange={(e) => setArgs(e.target.value)} rows={3} placeholder={t('-y\nпакет@1.2.3', '-y\npackage@1.2.3')} spellCheck={false} />
             </label>
             <label>
-              Переменные окружения, КЛЮЧ=значение, по одной в строке
+              {t('Переменные окружения, КЛЮЧ=значение, по одной в строке', 'Environment variables, KEY=value, one per line')}
               <textarea value={env} onChange={(e) => setEnv(e.target.value)} rows={2} placeholder="API_TOKEN=…" spellCheck={false} />
             </label>
           </>
         )}
         <p className="mute small">
-          Пакет не скачивается: в конфиг клиента записывается строка запуска, а `npx`/`uvx` загрузит пакет при первом запуске клиента. Значения env в предпросмотре и журнале не показываются.
+          {t(
+            'Пакет не скачивается: в конфиг клиента записывается строка запуска, а `npx`/`uvx` загрузит пакет при первом запуске клиента. Значения env в предпросмотре и журнале не показываются.',
+            'The package is not downloaded: the client config gets a launch command, and `npx`/`uvx` fetches the package on the client’s first launch. Env values are not shown in the preview or journal.',
+          )}
         </p>
         <div className="actions">
-          <button type="submit" disabled={!ok}>Предпросмотр</button>
-          <button type="button" onClick={onClose}>Отмена</button>
+          <button type="submit" disabled={!ok}>{t('Предпросмотр', 'Preview')}</button>
+          <button type="button" onClick={onClose}>{t('Отмена', 'Cancel')}</button>
         </div>
       </form>
     </Modal>

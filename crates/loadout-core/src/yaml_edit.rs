@@ -32,7 +32,7 @@ fn events(text: &str) -> Result<Vec<(Event, Marker)>, String> {
     let mut c = Collect(Vec::new());
     Parser::new_from_str(text)
         .load(&mut c, true)
-        .map_err(|_| "не YAML".to_owned())?;
+        .map_err(|_| crate::tr!("не YAML", "not YAML"))?;
     Ok(c.0)
 }
 
@@ -62,7 +62,10 @@ fn locate(text: &str) -> Result<Vec<Option<Seq>>, String> {
         .iter()
         .position(|(e, _)| matches!(e, Event::SequenceStart(..)))
     else {
-        return Err("корень YAML не список".into());
+        return Err(crate::tr!(
+            "корень YAML не список",
+            "YAML root is not a list"
+        ));
     };
     let (mut ops, mut i) = (Vec::new(), root + 1);
     while i < ev.len() && !matches!(ev[i].0, Event::SequenceEnd) {
@@ -104,11 +107,11 @@ fn locate(text: &str) -> Result<Vec<Option<Seq>>, String> {
 
 /// Записи `insert` каждой операции как значения YAML: для сверки до и после правки.
 fn entries_of(text: &str) -> Result<Vec<Vec<Yaml>>, String> {
-    let docs = YamlLoader::load_from_str(text).map_err(|_| "не YAML".to_owned())?;
+    let docs = YamlLoader::load_from_str(text).map_err(|_| crate::tr!("не YAML", "not YAML"))?;
     let ops = docs
         .first()
         .and_then(Yaml::as_vec)
-        .ok_or("корень YAML не список")?;
+        .ok_or_else(|| crate::tr!("корень YAML не список", "YAML root is not a list"))?;
     Ok(ops
         .iter()
         .map(|op| op["insert"].as_vec().cloned().unwrap_or_default())
@@ -121,10 +124,22 @@ fn indent_of(line: &str) -> usize {
 
 /// Границы записи `ei` операции `oi` в строках (с 0, конец не включён) и отступ тире.
 fn span(lines: &[&str], seq: &Seq, ei: usize) -> Result<(usize, usize, usize), String> {
-    let start = *seq.entries.get(ei).ok_or("записи нет")? - 1;
-    let first = lines.get(start).ok_or("запись за концом файла")?;
+    let start = *seq
+        .entries
+        .get(ei)
+        .ok_or_else(|| crate::tr!("записи нет", "no such entry"))?
+        - 1;
+    let first = lines.get(start).ok_or_else(|| {
+        crate::tr!(
+            "запись за концом файла",
+            "entry is past the end of the file"
+        )
+    })?;
     if !first.trim_start().starts_with("- ") || first.contains('\t') {
-        return Err("запись не в блочном стиле (`- ключ: значение`): правка отказана".into());
+        return Err(crate::tr!(
+            "запись не в блочном стиле (`- ключ: значение`): правка отказана",
+            "entry is not in block style (`- key: value`): edit refused"
+        ));
     }
     let indent = indent_of(first);
     let mut end = seq
@@ -143,7 +158,10 @@ fn span(lines: &[&str], seq: &Seq, ei: usize) -> Result<(usize, usize, usize), S
         .iter()
         .any(|l| !l.trim().is_empty() && indent_of(l) <= indent)
     {
-        return Err("границы записи не определились: правка отказана".into());
+        return Err(crate::tr!(
+            "границы записи не определились: правка отказана",
+            "entry boundaries could not be determined: edit refused"
+        ));
     }
     // Пустые строки перед записью принадлежат ей (уйдут и вернутся вместе с ней), но не глубже ключа `insert:`.
     let mut head = start;
@@ -155,10 +173,13 @@ fn span(lines: &[&str], seq: &Seq, ei: usize) -> Result<(usize, usize, usize), S
 
 fn guard(text: &str) -> Result<(), String> {
     if text.contains('\t') {
-        return Err("в файле табы: правка отказана".into());
+        return Err(crate::tr!(
+            "в файле табы: правка отказана",
+            "the file contains tabs: edit refused"
+        ));
     }
     match crate::deepseek::yaml_guard(text) {
-        Some(why) => Err(format!("{why}: правка отказана")),
+        Some(why) => Err(crate::tr!("{why}: правка отказана", "{why}: edit refused")),
         None => Ok(()),
     }
 }
@@ -168,26 +189,33 @@ fn guard(text: &str) -> Result<(), String> {
 /// а соседа по `id` можно найти снова.
 pub fn anchor_of(text: &str, oi: usize, ei: usize) -> Result<Option<String>, String> {
     let ents = entries_of(text)?;
-    let list = ents.get(oi).ok_or("нет такой операции")?;
+    let list = ents
+        .get(oi)
+        .ok_or_else(|| crate::tr!("нет такой операции", "no such operation"))?;
     let Some(n) = list
         .get(ei + 1)
         .or_else(|| ei.checked_sub(1).and_then(|i| list.get(i)))
     else {
         return Ok(None);
     };
-    n["id"]
-        .as_str()
-        .map(|s| Some(s.to_owned()))
-        .ok_or_else(|| "соседняя запись без id: вынос по строкам отказан".into())
+    n["id"].as_str().map(|s| Some(s.to_owned())).ok_or_else(|| {
+        crate::tr!(
+            "соседняя запись без id: вынос по строкам отказан",
+            "neighbouring entry has no id: line-based move-out refused"
+        )
+    })
 }
 
 /// Перед возвратом: в операции `oi` всё ещё стоит опорная запись (или операция пуста, если опоры не было).
 /// Иначе файл изменился так, что прежнее место неизвестно, и запись молча встала бы в чужую операцию.
 pub fn check_anchor(text: &str, oi: usize, anchor: Option<&str>) -> Result<(), String> {
     let ents = entries_of(text)?;
-    let list = ents
-        .get(oi)
-        .ok_or("операции нет: вернуть запись на прежнее место нельзя")?;
+    let list = ents.get(oi).ok_or_else(|| {
+        crate::tr!(
+            "операции нет: вернуть запись на прежнее место нельзя",
+            "the operation is gone: the entry cannot be restored to its place"
+        )
+    })?;
     let ok = match anchor {
         Some(a) => list.iter().any(|e| e["id"].as_str() == Some(a)),
         None => list.is_empty(),
@@ -195,10 +223,10 @@ pub fn check_anchor(text: &str, oi: usize, anchor: Option<&str>) -> Result<(), S
     if ok {
         Ok(())
     } else {
-        Err(
-            "операция в файле изменилась с момента выноса: вернуть запись на прежнее место нельзя"
-                .into(),
-        )
+        Err(crate::tr!(
+            "операция в файле изменилась с момента выноса: вернуть запись на прежнее место нельзя",
+            "the operation in the file changed since the move-out: the entry cannot be restored to its place"
+        ))
     }
 }
 
@@ -209,7 +237,7 @@ pub fn cut(text: &str, oi: usize, ei: usize) -> Result<(String, String), String>
     let seq = ops
         .get(oi)
         .and_then(Option::as_ref)
-        .ok_or("нет такой операции")?;
+        .ok_or_else(|| crate::tr!("нет такой операции", "no such operation"))?;
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let (start, end, _) = span(&lines, seq, ei)?;
     let raw: String = lines[start..end].concat();
@@ -227,12 +255,18 @@ pub fn cut(text: &str, oi: usize, ei: usize) -> Result<(String, String), String>
             .and_then(|v| v.first().cloned())
     });
     if cut_entry.as_ref() != before[oi].get(ei) {
-        return Err("вырезанные строки не равны записи: правка отказана".into());
+        return Err(crate::tr!(
+            "вырезанные строки не равны записи: правка отказана",
+            "the cut lines do not match the entry: edit refused"
+        ));
     }
     let mut want = before;
     want[oi].remove(ei);
     if want != after {
-        return Err("после вырезания файл не совпал с ожидаемым: правка отказана".into());
+        return Err(crate::tr!(
+            "после вырезания файл не совпал с ожидаемым: правка отказана",
+            "after cutting, the file does not match the expected result: edit refused"
+        ));
     }
     Ok((new, raw))
 }
@@ -244,7 +278,7 @@ pub fn put(text: &str, oi: usize, ei: usize, raw: &str) -> Result<String, String
     let seq = ops
         .get(oi)
         .and_then(Option::as_ref)
-        .ok_or("нет такой операции")?;
+        .ok_or_else(|| crate::tr!("нет такой операции", "no such operation"))?;
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     // переводы строк как в файле: добавленная строка не должна делать CRLF-файл смешанным
     let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
@@ -276,18 +310,22 @@ pub fn put(text: &str, oi: usize, ei: usize, raw: &str) -> Result<String, String
         new = format!("{chunk}{new}");
     }
     // сверка: остальные записи те же, вернувшаяся равна разобранным строкам
-    let one = YamlLoader::load_from_str(raw).map_err(|_| "строки записи не YAML".to_owned())?;
+    let one = YamlLoader::load_from_str(raw)
+        .map_err(|_| crate::tr!("строки записи не YAML", "entry lines are not YAML"))?;
     let entry = one
         .first()
         .and_then(Yaml::as_vec)
         .and_then(|v| v.first())
         .cloned()
-        .ok_or("строки записи не список")?;
+        .ok_or_else(|| crate::tr!("строки записи не список", "entry lines are not a list"))?;
     let mut want = entries_of(text)?;
     let pos = ei.min(want[oi].len());
     want[oi].insert(pos, entry);
     if want != entries_of(&new)? {
-        return Err("после возврата файл не совпал с ожидаемым: правка отказана".into());
+        return Err(crate::tr!(
+            "после возврата файл не совпал с ожидаемым: правка отказана",
+            "after restoring, the file does not match the expected result: edit refused"
+        ));
     }
     Ok(new)
 }

@@ -1,6 +1,7 @@
 mod backslash;
 mod check;
 mod doctor;
+mod gate;
 mod guard;
 mod report;
 mod setup;
@@ -90,16 +91,41 @@ fn main() {
         }
     }
 
-    let lang = detect_lang(&args);
+    // A hook must never break the user's work: any failure below (bad input, a panic) is a silent pass,
+    // exit 0 and empty stdout. Only a deliberate rule match prints a block/deny.
+    std::panic::set_hook(Box::new(|_| {}));
+    let _ = std::panic::catch_unwind(|| run_hook(&args, forced_client, forced_post));
+}
 
-    let mut raw = String::new();
-    if io::stdin().read_to_string(&mut raw).is_err() {
+/// Largest hook payload we parse; a bigger one is passed unchecked rather than held in memory.
+const MAX_STDIN: u64 = 64 * 1024 * 1024;
+
+fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
+    let lang = detect_lang(args);
+
+    let mut buf = Vec::new();
+    if io::stdin()
+        .lock()
+        .take(MAX_STDIN + 1)
+        .read_to_end(&mut buf)
+        .is_err()
+        || buf.len() as u64 > MAX_STDIN
+    {
         return;
     }
+    let Ok(raw) = String::from_utf8(buf) else {
+        return;
+    };
     // A BOM before the payload must not turn the hook into a silent pass.
     let Ok(call) = serde_json::from_str::<Value>(raw.trim_start_matches('\u{feff}')) else {
         return;
     };
+    // Emergency switch for PreToolUse/PostToolUse (the Stop gate has its own CTXKIT_GATE=0).
+    if call["hook_event_name"].as_str() != Some("Stop")
+        && env::var("CTXKIT_GUARD").is_ok_and(|v| v.trim() == "0")
+    {
+        return;
+    }
 
     let client = forced_client.unwrap_or_else(|| {
         if call.get("toolCall").is_some() {
@@ -248,6 +274,12 @@ fn extract_patch_files(input: &Value) -> Vec<String> {
 
 fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
     let event = call["hook_event_name"].as_str().unwrap_or("");
+    if event == "Stop" {
+        if let Some(reason) = gate::stop_reason(call, lang) {
+            print!("{}", json!({"decision": "block", "reason": reason}));
+        }
+        return;
+    }
     let tool = claude_tool_name(call["tool_name"].as_str().unwrap_or(""), client);
     let input = &call["tool_input"];
 

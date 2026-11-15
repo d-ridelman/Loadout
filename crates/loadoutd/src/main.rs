@@ -15,7 +15,7 @@ fn home_or_default(home: Option<PathBuf>) -> Option<PathBuf> {
     })
 }
 
-/// `loadout serve [--home ПУТЬ] [--backups КАТАЛОГ]`: постоянный процесс для окна (JSON-RPC по stdio и сторож файлов).
+/// `loadout serve [--home ПУТЬ] [--backups КАТАЛОГ] [--lang ru|en]`: постоянный процесс для окна (JSON-RPC по stdio и сторож файлов).
 /// Без `--backups` методы записи (R1) отказывают.
 fn serve_main(args: &[String]) -> ExitCode {
     let (mut home, mut backups) = (None, None);
@@ -24,14 +24,24 @@ fn serve_main(args: &[String]) -> ExitCode {
         match a.as_str() {
             "--home" => home = it.next().map(PathBuf::from),
             "--backups" => backups = it.next().map(PathBuf::from),
+            "--lang" => loadout_core::i18n::set_lang(it.next().map_or("ru", String::as_str)),
             other => {
-                eprintln!("неизвестный аргумент: {other}");
+                eprintln!(
+                    "{}",
+                    loadout_core::tr!("неизвестный аргумент: {other}", "unknown argument: {other}")
+                );
                 return ExitCode::from(2);
             }
         }
     }
     let Some(home) = home_or_default(home) else {
-        eprintln!("не удалось определить домашний каталог, укажите --home");
+        eprintln!(
+            "{}",
+            loadout_core::tr!(
+                "не удалось определить домашний каталог, укажите --home",
+                "cannot determine the home directory, pass --home"
+            )
+        );
         return ExitCode::from(2);
     };
     serve::run(&home, backups);
@@ -44,8 +54,20 @@ fn main() -> ExitCode {
         return serve_main(&args[1..]);
     }
     if args.first().map(String::as_str) != Some("scan") {
-        eprintln!("использование: loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek]");
-        eprintln!("             loadout serve [--home ПУТЬ] [--backups КАТАЛОГ]");
+        eprintln!(
+            "{}",
+            loadout_core::tr!(
+                "использование: loadout scan [--json] [--pretty] [--lang ru|en] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek]",
+                "usage: loadout scan [--json] [--pretty] [--lang ru|en] [--home PATH] [--client claude-code|claude-desktop|codex|antigravity|deepseek]"
+            )
+        );
+        eprintln!(
+            "{}",
+            loadout_core::tr!(
+                "             loadout serve [--home ПУТЬ] [--backups КАТАЛОГ] [--lang ru|en]",
+                "             loadout serve [--home PATH] [--backups DIR] [--lang ru|en]"
+            )
+        );
         return ExitCode::from(2);
     }
     let (mut json, mut pretty) = (false, false);
@@ -57,8 +79,12 @@ fn main() -> ExitCode {
             "--pretty" => pretty = true,
             "--home" => home = it.next().map(PathBuf::from),
             "--client" => client = it.next().cloned(),
+            "--lang" => loadout_core::i18n::set_lang(it.next().map_or("ru", String::as_str)),
             other => {
-                eprintln!("неизвестный аргумент: {other}");
+                eprintln!(
+                    "{}",
+                    loadout_core::tr!("неизвестный аргумент: {other}", "unknown argument: {other}")
+                );
                 return ExitCode::from(2);
             }
         }
@@ -68,20 +94,32 @@ fn main() -> ExitCode {
             .or_else(|| std::env::var_os("HOME"))
             .map(PathBuf::from)
     }) else {
-        eprintln!("не удалось определить домашний каталог, укажите --home");
+        eprintln!(
+            "{}",
+            loadout_core::tr!(
+                "не удалось определить домашний каталог, укажите --home",
+                "cannot determine the home directory, pass --home"
+            )
+        );
         return ExitCode::from(2);
     };
 
     let mut res: ScanResult = loadout_core::scan(&home);
     if let Some(want) = client {
         let Some(want) = Client::from_slug(&want) else {
-            eprintln!("неизвестный клиент: {want}");
+            eprintln!(
+                "{}",
+                loadout_core::tr!("неизвестный клиент: {want}", "unknown client: {want}")
+            );
             return ExitCode::from(2);
         };
         res.entities.retain(|e| e.client == want);
     }
     for w in &res.warnings {
-        eprintln!("предупреждение: {w}");
+        eprintln!(
+            "{}",
+            loadout_core::tr!("предупреждение: {w}", "warning: {w}")
+        );
     }
 
     if json {
@@ -111,7 +149,10 @@ fn summary(res: &ScanResult) {
         let parts: Vec<String> = states.iter().map(|(s, n)| format!("{s}={n}")).collect();
         println!("{client:<12} {kind:<12} {}", parts.join(" "));
     }
-    println!("всего: {}", res.entities.len());
+    println!(
+        "{}",
+        loadout_core::tr!("всего: {}", "total: {}", res.entities.len())
+    );
 }
 
 fn to_s<T: serde::Serialize>(v: &T) -> String {

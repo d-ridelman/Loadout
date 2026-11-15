@@ -55,8 +55,11 @@ fn config(c: &mut Ctx) {
     let table: toml::Table = match text.parse() {
         Ok(t) => t,
         Err(e) => {
-            c.warnings
-                .push(format!("{CONFIG}: не TOML ({})", e.message()));
+            c.warnings.push(crate::tr!(
+                "{CONFIG}: не TOML ({})",
+                "{CONFIG}: not TOML ({})",
+                e.message()
+            ));
             return;
         }
     };
@@ -72,7 +75,10 @@ fn config(c: &mut Ctx) {
         let (state, note) = match p.get("enabled").and_then(Value::as_bool) {
             Some(true) => (State::On, None),
             Some(false) => (State::Off, None),
-            None => (State::Unknown, Some("нет ключа enabled")),
+            None => (
+                State::Unknown,
+                Some(crate::tr!("нет ключа enabled", "no enabled key")),
+            ),
         };
         let mut e = Entity::new(
             CLIENT,
@@ -162,7 +168,10 @@ fn config(c: &mut Ctx) {
             CONFIG,
             format!("apps.{}", toml_key(id)),
         )
-        .note("локальный переключатель приложения аккаунта; источник правды — аккаунт ChatGPT")
+        .note(crate::tr!(
+            "локальный переключатель приложения аккаунта; источник правды — аккаунт ChatGPT",
+            "local switch of an account app; the source of truth is the ChatGPT account"
+        ))
         .target(flag(&path, &["apps", id]));
         c.push(e);
     }
@@ -190,7 +199,10 @@ fn remote_catalog(c: &mut Ctx) {
             "~/.codex/plugins/cache/openai-curated-remote",
             format!("/{n}"),
         )
-        .note("запись кеша каталога удалённых плагинов; источник правды — аккаунт")
+        .note(crate::tr!(
+            "запись кеша каталога удалённых плагинов; источник правды — аккаунт",
+            "an entry of the remote plugin catalog cache; the source of truth is the account"
+        ))
         .fs_named(); // имя — каталог кеша (`app-69f0dc45…`), не содержимое файла
         c.push(e);
     }

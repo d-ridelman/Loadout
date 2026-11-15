@@ -47,7 +47,11 @@ fn hook_command(settings: &Value) -> Option<String> {
         .as_array()?
         .iter()
         .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
-        .find_map(|h| h["command"].as_str().filter(|c| c.contains("ctxkit")))?
+        .find_map(|h| {
+            h["command"]
+                .as_str()
+                .filter(|c| crate::setup::our_name(c) == Some("ctxkit"))
+        })?
         .trim();
     Some(
         match cmd.chars().next().filter(|c| matches!(c, '"' | '\'')) {
@@ -111,6 +115,25 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
         )),
     }
 
+    let has_gate = settings["hooks"]["Stop"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|g| crate::setup::is_our_hook_group(g, None)));
+    out.push(if has_gate {
+        f("stop_gate", "ok", t(lang, "Stop gate installed", "шлюз Stop установлен"), None, None)
+    } else {
+        f(
+            "stop_gate",
+            "info",
+            t(
+                lang,
+                "no Stop gate: nothing returns the model to checker/advisor before it finishes",
+                "нет шлюза Stop: ничто не возвращает модель к checker/advisor перед завершением хода",
+            ),
+            None,
+            Some("ctxkit setup"),
+        )
+    });
+
     let model = settings["model"].as_str().map(str::to_string);
     let costly = model.as_deref().is_some_and(|m| {
         let m = m.to_ascii_lowercase();
@@ -126,7 +149,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                 "основная сессия не закреплена на дешёвой модели (рутина может идти на Opus/Fable)",
             ),
             model,
-            Some("ctxkit setup"),
+            Some("ctxkit setup --main-model sonnet"),
         ));
     } else {
         out.push(f(
@@ -145,18 +168,23 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
         settings["advisorModel"].as_str().map(str::to_string),
         None,
     ));
+    let sub = settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"].as_str();
+    // Older `ctxkit setup` wrote haiku here: it puts every subagent without its own `model`, code writers included, on haiku.
+    let sub_haiku = sub.is_some_and(|v| v.to_ascii_lowercase().contains("haiku"));
     out.push(f(
         "subagent_model",
-        "info",
+        if sub_haiku { "warn" } else { "info" },
         t(
             lang,
             "CLAUDE_CODE_SUBAGENT_MODEL",
             "CLAUDE_CODE_SUBAGENT_MODEL",
         ),
-        settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"]
-            .as_str()
-            .map(str::to_string),
-        None,
+        sub.map(str::to_string),
+        sub_haiku.then_some(t(
+            lang,
+            "here haiku also goes to subagents that write code: remove the key and set model in agent files",
+            "haiku здесь достаётся и субагентам, которые пишут код: убери ключ и задай model в файлах агентов",
+        )),
     ));
 
     let missing: Vec<&str> = ["Explore.md", "checker.md"]
@@ -328,7 +356,7 @@ mod tests {
         let cmd = format!("\"{}\"", exe.to_string_lossy().replace('\\', "/"));
         let settings = json!({
             "model": "sonnet",
-            "env": {"CLAUDE_CODE_SUBAGENT_MODEL": "haiku"},
+            "env": {"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"},
             "hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": cmd}]}]}
         });
         fs::write(d.join("settings.json"), settings.to_string()).unwrap();
@@ -349,10 +377,27 @@ mod tests {
     }
 
     #[test]
+    fn subagent_env_haiku_warns_but_other_values_do_not() {
+        let d = temp("ctxkit_doctor_subagent_env");
+        let write = |v: &str| {
+            let s = json!({"model": "sonnet", "env": {"CLAUDE_CODE_SUBAGENT_MODEL": v}});
+            fs::write(d.join("settings.json"), s.to_string()).unwrap();
+        };
+        write("haiku");
+        assert_eq!(sev(&diagnose(&d, Lang::En), "subagent_model"), "warn");
+        write("claude-haiku-5-5");
+        assert_eq!(sev(&diagnose(&d, Lang::En), "subagent_model"), "warn");
+        write("sonnet");
+        assert_eq!(sev(&diagnose(&d, Lang::En), "subagent_model"), "info");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn hook_command_forms_and_lang_values() {
         let hook = |c: &str| {
             json!({"hooks": {"PreToolUse": [
                 {"hooks": [{"command": "claude-guard"}]},
+                {"hooks": [{"command": "node C:/tools/ctxkit-helper/stop.js"}]},
                 {"hooks": [{"command": c}]}
             ]}})
         };

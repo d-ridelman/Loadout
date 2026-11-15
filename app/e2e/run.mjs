@@ -54,7 +54,8 @@ async function launch(env) {
   const app = await electron.launch({
     executablePath: electronExe,
     args: [appDir],
-    env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, ...env },
+    // язык по умолчанию — русский (сценарии ищут русские подписи); английский проход задаёт LOADOUT_LANG=en сам
+    env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', ...env },
   })
   const page = await app.firstWindow()
   const pid = app.process().pid
@@ -67,6 +68,25 @@ async function resize(app, w, h) {
 
 async function shot(page, name) {
   await page.screenshot({ path: join(stateDir, `${name}.png`) })
+}
+
+/** Шапка: каждый элемент в одну строку (не выше 36 px) и по центру строки (±2 px); справа не заходят под кнопки окна. */
+async function headerLayout(page, label) {
+  const m = await page.evaluate(() => {
+    const h = document.querySelector('header')
+    const hr = h.getBoundingClientRect()
+    const kids = [...h.children].filter((c) => !c.classList.contains('sp') && c.getClientRects().length > 0).map((c) => ({ c, r: c.getBoundingClientRect() }))
+    const area = navigator.windowControlsOverlay?.getTitlebarAreaRect()
+    const name = (c) => c.textContent.trim().slice(0, 20)
+    return {
+      tall: kids.filter(({ r }) => r.height > 36).map(({ c }) => name(c)),
+      off: kids.filter(({ r }) => Math.abs(r.top + r.height / 2 - (hr.top + hr.height / 2)) > 2).map(({ c }) => name(c)),
+      over: area ? Math.round(Math.max(...kids.map(({ r }) => r.right)) - (area.x + area.width)) : 0,
+    }
+  })
+  log(`  шапка ${label}:`, JSON.stringify(m))
+  must(m.tall.length === 0 && m.off.length === 0, `${label}: шапка: перенос строк ${JSON.stringify(m.tall)}, не по центру ${JSON.stringify(m.off)}`)
+  must(m.over <= 0, `${label}: шапка заходит под кнопки окна на ${m.over}px`)
 }
 
 /** Замер, а не «на глаз»: нет горизонтальной прокрутки страницы, нет обрезанных имён, колонки шапки и ячеек выровнены. */
@@ -83,6 +103,7 @@ async function layout(page, label) {
     return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length }
   })
   log(`  замер ${label}:`, JSON.stringify(m))
+  await headerLayout(page, label)
   must(m.hscroll <= 0, `${label}: горизонтальная прокрутка страницы (${m.hscroll}px)`)
   must(m.clipped === 0, `${label}: обрезанных имён: ${m.clipped}`)
   must(m.misaligned === 0, `${label}: колонки шапки и ячеек смещены`)
@@ -281,11 +302,12 @@ try {
 
   // разделы по цифрам
   await page.keyboard.press('2')
-  must((await page.locator('.node').count()) === 5, 'на радаре должно быть 5 клиентов')
+  // раздел рисуется не мгновенно: считаем с ожиданием, а не сразу после нажатия клавиши
+  await waitFor(async () => (await page.locator('.node').count()) === 5, 'на радаре должно быть 5 клиентов')
   await page.keyboard.press('3')
-  must((await page.locator('.pipe .hk').count()) > 0, 'в конвейере нет хуков')
+  await waitFor(async () => (await page.locator('.pipe .hk').count()) > 0, 'в конвейере нет хуков')
   await page.keyboard.press('4')
-  must((await page.locator('.find').count()) > 0, 'Доктор ничего не нашёл на фикстуре с поломками')
+  await waitFor(async () => (await page.locator('.find').count()) > 0, 'Доктор ничего не нашёл на фикстуре с поломками')
   await page.keyboard.press('1')
 
   // снимки по размерам и разделам
@@ -295,6 +317,18 @@ try {
       await page.keyboard.press(key)
       await page.waitForTimeout(250)
       if (key === '1') await layout(page, `${name}@${w}`)
+      if (name === 'hooks') {
+        // все события конвейера достижимы: если они не помещаются, сетка прокручивается, а не обрезается
+        const reach = await page.evaluate(() => {
+          const wrap = document.querySelector('.tablewrap.scrollx')
+          const heads = [...document.querySelectorAll('.pipe .h')]
+          wrap.scrollLeft = wrap.scrollWidth
+          const last = heads[heads.length - 1].getBoundingClientRect()
+          return { overflowX: getComputedStyle(wrap).overflowX, events: heads.length, lastRight: Math.round(last.right), wrapRight: Math.round(wrap.getBoundingClientRect().right) }
+        })
+        must(reach.overflowX === 'auto' && reach.lastRight <= reach.wrapRight + 1, `последнее событие хуков недостижимо: ${JSON.stringify(reach)}`)
+        await page.evaluate(() => { document.querySelector('.tablewrap.scrollx').scrollLeft = 0 })
+      }
       if (w === 1920) {
         const v = await axeCheck(page, name)
         must(v.length === 0, `axe нашёл нарушения на экране «${name}»: ${v.map((x) => x.id).join(', ')}`)
@@ -305,6 +339,10 @@ try {
   }
 
   // ---- живое обновление: правка конфига на диске меняет матрицу без кнопки «Скан» и без экрана «загрузка» ----
+  await resize(app, 1100, 700) // минимальный размер окна: шапка по-прежнему в одну строку
+  await page.waitForTimeout(250)
+  await headerLayout(page, 'ru@1100')
+  await shot(page, 'm1-matrix-1100')
   await resize(app, 1280, 800)
   await page.keyboard.press('1')
   await page.getByLabel('Поиск').fill('')
@@ -488,7 +526,15 @@ try {
     return { n: b.length, lefts: new Set(r.map((x) => Math.round(x.left))).size, tops: new Set(r.map((x) => Math.round(x.top))).size }
   })
   must(col.n >= 4 && col.lefts === 1 && col.tops === col.n, `действия записи в инспекторе должны стоять столбцом, а не рядом: ${JSON.stringify(col)}`)
+  // длинный путь файла переносится по сегментам: ни один сегмент (`/…/`) не разорван между строками
   await shot(page, 'm4-inspector-1280')
+  const pathSplit = await page.evaluate(() => {
+    const dd = [...document.querySelectorAll('aside dd.wrap')].find((d) => d.querySelector('wbr'))
+    // верх первого и последнего знака сегмента: разные — сегмент перенесён внутри
+    const tops = (s) => { const n = s.lastChild, r = document.createRange(); const at = (i) => { r.setStart(n, i); r.setEnd(n, i + 1); return Math.round(r.getBoundingClientRect().top) }; return [at(0), at(n.length - 1)] }
+    return dd ? [...dd.querySelectorAll('span')].filter((s) => { const [a, b] = tops(s); return a !== b }).map((s) => s.textContent) : null
+  })
+  must(pathSplit !== null && pathSplit.length === 0, `путь файла в инспекторе разорван посреди сегмента: ${JSON.stringify(pathSplit)}`)
   await page.keyboard.press('Space')
   const trashText = await openPlan()
   must(trashText.includes('в корзине Loadout') && trashText.includes('R2'), `предпросмотр выноса в корзину: ${trashText}`)
@@ -585,6 +631,9 @@ try {
   const card = page.getByRole('region', { name: 'Профиль e2e' })
   await card.waitFor({ timeout: 8000 })
   await card.getByText('Записи профиля').click()
+  // сразу после открытия список виден с первой строки целиком (обрезка сверху на снимке — прокрутка от `uncheck()` ниже)
+  const plistOpen = await card.locator('details .plist').evaluate((ul) => ({ top: ul.scrollTop, gap: Math.round(ul.querySelector('li').getBoundingClientRect().top - ul.getBoundingClientRect().top) }))
+  must(plistOpen.top === 0 && plistOpen.gap >= 0, `список записей профиля открывается обрезанным: ${JSON.stringify(plistOpen)}`)
   await card.locator('li', { hasText: 'p1@bundled' }).getByRole('checkbox').uncheck()
   await card.getByRole('button', { name: 'Сохранить изменения' }).click()
   await waitFor(async () => !(await card.getByRole('button', { name: 'Сохранить изменения' }).isEnabled()), 'профиль сохранён')
@@ -592,6 +641,7 @@ try {
   must(profLayout.hscroll <= 0 && profLayout.main <= 1, `горизонтальная прокрутка в профилях: ${JSON.stringify(profLayout)}`)
   const v3 = await axeCheck(page, 'профили')
   must(v3.length === 0, `axe: профили: ${v3.map((x) => x.id).join(', ')}`)
+  await card.locator('details .plist').evaluate((ul) => { ul.scrollTop = 0 }) // `uncheck()` прокрутил список к p1: на снимке то, что видно при открытии
   await shot(page, 'm4-profiles-1280')
   await resize(app, 1920, 1080)
   await page.waitForTimeout(250)
@@ -619,7 +669,7 @@ try {
   const claudeDir = join(home, '.claude')
   const hookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
-  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, lang: 'ru', advisor: 'fable' }
+  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep' } // форма по умолчанию: советник «не менять»
   // Настоящий профиль владельца ctxkit трогать не должен: хеши файлов, которые `setup` пишет, до и после всего шага.
   // `~/.claude.json` не сравниваем: его переписывает работающий Claude Code, ctxkit его только читает (в проверках с --claude-json на копию).
   const realHome = homedir()
@@ -644,7 +694,9 @@ try {
   const preview = await page.locator('pre.out').innerText()
   // путь настоящего домашнего каталога (с именем пользователя) в выводе недопустим ни с прямыми, ни с обратными слэшами
   const leaks = [realHome, realHome.replaceAll('\\', '/')].some((h) => preview.toLowerCase().includes(h.toLowerCase()))
+  must(preview.includes('Stop gate: on'), `в предпросмотре нет строки про шлюз Stop: ${preview.slice(0, 300)}`)
   must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
+  must(preview.includes('advisorModel: (unset) (kept'), `предпросмотр с формой по умолчанию должен оставлять advisorModel: ${preview.slice(0, 400)}`)
   must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
   await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')
   await page.getByLabel('Язык подсказок и хуков').selectOption('en')
@@ -672,6 +724,49 @@ try {
   const v4 = await axeCheck(page, 'ctxkit')
   must(v4.length === 0, `axe: ctxkit: ${v4.map((x) => x.id).join(', ')}`)
   await noSecretOnPage('ctxkit')
+  // применение с формой по умолчанию (советник «не менять») не создаёт model, advisorModel и effortLevel
+  const sKeep = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  const sBase = JSON.parse(settingsBefore)
+  for (const k of ['model', 'advisorModel', 'effortLevel', 'modelSettings']) must(JSON.stringify(sKeep[k]) === JSON.stringify(sBase[k]) && !(k in sKeep), `форма по умолчанию записала ${k}: ${JSON.stringify(sKeep[k])}`)
+  // явный выбор Fable: предпросмотр показывает смену, применение пишет advisorModel
+  await page.getByLabel('Модель-советник').selectOption('fable')
+  must(await applyBtn.isDisabled(), 'после выбора советника старый предпросмотр не должен разрешать применение')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с советником Fable')
+  must((await page.locator('pre.out').innerText()).includes('advisorModel: (unset) -> fable'), 'предпросмотр с Fable не показал запись advisorModel')
+  must(!('advisorModel' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'предпросмотр с Fable записал advisorModel')
+  await applyBtn.click()
+  await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).advisorModel === 'fable', 'явный выбор Fable записал advisorModel')
+  // шлюз Stop: по умолчанию ставится (хук + находка stop_gate «ok»), со снятой галочкой хук убирается (находка «нет шлюза»)
+  const ourStop = () => (JSON.parse(readFileSync(settingsFile, 'utf8')).hooks?.Stop ?? []).filter((g) => (g.hooks ?? []).some((h) => /(^|[\\/"])ctxkit(\.exe)?("|\s|$)/i.test(h.command ?? ''))).length
+  const findings = () => page.locator('ul[aria-label="Находки диагностики"]').innerText()
+  must(ourStop() === 1, `после применения нет хука Stop ctxkit (${ourStop()})`)
+  await waitFor(async () => (await findings()).includes('шлюз Stop установлен'), 'доктор: шлюз Stop установлен')
+  const gateBox = page.getByRole('checkbox', { name: /Шлюз Stop/ })
+  must(await gateBox.isChecked(), 'галочка «Шлюз Stop» по умолчанию должна стоять')
+  await gateBox.uncheck()
+  must(await applyBtn.isDisabled(), 'после смены галочки старый предпросмотр не должен разрешать применение')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр без шлюза Stop')
+  must(ourStop() === 1, 'предпросмотр без шлюза изменил settings.json')
+  await applyBtn.click()
+  await waitFor(() => ourStop() === 0, 'ctxkit убрал хук Stop при снятой галочке')
+  await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор: нет шлюза Stop')
+  must(JSON.parse(readFileSync(settingsFile, 'utf8')).hooks.PreToolUse !== undefined, 'снятие шлюза затронуло остальные хуки')
+  // окно передаёт --advisor только при явном выборе: основная модель и effort остаются как были, советник — выбор из формы (Fable выбран выше)
+  const sNow = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  const sPre = JSON.parse(settingsBefore)
+  must(sNow.model === sPre.model && sNow.effortLevel === sPre.effortLevel && JSON.stringify(sNow.modelSettings) === JSON.stringify(sPre.modelSettings), 'окно изменило model, effortLevel или modelSettings')
+  must(sNow.advisorModel === 'fable', `advisorModel из формы не записан: ${sNow.advisorModel}`)
+  // уход из раздела и возврат: галочка берётся из профиля (шлюза нет), а не сбрасывается на «шлюз включён»
+  await page.keyboard.press('1')
+  await page.keyboard.press('7')
+  await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 15000 })
+  await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор после возврата в раздел')
+  await waitFor(async () => !(await page.getByRole('checkbox', { name: /Шлюз Stop/ }).isChecked()), 'галочка «Шлюз Stop» после возврата в раздел должна остаться снятой')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(async () => (await page.locator('pre.out').innerText()).includes('Stop gate: off'), 'предпросмотр после возврата должен говорить «Stop gate: off»')
+  must(ourStop() === 0, 'предпросмотр после возврата вернул шлюз')
   await page.keyboard.press('1')
   await levelSel.selectOption('R0') // понижение подтверждения не требует
   must((await refusal(opts)).includes('R2'), 'при R0 применение ctxkit не отвергнуто в main')
@@ -720,6 +815,136 @@ try {
   must((await session.page.locator('td.empty').innerText()).includes('не найдено'), 'пустое состояние')
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-empty-1280')
+  await close(session)
+  session = undefined
+
+  // ---- английский интерфейс: ни одной кириллической буквы ни в тексте, ни в атрибутах, ни в ответах ядра ----
+  const enHome = materialize(() => {})
+  homes.push(enHome)
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ writeLevel: 'R2' }))
+  // журнал русских сценариев остаётся: записи, сделанные на другом языке, показываются на текущем (relang в ядре)
+  session = await launch({ LOADOUT_HOME: enHome, LOADOUT_LANG: 'en', LOADOUT_CLAUDE: process.execPath, LOADOUT_CLAUDE_ARGS: JSON.stringify([fakeClaude]) })
+  {
+    const { app: enApp, page: en } = session
+    const enErrors = []
+    en.on('pageerror', (e) => enErrors.push(`pageerror: ${e.message.slice(0, 200)}`))
+    await en.waitForSelector('#grid', { timeout: 20000 })
+    await resize(enApp, 1280, 800)
+    must((await en.evaluate(() => document.documentElement.lang)) === 'en', 'html lang не en')
+    // текст страницы, подписи, подсказки и плейсхолдеры: всё, что видит пользователь или экранный диктор
+    const cyrillic = (where) =>
+      en.evaluate((w) => {
+        const bad = []
+        const re = /[А-Яа-яЁё]/
+        const text = document.body.innerText
+        for (const line of text.split('\n')) if (re.test(line)) bad.push(`text: ${line.trim().slice(0, 90)}`)
+        for (const el of document.querySelectorAll('[aria-label],[title],[placeholder],[alt]'))
+          for (const a of ['aria-label', 'title', 'placeholder', 'alt']) {
+            const v = el.getAttribute(a)
+            if (v && re.test(v)) bad.push(`${a}: ${v.slice(0, 90)}`)
+          }
+        return bad.map((b) => `${w}: ${b}`)
+      }, where)
+    const enOk = async (where) => {
+      const bad = await cyrillic(where)
+      must(bad.length === 0, `кириллица в английском интерфейсе:\n${bad.slice(0, 12).join('\n')}`)
+    }
+    await enOk('matrix')
+    await layout(en, 'en-matrix@1280')
+    await resize(enApp, 1100, 700)
+    await en.waitForTimeout(250)
+    await headerLayout(en, 'en@1100')
+    await resize(enApp, 1280, 800)
+    await en.waitForTimeout(250)
+    await shot(en, 'en-matrix-1280')
+    for (const [key, name] of [['2', 'radar'], ['3', 'hooks'], ['4', 'doctor'], ['5', 'journal'], ['6', 'profiles'], ['7', 'ctxkit']]) {
+      await en.keyboard.press(key)
+      await en.waitForTimeout(700)
+      await enOk(name)
+      await shot(en, `en-${name}-1280`)
+    }
+    await en.keyboard.press('1')
+    // палитра
+    await en.keyboard.press('Control+k')
+    await en.waitForTimeout(300)
+    await enOk('palette')
+    await en.keyboard.press('Escape')
+    // добавление: ошибка ядра (имя занято) и план ядра — оба на английском
+    const enDialog = en.locator('[role=dialog][aria-modal=true]')
+    await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
+    await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
+    await enDialog.getByLabel('Name', { exact: true }).fill('tool-a')
+    await enDialog.getByLabel('Command', { exact: true }).fill('npx')
+    await enDialog.getByRole('button', { name: 'Preview' }).click()
+    await enDialog.locator('[role=alert]').waitFor({ timeout: 8000 })
+    await enOk('add: core error')
+    await shot(en, 'en-add-error-1280')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
+    await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
+    await enDialog.getByLabel('Name', { exact: true }).fill('en-added')
+    await enDialog.getByLabel('Command', { exact: true }).fill('npx')
+    await enDialog.getByRole('button', { name: 'Preview' }).click()
+    await enDialog.getByText('~/.gemini/config/mcp_config.json').waitFor({ timeout: 8000 })
+    await enOk('add: core plan')
+    await shot(en, 'en-add-plan-1280')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    // установка плагина: предпросмотр
+    await en.getByRole('button', { name: 'Install plugin', exact: true }).click()
+    await enDialog.getByLabel(/Plugin/).fill('demo@market')
+    await enDialog.getByRole('button', { name: 'Preview' }).click()
+    await enDialog.getByText('claude plugin install demo@market --scope user').waitFor({ timeout: 8000 })
+    await enOk('plugin dialog')
+    await shot(en, 'en-plugin-1280')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    // запись из матрицы: корзина, правка и копирование (диалоги и планы ядра)
+    const enCell = (row, idx) =>
+      en.locator('tbody tr', { has: en.locator('td.name b', { hasText: new RegExp(`^${row}$`) }) }).locator('td').nth(idx + 1).click()
+    await enCell('tool-a', 3)
+    await enOk('inspector')
+    await shot(en, 'en-inspector-1280')
+    await en.getByRole('button', { name: 'Disable (move to trash)' }).click()
+    await enDialog.getByText('Loadout trash').first().waitFor({ timeout: 8000 })
+    await enOk('trash plan')
+    await shot(en, 'en-trash-plan-1280')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    await en.getByRole('button', { name: 'Edit command…' }).click()
+    await enOk('edit dialog')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    await en.getByRole('button', { name: 'Copy to client…' }).click()
+    await enOk('copy dialog')
+    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    // журнал после записи на английском: сама запись и откат
+    await enCell('tool-a', 3)
+    await en.getByRole('button', { name: 'Disable (move to trash)' }).click()
+    await enDialog.getByRole('button', { name: 'Move to trash' }).click()
+    await enDialog.waitFor({ state: 'detached', timeout: 8000 })
+    await en.keyboard.press('5')
+    await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().waitFor({ timeout: 8000 })
+    await enOk('journal row')
+    await shot(en, 'en-journal-1280')
+    // переключатель языка: на русский и обратно
+    await en.getByLabel('Language').selectOption('ru')
+    await en.getByRole('button', { name: 'Матрица' }).waitFor({ timeout: 10000 })
+    must((await en.evaluate(() => document.documentElement.lang)) === 'ru', 'после переключения на RU lang не ru')
+    await en.getByLabel('Язык').selectOption('en')
+    await en.getByRole('button', { name: 'Matrix' }).waitFor({ timeout: 10000 })
+    // после RU→EN: уровень записи пережил сохранение языка, перезапущенное ядро говорит по-английски и принимает запись
+    must((await en.getByLabel('Write').inputValue()) === 'R2', 'смена языка стёрла уровень записи')
+    must(JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).lang === 'en', 'язык не сохранён в settings.json')
+    await en.waitForSelector('#grid', { timeout: 15000 })
+    await enCell('tool-b', 3)
+    await en.getByRole('button', { name: 'Disable (move to trash)' }).click()
+    await enDialog.getByText('Loadout trash').first().waitFor({ timeout: 8000 })
+    await enOk('plan after the switch')
+    await enDialog.getByRole('button', { name: 'Move to trash' }).click()
+    await enDialog.waitFor({ state: 'detached', timeout: 8000 })
+    await en.keyboard.press('5')
+    await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().getByRole('button', { name: 'Roll back', exact: true }).click()
+    await en.waitForTimeout(800)
+    await enOk('journal after rollback')
+    must(enErrors.length === 0, `ошибки страницы (EN): ${enErrors.join(' | ')}`)
+  }
   await close(session)
   session = undefined
 

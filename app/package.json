@@ -1,6 +1,6 @@
 {
   "name": "loadout-app",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "description": "Loadout: что загружено в ваших агентов",
   "main": "./out/main/index.js",
@@ -32,10 +32,13 @@
     "win": {
       "icon": "build/icon.png",
       "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "signAndEditExecutable": false
+      "signExecutable": false
     },
     "nsis": {
       "oneClick": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Loadout",
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "deleteAppDataOnUninstall": false

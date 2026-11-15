@@ -5,6 +5,8 @@ import type { ChangedEvent, LoadoutApi } from '../shared/model'
 const api: LoadoutApi = {
   scan: () => ipcRenderer.invoke('scan'),
   copyText: (text) => ipcRenderer.invoke('copyText', text),
+  getLang: () => ipcRenderer.invoke('lang:get'),
+  setLang: (lang) => ipcRenderer.invoke('lang:set', lang),
   getWriteLevel: () => ipcRenderer.invoke('writeLevel:get'),
   setWriteLevel: (level) => ipcRenderer.invoke('writeLevel:set', level),
   plan: (intent) => ipcRenderer.invoke('plan', intent),

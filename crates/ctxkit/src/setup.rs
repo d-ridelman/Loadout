@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod uninstall;
+
 const MARKER_START: &str = "<!-- ctxkit:start -->";
 const MARKER_END: &str = "<!-- ctxkit:end -->";
 const LEGACY_MARKER_START: &str = "<!-- claude-guard:start -->";
@@ -14,10 +16,15 @@ const LEGACY_MARKER_END: &str = "<!-- claude-guard:end -->";
 struct SetupOpts {
     dry_run: bool,
     profile_dir: Option<PathBuf>,
-    main_model: String,
-    advisor: String,
+    /// `--main-model` / `--advisor` / `--effort`: model choices are written only when given. Without the
+    /// flag the user's `model` / `advisorModel` / `effortLevel` stay as they are (or stay absent).
+    main_model: Option<String>,
+    advisor: Option<String>,
     subagent: String,
-    effort: String,
+    /// `--subagent` given: only then `CLAUDE_CODE_SUBAGENT_MODEL` is written (it would put every
+    /// subagent without its own `model`, code writers included, on that model); `subagent` alone sets Explore.md.
+    subagent_env: bool,
+    effort: Option<String>,
     no_agents: bool,
     force_agents: bool,
     with_rules: bool,
@@ -31,6 +38,9 @@ struct SetupOpts {
     hook_cmd: Option<String>,
     claude_json: Option<PathBuf>,
     skip_version_check: bool,
+    no_stop_gate: bool,
+    /// `--uninstall`: take out what setup added (see `uninstall.rs`).
+    uninstall: bool,
     lang: Lang,
 }
 
@@ -39,10 +49,11 @@ impl Default for SetupOpts {
         Self {
             dry_run: false,
             profile_dir: None,
-            main_model: "sonnet".to_string(),
-            advisor: "fable".to_string(),
+            main_model: None,
+            advisor: None,
             subagent: "haiku".to_string(),
-            effort: "high".to_string(),
+            subagent_env: false,
+            effort: None,
             no_agents: false,
             force_agents: false,
             with_rules: false,
@@ -56,6 +67,8 @@ impl Default for SetupOpts {
             hook_cmd: None,
             claude_json: None,
             skip_version_check: false,
+            no_stop_gate: false,
+            uninstall: false,
             lang: Lang::En,
         }
     }
@@ -78,6 +91,8 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--antigravity" => opts.antigravity = true,
             "--dsh" => opts.dsh = true,
             "--skip-version-check" => opts.skip_version_check = true,
+            "--no-stop-gate" => opts.no_stop_gate = true,
+            "--uninstall" => opts.uninstall = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
             | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home"
             | "--hook-cmd" | "--claude-json" | "--lang") => {
@@ -87,10 +102,13 @@ pub fn run_setup(args: &[String]) -> i32 {
                 };
                 match flag {
                     "--profile" => opts.profile_dir = Some(PathBuf::from(val)),
-                    "--main-model" => opts.main_model = val.clone(),
-                    "--advisor" => opts.advisor = val.clone(),
-                    "--subagent" => opts.subagent = val.clone(),
-                    "--effort" => opts.effort = val.clone(),
+                    "--main-model" => opts.main_model = Some(val.clone()),
+                    "--advisor" => opts.advisor = Some(val.clone()),
+                    "--subagent" => {
+                        opts.subagent = val.clone();
+                        opts.subagent_env = true;
+                    }
+                    "--effort" => opts.effort = Some(val.clone()),
                     "--desktop-model" => opts.desktop_model = val.clone(),
                     "--desktop-file" => opts.desktop_file = Some(PathBuf::from(val)),
                     "--agy-file" => opts.agy_file = Some(PathBuf::from(val)),
@@ -116,6 +134,13 @@ pub fn run_setup(args: &[String]) -> i32 {
         i += 1;
     }
 
+    if opts.uninstall {
+        if let Some(bad) = uninstall::reject_setup_only_flags(args) {
+            eprintln!("ERR: {bad} is a setup option and cannot be combined with --uninstall");
+            return 2;
+        }
+    }
+
     let Some(home) = home_dir() else {
         eprintln!("ERR: cannot determine USERPROFILE / HOME directory");
         return 1;
@@ -139,10 +164,54 @@ pub fn run_setup(args: &[String]) -> i32 {
         format!("\"{s}\"")
     });
 
+    if opts.uninstall {
+        return uninstall::run(
+            &opts,
+            &home,
+            &profile,
+            custom_profile,
+            &hook_bin_path,
+            bin_name,
+            &hook_cmd,
+        );
+    }
+
     if opts.dry_run {
         println!("[dry-run] profile: {}", profile.display());
     } else {
         println!("Setting up profile: {}", profile.display());
+    }
+
+    // Before anything is copied or written: input that setup cannot handle is refused as it is,
+    // so a refusal leaves neither a copied binary nor a rewritten settings.json behind.
+    let dsh_home_dir = || {
+        opts.dsh_home
+            .clone()
+            .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
+            .unwrap_or_else(|| home.join(".dsh"))
+    };
+    let preflight = || -> Result<(), String> {
+        preflight_settings(&profile.join("settings.json"), true)?;
+        if opts.with_rules {
+            readable_utf8(&profile.join("CLAUDE.md"))?;
+            if opts.dsh {
+                readable_utf8(&dsh_home_dir().join("AGENTS.md"))?;
+            }
+        }
+        if opts.antigravity {
+            let p = opts
+                .agy_file
+                .clone()
+                .unwrap_or_else(|| home.join(".gemini").join("config").join("hooks.json"));
+            if p.exists() {
+                read_json_object(&p)?;
+            }
+        }
+        Ok(())
+    };
+    if let Err(e) = preflight() {
+        eprintln!("ERR: {e}");
+        return 1;
     }
 
     // Install current binary into hooks/ and .local/bin/ unless explicit --hook-cmd
@@ -196,7 +265,7 @@ pub fn run_setup(args: &[String]) -> i32 {
         if let Err(e) = upsert_claude_md(
             &profile.join("CLAUDE.md"),
             &backup_dir,
-            &rules_snippet(&opts),
+            &rules_snippet(&opts, &settings_root),
             opts.dry_run,
         ) {
             eprintln!("ERR: {e}");
@@ -213,7 +282,7 @@ pub fn run_setup(args: &[String]) -> i32 {
             if let Err(e) = upsert_claude_md(
                 &dsh_agents,
                 &dsh_backup,
-                &rules_snippet(&opts),
+                &rules_snippet(&opts, &settings_root),
                 opts.dry_run,
             ) {
                 eprintln!("ERR: {e}");
@@ -236,9 +305,12 @@ pub fn run_setup(args: &[String]) -> i32 {
                     p.display()
                 );
             } else if p.exists() {
-                if let Err(e) =
-                    update_desktop_presets(&p, &opts.desktop_model, &opts.effort, opts.dry_run)
-                {
+                if let Err(e) = update_desktop_presets(
+                    &p,
+                    &opts.desktop_model,
+                    opts.effort.as_deref(),
+                    opts.dry_run,
+                ) {
                     eprintln!("ERR: {e}");
                     return 1;
                 }
@@ -444,31 +516,117 @@ fn update_claude_settings(
     let mut next = orig.clone();
     let root = next.as_object_mut().ok_or("settings root is not object")?;
 
-    root.insert("model".to_string(), Value::String(opts.main_model.clone()));
-    if opts.advisor.eq_ignore_ascii_case("none") {
-        root.remove("advisorModel");
-    } else {
-        root.insert(
-            "advisorModel".to_string(),
-            Value::String(opts.advisor.clone()),
+    // What setup changes in the user's choices is printed as "was -> became" (also in --dry-run).
+    let old = |v: &Value| v.as_str().map(str::to_string);
+    // Model, advisor and effort are the user's choices: written only with --main-model / --advisor /
+    // --effort. Otherwise the value stays (or stays absent) and the line says so.
+    let kept = |label: &str, hint: &str, cur: &Value| {
+        println!("{}", kept_line(label, cur.as_str(), hint));
+    };
+    match opts.main_model.as_deref() {
+        Some(m) => {
+            println!(
+                "{}",
+                change_line("model", old(&orig["model"]).as_deref(), Some(m))
+            );
+            root.insert("model".to_string(), Value::String(m.to_string()));
+        }
+        None => kept("model", "--main-model sonnet", &orig["model"]),
+    }
+    match opts.advisor.as_deref() {
+        Some(a) => {
+            let advisor = (!a.eq_ignore_ascii_case("none")).then_some(a);
+            println!(
+                "{}",
+                change_line(
+                    "advisorModel",
+                    old(&orig["advisorModel"]).as_deref(),
+                    advisor
+                )
+            );
+            match advisor {
+                Some(a) => root.insert("advisorModel".to_string(), Value::String(a.to_string())),
+                None => root.remove("advisorModel"),
+            };
+        }
+        None => kept("advisorModel", "--advisor fable", &orig["advisorModel"]),
+    }
+    match opts.effort.as_deref() {
+        Some(e) => {
+            println!(
+                "{}",
+                change_line("effortLevel", old(&orig["effortLevel"]).as_deref(), Some(e))
+            );
+            root.insert("effortLevel".to_string(), Value::String(e.to_string()));
+            // Claude Code ignores a top-level user-level `effortLevel` on Opus 5.5 and later models; the per-model
+            // `modelSettings` entry (v2.1.251+) is the documented way. `max` is not accepted there.
+            // The model is the one from --main-model, else the user's own `model`.
+            let main = opts.main_model.clone().or_else(|| old(&orig["model"]));
+            match (
+                main.as_deref().and_then(canonical_model_id),
+                matches!(e, "low" | "medium" | "high" | "xhigh"),
+            ) {
+                (Some(id), true) => {
+                    let entry = ensure_object(ensure_object(root, "modelSettings")?, &id)?;
+                    println!(
+                        "{}",
+                        change_line(
+                            &format!("effort modelSettings.{id}"),
+                            entry.get("effortLevel").and_then(old).as_deref(),
+                            Some(e)
+                        )
+                    );
+                    entry.insert("effortLevel".to_string(), Value::String(e.to_string()));
+                }
+                _ => println!(
+                    "  effort: modelSettings not written (needs a known main model, from --main-model or the `model` in settings.json, and low|medium|high|xhigh); top-level effortLevel only"
+                ),
+            }
+        }
+        None => kept("effortLevel", "--effort high", &orig["effortLevel"]),
+    }
+
+    let sub_old = orig["env"]["CLAUDE_CODE_SUBAGENT_MODEL"]
+        .as_str()
+        .map(str::to_string);
+    if opts.subagent_env {
+        println!(
+            "{}",
+            change_line(
+                "env.CLAUDE_CODE_SUBAGENT_MODEL",
+                sub_old.as_deref(),
+                Some(&opts.subagent)
+            )
+        );
+    } else if sub_old
+        .as_deref()
+        .is_some_and(|v| v.to_ascii_lowercase().contains("haiku"))
+    {
+        println!(
+            "  [warn] env.CLAUDE_CODE_SUBAGENT_MODEL={} puts every subagent without its own model (code writers too) on Haiku; left as is. Remove it, or pass --subagent <model> to change it",
+            sub_old.as_deref().unwrap_or_default()
         );
     }
-    root.insert(
-        "effortLevel".to_string(),
-        Value::String(opts.effort.clone()),
-    );
-
-    let env_obj = ensure_object(root, "env")?;
-    env_obj.insert(
-        "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
-        Value::String(opts.subagent.clone()),
-    );
-    match opts.lang {
-        Lang::Ru => {
+    // `env` is created only when something goes into it.
+    if opts.subagent_env || opts.lang == Lang::Ru {
+        let env_obj = ensure_object(root, "env")?;
+        if opts.subagent_env {
+            env_obj.insert(
+                "CLAUDE_CODE_SUBAGENT_MODEL".to_string(),
+                Value::String(opts.subagent.clone()),
+            );
+        }
+        if opts.lang == Lang::Ru {
             env_obj.insert("CTXKIT_LANG".to_string(), Value::String("ru".to_string()));
         }
-        Lang::En => {
-            env_obj.remove("CTXKIT_LANG");
+    }
+    if opts.lang == Lang::En {
+        let emptied = root
+            .get_mut("env")
+            .and_then(|e| e.as_object_mut())
+            .is_some_and(|env_obj| env_obj.remove("CTXKIT_LANG").is_some() && env_obj.is_empty());
+        if emptied {
+            root.remove("env"); // our `--lang ru` created it
         }
     }
 
@@ -476,10 +634,25 @@ fn update_claude_settings(
     upsert_claude_hook_event(
         hooks_obj,
         "PreToolUse",
-        "Bash|PowerShell|Write|Read|Edit|MultiEdit",
+        Some("Bash|PowerShell|Write|Read|Edit|MultiEdit"),
         hook_cmd,
     );
-    upsert_claude_hook_event(hooks_obj, "PostToolUse", "Edit|Write|MultiEdit", hook_cmd);
+    upsert_claude_hook_event(
+        hooks_obj,
+        "PostToolUse",
+        Some("Edit|Write|MultiEdit"),
+        hook_cmd,
+    );
+    // Stop takes no matcher. The gate fires once per turn (see gate.rs); --no-stop-gate removes our group.
+    if opts.no_stop_gate {
+        remove_our_hook_event(hooks_obj, "Stop", Some(hook_cmd));
+        println!("  Stop gate: off (--no-stop-gate); our Stop hook is removed if present");
+    } else {
+        upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd);
+        println!(
+            "  Stop gate: on, hook Stop sends the model back once per turn if code edits lack checker/advisor; remove with --no-stop-gate"
+        );
+    }
 
     write_json_if_changed(
         path,
@@ -490,6 +663,37 @@ fn update_claude_settings(
         "settings.json",
     )?;
     Ok(next)
+}
+
+/// One "was -> became" line for a setting; `new == None` means the key ends up unset.
+fn change_line(label: &str, old: Option<&str>, new: Option<&str>) -> String {
+    let show = |v: Option<&str>| v.unwrap_or("(unset)").to_string();
+    if old == new {
+        format!("  {label}: {} (unchanged)", show(new))
+    } else {
+        format!("  {label}: {} -> {}", show(old), show(new))
+    }
+}
+
+/// The line for a setting that setup leaves alone because its flag was not given.
+fn kept_line(label: &str, current: Option<&str>, hint: &str) -> String {
+    format!(
+        "  {label}: {} (kept; pass {hint} to set)",
+        current.unwrap_or("(unset)")
+    )
+}
+
+/// Canonical id for the `modelSettings` key. shortcut: alias table of 2026-11-15 (docs: `sonnet` is Sonnet 5.5,
+/// `opus` Opus 5.5, `haiku` Haiku 5.5, `fable` Fable 5.2); refresh when the aliases move to new releases.
+fn canonical_model_id(model: &str) -> Option<String> {
+    match model {
+        "sonnet" => Some("claude-sonnet-5-5".to_string()),
+        "opus" => Some("claude-opus-5-5".to_string()),
+        "haiku" => Some("claude-haiku-5-5".to_string()),
+        "fable" => Some("claude-fable-5-2".to_string()),
+        m if m.starts_with("claude-") => Some(m.to_string()),
+        _ => None,
+    }
 }
 
 fn ensure_object<'a>(
@@ -505,42 +709,134 @@ fn ensure_object<'a>(
         .ok_or_else(|| format!("'{key}' is not a JSON object"))
 }
 
-pub(crate) fn is_our_hook_group(group: &Value) -> bool {
-    let Some(arr) = group.get("hooks").and_then(|h| h.as_array()) else {
-        return false;
+/// Splits the first `n` words of a command line; quotes (" or ') keep a path with spaces in one word.
+fn first_words(cmd: &str, n: usize) -> Vec<String> {
+    let (mut words, mut cur, mut quote) = (Vec::new(), String::new(), None::<char>);
+    for c in cmd.trim().chars() {
+        match c {
+            '"' | '\'' if quote.is_none() => quote = Some(c),
+            c if quote == Some(c) => quote = None,
+            c if c.is_whitespace() && quote.is_none() => {
+                if !cur.is_empty() {
+                    words.push(std::mem::take(&mut cur));
+                    if words.len() == n {
+                        return words;
+                    }
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
+}
+
+/// The one rule for "this hook command is ctxkit's": it equals the command being installed
+/// (`--hook-cmd`), or one of its first two words (the exe, or `node <script>`) is a file named
+/// `ctxkit` / `claude-guard` / `no-inline-backslash` (any case, .exe/.js/.mjs/.cmd or none).
+/// A foreign command that merely has "ctxkit" somewhere in its path is not ours.
+pub(crate) fn command_is_ours(cmd: &str, current: Option<&str>) -> bool {
+    current.is_some_and(|c| c.trim() == cmd.trim()) || our_name(cmd).is_some()
+}
+
+/// File name of a command word without directory and (.exe/.js/.mjs/.cmd) extension, lower case.
+fn word_stem(w: &str) -> String {
+    let base = w
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    [".exe", ".js", ".mjs", ".cmd"]
+        .iter()
+        .find_map(|e| base.strip_suffix(e))
+        .unwrap_or(&base)
+        .to_string()
+}
+
+/// Which of our names (`ctxkit` or a legacy one) the command runs: the first word, or the second one when
+/// the first is a script launcher (`node C:/x/no-inline-backslash.mjs`). `logger.exe ctxkit` is not ours.
+pub(crate) fn our_name(cmd: &str) -> Option<&'static str> {
+    const OURS: [&str; 3] = ["ctxkit", "claude-guard", "no-inline-backslash"];
+    const LAUNCHERS: [&str; 9] = [
+        "node", "nodejs", "bun", "deno", "npx", "python", "python3", "py", "&",
+    ];
+    let words = first_words(cmd, 2);
+    let stem0 = word_stem(words.first()?);
+    let stem = if LAUNCHERS.contains(&stem0.as_str()) {
+        word_stem(words.get(1)?)
+    } else {
+        stem0
     };
-    arr.iter().any(|h| {
-        let cmd = h.get("command").and_then(|c| c.as_str()).unwrap_or("");
-        cmd.contains("ctxkit")
-            || cmd.contains("claude-guard")
-            || cmd.contains("no-inline-backslash")
-    })
+    OURS.into_iter().find(|n| *n == stem)
+}
+
+fn hook_is_ours(h: &Value, current: Option<&str>) -> bool {
+    h.get("command")
+        .and_then(|c| c.as_str())
+        .is_some_and(|c| command_is_ours(c, current))
+}
+
+pub(crate) fn is_our_hook_group(group: &Value, current: Option<&str>) -> bool {
+    group
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .is_some_and(|a| a.iter().any(|h| hook_is_ours(h, current)))
+}
+
+/// Removes only our elements from `hooks[]` of every group; a group is dropped only when it ends up
+/// empty, so foreign elements (and their matcher) survive even when they shared a group with ours.
+fn strip_our_hooks(list: Vec<Value>, current: Option<&str>) -> Vec<Value> {
+    list.into_iter()
+        .filter_map(|mut g| {
+            if !is_our_hook_group(&g, current) {
+                return Some(g);
+            }
+            let arr = g.get_mut("hooks")?.as_array_mut()?;
+            arr.retain(|h| !hook_is_ours(h, current));
+            (!arr.is_empty()).then_some(g)
+        })
+        .collect()
 }
 
 fn upsert_claude_hook_event(
     hooks: &mut Map<String, Value>,
     event: &str,
-    matcher: &str,
+    matcher: Option<&str>,
     command: &str,
 ) {
-    let mut list = hooks
+    let list = hooks
         .get(event)
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    list.retain(|item| !is_our_hook_group(item));
-    list.insert(
-        0,
-        json!({
-            "matcher": matcher,
-            "hooks": [{
-                "type": "command",
-                "command": command,
-                "timeout": 10
-            }]
-        }),
-    );
+    let mut list = strip_our_hooks(list, Some(command));
+    let mut group = json!({
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": 10
+        }]
+    });
+    if let Some(m) = matcher {
+        group["matcher"] = Value::String(m.to_string());
+    }
+    list.insert(0, group);
     hooks.insert(event.to_string(), Value::Array(list));
+}
+
+/// Drops our hook elements from `event`, keeps foreign ones, and removes the key when nothing is left.
+fn remove_our_hook_event(hooks: &mut Map<String, Value>, event: &str, current: Option<&str>) {
+    let Some(list) = hooks.get(event).and_then(|v| v.as_array()) else {
+        return;
+    };
+    let kept = strip_our_hooks(list.clone(), current);
+    if kept.is_empty() {
+        hooks.remove(event);
+    } else {
+        hooks.insert(event.to_string(), Value::Array(kept));
+    }
 }
 
 fn write_agent_file(
@@ -610,18 +906,85 @@ fn upsert_claude_md(
     Ok(())
 }
 
+/// Span of our rules block. A marker counts only when it is alone on its line (as `append_block` writes it):
+/// the same text inside the user's own sentence is not ours, and cutting from it would delete their text.
 pub(crate) fn marker_span(text: &str) -> Option<(usize, usize)> {
     for (start_m, end_m) in [
         (MARKER_START, MARKER_END),
         (LEGACY_MARKER_START, LEGACY_MARKER_END),
     ] {
-        if let (Some(s), Some(e)) = (text.find(start_m), text.find(end_m)) {
-            if s < e {
-                return Some((s, e + end_m.len()));
+        let mut start = None;
+        let mut off = 0;
+        for line in text.split_inclusive('\n') {
+            // A BOM (editors add one to the first line) is not a marker character, and not whitespace for Rust.
+            let body = line.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+            let lead = line.len() - body.len();
+            let t = body.trim_end();
+            match start {
+                Some(s) if t == end_m => return Some((s, off + lead + end_m.len())),
+                // The nearest start before the end: a lone start line of the user's own is not ours.
+                _ if t == start_m => start = Some(off + lead),
+                _ => {}
             }
+            off += line.len();
         }
     }
     None
+}
+
+/// Whether `m` stands alone on some line (how `marker_span` recognises a marker).
+pub(crate) fn has_marker_line(text: &str, m: &str) -> bool {
+    text.lines().any(|l| {
+        l.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+            .trim_end()
+            == m
+    })
+}
+
+/// `Ok` when the file is missing or readable as UTF-8: checked before a write that would read it later.
+pub(crate) fn readable_utf8(p: &Path) -> Result<(), String> {
+    if !p.exists() {
+        return Ok(());
+    }
+    fs::read_to_string(p)
+        .map(|_| ())
+        .map_err(|e| format!("read {}: {e}", p.display()))
+}
+
+/// Refuses a settings.json whose structure setup or the rollback would have to guess at (nothing is written
+/// before this passes, so a refusal leaves the profile untouched). `for_setup` also checks `modelSettings`.
+pub(crate) fn preflight_settings(path: &Path, for_setup: bool) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let v = read_json_object(path)?;
+    if let Some(h) = v.get("hooks") {
+        let h = h.as_object().ok_or("'hooks' is not a JSON object")?;
+        for ev in ["PreToolUse", "PostToolUse", "Stop"] {
+            if h.get(ev).is_some_and(|e| !e.is_array()) {
+                return Err(format!("'hooks.{ev}' is not a JSON array"));
+            }
+        }
+    }
+    let mut objects = vec!["env"];
+    if for_setup {
+        objects.push("modelSettings");
+    }
+    for k in objects {
+        if v.get(k).is_some_and(|x| !x.is_object()) {
+            return Err(format!("'{k}' is not a JSON object"));
+        }
+    }
+    if for_setup {
+        if let Some(bad) = v
+            .get("modelSettings")
+            .and_then(|m| m.as_object())
+            .and_then(|m| m.iter().find(|(_, e)| !e.is_object()))
+        {
+            return Err(format!("'modelSettings.{}' is not a JSON object", bad.0));
+        }
+    }
+    Ok(())
 }
 
 fn append_block(existing: &str, block: &str) -> String {
@@ -673,7 +1036,7 @@ fn is_desktop_exe(path: &str) -> bool {
 fn update_desktop_presets(
     path: &Path,
     model_id: &str,
-    effort: &str,
+    effort: Option<&str>,
     dry_run: bool,
 ) -> Result<(), String> {
     let orig = read_json_object(path)?;
@@ -682,20 +1045,41 @@ fn update_desktop_presets(
         println!("  skip desktop presets (no byAccount): {}", path.display());
         return Ok(());
     };
+    // Sets modelId/effort of one preset and prints "model X -> Y, effort A -> B".
+    let apply = |name: &str, s: &mut Map<String, Value>| {
+        let was = |k: &str| s.get(k).and_then(|v| v.as_str()).map(str::to_string);
+        let (m0, e0) = (was("modelId"), was("effort"));
+        let shown = |v: &Option<String>| v.clone().unwrap_or_else(|| "(unset)".to_string());
+        let model = if m0.as_deref() == Some(model_id) {
+            format!("model {model_id} (unchanged)")
+        } else {
+            format!("model {} -> {model_id}", shown(&m0))
+        };
+        // Without --effort the preset's own effort stays.
+        let eff = match effort {
+            Some(e) if e0.as_deref() == Some(e) => format!("effort {e} (unchanged)"),
+            Some(e) => format!("effort {} -> {e}", shown(&e0)),
+            None => format!("effort {} (kept; pass --effort to set)", shown(&e0)),
+        };
+        println!("  desktop preset {name}: {model}, {eff}");
+        s.insert("modelId".to_string(), Value::String(model_id.to_string()));
+        if let Some(e) = effort {
+            s.insert("effort".to_string(), Value::String(e.to_string()));
+        }
+    };
     for (_acct_id, acct) in accounts.iter_mut() {
         if let Some(presets) = acct.get_mut("presets").and_then(|v| v.as_array_mut()) {
             for p in presets.iter_mut() {
+                let name = p["name"].as_str().unwrap_or("(unnamed)").to_string();
                 if let Some(s) = p.get_mut("settings").and_then(|v| v.as_object_mut()) {
-                    s.insert("modelId".to_string(), Value::String(model_id.to_string()));
-                    s.insert("effort".to_string(), Value::String(effort.to_string()));
+                    apply(&name, s);
                 }
             }
         }
         if let Some(built_ins) = acct.get_mut("builtIns").and_then(|v| v.as_object_mut()) {
-            for (_k, b) in built_ins.iter_mut() {
+            for (k, b) in built_ins.iter_mut() {
                 if let Some(s) = b.get_mut("settings").and_then(|v| v.as_object_mut()) {
-                    s.insert("modelId".to_string(), Value::String(model_id.to_string()));
-                    s.insert("effort".to_string(), Value::String(effort.to_string()));
+                    apply(&format!("built-in {k}"), s);
                 }
             }
         }
@@ -981,29 +1365,47 @@ You are an independent verifier. You did not write this code and must never modi
     }
 }
 
-fn rules_snippet(opts: &SetupOpts) -> String {
-    let adv = if opts.advisor.eq_ignore_ascii_case("none") {
-        None
-    } else {
-        Some(opts.advisor.as_str())
+/// The rules block. Model names come from `settings` (the result of this run: the flags, else the user's
+/// own `model` / `advisorModel`); a model that is not set anywhere is not named.
+fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
+    let main = settings["model"].as_str();
+    let adv = settings["advisorModel"].as_str();
+    // The gate sentence must match what setup really wires (--no-stop-gate) and what is configured (--advisor none).
+    let gate = match (opts.no_stop_gate, adv.is_some(), opts.lang) {
+        (true, _, _) => "",
+        (false, true, Lang::Ru) => {
+            "; хук Stop один раз вернёт тебя, если правки остались без `checker` или advisor"
+        }
+        (false, false, Lang::Ru) => {
+            "; хук Stop один раз вернёт тебя, если правки остались без `checker`"
+        }
+        (false, true, Lang::En) => {
+            "; the Stop hook sends you back once if edits were left without `checker` or advisor"
+        }
+        (false, false, Lang::En) => {
+            "; the Stop hook sends you back once if edits were left without `checker`"
+        }
     };
     match opts.lang {
         Lang::Ru => {
-            let adv_line = match adv {
-                Some(a) => format!(
-                    "- Основная сессия — **{}**. Советуйся с **advisor ({a})** до фиксации подхода на нетривиальной задаче, когда одна ошибка повторяется дважды, и перед тем как объявить задачу готовой.\n",
-                    opts.main_model
+            let adv_line = match (main, adv) {
+                (Some(m), Some(a)) => format!(
+                    "- Основная сессия — **{m}**. Не фиксируй подход и не правь код по задаче больше чем в одном файле, не вызвав **advisor ({a})**; зови его и при второй одинаковой ошибке подряд.\n"
                 ),
-                None => format!(
-                    "- Основная сессия — **{}**; для сложной архитектуры подключай старшую модель точечно.\n",
-                    opts.main_model
+                (None, Some(a)) => format!(
+                    "- Не фиксируй подход и не правь код по задаче больше чем в одном файле, не вызвав **advisor ({a})**; зови его и при второй одинаковой ошибке подряд.\n"
                 ),
+                (Some(m), None) => format!(
+                    "- Основная сессия — **{m}**; для сложной архитектуры подключай старшую модель точечно.\n"
+                ),
+                (None, None) => "- Рутину веди на более лёгкой модели; для сложной архитектуры подключай старшую точечно.\n".to_string(),
             };
             format!(
                 "{MARKER_START}\n\
 ## Команда моделей и экономия контекста (ctxkit)\n\n\
 {adv_line}\
-- Поиск по коду, греп и чтение документации отправляй в `Explore` ({sub}); мелкую правку 1-2 файлов делай сам, перед сдачей нетривиальной работы прогоняй `checker` (Opus).\n\
+- Поиск по коду, греп и чтение документации отправляй в `Explore` ({sub}); правку одного файла без изменения логики делай сам.\n\
+- Не объявляй задачу готовой без `checker` (Opus), кроме правки одного файла без изменения логики{gate}.\n\
 - Группируй независимые `Read`/`Edit`; не читай длинные файлы целиком: сначала `Grep` или LSP, затем диапазон.\n\
 - Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `ctxkit check <cmd>`.\n\
 - Закрывай длинную задачу через `/clear`, не тяни одну сессию дальше ~100-150 ходов.\n\
@@ -1012,18 +1414,22 @@ fn rules_snippet(opts: &SetupOpts) -> String {
             )
         }
         Lang::En => {
-            let adv_line = match adv {
-                Some(a) => format!(
-                    "- Main session runs on **{}**. Consult **advisor ({a})** before locking a non-trivial plan, when the same error repeats twice, and before calling work done.\n",
-                    opts.main_model
+            let adv_line = match (main, adv) {
+                (Some(m), Some(a)) => format!(
+                    "- Main session runs on **{m}**. Do not lock a plan or edit code across more than one file without calling **advisor ({a})** first; call it again when the same error repeats twice.\n"
                 ),
-                None => format!("- Main session runs on **{}**.\n", opts.main_model),
+                (None, Some(a)) => format!(
+                    "- Do not lock a plan or edit code across more than one file without calling **advisor ({a})** first; call it again when the same error repeats twice.\n"
+                ),
+                (Some(m), None) => format!("- Main session runs on **{m}**.\n"),
+                (None, None) => "- Keep routine work on a lighter model; bring a stronger one in only for hard architecture.\n".to_string(),
             };
             format!(
                 "{MARKER_START}\n\
 ## Model Team & Context Discipline (ctxkit)\n\n\
 {adv_line}\
-- Delegate codebase search/grep/docs reading to `Explore` ({sub}); keep tiny 1-2 file fixes local; run `checker` (Opus) before finishing non-trivial changes.\n\
+- Delegate codebase search/grep/docs reading to `Explore` ({sub}); keep a one-file fix with no logic change local.\n\
+- Do not declare work done without `checker` (Opus), except a one-file change with no logic change{gate}.\n\
 - Batch independent `Read`/`Edit` calls; locate symbols via `Grep`/LSP first, then read tight line ranges.\n\
 - Run `ctxkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n\
 - Clear finished tasks with `/clear` instead of dragging sessions past ~100-150 turns.\n\
@@ -1042,7 +1448,7 @@ fn print_diagnostics(
     opts: &SetupOpts,
 ) {
     println!("\nDiagnostics:");
-    if !opts.skip_version_check && opts.advisor.eq_ignore_ascii_case("fable") {
+    if !opts.skip_version_check && settings["advisorModel"].as_str() == Some("fable") {
         match check_claude_version() {
             Some(ver) => {
                 if ver < (2, 1, 321) {
@@ -1492,20 +1898,22 @@ fn print_help() {
         "Usage: ctxkit setup [options]\n\n\
          Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness:\n\
          - Backs up existing configs before writing\n\
-         - Configures Sonnet main + Fable advisor + Haiku subagents + Opus checker (preserving custom env/hooks/plugins)\n\
+         - Creates the Explore (haiku) and checker (opus) agents; model, advisor and effort are NOT changed unless you pass --main-model / --advisor / --effort (the previous scheme: --main-model sonnet --advisor fable --effort high). Changes are printed as \"was -> became\"; custom env/hooks/plugins are preserved\n\
          - Wires ctxkit PreToolUse/PostToolUse hooks (replacing legacy claude-guard / no-inline-backslash entries)\n\
+         - Wires a once-per-turn Stop gate: a turn that edited code without checker/advisor afterwards is sent back once\n\
          - Audits enabled plugins, CLAUDE.md size, global MCPs, Claude CLI version, and Antigravity configs\n\n\
          Options:\n\
            --dry-run              Preview changes without writing files\n\
            --profile <dir>        Claude config dir (default: ~/.claude or CLAUDE_CONFIG_DIR)\n\
-           --main-model <name>    Main model (default: sonnet)\n\
-           --advisor <name>       Advisor model (default: fable; pass \"none\" to omit)\n\
-           --subagent <name>      CLAUDE_CODE_SUBAGENT_MODEL (default: haiku)\n\
-           --effort <level>       effortLevel (default: high)\n\
+           --main-model <name>    Write `model` (not written without this flag; e.g. sonnet)\n\
+           --advisor <name>       Write `advisorModel` (not written without this flag; e.g. fable; \"none\" removes it)\n\
+           --subagent <name>      Explore model and CLAUDE_CODE_SUBAGENT_MODEL (the env var is written only when this flag is given; Explore.md default: haiku)\n\
+           --effort <level>       Write effort (not written without this flag): modelSettings.<model>.effortLevel for the --main-model or your own `model` (known model, low|medium|high|xhigh), top-level effortLevel, and Desktop presets with --desktop\n\
+           --no-stop-gate         Do not wire the Stop gate (and remove ours if present; env CTXKIT_GATE=0 mutes it per session)\n\
            --no-agents            Skip creating Explore.md and checker.md\n\
            --force-agents         Overwrite existing Explore.md / checker.md\n\
            --with-rules           Add/update idempotent rules block in CLAUDE.md\n\
-           --desktop              Update Claude Desktop ccd-session-presets.json to Sonnet\n\
+           --desktop              Set modelId (--desktop-model) in Claude Desktop ccd-session-presets.json; effort only with --effort\n\
            --desktop-model <id>   Desktop modelId (default: claude-sonnet-5-5)\n\
            --desktop-file <path>  Override ccd-session-presets.json path\n\
            --antigravity          Wire ctxkit into Antigravity hooks.json and audit MCPs/plugins\n\
@@ -1513,13 +1921,146 @@ fn print_help() {
            --dsh                  Wire ctxkit into DeepSeek Harness Desktop (dsh-hooks-claude-code bridge)\n\
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --hook-cmd <cmd>       Override hook command path\n\
-           --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n"
+           --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
+           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries) and the hooks/ctxkit binary. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effort_goes_to_model_settings_and_subagent_env_only_when_asked() {
+        let d = std::env::temp_dir().join(format!("ctxkit_setup_effort_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let path = d.join("settings.json");
+        fs::write(
+            &path,
+            r#"{"modelSettings":{"claude-opus-5-5":{"effortLevel":"low"}},"env":{"KEEP":"1"}}"#,
+        )
+        .unwrap();
+        let mut opts = SetupOpts {
+            main_model: Some("sonnet".to_string()),
+            effort: Some("high".to_string()),
+            ..SetupOpts::default()
+        };
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
+        assert_eq!(
+            s["modelSettings"]["claude-sonnet-5-5"]["effortLevel"],
+            "high"
+        );
+        assert_eq!(
+            s["modelSettings"]["claude-opus-5-5"]["effortLevel"], "low",
+            "other models stay"
+        );
+        assert_eq!(s["effortLevel"], "high");
+        assert!(
+            s["env"]["CLAUDE_CODE_SUBAGENT_MODEL"].is_null(),
+            "no env without --subagent"
+        );
+        assert_eq!(s["env"]["KEEP"], "1");
+        opts.subagent_env = true;
+        opts.effort = Some("max".to_string()); // not accepted in modelSettings
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
+        assert_eq!(s["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "haiku");
+        assert_eq!(
+            s["modelSettings"]["claude-sonnet-5-5"]["effortLevel"], "high",
+            "max is not written"
+        );
+        assert_eq!(
+            canonical_model_id("claude-sonnet-5-5").as_deref(),
+            Some("claude-sonnet-5-5")
+        );
+        assert_eq!(canonical_model_id("gpt"), None);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn change_line_shows_was_and_became() {
+        assert_eq!(
+            change_line("model", Some("opus"), Some("sonnet")),
+            "  model: opus -> sonnet"
+        );
+        assert_eq!(
+            change_line("advisorModel", None, Some("fable")),
+            "  advisorModel: (unset) -> fable"
+        );
+        assert_eq!(
+            change_line("model", Some("sonnet"), Some("sonnet")),
+            "  model: sonnet (unchanged)"
+        );
+        assert_eq!(
+            change_line("advisorModel", Some("fable"), None),
+            "  advisorModel: fable -> (unset)"
+        );
+    }
+
+    #[test]
+    fn markers_inside_user_text_are_not_ours() {
+        // mention inside a sentence, then user lines: nothing may be cut
+        let prose =
+            "# Rules\nNote: after <!-- ctxkit:start --> marker.\nIMPORTANT 1\nIMPORTANT 2\n";
+        assert_eq!(marker_span(prose), None);
+        // both markers in one sentence
+        let one = "Markers are <!-- ctxkit:start --> and <!-- ctxkit:end -->, do not edit.\n";
+        assert_eq!(marker_span(one), None);
+        // setup appends a block, a second setup replaces exactly that block, user text stays
+        let block = format!("{MARKER_START}\nrules\n{MARKER_END}");
+        let once = append_block(prose, &block);
+        let (s, e) = marker_span(&once).unwrap();
+        assert_eq!(&once[s..e], block);
+        assert!(once.starts_with(prose.trim_end()));
+        let again = format!("{}{}{}", &once[..s], block, &once[e..]);
+        assert_eq!(again, once);
+        // markers alone on their lines still work, with CRLF and indentation
+        let crlf = format!("a\r\n{MARKER_START}\r\nx\r\n{MARKER_END}\r\nb\r\n");
+        let (s, e) = marker_span(&crlf).unwrap();
+        assert_eq!(&crlf[s..e], format!("{MARKER_START}\r\nx\r\n{MARKER_END}"));
+        // BOM on the first line, as editors write it
+        let bom = format!("\u{feff}{MARKER_START}\nold\n{MARKER_END}\n\nuser tail\n");
+        let (s, e) = marker_span(&bom).unwrap();
+        assert_eq!(&bom[e..], "\n\nuser tail\n");
+        assert!(bom[..s].chars().all(|c| c == '\u{feff}'));
+        // a lone start line of the user's own, then our block: only our block is replaced
+        let lone = format!("keep1\n{MARKER_START}\nkeep2 no end\n");
+        let with = append_block(&lone, &block);
+        let (s, e) = marker_span(&with).unwrap();
+        assert_eq!(&with[s..e], block);
+        assert!(with[..s].contains("keep2 no end"));
+        // legacy markers
+        let legacy = format!("{LEGACY_MARKER_START}\nold\n{LEGACY_MARKER_END}\n");
+        assert!(marker_span(&legacy).is_some());
+    }
+
+    #[test]
+    fn preflight_refuses_structures_it_would_have_to_guess_at() {
+        let d = std::env::temp_dir().join(format!("ctxkit_preflight_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let p = d.join("settings.json");
+        let check = |s: &str, setup: bool| {
+            fs::write(&p, s).unwrap();
+            preflight_settings(&p, setup)
+        };
+        assert!(check(r#"{"hooks":{"PreToolUse":{"x":1}}}"#, true).is_err());
+        assert!(check(r#"{"hooks":{"Stop":"s"}}"#, false).is_err());
+        assert!(check(r#"{"hooks":[]}"#, false).is_err());
+        assert!(check(r#"{"env":"s"}"#, false).is_err());
+        assert!(check(r#"{"modelSettings":null}"#, true).is_err());
+        assert!(
+            check(r#"{"modelSettings":null}"#, false).is_ok(),
+            "rollback does not touch it"
+        );
+        assert!(check(
+            r#"{"hooks":{"SessionStart":"free-form"},"model":"x"}"#,
+            true
+        )
+        .is_ok());
+        assert!(preflight_settings(&d.join("none.json"), true).is_ok());
+        let _ = fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn parses_semver_strings() {
@@ -1551,7 +2092,7 @@ mod tests {
         upsert_claude_hook_event(
             &mut hooks,
             "PreToolUse",
-            "Bash|PowerShell|Write|Read",
+            Some("Bash|PowerShell|Write|Read"),
             "\"C:/h/ctxkit.exe\"",
         );
         let arr = hooks["PreToolUse"].as_array().unwrap();
@@ -1561,6 +2102,184 @@ mod tests {
             .unwrap()
             .contains("ctxkit.exe"));
         assert_eq!(arr[1]["hooks"][0]["command"], "custom-other-hook");
+    }
+
+    #[test]
+    fn rules_mention_the_gate_and_advisor_only_when_configured() {
+        let with = |no_gate: bool, settings: Value, lang: Lang| {
+            rules_snippet(
+                &SetupOpts {
+                    no_stop_gate: no_gate,
+                    lang,
+                    ..SetupOpts::default()
+                },
+                &settings,
+            )
+        };
+        let adv = json!({ "model": "sonnet", "advisorModel": "fable" });
+        for lang in [Lang::Ru, Lang::En] {
+            let full = with(false, adv.clone(), lang);
+            assert!(full.contains("Stop") && full.contains("advisor"));
+            assert!(full.contains("**sonnet**") && full.contains("(fable)"));
+            assert!(!with(true, adv.clone(), lang).contains("Stop"));
+            let none = with(false, json!({ "model": "opus" }), lang);
+            assert!(none.contains("Stop") && !none.contains("advisor"));
+            assert!(none.contains("**opus**"), "the user's own model is named");
+            // nothing set anywhere: no model names at all
+            let blank = with(false, json!({}), lang);
+            assert!(!blank.contains("sonnet") && !blank.contains("opus"));
+            assert!(!blank.contains("advisor"));
+        }
+    }
+
+    #[test]
+    fn marker_after_user_text_and_empty_env_left_by_lang_ru() {
+        // an end marker in the user's own notes before our block must not hide the block
+        let text = format!("note {MARKER_END}\n\n{MARKER_START}\nx\n{MARKER_END}\n");
+        let (s, e) = marker_span(&text).unwrap();
+        assert_eq!(&text[s..e], format!("{MARKER_START}\nx\n{MARKER_END}"));
+        assert_eq!(marker_span(&format!("{MARKER_START} only")), None);
+
+        let d = std::env::temp_dir().join(format!("ctxkit_setup_env_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let path = d.join("settings.json");
+        let ru = SetupOpts {
+            lang: Lang::Ru,
+            ..SetupOpts::default()
+        };
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &ru).unwrap();
+        assert_eq!(s["env"]["CTXKIT_LANG"], "ru");
+        let s =
+            update_claude_settings(&path, &d.join("b"), "\"x\"", &SetupOpts::default()).unwrap();
+        assert!(
+            s.get("env").is_none(),
+            "env created by --lang ru goes with it"
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn without_flags_model_advisor_effort_are_not_touched_or_created() {
+        let d = std::env::temp_dir().join(format!("ctxkit_setup_noflags_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let path = d.join("settings.json");
+        let theirs = r#"{"model":"opus","advisorModel":"opus","effortLevel":"low","modelSettings":{"claude-opus-5-5":{"effortLevel":"low"}}}"#;
+        fs::write(&path, theirs).unwrap();
+        let opts = SetupOpts::default();
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
+        let theirs: Value = serde_json::from_str(theirs).unwrap();
+        for k in ["model", "advisorModel", "effortLevel", "modelSettings"] {
+            assert_eq!(s[k], theirs[k], "{k} stays");
+        }
+        assert!(s.get("env").is_none(), "no empty env is created");
+        // an empty settings.json gets hooks only
+        fs::write(&path, "{}").unwrap();
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &opts).unwrap();
+        for k in [
+            "model",
+            "advisorModel",
+            "effortLevel",
+            "modelSettings",
+            "env",
+        ] {
+            assert!(s.get(k).is_none(), "{k} is not written");
+        }
+        assert!(s["hooks"]["PreToolUse"].is_array());
+        assert_eq!(
+            kept_line("model", Some("opus"), "--main-model sonnet"),
+            "  model: opus (kept; pass --main-model sonnet to set)"
+        );
+        assert_eq!(
+            kept_line("model", None, "--main-model sonnet"),
+            "  model: (unset) (kept; pass --main-model sonnet to set)"
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn stop_gate_group_has_no_matcher_is_idempotent_and_removable() {
+        let mut hooks = Map::new();
+        hooks.insert(
+            "Stop".to_string(),
+            json!([{ "hooks": [{ "type": "command", "command": "notify-me.exe" }] }]),
+        );
+        for _ in 0..2 {
+            upsert_claude_hook_event(&mut hooks, "Stop", None, "\"C:/h/ctxkit.exe\"");
+        }
+        let ours = hooks["Stop"][0].clone();
+        assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2);
+        assert!(ours.get("matcher").is_none());
+        assert!(ours["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("ctxkit"));
+        remove_our_hook_event(&mut hooks, "Stop", None);
+        assert_eq!(hooks["Stop"].as_array().unwrap().len(), 1);
+        assert_eq!(hooks["Stop"][0]["hooks"][0]["command"], "notify-me.exe");
+        hooks.insert("Stop".to_string(), json!([ours]));
+        remove_our_hook_event(&mut hooks, "Stop", None);
+        assert!(hooks.get("Stop").is_none());
+    }
+
+    #[test]
+    fn recognises_our_command_by_file_name_not_substring() {
+        for ours in [
+            "\"C:/h/ctxkit.exe\"",
+            "C:\\x\\CTXKIT.EXE --lang ru",
+            "\"C:/Program Files/a/ctxkit.exe\" --dsh",
+            "ctxkit",
+            "node C:/x/no-inline-backslash.mjs",
+            "\"C:/h/claude-guard.exe\"",
+            "node \"C:/my dir/claude-guard.js\"",
+        ] {
+            assert!(command_is_ours(ours, None), "{ours}");
+        }
+        for foreign in [
+            "node C:/tools/ctxkit-helper/stop.js",
+            "D:/x/crates/ctxkit/notify.js",
+            "C:/tools/logger.exe ctxkit",
+            "notify-send claude-guard",
+            "\"C:/Program Files/ctxkit/other.exe\"",
+            "custom-other-hook",
+            "node x.js ctxkit",
+            "",
+        ] {
+            assert!(!command_is_ours(foreign, None), "{foreign}");
+        }
+        assert!(command_is_ours("test-ctxkit", Some("test-ctxkit")));
+        assert!(!command_is_ours("test-ctxkit", None));
+    }
+
+    #[test]
+    fn foreign_hook_with_ctxkit_in_path_survives_upsert_and_remove() {
+        let foreign_a =
+            json!({ "type": "command", "command": "node C:/tools/ctxkit-helper/stop.js" });
+        let foreign_b = json!({ "type": "command", "command": "D:/x/crates/ctxkit/notify.js" });
+        let ours = "\"C:/h/ctxkit.exe\"";
+        let mut hooks = Map::new();
+        hooks.insert(
+            "Stop".to_string(),
+            json!([
+                { "hooks": [foreign_a.clone()] },
+                // foreign and ours in one group: only ours must go
+                { "matcher": "Bash", "hooks": [{ "type": "command", "command": "\"C:/old/ctxkit.exe\"" }, foreign_b.clone()] }
+            ]),
+        );
+        for _ in 0..2 {
+            upsert_claude_hook_event(&mut hooks, "Stop", None, ours);
+        }
+        let list = hooks["Stop"].as_array().unwrap();
+        assert_eq!(list.len(), 3, "ours + two foreign groups");
+        assert_eq!(list[0]["hooks"][0]["command"], ours);
+        assert_eq!(list[1]["hooks"], json!([foreign_a]));
+        assert_eq!(list[2]["matcher"], "Bash");
+        assert_eq!(list[2]["hooks"], json!([foreign_b]));
+        remove_our_hook_event(&mut hooks, "Stop", Some(ours));
+        assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2);
+        remove_our_hook_event(&mut hooks, "Stop", Some(ours));
+        assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2, "idempotent");
     }
 
     #[test]
@@ -1577,7 +2296,7 @@ mod tests {
         .unwrap();
 
         let opts = SetupOpts::default();
-        let snip = rules_snippet(&opts);
+        let snip = rules_snippet(&opts, &json!({ "model": "sonnet" }));
         upsert_claude_md(&md, &bdir, &snip, false).unwrap();
         let after_first = fs::read_to_string(&md).unwrap();
         assert!(after_first.contains("# My Custom Rules"));

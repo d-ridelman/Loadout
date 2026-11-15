@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { t } from '../../shared/i18n'
 import { Modal } from './Modal'
 
 interface Props {
@@ -29,22 +30,22 @@ export function PluginDialog({ onClose, onDone }: Props) {
       const r = await window.loadout.pluginInstall(spec.trim(), dryRun)
       if (!r.ok) return setError(r.error)
       if (dryRun) return setCommand(r.data.output)
-      if (r.data.code === 0) onDone(`Плагин установлен: ${spec.trim()}. Выключить — в матрице, удалить — claude plugin uninstall`)
+      if (r.data.code === 0) onDone(t(`Плагин установлен: ${spec.trim()}. Выключить — в матрице, удалить — claude plugin uninstall`, `Plugin installed: ${spec.trim()}. Disable it in the matrix, remove it with claude plugin uninstall`))
       else {
         setOutput(r.data.output)
-        setError(`Установка не удалась (код ${r.data.code})`)
+        setError(t(`Установка не удалась (код ${r.data.code})`, `Installation failed (code ${r.data.code})`))
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'не удалось выполнить')
+      setError(e instanceof Error ? e.message : t('не удалось выполнить', 'could not run'))
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <Modal label="Установить плагин Claude Code" onEscape={onClose}>
+    <Modal label={t('Установить плагин Claude Code', 'Install Claude Code plugin')} onEscape={onClose}>
       <h2>
-        Установить плагин Claude Code <span className="lvl">R2</span>
+        {t('Установить плагин Claude Code', 'Install Claude Code plugin')} <span className="lvl">R2</span>
       </h2>
       <form
         className="form"
@@ -54,7 +55,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
         }}
       >
         <label>
-          Плагин (имя@маркетплейс)
+          {t('Плагин (имя@маркетплейс)', 'Plugin (name@marketplace)')}
           <input
             autoFocus
             value={spec}
@@ -68,20 +69,23 @@ export function PluginDialog({ onClose, onDone }: Props) {
           />
         </label>
         <p className="mute small">
-          Маркетплейс должен быть уже добавлен в Claude Code. Установка идёт через `claude`, скачивает код из маркетплейса и выполняется без перезапуска приложений.
+          {t(
+            'Маркетплейс должен быть уже добавлен в Claude Code. Установка идёт через `claude`, скачивает код из маркетплейса и выполняется без перезапуска приложений.',
+            'The marketplace must already be added to Claude Code. Installation runs through `claude`, downloads code from the marketplace and happens without restarting apps.',
+          )}
         </p>
         {command ? (
-          <p className="s-stale">◐ Будет выполнено: <span className="mono">{command}</span></p>
+          <p className="s-stale">◐ {t('Будет выполнено:', 'Will run:')} <span className="mono">{command}</span></p>
         ) : null}
         {error ? <p className="s-broken" role="alert">{error}</p> : null}
         {output ? <pre className="wrap mono small">{output}</pre> : null}
         <div className="actions">
           {command ? (
-            <button type="button" disabled={busy} onClick={() => void call(false)}>{busy ? 'Устанавливаю…' : 'Установить'}</button>
+            <button type="button" disabled={busy} onClick={() => void call(false)}>{busy ? t('Устанавливаю…', 'Installing…') : t('Установить', 'Install')}</button>
           ) : (
-            <button type="submit" disabled={!ok || busy}>Предпросмотр</button>
+            <button type="submit" disabled={!ok || busy}>{t('Предпросмотр', 'Preview')}</button>
           )}
-          <button type="button" onClick={onClose}>Отмена</button>
+          <button type="button" onClick={onClose}>{t('Отмена', 'Cancel')}</button>
         </div>
       </form>
     </Modal>

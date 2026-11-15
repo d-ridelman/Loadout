@@ -45,13 +45,20 @@ fn patch(c: &mut Ctx, path: &Path, scope: &str) {
     };
     let file = c.tilde(path);
     if let Some(why) = yaml_guard(&text) {
-        c.warnings.push(format!("{file}: пропущен ({why})"));
+        c.warnings.push(crate::tr!(
+            "{file}: пропущен ({why})",
+            "{file}: skipped ({why})"
+        ));
         return;
     }
     let docs = match YamlLoader::load_from_str(&text) {
         Ok(d) => d,
         Err(e) => {
-            c.warnings.push(format!("{file}: не YAML ({})", e.info()));
+            c.warnings.push(crate::tr!(
+                "{file}: не YAML ({})",
+                "{file}: not YAML ({})",
+                e.info()
+            ));
             return;
         }
     };
@@ -128,7 +135,10 @@ fn insert_entry(
         }
         let mut e = Entity::new(CLIENT, Kind::Mcp, scope, server, State::On, file, ptr)
             .detail(mcp_detail(&cfg))
-            .note("запись плагина dsh-mcp-client; признака «выключено» у записи нет: выключение выносит её строки в корзину Loadout");
+            .note(crate::tr!(
+                "запись плагина dsh-mcp-client; признака «выключено» у записи нет: выключение выносит её строки в корзину Loadout",
+                "an entry of the dsh-mcp-client plugin; the entry has no “off” flag: turning it off moves its lines to the Loadout trash"
+            ));
         if writable {
             e = e.target(Target {
                 file: loc.0.to_path_buf(),
@@ -192,8 +202,10 @@ fn hooks_file(c: &mut Ctx, _flavor: &str, scope: &str, config_path: Option<&str>
         _ => false, // файла нет: читать нечего
     };
     if !path.is_absolute() || !shown.starts_with('~') || escapes || outside_real {
-        c.warnings
-            .push("файл хуков dsh вне домашнего каталога не читается".to_owned());
+        c.warnings.push(crate::tr!(
+            "файл хуков dsh вне домашнего каталога не читается",
+            "the dsh hooks file outside the home directory is not read"
+        ));
         return;
     }
     if let Some(v) = c.read_json(&path) {
@@ -204,7 +216,7 @@ fn hooks_file(c: &mut Ctx, _flavor: &str, scope: &str, config_path: Option<&str>
 
 /// Защита разбора YAML: якоря и алиасы (`&x`, `*x`, `<<:`) растут экспоненциально при разворачивании, очень глубокая
 /// вложенность валит стек. Файл конфигурации dsh ничего из этого не использует, поэтому такой файл не читаем.
-pub(crate) fn yaml_guard(text: &str) -> Option<&'static str> {
+pub(crate) fn yaml_guard(text: &str) -> Option<String> {
     let (mut depth, mut max_depth) = (0usize, 0usize);
     for c in text.chars() {
         match c {
@@ -217,12 +229,18 @@ pub(crate) fn yaml_guard(text: &str) -> Option<&'static str> {
         }
     }
     if max_depth > 64 {
-        return Some("слишком глубокая вложенность");
+        return Some(crate::tr!(
+            "слишком глубокая вложенность",
+            "nesting is too deep"
+        ));
     }
     for line in text.lines() {
         let indent = line.len() - line.trim_start().len();
         if indent > 200 {
-            return Some("слишком глубокая вложенность");
+            return Some(crate::tr!(
+                "слишком глубокая вложенность",
+                "nesting is too deep"
+            ));
         }
         // значение: после `- ` и после `ключ: `; якорь `&имя` или алиас `*имя` стоит в самом начале значения
         let t = line.trim_start().trim_start_matches("- ").trim_start();
@@ -237,7 +255,10 @@ pub(crate) fn yaml_guard(text: &str) -> Option<&'static str> {
             || marked(value)
             || value.contains(" *") && value.contains('[')
         {
-            return Some("якоря и алиасы YAML не поддерживаются");
+            return Some(crate::tr!(
+                "якоря и алиасы YAML не поддерживаются",
+                "YAML anchors and aliases are not supported"
+            ));
         }
     }
     None

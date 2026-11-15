@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Entity, Intent } from '../../shared/model'
+import { t } from '../../shared/i18n'
 import { Modal } from './Modal'
 
 interface Props {
@@ -18,9 +19,9 @@ export function EditDialog({ entity, onSubmit, onClose }: Props) {
   const lines = args.split('\n').filter((l) => l !== '')
   const ok = command.trim() !== '' && command.length <= 500 && lines.length <= 64 && lines.every((l) => l.length <= 500)
   return (
-    <Modal label={`Править команду: ${entity.name}`} onEscape={onClose}>
+    <Modal label={t(`Править команду: ${entity.name}`, `Edit command: ${entity.name}`)} onEscape={onClose}>
       <h2>
-        Править команду <span className="lvl">R2</span>
+        {t('Править команду', 'Edit command')} <span className="lvl">R2</span>
       </h2>
       <p>
         <b>{entity.name}</b>
@@ -33,19 +34,22 @@ export function EditDialog({ entity, onSubmit, onClose }: Props) {
         }}
       >
         <label>
-          Команда
+          {t('Команда', 'Command')}
           <input autoFocus value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" maxLength={500} spellCheck={false} />
         </label>
         <label>
-          Аргументы, по одному в строке
-          <textarea value={args} onChange={(e) => setArgs(e.target.value)} rows={5} placeholder={'-y\nпакет@1.2.3'} spellCheck={false} />
+          {t('Аргументы, по одному в строке', 'Arguments, one per line')}
+          <textarea value={args} onChange={(e) => setArgs(e.target.value)} rows={5} placeholder={t('-y\nпакет@1.2.3', '-y\npackage@1.2.3')} spellCheck={false} />
         </label>
         <p className="mute small">
-          Старые значения не показываются: в списке они скрыты, чтобы секреты не попадали в окно. Заменяются только команда и аргументы, ключи env и заголовки остаются.
+          {t(
+            'Старые значения не показываются: в списке они скрыты, чтобы секреты не попадали в окно. Заменяются только команда и аргументы, ключи env и заголовки остаются.',
+            'Old values are not shown: they are hidden in the list so secrets never reach the window. Only the command and arguments are replaced; env keys and headers stay.',
+          )}
         </p>
         <div className="actions">
-          <button type="submit" disabled={!ok}>Предпросмотр</button>
-          <button type="button" onClick={onClose}>Отмена</button>
+          <button type="submit" disabled={!ok}>{t('Предпросмотр', 'Preview')}</button>
+          <button type="button" onClick={onClose}>{t('Отмена', 'Cancel')}</button>
         </div>
       </form>
     </Modal>

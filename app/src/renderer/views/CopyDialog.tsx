@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { ClientId, Entity, Intent } from '../../shared/model'
+import { t } from '../../shared/i18n'
 import { Modal } from './Modal'
 
 interface Props {
@@ -16,15 +17,15 @@ export function CopyDialog({ entity, onSubmit, onClose }: Props) {
   const options = TARGETS.filter((c) => c.id !== entity.client)
   const [to, setTo] = useState<ClientId | null>(null)
   return (
-    <Modal label={`Копировать в другой клиент: ${entity.name}`} onEscape={onClose}>
+    <Modal label={t(`Копировать в другой клиент: ${entity.name}`, `Copy to another client: ${entity.name}`)} onEscape={onClose}>
       <h2>
-        Копировать в клиент <span className="lvl">R2</span>
+        {t('Копировать в клиент', 'Copy to client')} <span className="lvl">R2</span>
       </h2>
       <p>
         <b>{entity.name}</b>
       </p>
       <fieldset className="choices">
-        <legend className="mute small">Куда</legend>
+        <legend className="mute small">{t('Куда', 'Destination')}</legend>
         {options.map((c) => (
           <label key={c.id}>
             <input type="radio" name="to" autoFocus={c === options[0]} checked={to === c.id} onChange={() => setTo(c.id)} /> {c.name}
@@ -32,11 +33,14 @@ export function CopyDialog({ entity, onSubmit, onClose }: Props) {
         ))}
       </fieldset>
       <p className="mute small">
-        Значения env и заголовков копируются как есть внутри ядра и в окне не показываются. Формат (JSON ⇄ TOML) переводится сам; что не переносится, покажет предпросмотр.
+        {t(
+          'Значения env и заголовков копируются как есть внутри ядра и в окне не показываются. Формат (JSON ⇄ TOML) переводится сам; что не переносится, покажет предпросмотр.',
+          'Env and header values are copied as-is inside the core and are not shown in the window. The format (JSON ⇄ TOML) is converted automatically; the preview shows anything that cannot be carried over.',
+        )}
       </p>
       <div className="actions">
-        <button disabled={to === null} onClick={() => to && onSubmit({ op: 'copy', entity: entity.id, to })}>Предпросмотр</button>
-        <button onClick={onClose}>Отмена</button>
+        <button disabled={to === null} onClick={() => to && onSubmit({ op: 'copy', entity: entity.id, to })}>{t('Предпросмотр', 'Preview')}</button>
+        <button onClick={onClose}>{t('Отмена', 'Cancel')}</button>
       </div>
     </Modal>
   )

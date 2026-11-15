@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { Entity } from '../shared/model'
+import type { CtxkitDoctor, Entity, FindingSeverity } from '../shared/model'
+import { stopGateOff } from './ctxkit-stats'
 import { buildRows, onlyUnknown, scopeRank } from './aggregate'
-import { diagnose, plural } from './doctor'
+import { plural } from '../shared/i18n'
+import { diagnose } from './doctor'
 
 let n = 0
 const ent = (over: Partial<Entity>): Entity => ({
@@ -73,6 +75,21 @@ describe('aggregate', () => {
   })
 })
 
+describe('галочка шлюза Stop', () => {
+  const doc = (...f: [string, FindingSeverity][]): CtxkitDoctor => ({
+    version: '1',
+    findings: f.map(([id, severity]) => ({ id, severity, message: id, detail: null, fix: null })),
+  })
+  it('берётся из находки stop_gate, но только когда ctxkit установлен', () => {
+    expect(stopGateOff(doc(['hooks', 'ok'], ['stop_gate', 'info']))).toBe(true)
+    expect(stopGateOff(doc(['hooks', 'ok'], ['stop_gate', 'ok']))).toBe(false)
+    expect(stopGateOff(doc(['hooks', 'error'], ['stop_gate', 'info']))).toBe(true)
+    // чистый профиль: хука нет, «нет шлюза» — не выбор пользователя, остаётся шлюз по умолчанию
+    expect(stopGateOff(doc(['hooks', 'warn'], ['stop_gate', 'info']))).toBeNull()
+    expect(stopGateOff(doc())).toBeNull()
+  })
+})
+
 describe('doctor', () => {
   it('сломанное и расходящееся идут первыми, предупреждения сканера сохраняются', () => {
     const f = diagnose(
@@ -89,7 +106,7 @@ describe('doctor', () => {
   it('две записи одного плагина с расхождением дают одну находку; склонение числа', () => {
     const f = diagnose([ent({ name: 'dup@mp', state: 'stale' }), ent({ name: 'dup@mp', state: 'stale' })], [])
     expect(f).toHaveLength(1)
-    expect([1, 2, 5, 11, 21, 22].map((n) => plural(n, 'плагина', 'плагина', 'плагинов'))).toEqual([
+    expect([1, 2, 5, 11, 21, 22].map((n) => plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins']))).toEqual([
       'плагина', 'плагина', 'плагинов', 'плагинов', 'плагина', 'плагина',
     ])
   })
