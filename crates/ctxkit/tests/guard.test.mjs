@@ -724,6 +724,20 @@ const cases = [
       && JSON.parse(stopGate({ env: { CTXKIT_GUARD: '0' } })).decision === 'block';
   }],
 
+  // CTXKIT_GUARD and CTXKIT_GATE share one rule: trimmed, case-insensitive 0/off/false/no turn the hook off
+  [true, () => {
+    const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } };
+    for (const v of ['0', ' 0 ', 'off', ' Off ', 'FALSE', 'No']) {
+      if (runHook(read, [], { CTXKIT_GUARD: v }) !== '') return `GUARD=${JSON.stringify(v)} did not mute`;
+      if (stopGate({ env: { CTXKIT_GATE: v } }) !== '') return `GATE=${JSON.stringify(v)} did not mute`;
+    }
+    for (const v of ['', '1', 'on', 'yes', 'of']) {
+      if (!runHook(read, [], { CTXKIT_GUARD: v }).includes('"deny"')) return `GUARD=${JSON.stringify(v)} muted`;
+      if (JSON.parse(stopGate({ env: { CTXKIT_GATE: v } })).decision !== 'block') return `GATE=${JSON.stringify(v)} muted`;
+    }
+    return true;
+  }],
+
   // Localization (default en vs CTXKIT_LANG=ru / --lang ru)
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }).includes('File is large')],
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }, [], { CTXKIT_LANG: 'ru' }).includes('Файл большой')],

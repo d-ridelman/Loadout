@@ -32,7 +32,7 @@ pub fn stop_reason(call: &Value, lang: Lang) -> Option<String> {
     if call["stop_hook_active"].as_bool() == Some(true) {
         return None;
     }
-    if std::env::var("CTXKIT_GATE").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("off")) {
+    if crate::env_off("CTXKIT_GATE") {
         return None;
     }
     let text = read_tail(Path::new(call["transcript_path"].as_str()?))?;

@@ -113,7 +113,7 @@ It does **not** touch `model`, `advisorModel`, `effortLevel`, `modelSettings`, `
 
 A hook must never get in the way of your work. In hook mode `ctxkit` exits `0` with empty stdout (the call goes on) on every failure: empty or broken JSON, missing or wrongly typed fields, an unknown event, a missing transcript for the Stop gate, input over 64 MiB, non-UTF-8 bytes, even a panic. It blocks only when a rule matched on purpose (`deny` for `PreToolUse`, `block` for `PostToolUse` / `Stop`); it never exits `2`. `ctxkit setup` writes `"timeout": 10` for every hook it adds (Claude Code, Antigravity, DeepSeek Harness).
 
-Emergency switches: `CTXKIT_GUARD=0` makes the `PreToolUse` / `PostToolUse` hooks exit at once without output; `CTXKIT_GATE=0` does the same for the Stop gate. Set it in the environment of the session (for example `CTXKIT_GUARD=0 claude`). To remove the hooks altogether see "How to roll back".
+Emergency switches: `CTXKIT_GUARD=0` makes the `PreToolUse` / `PostToolUse` hooks exit at once without output; `CTXKIT_GATE=0` does the same for the Stop gate. Both read the value by one rule: surrounding spaces are ignored and `0`, `off`, `false`, `no` (any case) turn the hook off; any other value, an empty one included, leaves it on. Set it in the environment of the session (for example `CTXKIT_GUARD=0 claude`). To remove the hooks altogether see "How to roll back".
 
 What Claude Code itself does when a hook misbehaves (hooks reference, https://code.claude.com/docs/en/hooks, read on 2026-11-16; the table is the documentation, our own live run is in the second table below):
 

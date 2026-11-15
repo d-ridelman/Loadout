@@ -65,6 +65,19 @@ fn detect_lang(args: &[String]) -> Lang {
         .unwrap_or(Lang::En)
 }
 
+/// The one rule of the emergency switches `CTXKIT_GUARD` and `CTXKIT_GATE`: the value, trimmed and
+/// without regard to case, is `0`, `off`, `false` or `no`. Anything else (or unset) leaves the hook on.
+fn is_off_value(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "0" | "off" | "false" | "no"
+    )
+}
+
+pub fn env_off(name: &str) -> bool {
+    env::var(name).is_ok_and(|v| is_off_value(&v))
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -121,9 +134,7 @@ fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
         return;
     };
     // Emergency switch for PreToolUse/PostToolUse (the Stop gate has its own CTXKIT_GATE=0).
-    if call["hook_event_name"].as_str() != Some("Stop")
-        && env::var("CTXKIT_GUARD").is_ok_and(|v| v.trim() == "0")
-    {
+    if call["hook_event_name"].as_str() != Some("Stop") && env_off("CTXKIT_GUARD") {
         return;
     }
 
@@ -381,4 +392,19 @@ fn deny_claude(reason: String) {
         }
     });
     print!("{out}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switch_values_are_trimmed_and_case_blind() {
+        for v in ["0", " 0 ", "off", " OFF", "False", "no", "No\t"] {
+            assert!(is_off_value(v), "{v:?}");
+        }
+        for v in ["", "1", "on", "yes", "of", "00", "true"] {
+            assert!(!is_off_value(v), "{v:?}");
+        }
+    }
 }
