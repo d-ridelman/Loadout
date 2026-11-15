@@ -671,3 +671,36 @@ fn profiles_save_plan_apply_and_roll_back_over_jsonrpc() {
     let del = s.call_with("profileDelete", json!({ "name": "рабочий" }));
     assert_eq!(del["result"].as_array().unwrap().len(), 0);
 }
+
+#[test]
+fn claude_json_rewrites_are_scanned_at_most_every_ten_seconds_but_other_files_are_not_delayed() {
+    let mut s = Server::start();
+    let cj = s.home.join(".claude.json");
+    let text = fs::read_to_string(&cj).unwrap();
+    assert!(text.contains("\"command\": \"old\""));
+    fs::write(
+        &cj,
+        text.replace("\"command\": \"old\"", "\"command\": \"older\""),
+    )
+    .unwrap();
+    // шумный файл: скан не раньше, чем через NOISY_MIN после предыдущего (за 4 с окно его не видит)
+    assert!(
+        s.wait_method("changed", Duration::from_secs(4)).is_none(),
+        "изменение ~/.claude.json не должно сканироваться сразу"
+    );
+    let ev = s
+        .wait_method("changed", Duration::from_secs(12))
+        .expect("но в итоге изменение замечено");
+    assert!(
+        !ev["params"]["changed"].as_array().unwrap().is_empty(),
+        "{ev}"
+    );
+    // обычный файл (`config.toml` Codex) идёт с обычной задержкой, шумное ограничение его не касается
+    let cfg = s.home.join(".codex/config.toml");
+    let t = fs::read_to_string(&cfg).unwrap();
+    fs::write(&cfg, t.replacen("enabled = true", "enabled = false", 1)).unwrap();
+    assert!(
+        s.wait_method("changed", Duration::from_secs(5)).is_some(),
+        "правка config.toml должна дойти за секунды"
+    );
+}

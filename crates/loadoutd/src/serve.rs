@@ -28,6 +28,9 @@ const PROTOCOL: u32 = 1;
 const DEBOUNCE: Duration = Duration::from_millis(300);
 /// Предел ожидания, если события идут без перерыва (`.claude.json` переписывается постоянно).
 const MAX_WAIT: Duration = Duration::from_secs(2);
+/// Скан по событиям только от `~/.claude.json` не чаще раза в это время: на машине с работающим Claude Code файл
+/// переписывается каждые секунды, а полный скан стоит 50–100 мс (CONCEPT.md §7, простой в 0 % процессора).
+const NOISY_MIN: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(3600);
 
 enum Msg {
@@ -339,27 +342,37 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
         &json!({ "jsonrpc": "2.0", "method": "ready", "params": { "watching": server.watched.len(), "protocol": PROTOCOL } }),
     );
 
-    // (когда пришло первое событие пачки, когда последнее, нужно ли пересоздать все подписки)
-    let mut dirty: Option<(Instant, Instant, bool)> = None;
-    let mark = |dirty: &mut Option<(Instant, Instant, bool)>, reset: bool| {
+    // (первое событие пачки, последнее, пересоздать ли подписки, все события пачки «шумные»)
+    type Dirty = Option<(Instant, Instant, bool, bool)>;
+    let mut dirty: Dirty = None;
+    let mark = |dirty: &mut Dirty, reset: bool, noisy: bool| {
         let now = Instant::now();
-        let (first, _, was) = dirty.unwrap_or((now, now, false));
-        *dirty = Some((first, now, was || reset));
+        let (first, _, was, was_noisy) = dirty.unwrap_or((now, now, false, true));
+        *dirty = Some((first, now, was || reset, was_noisy && noisy));
     };
+    // Когда пачка должна уйти в скан: после тишины, но не дольше MAX_WAIT; «шумная» пачка (только `~/.claude.json`,
+    // который работающий Claude Code переписывает постоянно) не чаще одного скана за NOISY_MIN.
+    let due_of = |first: Instant, last: Instant, reset: bool, noisy: bool, last_scan: Instant| {
+        let due = (last + DEBOUNCE).min(first + MAX_WAIT);
+        if noisy && !reset {
+            due.max(last_scan + NOISY_MIN)
+        } else {
+            due
+        }
+    };
+    let mut last_scan = Instant::now();
     loop {
         // срок проверяем в начале каждого шага: поток запросов не должен откладывать скан дольше MAX_WAIT
-        if let Some((first, last, reset)) = dirty {
-            let due = (last + DEBOUNCE).min(first + MAX_WAIT);
-            if due <= Instant::now() {
+        if let Some((first, last, reset, noisy)) = dirty {
+            if due_of(first, last, reset, noisy, last_scan) <= Instant::now() {
                 dirty = None;
                 server.rescan(true, reset);
+                last_scan = Instant::now();
                 continue;
             }
         }
-        let wait = dirty.map_or(IDLE, |(first, last, _)| {
-            (last + DEBOUNCE)
-                .min(first + MAX_WAIT)
-                .saturating_duration_since(Instant::now())
+        let wait = dirty.map_or(IDLE, |(first, last, reset, noisy)| {
+            due_of(first, last, reset, noisy, last_scan).saturating_duration_since(Instant::now())
         });
         match rx.recv_timeout(wait) {
             Ok(Msg::Request(line)) => server.handle(&line),
@@ -378,16 +391,25 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
                         server.forget_watch(p);
                     }
                 }
-                if ev.paths.iter().any(|p| {
-                    server.targets.is_relevant(p) || (structural && server.targets.is_fixed(p))
-                }) {
-                    mark(&mut dirty, false);
+                let relevant: Vec<&PathBuf> = ev
+                    .paths
+                    .iter()
+                    .filter(|p| {
+                        server.targets.is_relevant(p) || (structural && server.targets.is_fixed(p))
+                    })
+                    .collect();
+                if !relevant.is_empty() {
+                    let noisy = !structural
+                        && relevant
+                            .iter()
+                            .all(|p| p.file_name().is_some_and(|n| n == ".claude.json"));
+                    mark(&mut dirty, false, noisy);
                 }
             }
             // любая ошибка сторожа — повод перечитать диск: событие могло потеряться, а подписки — умереть
             Ok(Msg::Fs(Err(e))) => {
                 eprintln!("сторож: {e}");
-                mark(&mut dirty, true);
+                mark(&mut dirty, true, false);
             }
             Err(RecvTimeoutError::Timeout) => {}
         }
