@@ -58,8 +58,8 @@ Loadout читает все пять клиентов, показывает вс
 |---|---|
 | `app/` | Приложение (Electron + React, Windows) |
 | `crates/loadout-core`, `crates/loadoutd` | Ядро на Rust: скан, конвейер записи, сторож файлов, процесс-ядро для окна |
-| `crates/ctxkit` | ctxkit (MIT), собирается в том же Cargo-воркспейсе |
-| `docs/CONCEPT.md` | Концепция, решения, итоги этапов и аудитов |
+| `crates/ctxkit` | ctxkit, собирается в том же Cargo-воркспейсе |
+| `docs/CONCEPT.md`, `docs/CONCEPT.en.md` | Концепция, решения, итоги этапов и аудитов (русский, английский) |
 | `docs/screenshots/` | Снимки для этого README |
 | `fixtures/`, `state/` | Тестовые данные и снимки окна из сценариев e2e |
 
@@ -83,4 +83,4 @@ npm run dist                   # установщик (NSIS, без подпис
 
 ## Лицензия
 
-`crates/ctxkit` — MIT ([LICENSE](crates/ctxkit/LICENSE)). Остальной репозиторий пока без лицензии (все права сохранены).
+[MIT](LICENSE). См. также [CONTRIBUTING.ru.md](CONTRIBUTING.ru.md).

@@ -36,7 +36,7 @@ Loadout reads all five clients, shows everything in one matrix and changes it **
 
 ### Safe write pipeline
 
-plan → preview → hash lock (`base_sha`) → backup + manifest → temp file + rename → re-read and verify → journal / rollback. If a file changed after the preview, the write is refused. Details: [docs/CONCEPT.md](docs/CONCEPT.md) §5 (Russian).
+plan → preview → hash lock (`base_sha`) → backup + manifest → temp file + rename → re-read and verify → journal / rollback. If a file changed after the preview, the write is refused. Details: [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §5.
 
 | Add an MCP server | Install a plugin |
 |---|---|
@@ -58,8 +58,8 @@ plan → preview → hash lock (`base_sha`) → backup + manifest → temp file 
 |---|---|
 | `app/` | Desktop app (Electron + React, Windows) |
 | `crates/loadout-core`, `crates/loadoutd` | Rust core: scan, write pipeline, file watcher, sidecar process for the window |
-| `crates/ctxkit` | ctxkit (MIT), built in the same Cargo workspace |
-| `docs/CONCEPT.md` | Design, decisions, milestone and audit notes (Russian) |
+| `crates/ctxkit` | ctxkit, built in the same Cargo workspace |
+| `docs/CONCEPT.en.md`, `docs/CONCEPT.md` | Design, decisions, milestone and audit notes (English, Russian) |
 | `docs/screenshots/` | Screenshots used in this README |
 | `fixtures/`, `state/` | Test data and window snapshots produced by the e2e scenarios |
 
@@ -79,8 +79,8 @@ npm run dist                   # installer (NSIS, unsigned)
 
 ## Status
 
-Pre-release. Milestones M0–M5 are done (see [docs/CONCEPT.md](docs/CONCEPT.md) §10). Code signing and auto-update are intentionally not done: they need a code-signing certificate and a publishing address, and the app works fully offline.
+Pre-release. Milestones M0–M5 are done (see [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §10). Code signing and auto-update are intentionally not done: they need a code-signing certificate and a publishing address, and the app works fully offline.
 
 ## License
 
-`crates/ctxkit` is MIT ([LICENSE](crates/ctxkit/LICENSE)). The rest of the repository has no license yet (all rights reserved).
+[MIT](LICENSE). See also [CONTRIBUTING.md](CONTRIBUTING.md).
