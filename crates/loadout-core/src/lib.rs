@@ -12,6 +12,7 @@ pub mod frontmatter;
 pub mod mask;
 pub mod model;
 pub mod watch;
+pub mod write;
 
 use model::{Client, Entity, Kind, ScanResult, State};
 use serde_json::{json, Value};
@@ -426,6 +427,10 @@ pub fn scan(home: &Path) -> ScanResult {
     let forms = home_forms(home);
     let mut seen_ids: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for e in &mut c.entities {
+        e.can_toggle = e.target.is_some();
+        if !e.can_toggle {
+            e.toggle_why = Some(write::why_not(e).to_owned());
+        }
         for s in [
             &mut e.name,
             &mut e.scope,

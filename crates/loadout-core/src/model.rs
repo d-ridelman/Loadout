@@ -112,6 +112,10 @@ pub struct Entity {
     /// Как переключить запись; `None` — переключатель не поддержан (см. [`crate::write::why_not`]).
     #[serde(skip)]
     pub target: Option<Target>,
+    /// Заполняется в конце скана из `target`: окно по нему решает, давать ли переключатель.
+    pub can_toggle: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toggle_why: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
@@ -180,6 +184,8 @@ impl Entity {
             detail: json!({}),
             fs_named: false,
             target: None,
+            can_toggle: false,
+            toggle_why: None,
         }
     }
 
