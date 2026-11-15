@@ -303,7 +303,14 @@ try {
       .nth(idx + 1)
       .click()
   }
-  const levelBtn = page.getByRole('button', { name: 'Уровень записи' })
+  const levelSel = page.getByLabel('Уровень записи')
+  const levelIs = async (l) => (await levelSel.inputValue()) === l
+  /** Диалог ОС при повышении уровня подменяем в main-процессе: `answer` 1 — «Включить», 0 — «Отмена». */
+  const stubDialog = (answer) =>
+    app.evaluate(({ dialog }, a) => {
+      globalThis.__answer = a
+      dialog.showMessageBox = async () => ({ response: globalThis.__answer, checkboxChecked: false })
+    }, answer)
   const dialog = page.locator('[role=dialog][aria-modal=true]')
   const asOff = original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false')
   must(asOff !== original, 'фикстура: у p1 нет enabled = true')
@@ -314,20 +321,27 @@ try {
   await waitFor(async () => (await page.locator('#grid').count()) === 1, 'после клика по кнопке клавиша 1 открывает матрицу')
   // журнал пуст, пока записей не было
   await page.keyboard.press('5')
-  must((await page.locator('main').innerText()).includes('Операций пока не было'), 'пустой журнал без пояснения')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('Операций пока не было'), 'пустой журнал с пояснением')
   await shot(page, 'm3-journal-empty-1280')
   await page.keyboard.press('1')
 
   await clickCell('p1', 2)
-  must((await levelBtn.innerText()).startsWith('R0'), 'по умолчанию уровень R0')
+  must(await levelIs('R0'), 'по умолчанию уровень R0')
+  must((await page.locator('#scanlines').count()) === 0, 'полосы-сканлайны (линейная горизонтальная рябь) должны быть убраны')
   await page.keyboard.press('Space')
   must((await dialog.count()) === 0, 'при R0 предпросмотр не открывается')
   must((await page.locator('#notice').innerText()).includes('R0'), 'при R0 нет объяснения')
   must(readFileSync(cfg, 'utf8') === original, 'при R0 файл не должен меняться')
   must(await page.getByRole('button', { name: 'Выключить', exact: true }).isDisabled(), 'при R0 кнопка в инспекторе неактивна')
 
-  await levelBtn.click()
-  await waitFor(async () => (await levelBtn.innerText()).startsWith('R1'), 'уровень переключился на R1')
+  // отказ в окне ОС оставляет R0, согласие поднимает до R1
+  await stubDialog(0)
+  await levelSel.selectOption('R1')
+  await page.waitForTimeout(600)
+  must(await levelIs('R0'), 'отказ в диалоге ОС должен оставить R0')
+  await stubDialog(1)
+  await levelSel.selectOption('R1')
+  await waitFor(() => levelIs('R1'), 'уровень переключился на R1')
   await clickCell('p1', 2)
   await page.keyboard.press('Space')
   await dialog.waitFor({ timeout: 8000 })
@@ -406,8 +420,126 @@ try {
   must(readFileSync(cfg, 'utf8') === original, 'после отката файл побайтово как до записи')
   await page.keyboard.press('1')
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'после отката глиф p1 вернулся')
-  await levelBtn.click() // обратно в R0
-  await waitFor(async () => (await levelBtn.innerText()).startsWith('R0'), 'уровень вернулся в R0')
+  // ---- R2: корзина, правка, копирование, профили (тоже на копии фикстуры) ----
+  await stubDialog(1)
+  await levelSel.selectOption('R2')
+  await waitFor(() => levelIs('R2'), 'уровень переключился на R2')
+  const agFile = join(home, '.gemini', 'config', 'mcp_config.json')
+  const agOrig = readFileSync(agFile, 'utf8')
+  const agJson = () => JSON.parse(readFileSync(agFile, 'utf8'))
+  const applyDialog = async (label = 'Применить') => {
+    await dialog.getByRole('button', { name: label }).waitFor({ timeout: 8000 })
+    await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
+    await dialog.getByRole('button', { name: label }).click()
+  }
+  const openPlan = async () => {
+    await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
+    return dialog.innerText()
+  }
+  const noSecretOnPage = async (what) => must(!(await page.evaluate(() => document.body.innerText)).includes('FAKE-SECRET'), `${what}: в окне найден FAKE-SECRET`)
+
+  // корзина: у MCP Antigravity нет флага, выключение выносит запись из файла
+  await clickCell('tool-b', 3)
+  const col = await page.evaluate(() => {
+    const b = [...document.querySelectorAll('aside .actions.col button')]
+    const r = b.map((x) => x.getBoundingClientRect())
+    return { n: b.length, lefts: new Set(r.map((x) => Math.round(x.left))).size, tops: new Set(r.map((x) => Math.round(x.top))).size }
+  })
+  must(col.n >= 4 && col.lefts === 1 && col.tops === col.n, `действия записи в инспекторе должны стоять столбцом, а не рядом: ${JSON.stringify(col)}`)
+  await shot(page, 'm4-inspector-1280')
+  await page.keyboard.press('Space')
+  const trashText = await openPlan()
+  must(trashText.includes('в корзине Loadout') && trashText.includes('R2'), `предпросмотр выноса в корзину: ${trashText}`)
+  must(!trashText.includes('FAKE-SECRET'), 'в предпросмотре выноса секрет')
+  await shot(page, 'm4-trash-dialog-1280')
+  await applyDialog()
+  await waitFor(async () => String(await cellLabel(page, 'tool-b', 3)).includes('выключено'), 'tool-b в корзине: глиф «выключено»')
+  must(!('tool-b' in agJson().mcpServers) && 'tool-a' in agJson().mcpServers, 'запись не вынесена из файла или тронута соседняя')
+  must((await page.locator('aside').innerText()).includes('корзине'), 'инспектор не говорит про корзину')
+  await noSecretOnPage('корзина')
+  await page.locator('#grid').focus()
+  await page.keyboard.press('Space') // обратно
+  await openPlan()
+  await applyDialog()
+  await waitFor(async () => String(await cellLabel(page, 'tool-b', 3)).includes('включено'), 'tool-b вернулся: глиф «включено»')
+  must(JSON.stringify(agJson()) === JSON.stringify(JSON.parse(agOrig)), 'после возврата из корзины файл должен быть равен исходному')
+
+  // правка команды: старые значения не показываются, новые секреты в предпросмотре скрыты
+  const deskFile = join(home, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json')
+  const deskOrig = readFileSync(deskFile)
+  await clickCell('desk-tool', 1)
+  await page.getByRole('button', { name: 'Править команду…' }).click()
+  await dialog.getByLabel('Команда').fill('new-cmd')
+  await dialog.getByLabel('Аргументы, по одному в строке').fill('--token\nFAKE-SECRET-NEW\n--port\n8080')
+  await shot(page, 'm4-edit-dialog-1280')
+  await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
+  const editText = await openPlan()
+  must(editText.includes('<masked>') && !editText.includes('FAKE-SECRET'), `предпросмотр правки: ${editText}`)
+  await applyDialog()
+  await waitFor(() => JSON.parse(readFileSync(deskFile, 'utf8')).mcpServers['desk-tool'].command === 'new-cmd', 'команда записана в файл')
+  const editedDesk = JSON.parse(readFileSync(deskFile, 'utf8')).mcpServers['desk-tool']
+  must(editedDesk.env.TOKEN === 'FAKE-SECRET-DESKENV' && editedDesk.args[1] === 'FAKE-SECRET-NEW', 'правка тронула env или записала не те аргументы')
+  await noSecretOnPage('правка')
+  await page.keyboard.press('5')
+  await page.getByRole('row', { name: /правка/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
+  await waitFor(() => readFileSync(deskFile).equals(deskOrig), 'откат правки вернул файл побайтово')
+
+  // копирование в другой клиент: формат переводится сам, значения env остаются внутри ядра
+  await page.keyboard.press('1')
+  const cfgBeforeCopy = readFileSync(cfg)
+  await clickCell('tool-a', 3)
+  await page.getByRole('button', { name: 'Копировать в клиент…' }).click()
+  await dialog.getByLabel('ChatGPT / Codex').check()
+  await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
+  const copyText = await openPlan()
+  must(copyText.includes('~/.codex/config.toml') && copyText.includes('R2') && !copyText.includes('FAKE-SECRET'), `предпросмотр копирования: ${copyText}`)
+  await shot(page, 'm4-copy-dialog-1280')
+  await applyDialog()
+  await waitFor(() => readFileSync(cfg, 'utf8').includes('[mcp_servers.tool-a]'), 'запись скопирована в config.toml Codex')
+  await waitFor(async () => String(await cellLabel(page, 'tool-a', 2)).includes('включено'), 'в матрице у Codex появилась запись tool-a')
+  await page.keyboard.press('5')
+  await page.getByRole('row', { name: /копия/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
+  await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'откат копии вернул config.toml побайтово')
+
+  // профили: снять состояние, поправить, применить пакетом, откатить пакет целиком
+  await page.keyboard.press('6')
+  await page.getByLabel('Имя профиля').fill('e2e')
+  await page.getByRole('button', { name: 'Снять с текущего состояния' }).click()
+  const card = page.getByRole('region', { name: 'Профиль e2e' })
+  await card.waitFor({ timeout: 8000 })
+  await card.getByText('Записи профиля').click()
+  await card.locator('li', { hasText: 'p1@bundled' }).getByRole('checkbox').uncheck()
+  await card.getByRole('button', { name: 'Сохранить изменения' }).click()
+  await waitFor(async () => !(await card.getByRole('button', { name: 'Сохранить изменения' }).isEnabled()), 'профиль сохранён')
+  const profLayout = await page.evaluate(() => ({ hscroll: document.documentElement.scrollWidth - document.documentElement.clientWidth, main: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth }))
+  must(profLayout.hscroll <= 0 && profLayout.main <= 1, `горизонтальная прокрутка в профилях: ${JSON.stringify(profLayout)}`)
+  const v3 = await axeCheck(page, 'профили')
+  must(v3.length === 0, `axe: профили: ${v3.map((x) => x.id).join(', ')}`)
+  await shot(page, 'm4-profiles-1280')
+  await resize(app, 1920, 1080)
+  await page.waitForTimeout(250)
+  await shot(page, 'm4-profiles-1920')
+  await resize(app, 1280, 800)
+  await card.getByRole('button', { name: 'Применить…' }).click()
+  await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
+  const batchText = await dialog.innerText()
+  must(batchText.includes('Изменится записей: 1') && batchText.includes('p1@bundled'), `предпросмотр пакета: ${batchText}`)
+  await shot(page, 'm4-batch-dialog-1280')
+  await applyDialog()
+  await dialog.waitFor({ state: 'detached', timeout: 8000 }) // пока диалог открыт, одиночные клавиши отключены
+  await page.keyboard.press('1')
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'профиль применён: p1 выключен')
+  await page.keyboard.press('5')
+  await page.getByRole('button', { name: 'Откатить пакет' }).click()
+  await page.keyboard.press('1')
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'пакет откатан: p1 вернулся')
+  must(readFileSync(cfg).equals(cfgBeforeCopy), 'после отката пакета config.toml равен исходному')
+  await page.keyboard.press('6')
+  await card.getByRole('button', { name: 'Удалить профиль' }).click()
+  await waitFor(async () => (await card.count()) === 0, 'профиль удалён')
+  await page.keyboard.press('1')
+  await levelSel.selectOption('R0') // понижение подтверждения не требует
+  await waitFor(() => levelIs('R0'), 'уровень вернулся в R0')
 
   // reduced motion → «FX: выкл» по умолчанию применяется при загрузке; здесь проверяем переключатель
   await page.getByLabel('Уровень эффектов').selectOption('off')

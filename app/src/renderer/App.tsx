@@ -1,21 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CLIENTS } from '../shared/model'
-import type { ClientId, Entity, ScanResult, WriteLevel } from '../shared/model'
+import type { ClientId, Entity, Intent, ScanResult, WriteLevel } from '../shared/model'
 import { buildRows, groupOf, onlyUnknown } from './aggregate'
 import type { Row } from './aggregate'
 import { diagnose } from './doctor'
 import { Doctor } from './views/Doctor'
 import { Hooks } from './views/Hooks'
-import { Inspector } from './views/Inspector'
+import { Inspector, levelOk } from './views/Inspector'
 import { Journal } from './views/Journal'
-import { ToggleDialog } from './views/ToggleDialog'
+import { CopyDialog } from './views/CopyDialog'
+import { EditDialog } from './views/EditDialog'
+import { PlanDialog } from './views/PlanDialog'
+import { Profiles } from './views/Profiles'
 import { Matrix, keyOf } from './views/Matrix'
 import type { Filters, Sel } from './views/Matrix'
 import { Palette } from './views/Palette'
 import type { PaletteItem } from './views/Palette'
 import { Radar } from './views/Radar'
 
-type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal'
+type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal' | 'profiles'
+/** Что сейчас открыто поверх окна: форма, а затем предпросмотр записи. */
+type Flow = { type: 'plan'; entity: Entity; intent: Intent } | { type: 'edit'; entity: Entity } | { type: 'copy'; entity: Entity }
 type Fx = 'off' | 'low' | 'full'
 type ScanState =
   | { status: 'loading' }
@@ -28,7 +33,10 @@ const VIEWS: readonly { id: View; label: string }[] = [
   { id: 'hooks', label: 'Хуки' },
   { id: 'doctor', label: 'Доктор' },
   { id: 'journal', label: 'Журнал' },
+  { id: 'profiles', label: 'Профили' },
 ]
+
+const LEVEL_LABEL: Record<WriteLevel, string> = { R0: 'R0 · только чтение', R1: 'R1 · флаги', R2: 'R2 · корзина и правка' }
 
 const DEFAULT_FILTERS: Filters = { q: '', group: 'all', state: 'all', hideUnknown: true, client: null }
 
@@ -66,7 +74,7 @@ export function App() {
 
   /** Уровень записи хранит main-процесс; здесь только его отражение. */
   const [level, setLevel] = useState<WriteLevel>('R0')
-  const [toggle, setToggle] = useState<{ entity: Entity; enable: boolean } | null>(null)
+  const [flow, setFlow] = useState<Flow | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const say = useCallback((m: string) => {
@@ -88,19 +96,28 @@ export function App() {
     },
     [say],
   )
-  /** Закрывает предпросмотр и возвращает фокус на таблицу, как палитра. */
-  const closeToggle = useCallback(() => {
-    setToggle(null)
+  /** Закрывает диалог и возвращает фокус на таблицу, как палитра. */
+  const closeFlow = useCallback(() => {
+    setFlow(null)
     requestAnimationFrame(() => document.getElementById('grid')?.focus())
   }, [])
-  /** Номер обновления данных: раздел «Журнал» перечитывается по нему (`canRollback` зависит от файла). */
+  /** Номер обновления данных: разделы «Журнал» и «Профили» перечитываются по нему (`canRollback` зависит от файла). */
   const [rev, setRev] = useState(0)
 
   const requestToggle = useCallback(
     (e: Entity, enable: boolean) => {
-      if (level !== 'R1') return say('Запись выключена (R0): включите уровень R1 в шапке окна')
       if (!e.canToggle) return say(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}`)
-      setToggle({ entity: e, enable })
+      const need = e.toggleLevel ?? 'R1'
+      if (!levelOk(level, need)) return say(`Запись выключена (${level}): для этой записи включите уровень ${need} в шапке окна`)
+      setFlow({ type: 'plan', entity: e, intent: { op: 'toggle', entity: e.id, enable } })
+    },
+    [level, say],
+  )
+  const requestForm = useCallback(
+    (type: 'edit' | 'copy', e: Entity) => {
+      if (!e.canEdit) return say('Эту запись править и копировать нельзя: она не в файле клиента')
+      if (!levelOk(level, 'R2')) return say(`Запись выключена (${level}): включите уровень R2 в шапке окна`)
+      setFlow({ type, entity: e })
     },
     [level, say],
   )
@@ -205,9 +222,9 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (toggle) {
-        // пока открыт предпросмотр, остальные клавиши отключены; Esc закрывает его, где бы ни стоял фокус
-        if (e.key === 'Escape') closeToggle()
+      // Пока открыт диалог (форма, предпросмотр записи или пакета), остальные клавиши отключены; Esc закрывает диалог.
+      if (flow || document.querySelector('.modal')) {
+        if (e.key === 'Escape' && flow) closeFlow()
         return
       }
       const k = keyOf(e)
@@ -232,7 +249,7 @@ export function App() {
       } else if ((e.code === 'Slash' || e.key === '/') && view === 'matrix') {
         e.preventDefault()
         searchRef.current?.focus()
-      } else if (/^[1-5]$/.test(e.key)) {
+      } else if (/^[1-6]$/.test(e.key)) {
         setView(VIEWS[Number(e.key) - 1]?.id ?? 'matrix')
       } else if (k === 'r' && !e.ctrlKey && !e.metaKey) {
         void load(true)
@@ -246,17 +263,15 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [palette, view, load, toggle, selEntity, requestToggle, closeToggle])
+  }, [palette, view, load, flow, selEntity, requestToggle, closeFlow])
 
   const paletteItems = useMemo<PaletteItem[]>(
     () => [
       ...VIEWS.map((v) => ({ label: `Раздел: ${v.label}`, hint: 'раздел', run: () => setView(v.id) })),
       { label: 'Пересканировать', hint: 'действие', run: () => void load(true) },
-      {
-        label: level === 'R1' ? 'Уровень записи: R0 (только чтение)' : 'Уровень записи: R1 (включать и выключать)',
-        hint: 'действие',
-        run: () => void changeLevel(level === 'R1' ? 'R0' : 'R1'),
-      },
+      ...(['R0', 'R1', 'R2'] as const)
+        .filter((l) => l !== level)
+        .map((l) => ({ label: `Уровень записи: ${LEVEL_LABEL[l]}`, hint: 'действие', run: () => void changeLevel(l) })),
       ...(selEntity
         ? [{
             label: `${selEntity.state === 'off' || selEntity.state === 'unknown' ? 'Включить' : 'Выключить'}: ${selEntity.name}`,
@@ -290,15 +305,20 @@ export function App() {
             <option value="full">полные</option>
           </select>
         </label>
-        <button
-          className={`mono level ${level === 'R1' ? 's-stale' : 's-on'}`}
-          aria-pressed={level === 'R1'}
-          aria-label="Уровень записи"
-          title={level === 'R1' ? 'Запись включена: включить и выключить можно, каждое изменение с бэкапом. Нажмите, чтобы вернуть только чтение' : 'Только чтение. Нажмите, чтобы разрешить включать и выключать записи (с предпросмотром, бэкапом и откатом)'}
-          onClick={() => void changeLevel(level === 'R1' ? 'R0' : 'R1')}
-        >
-          {level === 'R1' ? 'R1 · запись включена' : 'R0 · только чтение'}
-        </button>
+        <label className="mute">
+          Запись{' '}
+          <select
+            className={`mono level ${level === 'R0' ? 's-on' : 's-stale'}`}
+            aria-label="Уровень записи"
+            title="R0 — только чтение; R1 — включать и выключать по флагам; R2 — ещё корзина, правка команд, копирование и профили. Повышение подтверждается окном системы"
+            value={level}
+            onChange={(e) => void changeLevel(e.target.value as WriteLevel)}
+          >
+            {(['R0', 'R1', 'R2'] as const).map((l) => (
+              <option key={l} value={l}>{LEVEL_LABEL[l]}</option>
+            ))}
+          </select>
+        </label>
         <button onClick={() => void load(scan.status === 'ready')} aria-label="Пересканировать (клавиша R)">Скан</button>
         <button onClick={() => setPalette(true)} aria-label="Палитра команд">Ctrl+K</button>
       </header>
@@ -331,13 +351,23 @@ export function App() {
           <Hooks hooks={hooks} onShow={showEntity} />
         ) : view === 'doctor' ? (
           <Doctor findings={findings} onShow={showEntity} />
-        ) : (
+        ) : view === 'journal' ? (
           <Journal level={level} refreshKey={rev} onNotice={say} />
+        ) : (
+          <Profiles level={level} refreshKey={rev} onNotice={say} />
         )}
       </main>
 
       <aside aria-label="Инспектор">
-        <Inspector row={selRow} sel={sel} onPick={(id) => sel && setSel({ ...sel, id })} level={level} onToggle={requestToggle} />
+        <Inspector
+          row={selRow}
+          sel={sel}
+          onPick={(id) => sel && setSel({ ...sel, id })}
+          level={level}
+          onToggle={requestToggle}
+          onEdit={(e) => requestForm('edit', e)}
+          onCopy={(e) => requestForm('copy', e)}
+        />
       </aside>
 
       <footer>
@@ -361,8 +391,8 @@ export function App() {
             <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>строка вниз / вверх</dd>
             <dt><kbd>h</kbd> <kbd>l</kbd></dt><dd>клиент влево / вправо</dd>
             <dt><kbd>/</kbd></dt><dd>поиск</dd>
-            <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>разделы</dd>
-            <dt><kbd>Space</kbd></dt><dd>включить / выключить выбранное (нужен R1)</dd>
+            <dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>разделы</dd>
+            <dt><kbd>Space</kbd></dt><dd>включить / выключить выбранное (R1; без флага — R2)</dd>
             <dt><kbd>r</kbd></dt><dd>пересканировать</dd>
             <dt><kbd>Ctrl+K</kbd></dt><dd>палитра</dd>
             <dt><kbd>?</kbd> <kbd>Esc</kbd></dt><dd>справка / закрыть</dd>
@@ -370,16 +400,22 @@ export function App() {
         </div>
       ) : null}
       {palette ? <Palette items={paletteItems} onClose={() => setPalette(false)} /> : null}
-      {toggle ? (
-        <ToggleDialog
-          entity={toggle.entity}
-          enable={toggle.enable}
-          onClose={closeToggle}
+      {flow?.type === 'plan' ? (
+        <PlanDialog
+          entity={flow.entity}
+          intent={flow.intent}
+          onClose={closeFlow}
           onDone={(m) => {
-            closeToggle()
+            closeFlow()
             say(m)
           }}
         />
+      ) : null}
+      {flow?.type === 'edit' ? (
+        <EditDialog entity={flow.entity} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent })} />
+      ) : null}
+      {flow?.type === 'copy' ? (
+        <CopyDialog entity={flow.entity} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent })} />
       ) : null}
     </div>
   )

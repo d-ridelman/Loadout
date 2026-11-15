@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { JournalEntry, WriteLevel } from '../../shared/model'
+import { levelOk } from './Inspector'
+
+const OP_LABEL: Record<JournalEntry['op'], string> = { toggle: 'запись', edit: 'правка', copy: 'копия', rollback: 'откат' }
 
 type State = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; rows: JournalEntry[] }
 
@@ -32,9 +35,22 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
     setBusy(id)
     try {
       const r = await window.loadout.rollback(id)
-      onNotice(r.ok ? 'Откат выполнен: файл возвращён из бэкапа' : r.error)
+      onNotice(r.ok ? 'Откат выполнен' : r.error)
     } catch (e) {
       onNotice(e instanceof Error ? e.message : 'откат не удался')
+    } finally {
+      setBusy(null)
+      void load()
+    }
+  }
+
+  const rollbackBatch = async (batch: string) => {
+    setBusy(batch)
+    try {
+      const r = await window.loadout.rollbackBatch(batch)
+      onNotice(r.ok ? `Пакет откатан: ${r.data.length} записей` : r.error)
+    } catch (e) {
+      onNotice(e instanceof Error ? e.message : 'откат пакета не удался')
     } finally {
       setBusy(null)
       void load()
@@ -69,27 +85,47 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
               </tr>
             </thead>
             <tbody>
-              {state.rows.map((j) => (
-                <tr key={j.id}>
-                  <td className="mono nw">{new Date(j.time).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}</td>
-                  <td className="nw">{j.op === 'toggle' ? 'запись' : 'откат'}</td>
-                  <td className="name">
-                    <b>{j.name}</b>
-                    <div className="mute small">{CLIENTS.find((c) => c.id === j.client)?.name} · {j.pointer}</div>
-                  </td>
-                  <td className="mono nw">{j.from} → {j.to}</td>
-                  <td className="nw">{j.rolledBack ? '↺ откатано' : j.op === 'rollback' ? 'откат записан' : j.canRollback ? 'можно откатить' : 'файл менялся после'}</td>
-                  <td>
-                    <button
-                      disabled={!j.canRollback || level !== 'R1' || busy !== null}
-                      title={level !== 'R1' ? 'Включите уровень R1 в шапке' : !j.canRollback ? 'Откат невозможен: файл менялся после операции или операция уже откатана' : undefined}
-                      onClick={() => void rollback(j.id)}
-                    >
-                      Откатить
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {state.rows.map((j, i) => {
+                const ok = levelOk(level, j.level)
+                // кнопка пакета стоит у самой новой записи пакета, пока в нём есть что откатывать
+                const batchHead =
+                  j.batch !== null && state.rows.findIndex((x) => x.batch === j.batch) === i && state.rows.some((x) => x.batch === j.batch && x.canRollback)
+                return (
+                  <tr key={j.id}>
+                    <td className="mono nw">{new Date(j.time).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                    <td className="nw">
+                      {OP_LABEL[j.op]}
+                      {j.level === 'R2' ? <span className="lvl">R2</span> : null}
+                    </td>
+                    <td className="name">
+                      <b>{j.name}</b>
+                      <div className="mute small">{CLIENTS.find((c) => c.id === j.client)?.name} · {j.pointer}</div>
+                    </td>
+                    <td className="mono vcell wrap">{j.from} → {j.to}</td>
+                    <td className="nw">{j.rolledBack ? '↺ откатано' : j.op === 'rollback' ? 'откат записан' : j.canRollback ? 'можно откатить' : 'уже менялось'}</td>
+                    <td>
+                      <div className="actions col">
+                        <button
+                          disabled={!j.canRollback || !ok || busy !== null}
+                          title={!ok ? `Включите уровень ${j.level} в шапке` : !j.canRollback ? 'Откат невозможен: файл менялся после операции или операция уже откатана' : undefined}
+                          onClick={() => void rollback(j.id)}
+                        >
+                          Откатить
+                        </button>
+                        {batchHead ? (
+                          <button
+                            disabled={!levelOk(level, 'R2') || busy !== null}
+                            title={!levelOk(level, 'R2') ? 'Включите уровень R2 в шапке' : 'Откатить весь пакет профиля, начиная с последней записи'}
+                            onClick={() => void rollbackBatch(j.batch ?? '')}
+                          >
+                            Откатить пакет
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

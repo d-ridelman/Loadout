@@ -148,6 +148,9 @@ pub struct Entity {
     pub can_toggle: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub toggle_why: Option<String>,
+    /// Какой уровень записи нужен для переключения: `R1` (флаг) или `R2` (корзина).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toggle_level: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
@@ -220,6 +223,7 @@ impl Entity {
             can_edit: false,
             can_toggle: false,
             toggle_why: None,
+            toggle_level: None,
         }
     }
 

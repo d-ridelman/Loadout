@@ -463,6 +463,13 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
     for e in &mut c.entities {
         e.can_toggle = e.target.is_some();
         e.can_edit = e.src.is_some();
+        e.toggle_level = e.target.as_ref().map(|t| {
+            match t.kind {
+                model::TargetKind::Flag => "R1",
+                _ => "R2",
+            }
+            .to_owned()
+        });
         if !e.can_toggle {
             e.toggle_why = Some(write::why_not(e).to_owned());
         }

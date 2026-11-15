@@ -3,7 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Sidecar } from './sidecar'
-import { validateApplied, validateDiff, validateJournal, validatePlan, validateScan } from './validate'
+import {
+  validateApplied,
+  validateBatchApplied,
+  validateBatchPlan,
+  validateDiff,
+  validateJournal,
+  validatePlan,
+  validateProfiles,
+  validateScan,
+} from './validate'
 
 /** Подставное «ядро»: JSON-RPC по stdio, с командами для падения, шума и записи следов в файл. */
 const FAKE = `
@@ -130,7 +139,7 @@ describe('validate', () => {
     entities: [
       {
         id: 'a', logicalKey: 'k', kind: 'mcp', client: 'codex', scope: 'user', name: 'n', state: 'on',
-        origin: { file: '~/f', pointer: '/p' }, detail: {}, canToggle: true,
+        origin: { file: '~/f', pointer: '/p' }, detail: {}, canToggle: true, canEdit: false,
       },
     ],
     warnings: [],
@@ -175,6 +184,7 @@ describe('validate', () => {
   })
 
   const plan = {
+    op: 'toggle', level: 'R1', notes: [] as string[],
     entity: 'a1', client: 'codex', kind: 'plugin', name: 'n', file: '~/f', pointer: 'p', enable: false,
     from: 'true', to: 'false', noop: false, affects: [], baseSha: 'a'.repeat(64),
   }
@@ -189,11 +199,25 @@ describe('validate', () => {
     })
     expect(() => validateApplied({ op: 1 })).toThrow()
     const row = {
-      id: '1-00', time: 5, op: 'toggle', of: null, client: 'codex', kind: 'plugin', name: 'n', pointer: 'p', file: '~/f',
+      id: '1-00', time: 5, op: 'toggle', of: null, batch: null, level: 'R1', client: 'codex', kind: 'plugin', name: 'n', pointer: 'p', file: '~/f',
       from: 'true', to: 'false', rolledBack: false, canRollback: true,
     }
     expect(validateJournal([{ ...row, path: 'C:/x' }])).toEqual([row])
     expect(() => validateJournal([{ ...row, op: 'delete' }])).toThrow()
     expect(() => validateJournal({})).toThrow()
+    expect(validateJournal([{ ...row, op: 'copy', batch: '1700000000000', level: 'R2' }])[0]).toMatchObject({ op: 'copy', batch: '1700000000000', level: 'R2' })
+    expect(() => validateJournal([{ ...row, level: 'R9' }])).toThrow()
+  })
+
+  it('профили и план пакета: лишние поля отбрасываются, кривые формы отвергаются', () => {
+    const prof = [{ name: 'рабочий', items: [{ client: 'codex', kind: 'plugin', scope: 'user', name: 'p1', enable: true, junk: 1 }], x: 1 }]
+    expect(validateProfiles(prof)).toEqual([{ name: 'рабочий', items: [{ client: 'codex', kind: 'plugin', scope: 'user', name: 'p1', enable: true }] }])
+    expect(() => validateProfiles([{ name: 'x', items: [{ client: 'evil', kind: 'plugin', scope: 'u', name: 'n', enable: true }] }])).toThrow()
+    const bp = { plans: [plan], skipped: ['x'], level: 'R2', batchSha: 'b'.repeat(64), junk: 1 }
+    expect(validateBatchPlan(bp)).toEqual({ plans: [plan], skipped: ['x'], level: 'R2', batchSha: 'b'.repeat(64) })
+    expect(() => validateBatchPlan({ ...bp, batchSha: 'z' })).toThrow()
+    expect(validateBatchApplied({ batch: '1', applied: [{ op: '1-00', entity: 'a', from: 'a', to: 'b', path: 'C:/x' }] })).toEqual({
+      batch: '1', applied: [{ op: '1-00', entity: 'a', from: 'a', to: 'b' }],
+    })
   })
 })

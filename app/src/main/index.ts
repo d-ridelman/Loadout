@@ -4,9 +4,19 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { ChangedEvent, ClientId, Result, ScanResponse, WriteLevel } from '../shared/model'
+import { CLIENTS, LEVEL_RANK } from '../shared/model'
+import type { ChangedEvent, ClientId, Intent, Result, ScanResponse, WriteLevel } from '../shared/model'
 import { Sidecar } from './sidecar'
-import { validateApplied, validateDiff, validateJournal, validatePlan, validateScan } from './validate'
+import {
+  validateApplied,
+  validateBatchApplied,
+  validateBatchPlan,
+  validateDiff,
+  validateJournal,
+  validatePlan,
+  validateProfiles,
+  validateScan,
+} from './validate'
 
 /**
  * Переменные окружения (`LOADOUT_BIN`, `LOADOUT_HOME`, `LOADOUT_USER_DATA`, `ELECTRON_RENDERER_URL`) нужны разработке
@@ -115,7 +125,8 @@ const settingsFile = (): string => join(app.getPath('userData'), 'settings.json'
 function readWriteLevel(): WriteLevel {
   try {
     const raw: unknown = JSON.parse(readFileSync(settingsFile(), 'utf8'))
-    return typeof raw === 'object' && raw !== null && (raw as Record<string, unknown>)['writeLevel'] === 'R1' ? 'R1' : 'R0'
+    const v = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>)['writeLevel'] : undefined
+    return v === 'R1' || v === 'R2' ? v : 'R0'
   } catch {
     return 'R0'
   }
@@ -164,8 +175,44 @@ function writeCore(): Sidecar {
   return s
 }
 
-function needWrite(): void {
-  if (readWriteLevel() !== 'R1') throw new Error('запись выключена: включите уровень R1 в шапке окна')
+/** Для записи нужен уровень не ниже требуемого операцией; проверка здесь, а не на странице. */
+function needLevel(level: 'R1' | 'R2'): void {
+  const have = readWriteLevel()
+  if (LEVEL_RANK[have] < LEVEL_RANK[level]) {
+    throw new Error(
+      have === 'R0'
+        ? `запись выключена (R0): для этой операции включите уровень ${level} в шапке окна`
+        : `для этой операции нужен уровень ${level}: включите его в шапке окна`,
+    )
+  }
+}
+
+const CLIENT_IDS: readonly string[] = CLIENTS.map((c) => c.id)
+const BATCH_RE = /^[0-9]{13}$/
+const NAME_RE = /^[\p{L}\p{N} _.-]{1,40}$/u
+const isShort = (v: unknown): v is string => typeof v === 'string' && v.length <= 500 && !/\p{Cc}/u.test(v)
+
+/** Разбор намерения от страницы: только id записи и то, что с ней сделать. Всё остальное отбрасывается. */
+function validateIntent(raw: unknown): Intent {
+  if (typeof raw !== 'object' || raw === null) throw new Error('неверные параметры')
+  const r = raw as Record<string, unknown>
+  const entity = r['entity']
+  if (typeof entity !== 'string' || !ENTITY_RE.test(entity)) throw new Error('неверные параметры')
+  if (r['op'] === 'toggle' && typeof r['enable'] === 'boolean') return { op: 'toggle', entity, enable: r['enable'] }
+  if (r['op'] === 'edit' && isShort(r['command']) && r['command'].trim() !== '') {
+    const args = r['args']
+    if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error('неверные аргументы')
+    return { op: 'edit', entity, command: r['command'], args: args as string[] }
+  }
+  if (r['op'] === 'copy' && typeof r['to'] === 'string' && CLIENT_IDS.includes(r['to'])) {
+    return { op: 'copy', entity, to: r['to'] as ClientId }
+  }
+  throw new Error('неверные параметры')
+}
+
+function validateName(v: unknown): string {
+  if (typeof v !== 'string' || !NAME_RE.test(v) || v.trim() !== v) throw new Error('имя профиля: 1–40 знаков (буквы, цифры, пробел, _ - .)')
+  return v
 }
 
 /** Принимаем вызовы только от нашей страницы: файл из сборки или адрес dev-сервера. */
@@ -228,17 +275,20 @@ void app.whenReady().then(() => {
   ipcMain.handle('writeLevel:get', (e) => (guard(e), readWriteLevel()))
   ipcMain.handle('writeLevel:set', async (e, level: unknown) => {
     guard(e)
-    if (level !== 'R0' && level !== 'R1') throw new Error('неизвестный уровень')
-    // Повышение до R1 подтверждает человек в окне самой ОС, которое страница не может нажать за него:
+    if (level !== 'R0' && level !== 'R1' && level !== 'R2') throw new Error('неизвестный уровень')
+    // Повышение уровня подтверждает человек в окне самой ОС, которое страница не может нажать за него:
     // иначе скомпрометированная страница включила бы запись и тут же вызвала `apply`. Понижение подтверждения не требует.
-    // В проверочном режиме (только разработка, `APP_QA=1`) окна нет: сценарий не может его нажать.
-    if (level === 'R1' && readWriteLevel() !== 'R1' && !qa) {
+    // Проверки окна подменяют `dialog.showMessageBox` в main-процессе, и согласие, и отказ.
+    if (LEVEL_RANK[level] > LEVEL_RANK[readWriteLevel()]) {
+      const r2 = level === 'R2'
       const opts = {
         type: 'warning' as const,
-        title: 'Loadout: включить запись?',
-        message: 'Разрешить Loadout включать и выключать записи в конфигах клиентов?',
+        title: `Loadout: включить уровень ${level}?`,
+        message: r2
+          ? 'Разрешить Loadout выносить записи в корзину, править команды MCP, копировать записи между клиентами и применять профили?'
+          : 'Разрешить Loadout включать и выключать записи в конфигах клиентов?',
         detail: 'Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.',
-        buttons: ['Отмена', 'Включить запись'],
+        buttons: ['Отмена', r2 ? 'Включить R2' : 'Включить запись'],
         defaultId: 0,
         cancelId: 0,
         noLink: true,
@@ -250,22 +300,21 @@ void app.whenReady().then(() => {
     saveWriteLevel(level)
     return level
   })
-  ipcMain.handle('plan', (e, entity: unknown, enable: unknown) => {
+  ipcMain.handle('plan', (e, raw: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof entity !== 'string' || !ENTITY_RE.test(entity) || typeof enable !== 'boolean') throw new Error('неверные параметры')
-      const plan = validatePlan(await writeCore().request('plan', { entity, enable }))
+      const plan = validatePlan(await writeCore().request('plan', validateIntent(raw)))
       return { ...plan, running: await runningOf(plan.client) }
     })
   })
-  ipcMain.handle('apply', (e, entity: unknown, enable: unknown, baseSha: unknown) => {
+  ipcMain.handle('apply', (e, raw: unknown, baseSha: unknown) => {
     guard(e)
     return guarded(async () => {
-      needWrite()
-      if (typeof entity !== 'string' || !ENTITY_RE.test(entity) || typeof enable !== 'boolean' || typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) {
-        throw new Error('неверные параметры')
-      }
-      return validateApplied(await writeCore().request('apply', { entity, enable, baseSha }))
+      const intent = validateIntent(raw)
+      if (typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) throw new Error('неверные параметры')
+      // нужный уровень знает ядро (флаг — R1, корзина, правка, копирование — R2): спрашиваем у него, а не у страницы
+      needLevel(validatePlan(await writeCore().request('plan', intent)).level)
+      return validateApplied(await writeCore().request('apply', { ...intent, baseSha }))
     })
   })
   ipcMain.handle('journal', (e) => {
@@ -275,9 +324,58 @@ void app.whenReady().then(() => {
   ipcMain.handle('rollback', (e, op: unknown) => {
     guard(e)
     return guarded(async () => {
-      needWrite()
       if (typeof op !== 'string' || !OP_RE.test(op)) throw new Error('неверный номер операции')
+      const entry = validateJournal(await writeCore().request('journal')).find((j) => j.id === op)
+      needLevel(entry?.level ?? 'R2') // операции не нашли в журнале: на всякий случай требуем высший уровень
       return validateApplied(await writeCore().request('rollback', { op }))
+    })
+  })
+  ipcMain.handle('rollbackBatch', (e, batch: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (typeof batch !== 'string' || !BATCH_RE.test(batch)) throw new Error('неверный номер пакета')
+      needLevel('R2')
+      const done: unknown = await writeCore().request('rollbackBatch', { batch })
+      if (!Array.isArray(done)) throw new Error('ядро вернуло ответ неожиданной формы')
+      return done.map(validateApplied)
+    })
+  })
+  // Профили лежат в хранилище Loadout и в конфиги клиентов не пишут: читать и менять их можно на любом уровне.
+  ipcMain.handle('profiles', (e) => {
+    guard(e)
+    return guarded(async () => validateProfiles(await writeCore().request('profiles')))
+  })
+  ipcMain.handle('profileSave', (e, name: unknown, items: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      const params: Record<string, unknown> = { name: validateName(name) }
+      if (items !== undefined && items !== null) {
+        // проверка формы записей профиля и повторная сборка: лишние поля до ядра не доходят
+        params['items'] = validateProfiles([{ name: 'x', items }])[0]?.items
+      }
+      return validateProfiles(await writeCore().request('profileSave', params))
+    })
+  })
+  ipcMain.handle('profileDelete', (e, name: unknown) => {
+    guard(e)
+    return guarded(async () => validateProfiles(await writeCore().request('profileDelete', { name: validateName(name) })))
+  })
+  ipcMain.handle('planProfile', (e, name: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      const bp = validateBatchPlan(await writeCore().request('planProfile', { name: validateName(name) }))
+      const clients = [...new Set(bp.plans.filter((p) => !p.noop).map((p) => p.client))]
+      const running = [...new Set((await Promise.all(clients.map(runningOf))).flat())]
+      return { ...bp, running }
+    })
+  })
+  ipcMain.handle('applyProfile', (e, name: unknown, batchSha: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (typeof batchSha !== 'string' || !SHA_RE.test(batchSha)) throw new Error('неверные параметры')
+      const n = validateName(name)
+      needLevel(validateBatchPlan(await writeCore().request('planProfile', { name: n })).level)
+      return validateBatchApplied(await writeCore().request('applyProfile', { name: n, batchSha }))
     })
   })
   createWindow()

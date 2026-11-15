@@ -559,6 +559,10 @@ pub fn plan(home: &Path, store: Option<&Path>, i: &Intent) -> Result<Plan, Strin
     prepare(home, store, &scan, i).map(|p| p.plan)
 }
 
+fn level_r1() -> String {
+    "R1".to_owned()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Manifest {
@@ -570,6 +574,9 @@ struct Manifest {
     of: Option<String>,
     #[serde(default)]
     batch: Option<String>,
+    /// Какой уровень записи требовала операция (`R1`, `R2`): для отката нужен тот же.
+    #[serde(default = "level_r1")]
+    level: String,
     /// id записи, к которой относится операция (откат корзинных операций строится по нему).
     #[serde(default)]
     entity: String,
@@ -602,6 +609,7 @@ pub struct Entry {
     pub op: String,
     pub of: Option<String>,
     pub batch: Option<String>,
+    pub level: String,
     pub client: String,
     pub kind: String,
     pub name: String,
@@ -719,6 +727,7 @@ fn commit(
         op: op.to_owned(),
         of,
         batch: batch.map(str::to_owned),
+        level: p.plan.level.clone(),
         entity: p.entity.clone(),
         inverse_enable: p.inverse_enable,
         trash_id: p.trash.as_ref().map(|t| t.id.clone()),
@@ -954,6 +963,7 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
                 op: m.op.clone(),
                 of: m.of.clone(),
                 batch: m.batch.clone(),
+                level: m.level.clone(),
                 client: m.client.clone(),
                 kind: m.kind.clone(),
                 name: m.name.clone(),

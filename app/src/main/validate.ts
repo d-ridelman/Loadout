@@ -1,12 +1,17 @@
 import type {
   Applied,
+  BatchApplied,
+  BatchPlan,
   ChangedEvent,
   ClientId,
   Entity,
   EntityState,
   JournalEntry,
   Kind,
+  Level,
+  OpKind,
   Plan,
+  Profile,
   ScanDiff,
   ScanResult,
 } from '../shared/model'
@@ -39,7 +44,8 @@ export function validateScan(raw: unknown): ScanResult {
       isStr(e['state']) && STATES.includes(e['state']) &&
       isObj(e['origin']) && isStr(e['origin']['file']) && isStr(e['origin']['pointer']) &&
       isObj(e['detail']) &&
-      typeof e['canToggle'] === 'boolean'
+      typeof e['canToggle'] === 'boolean' &&
+      typeof e['canEdit'] === 'boolean'
     if (!ok) throw new Error('в ответе ядра есть запись неожиданной формы')
     const o = e['origin'] as Record<string, string>
     return {
@@ -55,7 +61,9 @@ export function validateScan(raw: unknown): ScanResult {
       ...(isStr(e['note']) ? { note: e['note'] } : {}),
       detail: e['detail'] as Record<string, unknown>, // значения уже замаскированы ядром
       canToggle: e['canToggle'] as boolean,
+      canEdit: e['canEdit'] as boolean,
       ...(isStr(e['toggleWhy']) ? { toggleWhy: e['toggleWhy'] } : {}),
+      ...(e['toggleLevel'] === 'R1' || e['toggleLevel'] === 'R2' ? { toggleLevel: e['toggleLevel'] as Level } : {}),
     }
   })
   if (!(warnings as unknown[]).every(isStr)) throw new Error('предупреждения ядра неожиданной формы')
@@ -108,18 +116,55 @@ function bad(what: string): never {
   throw new Error(`ядро вернуло ${what} неожиданной формы`)
 }
 
+const levelOf = (v: unknown): v is Level => v === 'R1' || v === 'R2'
+const opOf = (v: unknown): v is OpKind => v === 'toggle' || v === 'edit' || v === 'copy'
+
 /** Ответ `plan`: только поля плана, собранные заново. */
 export function validatePlan(raw: unknown): Plan {
   if (!isObj(raw)) bad('план')
-  const { entity, client, kind, name, file, pointer, enable, from, to, noop, affects, baseSha } = raw
+  const { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects, notes, baseSha } = raw
   if (
+    !opOf(op) || !levelOf(level) ||
     !isStr(entity) || !known(client) || !kindOf(kind) || !isStr(name) || !isStr(file) || !isStr(pointer) ||
     typeof enable !== 'boolean' || !isStr(from) || !isStr(to) || typeof noop !== 'boolean' ||
+    !Array.isArray(notes) || notes.length > 20 || !notes.every(isStr) ||
     !isStr(baseSha) || !/^[0-9a-f]{64}$/.test(baseSha)
   ) {
     bad('план')
   }
-  return { entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), baseSha }
+  return { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), notes: notes as string[], baseSha }
+}
+
+export function validateBatchPlan(raw: unknown): BatchPlan {
+  if (!isObj(raw) || !Array.isArray(raw['plans']) || raw['plans'].length > 5000 || !Array.isArray(raw['skipped']) ||
+    !raw['skipped'].every(isStr) || !levelOf(raw['level']) || !isStr(raw['batchSha']) || !/^[0-9a-f]{64}$/.test(raw['batchSha'])) {
+    bad('план пакета')
+  }
+  return {
+    plans: (raw['plans'] as unknown[]).map(validatePlan),
+    skipped: raw['skipped'] as string[],
+    level: raw['level'],
+    batchSha: raw['batchSha'],
+  }
+}
+
+export function validateBatchApplied(raw: unknown): BatchApplied {
+  if (!isObj(raw) || !isStr(raw['batch']) || !Array.isArray(raw['applied'])) bad('результат пакета')
+  return { batch: raw['batch'], applied: (raw['applied'] as unknown[]).map(validateApplied) }
+}
+
+export function validateProfiles(raw: unknown): Profile[] {
+  if (!Array.isArray(raw) || raw.length > 200) bad('список профилей')
+  return raw.map((p: unknown) => {
+    if (!isObj(p) || !isStr(p['name']) || !Array.isArray(p['items']) || p['items'].length > 2000) bad('профиль')
+    const items = (p['items'] as unknown[]).map((i) => {
+      if (!isObj(i) || !known(i['client']) || !kindOf(i['kind']) || !isStr(i['scope']) || !isStr(i['name']) || typeof i['enable'] !== 'boolean') {
+        bad('запись профиля')
+      }
+      return { client: i['client'], kind: i['kind'], scope: i['scope'], name: i['name'], enable: i['enable'] }
+    })
+    return { name: p['name'], items }
+  })
 }
 
 export function validateApplied(raw: unknown): Applied {
@@ -134,14 +179,15 @@ export function validateJournal(raw: unknown): JournalEntry[] {
   return raw.map((r: unknown) => {
     if (
       !isObj(r) || !isStr(r['id']) || typeof r['time'] !== 'number' || !isNum(r['time']) ||
-      (r['op'] !== 'toggle' && r['op'] !== 'rollback') || !(r['of'] === null || isStr(r['of'])) ||
+      !(opOf(r['op']) || r['op'] === 'rollback') || !(r['of'] === null || isStr(r['of'])) ||
+      !(r['batch'] === null || isStr(r['batch'])) || !levelOf(r['level']) ||
       !known(r['client']) || !kindOf(r['kind']) || !isStr(r['name']) || !isStr(r['pointer']) || !isStr(r['file']) ||
       !isStr(r['from']) || !isStr(r['to']) || typeof r['rolledBack'] !== 'boolean' || typeof r['canRollback'] !== 'boolean'
     ) {
       bad('строку журнала')
     }
     return {
-      id: r['id'], time: r['time'], op: r['op'], of: r['of'], client: r['client'], kind: r['kind'],
+      id: r['id'], time: r['time'], op: r['op'], of: r['of'], batch: r['batch'], level: r['level'], client: r['client'], kind: r['kind'],
       name: r['name'], pointer: r['pointer'], file: r['file'], from: r['from'], to: r['to'],
       rolledBack: r['rolledBack'], canRollback: r['canRollback'],
     }

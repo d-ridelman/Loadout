@@ -26,13 +26,28 @@ export interface Entity {
   origin: { file: string; pointer: string }
   note?: string
   detail: Record<string, unknown>
-  /** Есть булев ключ, которым запись переключается (R1); иначе `toggleWhy` объясняет почему нет. */
+  /** Запись переключается (флагом или через корзину); иначе `toggleWhy` объясняет почему нет. */
   canToggle: boolean
   toggleWhy?: string
+  /** Какой уровень нужен для переключения: флаг — R1, корзина — R2. */
+  toggleLevel?: Level
+  /** MCP в файле клиента: можно править команду и копировать в другой клиент (R2). */
+  canEdit: boolean
 }
 
-/** Предпросмотр переключения: ключ и старое/новое значение, содержимого файла в нём нет. */
+/** Что сделать с записью. Путей и значений секретов в нём нет: ядро находит цель само. */
+export type Intent =
+  | { op: 'toggle'; entity: string; enable: boolean }
+  | { op: 'edit'; entity: string; command: string; args: string[] }
+  | { op: 'copy'; entity: string; to: ClientId }
+
+export type OpKind = 'toggle' | 'edit' | 'copy'
+export type Level = 'R1' | 'R2'
+
+/** Предпросмотр: ключ и старое/новое значение (команды замаскированы), содержимого файла в нём нет. */
 export interface Plan {
+  op: OpKind
+  level: Level
   entity: string
   client: ClientId
   kind: Kind
@@ -45,7 +60,35 @@ export interface Plan {
   noop: boolean
   /** Другие записи, которые меняет тот же ключ. */
   affects: string[]
+  /** Что стоит знать до подтверждения (что не переносится, какие ключи env копируются). */
+  notes: string[]
   baseSha: string
+}
+
+/** План пакета (профиль): один предпросмотр на все записи. */
+export interface BatchPlan {
+  plans: Plan[]
+  skipped: string[]
+  level: Level
+  batchSha: string
+}
+
+export interface ProfileItem {
+  client: ClientId
+  kind: Kind
+  scope: string
+  name: string
+  enable: boolean
+}
+
+export interface Profile {
+  name: string
+  items: ProfileItem[]
+}
+
+export interface BatchApplied {
+  batch: string
+  applied: Applied[]
 }
 
 export interface Applied {
@@ -58,8 +101,10 @@ export interface Applied {
 export interface JournalEntry {
   id: string
   time: number
-  op: 'toggle' | 'rollback'
+  op: OpKind | 'rollback'
   of: string | null
+  batch: string | null
+  level: Level
   client: ClientId
   kind: Kind
   name: string
@@ -71,7 +116,9 @@ export interface JournalEntry {
   canRollback: boolean
 }
 
-export type WriteLevel = 'R0' | 'R1'
+/** R0 — только чтение, R1 — флаги, R2 — корзина, правка, копирование, профили. Каждый уровень включает прежние. */
+export type WriteLevel = 'R0' | 'R1' | 'R2'
+export const LEVEL_RANK: Record<WriteLevel, number> = { R0: 0, R1: 1, R2: 2 }
 
 export type Result<T> = ({ ok: true; data: T } | { ok: false; error: string })
 
@@ -117,10 +164,17 @@ export interface LoadoutApi {
   /** Уровень записи хранит main; страница может его только прочитать и попросить сменить. */
   getWriteLevel: () => Promise<WriteLevel>
   setWriteLevel: (level: WriteLevel) => Promise<WriteLevel>
-  plan: (entity: string, enable: boolean) => Promise<PlanResponse>
-  apply: (entity: string, enable: boolean, baseSha: string) => Promise<Result<Applied>>
+  plan: (intent: Intent) => Promise<PlanResponse>
+  apply: (intent: Intent, baseSha: string) => Promise<Result<Applied>>
   journal: () => Promise<Result<JournalEntry[]>>
   rollback: (op: string) => Promise<Result<Applied>>
+  rollbackBatch: (batch: string) => Promise<Result<Applied[]>>
+  profiles: () => Promise<Result<Profile[]>>
+  /** Без `items` профиль снимается с текущего состояния. */
+  saveProfile: (name: string, items?: ProfileItem[]) => Promise<Result<Profile[]>>
+  deleteProfile: (name: string) => Promise<Result<Profile[]>>
+  planProfile: (name: string) => Promise<Result<BatchPlan & { running: string[] }>>
+  applyProfile: (name: string, batchSha: string) => Promise<Result<BatchApplied>>
   /** Подписка на изменения конфигов; возвращает отписку. */
   onChanged: (cb: (e: ChangedEvent) => void) => () => void
 }

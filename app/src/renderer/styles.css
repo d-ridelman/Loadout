@@ -51,6 +51,7 @@ footer > span.sp { flex: 1; min-width: 0; }
 footer > #notice { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 footer > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 td.nw { white-space: nowrap; }
+td.vcell { max-width: 260px; text-align: left; }
 .logo { font: 700 15px var(--mono); letter-spacing: 0.28em; color: var(--cyan); text-shadow: 0 0 10px rgba(139, 233, 253, 0.55); }
 .logo i { color: var(--pink); font-style: normal; }
 
@@ -71,13 +72,9 @@ td.nw { white-space: nowrap; }
 .card p { margin: 4px 0 0; }
 
 /* эффекты по уровням */
-#scanlines { position: fixed; inset: 0; pointer-events: none; z-index: 50; opacity: 0.035; background: repeating-linear-gradient(0deg, #fff 0 1px, transparent 1px 3px); }
-html[data-fx='low'] #scanlines, html[data-fx='off'] #scanlines { display: none; }
 html[data-fx='off'] .logo { text-shadow: none; }
-@keyframes flick { 0%, 96%, 100% { opacity: 1; } 97% { opacity: 0.7; } 98% { opacity: 1; } 99% { opacity: 0.8; } }
 @keyframes pulse { 50% { opacity: 0.7; } }
 @keyframes sweep { to { transform: rotate(360deg); } }
-html[data-fx='full'] .logo, html[data-fx='low'] .logo { animation: flick 6s infinite; }
 html[data-fx='low'] .pulse, html[data-fx='full'] .pulse { animation: pulse 2.2s ease-in-out infinite; }
 html[data-fx='full'] .beam { animation: sweep 5s linear infinite; }
 html[data-fx='full'] .cur { box-shadow: 0 0 12px rgba(139, 233, 253, 0.45); }
@@ -171,4 +168,19 @@ html[data-fx='off'] .beam { display: none; }
 .modal p { margin: 6px 0; }
 button.level { border-color: transparent; }
 button.level[aria-pressed='true'] { border-color: var(--orange); background: rgba(255, 184, 108, 0.12); }
+.lvl { font: 11px var(--mono); border: 1px solid var(--orange); color: var(--orange); border-radius: 3px; padding: 0 5px; margin-left: 6px; letter-spacing: 0; }
+.notes { margin: 6px 0; padding-left: 18px; }
+/* столбец вместо длинной строки кнопок: инспектор узкий, а действий несколько */
+.actions.col { flex-direction: column; align-items: stretch; max-width: 340px; }
+.actions.col button { text-align: left; }
+.form { display: flex; flex-direction: column; gap: 10px; }
+.form label { display: flex; flex-direction: column; gap: 4px; color: var(--mute); }
+.form input, .form textarea, select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--fg); font: 13px var(--mono); }
+.form textarea { resize: vertical; min-height: 80px; }
+.choices { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.choices label { display: flex; gap: 8px; align-items: center; }
+.cards { display: flex; flex-direction: column; gap: 12px; }
+.pitem { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(68, 71, 90, 0.55); }
+.pitem .sub { grid-column: 1; }
+.plist { list-style: none; margin: 6px 0 0; padding: 0; max-height: 240px; overflow: auto; }
 .help { position: fixed; right: 364px; bottom: 40px; padding: 12px; z-index: 80; width: 280px; }
