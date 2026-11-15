@@ -702,17 +702,23 @@ fn kept_line(label: &str, current: Option<&str>, hint: &str) -> String {
     )
 }
 
-/// Canonical id for the `modelSettings` key. shortcut: alias table of 2026-11-15 (docs: `sonnet` is Sonnet 5.5,
-/// `opus` Opus 5.5, `haiku` Haiku 5.5, `fable` Fable 5.2); refresh when the aliases move to new releases.
-fn canonical_model_id(model: &str) -> Option<String> {
-    match model {
-        "sonnet" => Some("claude-sonnet-5-5".to_string()),
-        "opus" => Some("claude-opus-5-5".to_string()),
-        "haiku" => Some("claude-haiku-5-5".to_string()),
-        "fable" => Some("claude-fable-5-2".to_string()),
-        m if m.starts_with("claude-") => Some(m.to_string()),
-        _ => None,
+/// The one place of the model alias table: which model id each alias meant on `MODEL_ALIASES_AS_OF` (docs:
+/// `sonnet` is Sonnet 5.5, `opus` Opus 5.5, `haiku` Haiku 5.5, `fable` Fable 5.2). Aliases move to new
+/// releases, so the table goes stale; `doctor` names its date when a `modelSettings` entry is missing.
+pub(crate) const MODEL_ALIASES_AS_OF: &str = "2026-11-15";
+pub(crate) const MODEL_ALIASES: [(&str, &str); 4] = [
+    ("sonnet", "claude-sonnet-5-5"),
+    ("opus", "claude-opus-5-5"),
+    ("haiku", "claude-haiku-5-5"),
+    ("fable", "claude-fable-5-2"),
+];
+
+/// Canonical id for the `modelSettings` key: an alias from the table, or a full `claude-...` id as it is.
+pub(crate) fn canonical_model_id(model: &str) -> Option<String> {
+    if let Some((_, id)) = MODEL_ALIASES.iter().find(|(alias, _)| *alias == model) {
+        return Some((*id).to_string());
     }
+    model.starts_with("claude-").then(|| model.to_string())
 }
 
 fn ensure_object<'a>(
@@ -2079,6 +2085,29 @@ mod tests {
         .is_ok());
         assert!(preflight_settings(&d.join("none.json"), true).is_ok());
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn alias_table_is_dated_and_maps_aliases_and_full_ids() {
+        assert_eq!(MODEL_ALIASES_AS_OF.len(), 10, "a YYYY-MM-DD date");
+        for (alias, id) in MODEL_ALIASES {
+            assert!(
+                !alias.starts_with("claude-") && id.starts_with("claude-"),
+                "{alias}"
+            );
+            assert_eq!(canonical_model_id(alias).as_deref(), Some(id));
+            assert_eq!(
+                canonical_model_id(id).as_deref(),
+                Some(id),
+                "a full id maps to itself"
+            );
+        }
+        assert_eq!(
+            canonical_model_id("sonnet").as_deref(),
+            Some("claude-sonnet-5-5")
+        );
+        assert_eq!(canonical_model_id("sonnet[1m]"), None);
+        assert_eq!(canonical_model_id("gpt"), None);
     }
 
     #[test]

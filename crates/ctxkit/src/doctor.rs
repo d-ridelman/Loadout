@@ -174,6 +174,29 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
         ));
     }
 
+    // The effort of a model lives in `modelSettings.<model id>`; setup writes it only for a model it can name.
+    if let Some((model, id)) = settings["model"]
+        .as_str()
+        .and_then(|m| crate::setup::canonical_model_id(m).map(|id| (m, id)))
+    {
+        if !settings["modelSettings"][&id].is_object() {
+            out.push(f(
+                "model_settings",
+                "warn",
+                t(
+                    lang,
+                    "no modelSettings entry for the main model: its effort is not set (an alias such as `sonnet` may also now mean a newer model than this table knows)",
+                    "для основной модели нет записи в modelSettings: её effort не задан (алиас вроде `sonnet` мог уже сместиться на более новую модель, чем знает таблица)",
+                ),
+                Some(format!(
+                    "model {model}, expected modelSettings.{id}; ctxkit's alias table is from {}",
+                    crate::setup::MODEL_ALIASES_AS_OF
+                )),
+                Some("ctxkit setup --main-model <model> --effort <level>"),
+            ));
+        }
+    }
+
     out.push(f(
         "advisor",
         "info",
@@ -369,6 +392,7 @@ mod tests {
         let cmd = format!("\"{}\"", exe.to_string_lossy().replace('\\', "/"));
         let settings = json!({
             "model": "sonnet",
+            "modelSettings": {"claude-sonnet-5-5": {"effortLevel": "high"}},
             "env": {"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"},
             "hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": cmd}]}]}
         });
@@ -433,6 +457,41 @@ mod tests {
         assert_eq!(lang_arg(&a(&["--lang", "--json"]), 0), None);
         assert_eq!(lang_arg(&a(&["--lang"]), 0), None);
         assert_eq!(lang_arg(&a(&["--lang", "xx"]), 0), None);
+    }
+
+    #[test]
+    fn missing_model_settings_for_a_known_model_warns() {
+        let d = temp("ctxkit_doctor_model_settings");
+        let has = |s: Value| {
+            fs::write(d.join("settings.json"), s.to_string()).unwrap();
+            diagnose(&d, Lang::En)
+                .into_iter()
+                .find(|x| x.id == "model_settings")
+        };
+        let w = has(json!({"model": "sonnet"})).unwrap();
+        assert_eq!(w.severity, "warn");
+        assert_eq!(
+            w.fix,
+            Some("ctxkit setup --main-model <model> --effort <level>")
+        );
+        let detail = w.detail.unwrap();
+        assert!(
+            detail.contains("modelSettings.claude-sonnet-5-5")
+                && detail.contains(crate::setup::MODEL_ALIASES_AS_OF)
+        );
+        // a full id is a known model as well; an entry for it (even an empty one) is enough
+        assert!(has(json!({"model": "claude-opus-5-5"})).is_some());
+        assert!(
+            has(json!({"model": "claude-opus-5-5", "modelSettings": {"claude-opus-5-5": {}}}))
+                .is_none()
+        );
+        assert!(
+            has(json!({"model": "opus", "modelSettings": {"claude-sonnet-5-5": {}}})).is_some()
+        );
+        // an unnamed model (no key, an id setup cannot map) gives no such finding
+        assert!(has(json!({})).is_none());
+        assert!(has(json!({"model": "sonnet[1m]"})).is_none());
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -17,7 +17,6 @@
 - [ ] Нет повторной сверки sha перед `rename` в commit и rollback: `crates/loadout-core/src/write.rs:1152-1190`, `write.rs:1603-1638`.
 - [ ] Нет тестов на IPC-ворота главного процесса (`validateIntent`, `trusted`): `app/src/main/index.ts:260-310`.
 - [ ] Дубли: разворот `~` (`crates/loadout-core/src/write.rs:107-118` и `crates/loadout-core/src/lib.rs:42-54`) и поиск домашнего каталога (`crates/loadoutd/src/main.rs`).
-- [ ] Таблица алиасов `canonical_model_id` устареет (`crates/ctxkit/src/setup.rs`, около строки 540); `doctor` не замечает отсутствия `modelSettings` для основной модели.
 - [ ] Кнопка отката ctxkit в окне Loadout (следующий шаг после `ctxkit setup --uninstall`).
 - [ ] Сравнение advisor и `checker` по дням не раньше 22.11.2026 (остаётся как есть, см. раздел про шлюз Stop выше).
 - [ ] Команда хука из `ctxkit setup` (`"C:/…/ctxkit.exe"`) состоит из одной строки в кавычках: на Windows без Git Bash PowerShell её печатает, а не запускает, а упавший хук `PreToolUse` без `onFailure` может блокировать вызов (docs хуков). Живой прогон 16.11 (claude 2.1.325, с Git Bash) подтвердил документацию по остальным строкам и то, что эта форма команды на машине с Git Bash запускается; сама строка «Windows без Git Bash» не проверена. Проверить на машине без Git Bash и решить: форма exec (`command` + `args`) или `"shell": "powershell"` с `& `, либо `"onFailure": "continue"` (нужен Claude Code 2.1.295+).

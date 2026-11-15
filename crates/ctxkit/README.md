@@ -155,7 +155,7 @@ ctxkit doctor [--json] [--profile <dir>] [--lang ru]   # why subagents are not c
 ctxkit report [--json] [--days 14] [--profile <dir>]   # per day: turns by model, subagent and advisor calls, tool_result volume
 ```
 
-`doctor` exits `1` only on an `error` finding (for example the hook points to a deleted binary). Without the rules block (`ctxkit setup --with-rules`) the model is never told when to call `Explore`, `checker` or the advisor, and usually will not. `report` reads the transcripts under `<profile>/projects` and emits counters only (no text, paths or tool output); days are UTC. Both commands print JSON with `"schema": 1` for shells such as Loadout.
+`doctor` exits `1` only on an `error` finding (for example the hook points to a deleted binary). Without the rules block (`ctxkit setup --with-rules`) the model is never told when to call `Explore`, `checker` or the advisor, and usually will not. When `model` is an alias that `setup` maps (`sonnet`, `opus`, `haiku`, `fable`) or a full `claude-...` id and `modelSettings` has no entry for it, `doctor` warns (`model_settings`) with the fix `ctxkit setup --main-model <model> --effort <level>`: the effort of that model is not set. The alias table lives in one place (`MODEL_ALIASES` in `setup.rs`, dated 2026-11-15; aliases move to newer releases, and the warning names the date). `report` reads the transcripts under `<profile>/projects` and emits counters only (no text, paths or tool output); days are UTC. Both commands print JSON with `"schema": 1` for shells such as Loadout.
 
 ## Tests and Session Audit
 
