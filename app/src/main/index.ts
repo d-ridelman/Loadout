@@ -24,7 +24,7 @@ function tidy(text: string): string {
  * Проверочный режим (`APP_QA=1`): данные окна живут только в профиле из `LOADOUT_USER_DATA`.
  * Профиль владельца не трогаем никогда, поэтому без явного каталога в этом режиме приложение не стартует.
  */
-const qa = process.env.APP_QA === '1'
+const qa = !app.isPackaged && process.env.APP_QA === '1'
 if (qa && !process.env.LOADOUT_USER_DATA) {
   console.error('FAILED: APP_QA=1 требует LOADOUT_USER_DATA (каталог проверочного профиля)')
   app.exit(1)

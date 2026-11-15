@@ -302,6 +302,27 @@ fn client_directory_created_after_start_is_noticed() {
 }
 
 #[test]
+fn client_directory_with_unwatched_parent_is_noticed() {
+    // `.gemini/config` (Antigravity): родитель `.gemini` сам не слушается, пока его нет; Claude Desktop — то же с `AppData/Roaming`
+    let aside = std::env::temp_dir().join(format!("loadout-aside-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&aside);
+    let mut s = Server::start_with(|h| {
+        copy_tree(&h.join(".gemini"), &aside, "");
+        fs::remove_dir_all(h.join(".gemini")).unwrap();
+    });
+    // сначала появляется только родитель, `config` — позже: слушать нужно ближайшего существующего предка
+    fs::create_dir_all(s.home.join(".gemini")).unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    copy_tree(&aside, &s.home.join(".gemini"), "");
+    let ev = s.wait_changed_with("added", Duration::from_secs(10));
+    let _ = fs::remove_dir_all(&aside);
+    assert!(
+        ev.is_some(),
+        "Antigravity, поставленный после запуска ядра, замечен"
+    );
+}
+
+#[test]
 fn new_remote_catalog_entry_is_noticed() {
     let mut s = Server::start();
     fs::create_dir_all(
@@ -341,6 +362,52 @@ fn invalid_utf8_line_does_not_kill_the_server() {
         s.parked.iter().any(|m| m["error"]["message"].is_string()),
         "битая строка получила ошибку: {:?}",
         s.parked
+    );
+}
+
+#[test]
+fn request_flood_does_not_postpone_the_rescan() {
+    let mut s = Server::start();
+    let cfg = s.home.join(".codex/config.toml");
+    let text = fs::read_to_string(&cfg).unwrap();
+    // очередь запросов не пустеет несколько секунд: скан обязан пройти по сроку, а не после неё
+    let mut stdin = s.stdin.take().unwrap();
+    let flood = std::thread::spawn(move || {
+        let line = b"{\"id\":1,\"method\":\"status\"}\n".repeat(1000);
+        for _ in 0..100 {
+            if stdin.write_all(&line).is_err() {
+                break;
+            }
+        }
+        let _ = stdin.write_all(b"{\"id\":999999999,\"method\":\"status\"}\n");
+        let _ = stdin.flush();
+        stdin
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    fs::write(&cfg, text.replacen("enabled = true", "enabled = false", 1)).unwrap();
+
+    let (mut changed_at, mut last_at, mut n) = (None, None, 0u64);
+    let end = Instant::now() + Duration::from_secs(60);
+    while last_at.is_none() && Instant::now() < end {
+        let Some(m) = s.recv(Duration::from_secs(10)) else {
+            break;
+        };
+        n += 1;
+        if m["method"] == "changed" && changed_at.is_none() {
+            changed_at = Some(n);
+        }
+        if m["id"] == 999_999_999 {
+            last_at = Some(n);
+        }
+    }
+    s.stdin = flood.join().ok();
+    let (c, l) = (
+        changed_at.expect("`changed` пришёл"),
+        last_at.expect("ответ на последний запрос пришёл"),
+    );
+    assert!(
+        c < l,
+        "`changed` (сообщение {c}) пришёл только после всего потока запросов (последний ответ {l})"
     );
 }
 

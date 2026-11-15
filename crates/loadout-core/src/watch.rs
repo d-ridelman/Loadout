@@ -87,6 +87,21 @@ fn is_noise(n: &str) -> bool {
         || n.ends_with(".jsonl")
 }
 
+/// Ближайший существующий предок отсутствующего каталога; несуществующие промежуточные предки кладёт в `fixed`,
+/// чтобы их создание считалось значимым. Выше домашнего каталога не поднимается.
+fn nearest_existing_ancestor(
+    home: &Path,
+    dir: &Path,
+    fixed: &mut HashSet<String>,
+) -> Option<PathBuf> {
+    let mut anc = dir.parent()?;
+    while anc != home && !anc.is_dir() {
+        fixed.insert(norm(anc));
+        anc = anc.parent()?;
+    }
+    anc.is_dir().then(|| anc.to_path_buf())
+}
+
 impl Targets {
     /// Каталоги и файлы по результату скана: постоянный набор плюс родители всех файлов, из которых собраны записи.
     pub fn from_scan(home: &Path, scan: &ScanResult) -> Self {
@@ -111,6 +126,12 @@ impl Targets {
                         any_child,
                     },
                 );
+            } else if let Some(ancestor) = nearest_existing_ancestor(home, &dir, &mut t.fixed) {
+                // каталога ещё нет (клиент поставят позже): его появление увидит только ближайший существующий предок
+                t.dirs.entry(ancestor).or_insert(Target {
+                    recursive: false,
+                    any_child: false,
+                });
             }
         }
         // профили dsh: свои патчи в `profiles/<имя>/`
@@ -283,6 +304,22 @@ mod tests {
             !t.is_fixed(&h.join(".claude/skills/new-skill")),
             "потомок — не постоянный каталог"
         );
+        let _ = fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn missing_dir_is_watched_through_its_nearest_existing_ancestor() {
+        let h = home();
+        fs::create_dir_all(h.join(".gemini")).unwrap(); // `.gemini/config` ещё нет
+        let t = Targets::from_scan(&h, &ScanResult::default());
+        assert!(t.dirs.contains_key(&h.join(".gemini")), "предок слушается");
+        assert!(
+            t.is_fixed(&h.join(".gemini/config")),
+            "появление config значимо"
+        );
+        // `AppData/Roaming` нет совсем: промежуточные каталоги значимы, слушается дом
+        assert!(t.is_fixed(&h.join("AppData")) && t.is_fixed(&h.join("AppData/Roaming")));
+        assert!(t.dirs.contains_key(&h));
         let _ = fs::remove_dir_all(&h);
     }
 
