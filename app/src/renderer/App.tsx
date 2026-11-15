@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CLIENTS } from '../shared/model'
-import type { ClientId, Entity, ScanResult } from '../shared/model'
+import type { ClientId, Entity, ScanResult, WriteLevel } from '../shared/model'
 import { buildRows, groupOf, onlyUnknown } from './aggregate'
 import type { Row } from './aggregate'
 import { diagnose } from './doctor'
 import { Doctor } from './views/Doctor'
 import { Hooks } from './views/Hooks'
 import { Inspector } from './views/Inspector'
+import { Journal } from './views/Journal'
+import { ToggleDialog } from './views/ToggleDialog'
 import { Matrix, keyOf } from './views/Matrix'
 import type { Filters, Sel } from './views/Matrix'
 import { Palette } from './views/Palette'
@@ -62,6 +64,42 @@ export function App() {
   const [fx, setFx] = useState<Fx>(initialFx)
   const searchRef = useRef<HTMLInputElement>(null)
 
+  /** Уровень записи хранит main-процесс; здесь только его отражение. */
+  const [level, setLevel] = useState<WriteLevel>('R0')
+  const [toggle, setToggle] = useState<{ entity: Entity; enable: boolean } | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const say = useCallback((m: string) => {
+    setNotice(m)
+    clearTimeout(noticeTimer.current)
+    noticeTimer.current = setTimeout(() => setNotice(null), 8000)
+  }, [])
+  useEffect(() => {
+    void window.loadout.getWriteLevel().then(setLevel, () => undefined)
+    return () => clearTimeout(noticeTimer.current)
+  }, [])
+  const changeLevel = useCallback(
+    async (next: WriteLevel) => {
+      try {
+        setLevel(await window.loadout.setWriteLevel(next))
+      } catch {
+        say('Не удалось сменить уровень записи')
+      }
+    },
+    [say],
+  )
+  /** Номер обновления данных: раздел «Журнал» перечитывается по нему (`canRollback` зависит от файла). */
+  const [rev, setRev] = useState(0)
+
+  const requestToggle = useCallback(
+    (e: Entity, enable: boolean) => {
+      if (level !== 'R1') return say('Запись выключена (R0): включите уровень R1 в шапке окна')
+      if (!e.canToggle) return say(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}`)
+      setToggle({ entity: e, enable })
+    },
+    [level, say],
+  )
+
   /** Записи, изменившиеся при последнем обновлении с диска (подсвечиваются на несколько секунд). */
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set())
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
@@ -73,7 +111,10 @@ export function App() {
     try {
       const r = await window.loadout.scan()
       setScan(r.ok ? { status: 'ready', data: r.data, ms: r.ms } : { status: 'error', error: r.error })
-      if (r.ok) setUpdatedAt(new Date())
+      if (r.ok) {
+        setUpdatedAt(new Date())
+        setRev((n) => n + 1)
+      }
     } catch (e) {
       setScan({ status: 'error', error: e instanceof Error ? e.message : 'не удалось запросить скан' })
     }
@@ -87,6 +128,7 @@ export function App() {
     const off = window.loadout.onChanged((e) => {
       setScan((prev) => ({ status: 'ready', data: e.data, ms: prev.status === 'ready' ? prev.ms : 0 }))
       setUpdatedAt(new Date())
+      setRev((n) => n + 1)
       setFresh(new Set([...e.diff.added, ...e.diff.changed]))
       clearTimeout(freshTimer.current)
       freshTimer.current = setTimeout(() => setFresh(new Set()), 8000)
@@ -105,6 +147,11 @@ export function App() {
   const findings = useMemo(() => diagnose(entities, warnings, facts), [entities, warnings, facts])
   const hooks = useMemo(() => entities.filter((e) => e.kind === 'hook'), [entities])
   const selRow = sel ? rows.find((r) => r.key === sel.rowKey) : undefined
+  /** Выбранная запись: по id, а если выбрана главная в ячейке, то первая. */
+  const selEntity = useMemo<Entity | undefined>(() => {
+    const inst = sel ? selRow?.cells[sel.client]?.instances : undefined
+    return inst?.find((x) => x.id === sel?.id) ?? inst?.[0]
+  }, [sel, selRow])
 
   useEffect(() => {
     document.documentElement.dataset['fx'] = fx
@@ -153,6 +200,7 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (toggle) return // окно предпросмотра перехватывает клавиатуру само
       const k = keyOf(e)
       if ((e.ctrlKey || e.metaKey) && k === 'k') {
         e.preventDefault()
@@ -164,9 +212,12 @@ export function App() {
         return
       }
       const t = e.target
-      if (t instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return
+      if (t instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(t.tagName)) return
       if (palette) return
-      if (e.key === '?' || (e.code === 'Slash' && e.shiftKey)) {
+      if (e.key === ' ' && view === 'matrix' && selEntity) {
+        e.preventDefault() // иначе пробел прокрутит страницу
+        requestToggle(selEntity, selEntity.state === 'off' || selEntity.state === 'unknown')
+      } else if (e.key === '?' || (e.code === 'Slash' && e.shiftKey)) {
         setHelp((h) => !h)
       } else if ((e.code === 'Slash' || e.key === '/') && view === 'matrix') {
         e.preventDefault()
@@ -185,16 +236,28 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [palette, view, load])
+  }, [palette, view, load, toggle, selEntity, requestToggle])
 
   const paletteItems = useMemo<PaletteItem[]>(
     () => [
       ...VIEWS.map((v) => ({ label: `Раздел: ${v.label}`, hint: 'раздел', run: () => setView(v.id) })),
       { label: 'Пересканировать', hint: 'действие', run: () => void load(true) },
+      {
+        label: level === 'R1' ? 'Уровень записи: R0 (только чтение)' : 'Уровень записи: R1 (включать и выключать)',
+        hint: 'действие',
+        run: () => void changeLevel(level === 'R1' ? 'R0' : 'R1'),
+      },
+      ...(selEntity
+        ? [{
+            label: `${selEntity.state === 'off' || selEntity.state === 'unknown' ? 'Включить' : 'Выключить'}: ${selEntity.name}`,
+            hint: 'действие',
+            run: () => requestToggle(selEntity, selEntity.state === 'off' || selEntity.state === 'unknown'),
+          }]
+        : []),
       ...(['off', 'low', 'full'] as const).map((m) => ({ label: `Эффекты: ${m === 'off' ? 'выкл' : m === 'low' ? 'лёгкие' : 'полные'}`, hint: 'действие', run: () => setFx(m) })),
       ...rows.map((r) => ({ label: r.name, hint: r.kinds.join('+'), run: () => showRow(r) })),
     ],
-    [rows, load, showRow],
+    [rows, load, showRow, level, changeLevel, selEntity, requestToggle],
   )
 
   const problems = findings.filter((f) => f.severity === 'error').length
@@ -217,9 +280,15 @@ export function App() {
             <option value="full">полные</option>
           </select>
         </label>
-        <span className="mono s-on" title="Приложение работает только на чтение. Запись — этапы M3–M4 (docs/CONCEPT.md)">
-          R0 · только чтение
-        </span>
+        <button
+          className={`mono level ${level === 'R1' ? 's-stale' : 's-on'}`}
+          aria-pressed={level === 'R1'}
+          aria-label="Уровень записи"
+          title={level === 'R1' ? 'Запись включена: включить и выключить можно, каждое изменение с бэкапом. Нажмите, чтобы вернуть только чтение' : 'Только чтение. Нажмите, чтобы разрешить включать и выключать записи (с предпросмотром, бэкапом и откатом)'}
+          onClick={() => void changeLevel(level === 'R1' ? 'R0' : 'R1')}
+        >
+          {level === 'R1' ? 'R1 · запись включена' : 'R0 · только чтение'}
+        </button>
         <button onClick={() => void load(scan.status === 'ready')} aria-label="Пересканировать (клавиша R)">Скан</button>
         <button onClick={() => setPalette(true)} aria-label="Палитра команд">Ctrl+K</button>
       </header>
@@ -253,17 +322,12 @@ export function App() {
         ) : view === 'doctor' ? (
           <Doctor findings={findings} onShow={showEntity} />
         ) : (
-          <>
-            <h2>Журнал</h2>
-            <div className="hud card">
-              <p>Здесь будут снимки состояния, diff «что изменилось» и откат. Раздел появляется с этапа M3 (docs/CONCEPT.md §5, §10).</p>
-            </div>
-          </>
+          <Journal level={level} refreshKey={rev} onNotice={say} />
         )}
       </main>
 
       <aside aria-label="Инспектор">
-        <Inspector row={selRow} sel={sel} onPick={(id) => sel && setSel({ ...sel, id })} />
+        <Inspector row={selRow} sel={sel} onPick={(id) => sel && setSel({ ...sel, id })} level={level} onToggle={requestToggle} />
       </aside>
 
       <footer>
@@ -273,6 +337,7 @@ export function App() {
             обновлено {updatedAt.toLocaleTimeString('ru-RU')}
           </span>
         ) : null}
+        {notice ? <span role="status" id="notice" className="s-stale">{notice}</span> : null}
         {problems > 0 ? <span className="s-broken">✕ сломано: {problems}</span> : null}
         {warnings.length > 0 ? <span className="s-stale">◐ предупреждений: {warnings.length}</span> : null}
         <span className="sp" />
@@ -287,6 +352,7 @@ export function App() {
             <dt><kbd>h</kbd> <kbd>l</kbd></dt><dd>клиент влево / вправо</dd>
             <dt><kbd>/</kbd></dt><dd>поиск</dd>
             <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>разделы</dd>
+            <dt><kbd>Space</kbd></dt><dd>включить / выключить выбранное (нужен R1)</dd>
             <dt><kbd>r</kbd></dt><dd>пересканировать</dd>
             <dt><kbd>Ctrl+K</kbd></dt><dd>палитра</dd>
             <dt><kbd>?</kbd> <kbd>Esc</kbd></dt><dd>справка / закрыть</dd>
@@ -294,6 +360,17 @@ export function App() {
         </div>
       ) : null}
       {palette ? <Palette items={paletteItems} onClose={() => setPalette(false)} /> : null}
+      {toggle ? (
+        <ToggleDialog
+          entity={toggle.entity}
+          enable={toggle.enable}
+          onClose={() => setToggle(null)}
+          onDone={(m) => {
+            setToggle(null)
+            say(m)
+          }}
+        />
+      ) : null}
     </div>
   )
 }

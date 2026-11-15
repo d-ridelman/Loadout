@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Sidecar } from './sidecar'
-import { validateDiff, validateScan } from './validate'
+import { validateApplied, validateDiff, validateJournal, validatePlan, validateScan } from './validate'
 
 /** Подставное «ядро»: JSON-RPC по stdio, с командами для падения, шума и записи следов в файл. */
 const FAKE = `
@@ -130,7 +130,7 @@ describe('validate', () => {
     entities: [
       {
         id: 'a', logicalKey: 'k', kind: 'mcp', client: 'codex', scope: 'user', name: 'n', state: 'on',
-        origin: { file: '~/f', pointer: '/p' }, detail: {},
+        origin: { file: '~/f', pointer: '/p' }, detail: {}, canToggle: true,
       },
     ],
     warnings: [],
@@ -166,5 +166,34 @@ describe('validate', () => {
     })
     expect(() => validateDiff({ added: [1], removed: [], changed: [] })).toThrow()
     expect(() => validateDiff('x')).toThrow()
+  })
+
+  it('canToggle обязателен, toggleWhy необязателен', () => {
+    expect(() => validateScan({ ...ok, entities: [{ ...ok.entities[0], canToggle: undefined }] })).toThrow()
+    const out = validateScan({ ...ok, entities: [{ ...ok.entities[0], canToggle: false, toggleWhy: 'нет флага' }] })
+    expect(out.entities[0]).toMatchObject({ canToggle: false, toggleWhy: 'нет флага' })
+  })
+
+  const plan = {
+    entity: 'a1', client: 'codex', kind: 'plugin', name: 'n', file: '~/f', pointer: 'p', enable: false,
+    from: 'true', to: 'false', noop: false, affects: [], baseSha: 'a'.repeat(64),
+  }
+
+  it('план, результат записи и журнал: лишние поля отбрасываются, кривые формы отвергаются', () => {
+    expect(validatePlan({ ...plan, content: 'FAKE-SECRET' })).toEqual(plan)
+    expect(() => validatePlan({ ...plan, baseSha: 'zz' })).toThrow('план')
+    expect(() => validatePlan({ ...plan, client: 'evil' })).toThrow()
+    expect(() => validatePlan({ ...plan, affects: [1] })).toThrow()
+    expect(validateApplied({ op: '1-00', entity: 'a', from: 'true', to: 'false', path: 'C:/x' })).toEqual({
+      op: '1-00', entity: 'a', from: 'true', to: 'false',
+    })
+    expect(() => validateApplied({ op: 1 })).toThrow()
+    const row = {
+      id: '1-00', time: 5, op: 'toggle', of: null, client: 'codex', kind: 'plugin', name: 'n', pointer: 'p', file: '~/f',
+      from: 'true', to: 'false', rolledBack: false, canRollback: true,
+    }
+    expect(validateJournal([{ ...row, path: 'C:/x' }])).toEqual([row])
+    expect(() => validateJournal([{ ...row, op: 'delete' }])).toThrow()
+    expect(() => validateJournal({})).toThrow()
   })
 })

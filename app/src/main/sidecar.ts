@@ -47,8 +47,8 @@ export class Sidecar {
     this.spawnChild()
   }
 
-  /** Запрос без аргументов: у страницы нет способа передать ядру путь. */
-  request(method: string): Promise<unknown> {
+  /** Параметры собирает main-процесс из проверенных значений (id, флаг, хеш): у страницы нет способа передать ядру путь. */
+  request(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error('ядро остановлено'))
     if (this.dead || (!this.child && !this.restartTimer)) {
       // исчерпанные или не начатые попытки: повторный запрос (кнопка «Повторить») начинает заново
@@ -62,7 +62,7 @@ export class Sidecar {
         reject(new Error(`ядро не ответило: нет ответа на ${method} за ${(this.o.requestTimeoutMs ?? 20_000) / 1000} с`))
       }, this.o.requestTimeoutMs ?? 20_000)
       this.pending.set(id, { resolve, reject, timer })
-      this.write(JSON.stringify({ jsonrpc: '2.0', id, method }))
+      this.write(JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }))
     })
   }
 

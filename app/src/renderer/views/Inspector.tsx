@@ -1,5 +1,5 @@
 import { CLIENTS } from '../../shared/model'
-import type { Entity } from '../../shared/model'
+import type { Entity, WriteLevel } from '../../shared/model'
 import { GLYPH } from '../aggregate'
 import type { Row } from '../aggregate'
 import { Glyph, KindBadge, Panel } from '../ui'
@@ -32,7 +32,15 @@ const DETAIL_LABELS: Record<string, string> = {
   id: 'id записи',
 }
 
-export function Inspector({ row, sel, onPick }: { row: Row | undefined; sel: Sel | null; onPick: (id: string) => void }) {
+interface Props {
+  row: Row | undefined
+  sel: Sel | null
+  onPick: (id: string) => void
+  level: WriteLevel
+  onToggle: (e: Entity, enable: boolean) => void
+}
+
+export function Inspector({ row, sel, onPick, level, onToggle }: Props) {
   if (!row || !sel) {
     return (
       <>
@@ -128,11 +136,21 @@ export function Inspector({ row, sel, onPick }: { row: Row | undefined; sel: Sel
 
       <div className="actions">
         <button onClick={() => void window.loadout.copyText(e.origin.file)}>Копировать путь</button>
-        <button disabled title="Запись включается с M3 (CONCEPT.md §5)">
-          {e.state === 'off' ? 'Включить' : 'Выключить'}
+        <button
+          disabled={!e.canToggle || level !== 'R1'}
+          title={!e.canToggle ? e.toggleWhy : level !== 'R1' ? 'Включите уровень R1 в шапке окна' : 'Предпросмотр, затем запись (Space)'}
+          onClick={() => onToggle(e, e.state === 'off' || e.state === 'unknown')}
+        >
+          {e.state === 'off' || e.state === 'unknown' ? 'Включить' : 'Выключить'}
         </button>
       </div>
-      <p className="mute small">Loadout пока только читает. Запись пойдёт через план → diff → бэкап → откат (M3).</p>
+      <p className="mute small">
+        {!e.canToggle
+          ? `Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}.`
+          : level === 'R1'
+            ? 'Запись пойдёт через предпросмотр, бэкап и проверку; откат — в журнале.'
+            : 'Запись выключена (R0). Уровень R1 включается в шапке окна.'}
+      </p>
     </>
   )
 }

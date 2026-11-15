@@ -1,4 +1,15 @@
-import type { ChangedEvent, ClientId, Entity, EntityState, Kind, ScanDiff, ScanResult } from '../shared/model'
+import type {
+  Applied,
+  ChangedEvent,
+  ClientId,
+  Entity,
+  EntityState,
+  JournalEntry,
+  Kind,
+  Plan,
+  ScanDiff,
+  ScanResult,
+} from '../shared/model'
 
 const CLIENTS = ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek']
 const KINDS = ['plugin', 'mcp', 'skill', 'hook', 'agent', 'command', 'marketplace', 'connector']
@@ -27,7 +38,8 @@ export function validateScan(raw: unknown): ScanResult {
       isStr(e['kind']) && KINDS.includes(e['kind']) &&
       isStr(e['state']) && STATES.includes(e['state']) &&
       isObj(e['origin']) && isStr(e['origin']['file']) && isStr(e['origin']['pointer']) &&
-      isObj(e['detail'])
+      isObj(e['detail']) &&
+      typeof e['canToggle'] === 'boolean'
     if (!ok) throw new Error('в ответе ядра есть запись неожиданной формы')
     const o = e['origin'] as Record<string, string>
     return {
@@ -42,6 +54,8 @@ export function validateScan(raw: unknown): ScanResult {
       origin: { file: o['file'] as string, pointer: o['pointer'] as string },
       ...(isStr(e['note']) ? { note: e['note'] } : {}),
       detail: e['detail'] as Record<string, unknown>, // значения уже замаскированы ядром
+      canToggle: e['canToggle'] as boolean,
+      ...(isStr(e['toggleWhy']) ? { toggleWhy: e['toggleWhy'] } : {}),
     }
   })
   if (!(warnings as unknown[]).every(isStr)) throw new Error('предупреждения ядра неожиданной формы')
@@ -85,6 +99,53 @@ export function validateDiff(raw: unknown): ScanDiff {
     warningsChanged: raw['warningsChanged'] === true,
     factsChanged: raw['factsChanged'] === true,
   }
+}
+
+const known = (v: unknown): v is ClientId => isStr(v) && CLIENTS.includes(v)
+const kindOf = (v: unknown): v is Kind => isStr(v) && KINDS.includes(v)
+
+function bad(what: string): never {
+  throw new Error(`ядро вернуло ${what} неожиданной формы`)
+}
+
+/** Ответ `plan`: только поля плана, собранные заново. */
+export function validatePlan(raw: unknown): Plan {
+  if (!isObj(raw)) bad('план')
+  const { entity, client, kind, name, file, pointer, enable, from, to, noop, affects, baseSha } = raw
+  if (
+    !isStr(entity) || !known(client) || !kindOf(kind) || !isStr(name) || !isStr(file) || !isStr(pointer) ||
+    typeof enable !== 'boolean' || !isStr(from) || !isStr(to) || typeof noop !== 'boolean' ||
+    !isStr(baseSha) || !/^[0-9a-f]{64}$/.test(baseSha)
+  ) {
+    bad('план')
+  }
+  return { entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), baseSha }
+}
+
+export function validateApplied(raw: unknown): Applied {
+  if (!isObj(raw) || !isStr(raw['op']) || !isStr(raw['entity']) || !isStr(raw['from']) || !isStr(raw['to'])) {
+    bad('результат записи')
+  }
+  return { op: raw['op'], entity: raw['entity'], from: raw['from'], to: raw['to'] }
+}
+
+export function validateJournal(raw: unknown): JournalEntry[] {
+  if (!Array.isArray(raw) || raw.length > 1000) bad('журнал')
+  return raw.map((r: unknown) => {
+    if (
+      !isObj(r) || !isStr(r['id']) || typeof r['time'] !== 'number' || !isNum(r['time']) ||
+      (r['op'] !== 'toggle' && r['op'] !== 'rollback') || !(r['of'] === null || isStr(r['of'])) ||
+      !known(r['client']) || !kindOf(r['kind']) || !isStr(r['name']) || !isStr(r['pointer']) || !isStr(r['file']) ||
+      !isStr(r['from']) || !isStr(r['to']) || typeof r['rolledBack'] !== 'boolean' || typeof r['canRollback'] !== 'boolean'
+    ) {
+      bad('строку журнала')
+    }
+    return {
+      id: r['id'], time: r['time'], op: r['op'], of: r['of'], client: r['client'], kind: r['kind'],
+      name: r['name'], pointer: r['pointer'], file: r['file'], from: r['from'], to: r['to'],
+      rolledBack: r['rolledBack'], canRollback: r['canRollback'],
+    }
+  })
 }
 
 export type { ChangedEvent }

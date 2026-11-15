@@ -14,6 +14,7 @@ const ent = (over: Partial<Entity>): Entity => ({
   state: 'on',
   origin: { file: '~/f', pointer: '/p' },
   detail: {},
+  canToggle: false,
   ...over,
 })
 

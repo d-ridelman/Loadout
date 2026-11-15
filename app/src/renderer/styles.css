@@ -160,4 +160,9 @@ html[data-fx='off'] .beam { display: none; }
 .palette li { padding: 6px 10px; display: flex; justify-content: space-between; cursor: pointer; border-radius: 3px; }
 .palette li[aria-selected='true'] { background: rgba(189, 147, 249, 0.22); }
 .palette li[aria-selected='true'] .mute { color: var(--fg); }
+.modal { position: fixed; inset: 0; background: rgba(33, 34, 44, 0.72); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 95; }
+.modal .box { width: 520px; max-width: 92vw; padding: 16px 18px; }
+.modal p { margin: 6px 0; }
+button.level { border-color: transparent; }
+button.level[aria-pressed='true'] { border-color: var(--orange); background: rgba(255, 184, 108, 0.12); }
 .help { position: fixed; right: 364px; bottom: 40px; padding: 12px; z-index: 80; width: 280px; }

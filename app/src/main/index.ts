@@ -1,11 +1,12 @@
 import { app, BrowserWindow, clipboard, ipcMain, Menu, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
-import { existsSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { ChangedEvent, ScanResponse } from '../shared/model'
+import type { ChangedEvent, ClientId, Result, ScanResponse, WriteLevel } from '../shared/model'
 import { Sidecar } from './sidecar'
-import { validateDiff, validateScan } from './validate'
+import { validateApplied, validateDiff, validateJournal, validatePlan, validateScan } from './validate'
 
 /**
  * Переменные окружения (`LOADOUT_BIN`, `LOADOUT_HOME`, `LOADOUT_USER_DATA`, `ELECTRON_RENDERER_URL`) нужны разработке
@@ -53,7 +54,8 @@ function ensureSidecar(): Sidecar | string {
   if (!existsSync(bin) || !basename(bin).toLowerCase().startsWith('loadout')) {
     return tidy(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`)
   }
-  const args = ['serve']
+  // Каталог бэкапов передаём всегда, а право писать проверяет main (уровень R1) перед каждым `apply` и `rollback`.
+  const args = ['serve', '--backups', join(app.getPath('userData'), 'backups')]
   const homeOverride = envOf('LOADOUT_HOME')
   if (homeOverride) args.push('--home', homeOverride)
   let readySeen = false
@@ -105,6 +107,65 @@ async function pushChanged(params: unknown): Promise<void> {
   } catch {
     /* битое событие не должно ронять окно: следующий скан или ручное обновление догонит */
   }
+}
+
+/** Уровень записи (CONCEPT.md §5) хранится в профиле приложения; по умолчанию R0 — только чтение. */
+const settingsFile = (): string => join(app.getPath('userData'), 'settings.json')
+
+function readWriteLevel(): WriteLevel {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(settingsFile(), 'utf8'))
+    return typeof raw === 'object' && raw !== null && (raw as Record<string, unknown>)['writeLevel'] === 'R1' ? 'R1' : 'R0'
+  } catch {
+    return 'R0'
+  }
+}
+
+function saveWriteLevel(level: WriteLevel): void {
+  mkdirSync(app.getPath('userData'), { recursive: true })
+  writeFileSync(settingsFile(), JSON.stringify({ writeLevel: level }))
+}
+
+/** Процессы клиентов по имени образа; Claude Desktop и Claude Code оба зовутся `claude.exe`, поэтому это предупреждение, а не запрет. */
+const CLIENT_PROCESSES: Partial<Record<ClientId, string[]>> = {
+  'claude-code': ['claude.exe'],
+  'claude-desktop': ['claude.exe'],
+  codex: ['codex.exe'],
+}
+
+function runningOf(client: ClientId): Promise<string[]> {
+  const want = CLIENT_PROCESSES[client] ?? []
+  if (want.length === 0 || process.platform !== 'win32') return Promise.resolve([])
+  return new Promise((done) => {
+    execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, timeout: 5000, maxBuffer: 8 << 20 }, (err, out) => {
+      if (err) return done([])
+      const names = new Set(out.split(/\r?\n/).map((l) => /^"([^"]+)"/.exec(l)?.[1]?.toLowerCase()))
+      done(want.filter((n) => names.has(n)))
+    })
+  })
+}
+
+/** Ошибка ядра или проверки превращается в ответ окну: страница не получает исключений с путями. */
+async function guarded<T>(fn: () => Promise<T>): Promise<Result<T>> {
+  try {
+    return { ok: true, data: await fn() }
+  } catch (e) {
+    return { ok: false, error: tidy(e instanceof Error ? e.message : 'не удалось выполнить операцию') }
+  }
+}
+
+const ENTITY_RE = /^[0-9a-f]{16}(-\d{1,4})?$/
+const SHA_RE = /^[0-9a-f]{64}$/
+const OP_RE = /^[0-9]{13}-[0-9]{2}$/
+
+function writeCore(): Sidecar {
+  const s = ensureSidecar()
+  if (typeof s === 'string') throw new Error(s)
+  return s
+}
+
+function needWrite(): void {
+  if (readWriteLevel() !== 'R1') throw new Error('запись выключена: включите уровень R1 в шапке окна')
 }
 
 /** Принимаем вызовы только от нашей страницы: файл из сборки или адрес dev-сервера. */
@@ -159,6 +220,47 @@ void app.whenReady().then(() => {
   ipcMain.handle('copyText', (e, text: unknown) => {
     if (!trusted(e) || typeof text !== 'string') return
     clipboard.writeText(text.slice(0, 10_000))
+  })
+  // Каналы записи: страница передаёт только id записи, желаемое состояние, хеш из предпросмотра и номер операции.
+  const guard = (e: IpcMainInvokeEvent): void => {
+    if (!trusted(e)) throw new Error('untrusted sender')
+  }
+  ipcMain.handle('writeLevel:get', (e) => (guard(e), readWriteLevel()))
+  ipcMain.handle('writeLevel:set', (e, level: unknown) => {
+    guard(e)
+    if (level !== 'R0' && level !== 'R1') throw new Error('неизвестный уровень')
+    saveWriteLevel(level)
+    return level
+  })
+  ipcMain.handle('plan', (e, entity: unknown, enable: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (typeof entity !== 'string' || !ENTITY_RE.test(entity) || typeof enable !== 'boolean') throw new Error('неверные параметры')
+      const plan = validatePlan(await writeCore().request('plan', { entity, enable }))
+      return { ...plan, running: await runningOf(plan.client) }
+    })
+  })
+  ipcMain.handle('apply', (e, entity: unknown, enable: unknown, baseSha: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      needWrite()
+      if (typeof entity !== 'string' || !ENTITY_RE.test(entity) || typeof enable !== 'boolean' || typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) {
+        throw new Error('неверные параметры')
+      }
+      return validateApplied(await writeCore().request('apply', { entity, enable, baseSha }))
+    })
+  })
+  ipcMain.handle('journal', (e) => {
+    guard(e)
+    return guarded(async () => validateJournal(await writeCore().request('journal')))
+  })
+  ipcMain.handle('rollback', (e, op: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      needWrite()
+      if (typeof op !== 'string' || !OP_RE.test(op)) throw new Error('неверный номер операции')
+      return validateApplied(await writeCore().request('rollback', { op }))
+    })
   })
   createWindow()
   app.on('activate', () => {

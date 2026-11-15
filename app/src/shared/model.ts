@@ -26,7 +26,57 @@ export interface Entity {
   origin: { file: string; pointer: string }
   note?: string
   detail: Record<string, unknown>
+  /** Есть булев ключ, которым запись переключается (R1); иначе `toggleWhy` объясняет почему нет. */
+  canToggle: boolean
+  toggleWhy?: string
 }
+
+/** Предпросмотр переключения: ключ и старое/новое значение, содержимого файла в нём нет. */
+export interface Plan {
+  entity: string
+  client: ClientId
+  kind: Kind
+  name: string
+  file: string
+  pointer: string
+  enable: boolean
+  from: string
+  to: string
+  noop: boolean
+  /** Другие записи, которые меняет тот же ключ. */
+  affects: string[]
+  baseSha: string
+}
+
+export interface Applied {
+  op: string
+  entity: string
+  from: string
+  to: string
+}
+
+export interface JournalEntry {
+  id: string
+  time: number
+  op: 'toggle' | 'rollback'
+  of: string | null
+  client: ClientId
+  kind: Kind
+  name: string
+  pointer: string
+  file: string
+  from: string
+  to: string
+  rolledBack: boolean
+  canRollback: boolean
+}
+
+export type WriteLevel = 'R0' | 'R1'
+
+export type Result<T> = ({ ok: true; data: T } | { ok: false; error: string })
+
+/** Ответ на `plan`: кроме плана — какие процессы клиента сейчас запущены (они могут перезаписать файл). */
+export type PlanResponse = Result<Plan & { running: string[] }>
 
 /** Счётчики по каталогам клиентов; выводы делает Доктор (doctor.ts). */
 export interface Facts {
@@ -64,6 +114,13 @@ export type ScanResponse =
 export interface LoadoutApi {
   scan: () => Promise<ScanResponse>
   copyText: (text: string) => Promise<void>
+  /** Уровень записи хранит main; страница может его только прочитать и попросить сменить. */
+  getWriteLevel: () => Promise<WriteLevel>
+  setWriteLevel: (level: WriteLevel) => Promise<WriteLevel>
+  plan: (entity: string, enable: boolean) => Promise<PlanResponse>
+  apply: (entity: string, enable: boolean, baseSha: string) => Promise<Result<Applied>>
+  journal: () => Promise<Result<JournalEntry[]>>
+  rollback: (op: string) => Promise<Result<Applied>>
   /** Подписка на изменения конфигов; возвращает отписку. */
   onChanged: (cb: (e: ChangedEvent) => void) => () => void
 }
