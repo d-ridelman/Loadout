@@ -16,6 +16,7 @@ import { CopyDialog } from './views/CopyDialog'
 import { EditDialog } from './views/EditDialog'
 import { PlanDialog } from './views/PlanDialog'
 import { PluginDialog } from './views/PluginDialog'
+import { SkillDialog } from './views/SkillDialog'
 import { Profiles } from './views/Profiles'
 import { Ctxkit } from './views/Ctxkit'
 import { Matrix, keyOf } from './views/Matrix'
@@ -32,6 +33,7 @@ type Flow =
   | { type: 'copy'; entity: Entity }
   | { type: 'add' }
   | { type: 'plugin' }
+  | { type: 'skill' }
 type Fx = 'off' | 'low' | 'full'
 type ScanState =
   | { status: 'loading' }
@@ -156,6 +158,11 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
   const requestPlugin = useCallback(() => {
     if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
     setFlow({ type: 'plugin' })
+  }, [level, say])
+
+  const requestSkill = useCallback(() => {
+    if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
+    setFlow({ type: 'skill' })
   }, [level, say])
 
   /** Записи, изменившиеся при последнем обновлении с диска (подсвечиваются на несколько секунд). */
@@ -307,6 +314,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
       { label: t('Пересканировать', 'Rescan'), hint: t('действие', 'action'), run: () => void load(true) },
       { label: t('Добавить MCP-сервер', 'Add MCP server'), hint: t('действие', 'action'), run: requestAdd },
       { label: t('Установить плагин Claude Code', 'Install Claude Code plugin'), hint: t('действие', 'action'), run: requestPlugin },
+      { label: t('Установить скил из GitHub или папки', 'Install a skill from GitHub or a folder'), hint: t('действие', 'action'), run: requestSkill },
       ...(['R0', 'R1', 'R2'] as const)
         .filter((l) => l !== level)
         .map((l) => ({ label: t(`Уровень записи: ${levelLabel(l)}`, `Write level: ${levelLabel(l)}`), hint: t('действие', 'action'), run: () => void changeLevel(l) })),
@@ -320,7 +328,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
       ...(['off', 'low', 'full'] as const).map((m) => ({ label: t(`Эффекты: ${fxLabel(m)}`, `Effects: ${fxLabel(m)}`), hint: t('действие', 'action'), run: () => setFx(m) })),
       ...rows.map((r) => ({ label: r.name, hint: r.kinds.join('+'), run: () => showRow(r) })),
     ],
-    [rows, load, showRow, level, changeLevel, selEntity, requestToggle, requestAdd, requestPlugin],
+    [rows, load, showRow, level, changeLevel, selEntity, requestToggle, requestAdd, requestPlugin, requestSkill],
   )
 
   const problems = findings.filter((f) => f.severity === 'error').length
@@ -364,7 +372,9 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
           </select>
         </label>
         <button onClick={requestAdd} title={t('Записать новый MCP-сервер в конфиг клиента (R2)', 'Write a new MCP server to the client config (R2)')}>{t('Добавить MCP', 'Add MCP')}</button>
-        <button onClick={requestPlugin} title={t('Установить плагин Claude Code из добавленного маркетплейса (R2)', 'Install a Claude Code plugin from an added marketplace (R2)')}>{t('Установить плагин', 'Install plugin')}</button>
+        {/* короткие подписи: шапка на 1100px не помещает три «Установить …»; полное действие — в имени кнопки */}
+        <button onClick={requestPlugin} aria-label={t('Установить плагин', 'Install plugin')} title={t('Установить плагин Claude Code из маркетплейса (R2)', 'Install a Claude Code plugin from a marketplace (R2)')}>{t('+ Плагин', '+ Plugin')}</button>
+        <button onClick={requestSkill} aria-label={t('Установить скил', 'Install skill')} title={t('Установить скил Claude Code из GitHub или папки, с журналом и откатом (R2)', 'Install a Claude Code skill from GitHub or a folder, with journal and rollback (R2)')}>{t('+ Скил', '+ Skill')}</button>
         <button onClick={() => void load(scan.status === 'ready')} aria-label={t('Пересканировать (клавиша R)', 'Rescan (key R)')}>{t('Скан', 'Scan')}</button>
         <button onClick={() => setPalette(true)} aria-label={t('Палитра команд', 'Command palette')}>Ctrl+K</button>
         <select aria-label={t('Язык', 'Language')} title={t('Язык', 'Language')} className="mono" value={lang} onChange={(e) => onLang(e.target.value as Lang)}>
@@ -483,6 +493,9 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
             say(m)
           }}
         />
+      ) : null}
+      {flow?.type === 'skill' ? (
+        <SkillDialog onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: null, intent })} />
       ) : null}
       {flow?.type === 'copy' ? (
         <CopyDialog entity={flow.entity} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent })} />

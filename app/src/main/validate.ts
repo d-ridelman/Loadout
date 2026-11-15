@@ -118,7 +118,7 @@ function bad(ru: string, en: string): never {
 }
 
 const levelOf = (v: unknown): v is Level => v === 'R1' || v === 'R2'
-const opOf = (v: unknown): v is OpKind => v === 'toggle' || v === 'edit' || v === 'copy' || v === 'add'
+const opOf = (v: unknown): v is OpKind => v === 'toggle' || v === 'edit' || v === 'copy' || v === 'add' || v === 'installSkill'
 
 /** Ответ `plan`: только поля плана, собранные заново. */
 export function validatePlan(raw: unknown): Plan {

@@ -1,0 +1,18 @@
+{
+  "name": "e2e-market",
+  "description": "Local marketplace for Loadout checks",
+  "owner": { "name": "Loadout" },
+  "plugins": [
+    {
+      "name": "hello-plugin",
+      "source": "./plugins/hello-plugin",
+      "description": "Greets the user: a plugin with one skill",
+      "version": "1.0.0"
+    },
+    {
+      "name": "tool-plugin",
+      "source": { "source": "command", "command": "my-tool claude-plugin-path" },
+      "description": "Built by a local tool: installed only from Claude Code"
+    }
+  ]
+}

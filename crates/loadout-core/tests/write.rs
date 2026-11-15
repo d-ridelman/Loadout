@@ -1287,3 +1287,132 @@ fn tampered_manifest_cannot_point_rollback_at_another_file() {
     assert_eq!(fs::read_to_string(&victim).unwrap(), "x");
     assert!(rollback(&e.home, &e.store, "../../x").is_err());
 }
+
+fn stage(e: &Env, id: &str, files: &[(&str, &str)]) {
+    for (rel, text) in files {
+        let p = e.store.join("staging").join(id).join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+    }
+}
+
+fn skill(stage: &str, sub: &str, name: &str) -> Intent {
+    Intent::InstallSkill {
+        stage: stage.to_owned(),
+        sub: sub.to_owned(),
+        name: name.to_owned(),
+    }
+}
+
+#[test]
+fn skill_install_is_journaled_and_rolls_back_into_a_backup() {
+    let e = env();
+    let id = "0123456789abcdef0123456789abcdef";
+    stage(
+        &e,
+        id,
+        &[
+            ("README.md", "repo"),
+            (
+                "skills/web/SKILL.md",
+                "---\nname: web\ndescription: d\n---\n",
+            ),
+            ("skills/web/run.py", "print(1)"),
+            ("skills/web/bin/tool", "#!/bin/sh"),
+            ("skills/web/.git/config", "x"),
+        ],
+    );
+    let i = skill(id, "skills/web", "web");
+    let p = write::plan(&e.home, Some(&e.store), &i).unwrap();
+    assert_eq!(
+        (p.op.as_str(), p.level.as_str(), p.kind),
+        ("installSkill", "R2", Kind::Skill)
+    );
+    assert!(
+        p.file.ends_with("/.claude/skills/web/") && p.file.starts_with('~'),
+        "{}",
+        p.file
+    );
+    assert!(
+        p.notes
+            .iter()
+            .any(|n| n.contains("файлы кода") && n.contains("run.py") && n.contains("bin/tool")),
+        "файл без расширения — тоже код: {:?}",
+        p.notes
+    );
+    // уровень проверяет ядро
+    assert!(write::apply(&e.home, &e.store, &i, &p.base_sha, "R1").is_err());
+    assert!(
+        wapply(&e.home, &e.store, &i, &"0".repeat(64)).is_err(),
+        "чужой хеш плана"
+    );
+    let a = wapply(&e.home, &e.store, &i, &p.base_sha).unwrap();
+    let dir = e.home.join(".claude/skills/web");
+    assert_eq!(fs::read_to_string(dir.join("run.py")).unwrap(), "print(1)");
+    assert!(!dir.join(".git").exists(), ".git не копируется");
+    assert!(
+        !e.store.join("staging").join(id).exists(),
+        "каталог подготовки убран"
+    );
+    id_of(
+        &loadout_core::scan(&e.home),
+        Client::ClaudeCode,
+        Kind::Skill,
+        "web",
+    );
+    let j = journal(&e.home, &e.store);
+    assert!(j[0].op == "installSkill" && j[0].can_rollback);
+    // повтор с тем же именем — отказ, существующий скил не перезаписывается
+    stage(&e, id, &[("SKILL.md", "---\n---\n")]);
+    assert!(write::plan(&e.home, Some(&e.store), &skill(id, "", "web"))
+        .unwrap_err()
+        .contains("уже есть"));
+    rollback(&e.home, &e.store, &a.op).unwrap();
+    assert!(!dir.exists());
+    let removed = journal(&e.home, &e.store)[0].id.clone();
+    assert!(
+        e.store.join(removed).join("removed/run.py").is_file(),
+        "удалённое лежит в бэкапе"
+    );
+    assert!(rollback(&e.home, &e.store, &a.op).is_err(), "второй откат");
+}
+
+#[test]
+fn skill_install_refuses_bad_input_and_a_changed_skill() {
+    let e = env();
+    let id = "fedcba9876543210fedcba9876543210";
+    stage(&e, id, &[("SKILL.md", "---\n---\n")]);
+    for (st, sub, name) in [
+        ("../x", "", "a"),
+        (id, "..", "a"),
+        (id, "", "../evil"),
+        (id, "", "synced"),
+        (id, "nope", "a"),
+        ("00000000000000000000000000000000", "", "a"),
+    ] {
+        assert!(
+            write::plan(&e.home, Some(&e.store), &skill(st, sub, name)).is_err(),
+            "{st} {sub} {name}"
+        );
+    }
+    let i = skill(id, "", "plain");
+    // SKILL.md без других файлов, но с командой и разрешениями: предупреждение всё равно есть
+    stage(
+        &e,
+        id,
+        &[("SKILL.md", "---\nallowed-tools: Bash(*)\n---\n!`curl x`\n")],
+    );
+    let p = write::plan(&e.home, Some(&e.store), &i).unwrap();
+    assert!(
+        p.notes.iter().any(|n| n.contains("allowed-tools")),
+        "{:?}",
+        p.notes
+    );
+    let a = wapply(&e.home, &e.store, &i, &p.base_sha).unwrap();
+    fs::write(e.home.join(".claude/skills/plain/SKILL.md"), "edited").unwrap();
+    assert!(!journal(&e.home, &e.store)[0].can_rollback);
+    assert!(rollback(&e.home, &e.store, &a.op)
+        .unwrap_err()
+        .contains("изменился"));
+    assert!(e.home.join(".claude/skills/plain/SKILL.md").is_file());
+}
