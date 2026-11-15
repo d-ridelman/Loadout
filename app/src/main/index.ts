@@ -51,6 +51,15 @@ if (qa && !process.env.LOADOUT_USER_DATA) {
 const userData = envOf('LOADOUT_USER_DATA')
 if (userData) app.setPath('userData', resolve(userData))
 
+/**
+ * Один экземпляр на каталог данных: два окна с одним профилем писали бы в одни копии и конфиги. Блокировка Electron
+ * привязана к `userData` (проверено на Electron этого проекта: два процесса с разными `userData`, через `setPath` и через
+ * `--user-data-dir`, оба получают замок; с одним — второй получает `false`). Поэтому проверочные прогоны (`LOADOUT_USER_DATA`,
+ * `--user-data-dir` у pack-check) со своим профилем не мешают друг другу и установленной копии. Вызывать после `setPath`.
+ */
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) app.quit()
+
 // Окно простое (таблицы, текст, лёгкие эффекты): GPU-процесс с ускорением съедает ~120 МБ ради нескольких градиентов.
 // Программная отрисовка держит приватную память ниже (CONCEPT.md §7, цель 150 МБ).
 app.disableHardwareAcceleration()
@@ -292,7 +301,18 @@ function createWindow(): void {
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
+// Второй запуск с тем же профилем: первое окно выходит вперёд, второй процесс уже завершается (см. `gotLock`).
+app.on('second-instance', () => {
+  const win = lastWindow
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+})
+
 void app.whenReady().then(() => {
+  // второй экземпляр ничего не трогает: ни каталог подготовки, ни ядро, ни окно
+  if (!gotLock) return
   setLang(initialLang())
   Menu.setApplicationMenu(null)
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))

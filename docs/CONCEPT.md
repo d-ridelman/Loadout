@@ -190,6 +190,8 @@ loadoutd (Rust, sidecar)  ──  loadout-core (библиотека)
 
 Безопасность Electron: `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, строгий CSP без `unsafe-eval`, никаких удалённых URL, IPC только по allow-list, имена файлов из UI проверяются ядром (запись только в известные пути адаптеров).
 
+Один экземпляр: `app.requestSingleInstanceLock()` вызывается после `setPath('userData')`, второй запуск выводит первое окно вперёд (`second-instance`) и выходит сам. Замок Electron привязан к каталогу `userData` (проверено на двух процессах Electron: разные `userData` через `setPath` и через `--user-data-dir` оба получают замок, один и тот же — только первый), поэтому проверочные прогоны со своим профилем (`LOADOUT_USER_DATA`, `--user-data-dir` у `pack-check`) не мешают друг другу и установленной копии.
+
 Макет структуры репозитория:
 ```
 Loadout/

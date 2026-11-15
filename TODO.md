@@ -11,7 +11,6 @@
 Найдено при ревью и аудите, в этот заход не берётся. Номера строк даны на 16.11.
 
 - [ ] `ctxkit setup` пишет чужие файлы не атомарно: `fs::write` поверх `settings.json`, `CLAUDE.md`, `hooks.json`, `ccd-session-presets.json` (`crates/ctxkit/src/setup.rs`). `serde_json` без `preserve_order` пересортировывает ключи чужих файлов; признак общий на воркспейс, нужен отдельный прогон `cargo test` ядра.
-- [ ] Нет `requestSingleInstanceLock` (`app/src/main/index.ts:350`).
 - [ ] `ctxkit check` запускает команду через `cmd.exe /d /c` и ломает аргументы с `&`, `|`, `%`, `^`: `crates/ctxkit/src/check.rs:30-35`.
 - [ ] `install.ps1` перезаписывает пользовательский `PATH` раскрытыми значениями: `crates/ctxkit/scripts/install.ps1:27-31`.
 - [ ] Дубли: разворот `~` (`crates/loadout-core/src/write.rs:107-118` и `crates/loadout-core/src/lib.rs:42-54`) и поиск домашнего каталога (`crates/loadoutd/src/main.rs`).

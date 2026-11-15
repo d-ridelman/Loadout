@@ -188,6 +188,8 @@ Choice of technologies (driven by convenience, not by requirements):
 - A third language is not needed. We do not add Python/Go.
 - Packaging: `electron-builder`, an NSIS installer for Windows. The sidecar sits alongside, its path is hardcoded, not taken from PATH.
 
+Single instance: `app.requestSingleInstanceLock()` is called after `setPath('userData')`; a second launch brings the first window forward (`second-instance`) and exits. The Electron lock is bound to the `userData` directory (checked with two Electron processes: different `userData` set through `setPath` and through `--user-data-dir` both get the lock, the same one only the first), so check runs with their own profile (`LOADOUT_USER_DATA`, `--user-data-dir` in `pack-check`) do not interfere with each other or with an installed copy.
+
 Electron security: `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, a strict CSP without `unsafe-eval`, no remote URLs, IPC only via an allow-list, file names from the UI are validated by the core (writes only to the known adapter paths).
 
 Repository structure layout:
