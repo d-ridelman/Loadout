@@ -21,6 +21,7 @@ const api: LoadoutApi = {
   ctxkitDoctor: () => ipcRenderer.invoke('ctxkit:doctor'),
   ctxkitReport: (days) => ipcRenderer.invoke('ctxkit:report', days),
   ctxkitSetup: (options, dryRun) => ipcRenderer.invoke('ctxkit:setup', options, dryRun),
+  pluginInstall: (spec, dryRun) => ipcRenderer.invoke('plugin:install', spec, dryRun),
   // страница получает только данные события, без объекта IpcRendererEvent и самого ipcRenderer
   onChanged: (cb) => {
     const handler = (_e: IpcRendererEvent, payload: ChangedEvent) => cb(payload)

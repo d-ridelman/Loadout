@@ -202,9 +202,13 @@ try {
     writeFileSync(join(h, '.claude', 'projects', 'p', 'a.jsonl'), rows.join('\n') + '\n')
   })
   homes.push(home)
+  // подставной `claude`: ничего не скачивает, только записывает свои аргументы
+  const fakeClaude = join(home, 'fake-claude.mjs')
+  const claudeCalls = join(home, 'claude-calls.txt')
+  writeFileSync(fakeClaude, `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(claudeCalls)}, process.argv.slice(2).join(' ') + '\\n')\nconsole.log('installed')\n`)
 
   // ---- основной сценарий ----
-  session = await launch({ LOADOUT_HOME: home })
+  session = await launch({ LOADOUT_HOME: home, LOADOUT_CLAUDE: process.execPath, LOADOUT_CLAUDE_ARGS: JSON.stringify([fakeClaude]) })
   let { app, page } = session
   const pageErrors = []
   page.on('pageerror', (e) => pageErrors.push(`pageerror: ${e.message.slice(0, 200)}`))
@@ -557,6 +561,22 @@ try {
   await page.keyboard.press('5')
   await page.getByRole('row', { name: /добавление/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
   await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'откат добавления вернул config.toml побайтово')
+
+  // установка плагина CLI Claude Code: сначала команда, потом отдельное подтверждение; плохие имена отвергаются
+  await page.keyboard.press('1')
+  const pluginErr = (s, dry) => page.evaluate(async ([x, d]) => (await window.loadout.pluginInstall(x, d)).error ?? 'ok', [s, dry])
+  must((await pluginErr('x@y --scope local', true)) !== 'ok' && (await pluginErr('../x@y', true)) !== 'ok', 'имя плагина с пробелом или путём должно отвергаться')
+  must((await pluginErr('only-name', true)) !== 'ok', 'имя без маркетплейса должно отвергаться')
+  must((await pluginErr('demo@market', false)).includes('предпросмотр'), 'установка без предпросмотра должна отказывать')
+  await page.getByRole('button', { name: 'Установить плагин', exact: true }).click()
+  await dialog.getByLabel(/Плагин/).fill('demo@market')
+  await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
+  await dialog.getByText('claude plugin install demo@market --scope user').waitFor({ timeout: 8000 })
+  must(!existsSync(claudeCalls), 'предпросмотр не должен запускать claude')
+  await shot(page, 'm4-plugin-dialog-1280')
+  await dialog.getByRole('button', { name: 'Установить', exact: true }).click()
+  await waitFor(() => existsSync(claudeCalls) && readFileSync(claudeCalls, 'utf8').trim() === 'plugin install demo@market --scope user', 'claude вызван с точной командой установки')
+  await dialog.waitFor({ state: 'detached', timeout: 8000 })
 
   // профили: снять состояние, поправить, применить пакетом, откатить пакет целиком
   await page.keyboard.press('6')

@@ -59,12 +59,16 @@ export interface RunResult {
 }
 
 /** Запуск встроенного ctxkit: без оболочки, с таймаутом, окно не показывается. Ненулевой код — не исключение (`doctor` так сообщает об ошибках). */
-export function run(bin: string, args: string[], timeoutMs: number): Promise<RunResult> {
+export function run(bin: string, args: string[], timeoutMs: number, env?: Record<string, string>): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    execFile(bin, args, { windowsHide: true, timeout: timeoutMs, maxBuffer: 8 << 20, encoding: 'utf8' }, (err, stdout, stderr) => {
-      if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') return reject(new Error('ctxkit не найден в составе приложения'))
+    const opts = { windowsHide: true, timeout: timeoutMs, maxBuffer: 8 << 20, encoding: 'utf8' as const, ...(env ? { env: { ...process.env, ...env } } : {}) }
+    execFile(bin, args, opts, (err, stdout, stderr) => {
+      const what = bin.toLowerCase().includes('ctxkit') ? 'ctxkit' : 'программа'
+      if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return reject(new Error(what === 'ctxkit' ? 'ctxkit не найден в составе приложения' : 'Claude Code CLI (`claude`) не найден в PATH'))
+      }
       const e = err as (Error & { code?: number | string; killed?: boolean }) | null
-      if (e?.killed) return reject(new Error('ctxkit не ответил вовремя'))
+      if (e?.killed) return reject(new Error(`${what === 'ctxkit' ? 'ctxkit' : 'команда'} не ответила вовремя`))
       resolve({ code: e ? (typeof e.code === 'number' ? e.code : 1) : 0, stdout, stderr })
     })
   })

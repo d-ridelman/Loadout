@@ -244,6 +244,8 @@ export interface LoadoutApi {
   ctxkitReport: (days: 7 | 14 | 30) => Promise<Result<CtxkitReport>>
   /** `dryRun` — предпросмотр (любой уровень); применение требует R2 и совпадающего предпросмотра. */
   ctxkitSetup: (options: SetupOptions, dryRun: boolean) => Promise<Result<SetupResult>>
+  /** Установка плагина Claude Code через его CLI (`имя@маркетплейс`). `dryRun` — показать команду; установка требует R2 и такого же предпросмотра. */
+  pluginInstall: (spec: string, dryRun: boolean) => Promise<Result<SetupResult>>
   /** Подписка на изменения конфигов; возвращает отписку. */
   onChanged: (cb: (e: ChangedEvent) => void) => () => void
 }

@@ -13,6 +13,7 @@ import { AddDialog } from './views/AddDialog'
 import { CopyDialog } from './views/CopyDialog'
 import { EditDialog } from './views/EditDialog'
 import { PlanDialog } from './views/PlanDialog'
+import { PluginDialog } from './views/PluginDialog'
 import { Profiles } from './views/Profiles'
 import { Ctxkit } from './views/Ctxkit'
 import { Matrix, keyOf } from './views/Matrix'
@@ -28,6 +29,7 @@ type Flow =
   | { type: 'edit'; entity: Entity }
   | { type: 'copy'; entity: Entity }
   | { type: 'add' }
+  | { type: 'plugin' }
 type Fx = 'off' | 'low' | 'full'
 type ScanState =
   | { status: 'loading' }
@@ -133,6 +135,11 @@ export function App() {
   const requestAdd = useCallback(() => {
     if (!levelOk(level, 'R2')) return say(`Запись выключена (${level}): включите уровень R2 в шапке окна`)
     setFlow({ type: 'add' })
+  }, [level, say])
+
+  const requestPlugin = useCallback(() => {
+    if (!levelOk(level, 'R2')) return say(`Запись выключена (${level}): включите уровень R2 в шапке окна`)
+    setFlow({ type: 'plugin' })
   }, [level, say])
 
   /** Записи, изменившиеся при последнем обновлении с диска (подсвечиваются на несколько секунд). */
@@ -283,6 +290,7 @@ export function App() {
       ...VIEWS.map((v) => ({ label: `Раздел: ${v.label}`, hint: 'раздел', run: () => setView(v.id) })),
       { label: 'Пересканировать', hint: 'действие', run: () => void load(true) },
       { label: 'Добавить MCP-сервер', hint: 'действие', run: requestAdd },
+      { label: 'Установить плагин Claude Code', hint: 'действие', run: requestPlugin },
       ...(['R0', 'R1', 'R2'] as const)
         .filter((l) => l !== level)
         .map((l) => ({ label: `Уровень записи: ${LEVEL_LABEL[l]}`, hint: 'действие', run: () => void changeLevel(l) })),
@@ -296,7 +304,7 @@ export function App() {
       ...(['off', 'low', 'full'] as const).map((m) => ({ label: `Эффекты: ${m === 'off' ? 'выкл' : m === 'low' ? 'лёгкие' : 'полные'}`, hint: 'действие', run: () => setFx(m) })),
       ...rows.map((r) => ({ label: r.name, hint: r.kinds.join('+'), run: () => showRow(r) })),
     ],
-    [rows, load, showRow, level, changeLevel, selEntity, requestToggle, requestAdd],
+    [rows, load, showRow, level, changeLevel, selEntity, requestToggle, requestAdd, requestPlugin],
   )
 
   const problems = findings.filter((f) => f.severity === 'error').length
@@ -337,6 +345,7 @@ export function App() {
           </select>
         </label>
         <button onClick={requestAdd} title="Записать новый MCP-сервер в конфиг клиента (R2)">Добавить MCP</button>
+        <button onClick={requestPlugin} title="Установить плагин Claude Code из добавленного маркетплейса (R2)">Установить плагин</button>
         <button onClick={() => void load(scan.status === 'ready')} aria-label="Пересканировать (клавиша R)">Скан</button>
         <button onClick={() => setPalette(true)} aria-label="Палитра команд">Ctrl+K</button>
       </header>
@@ -437,6 +446,15 @@ export function App() {
       ) : null}
       {flow?.type === 'add' ? (
         <AddDialog onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: null, intent })} />
+      ) : null}
+      {flow?.type === 'plugin' ? (
+        <PluginDialog
+          onClose={closeFlow}
+          onDone={(m) => {
+            closeFlow()
+            say(m)
+          }}
+        />
       ) : null}
       {flow?.type === 'copy' ? (
         <CopyDialog entity={flow.entity} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent })} />

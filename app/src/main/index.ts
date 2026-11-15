@@ -491,6 +491,38 @@ void app.whenReady().then(() => {
       }
     })
   })
+  // ---- установка плагина Claude Code его собственным CLI: это сеть и чужой код, поэтому R2, предпросмотр и без `-y` ----
+  const SPEC_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+  let lastPluginPreview: string | undefined
+  let pluginBusy = false
+  ipcMain.handle('plugin:install', (e, spec: unknown, dryRun: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (typeof spec !== 'string' || !SPEC_RE.test(spec) || typeof dryRun !== 'boolean') {
+        throw new Error('имя плагина: имя@маркетплейс, буквы, цифры, `.`, `_`, `-`')
+      }
+      const args = ['plugin', 'install', spec, '--scope', 'user']
+      if (dryRun) {
+        lastPluginPreview = spec
+        return { dryRun, code: 0, output: `claude ${args.join(' ')}` }
+      }
+      if (readWriteLevel() !== 'R2') throw new Error('для установки плагина нужен уровень R2: включите его в шапке окна')
+      if (lastPluginPreview !== spec) throw new Error('сначала выполните предпросмотр с тем же именем')
+      if (pluginBusy) throw new Error('установка уже идёт')
+      lastPluginPreview = undefined
+      pluginBusy = true
+      try {
+        // стандартный запуск CLI из PATH; в разработке и проверках `LOADOUT_CLAUDE` (+ `LOADOUT_CLAUDE_ARGS`, JSON) подменяет его
+        const extra = envOf('LOADOUT_CLAUDE_ARGS')
+        const prefix: string[] = extra ? (JSON.parse(extra) as string[]) : []
+        const home = ctxHome()
+        const r = await ctxkit.run(envOf('LOADOUT_CLAUDE') ?? 'claude', [...prefix, ...args], 180_000, home ? { USERPROFILE: home, HOME: home } : undefined)
+        return { dryRun, code: r.code, output: tidy(`${r.stdout}${r.stderr}`).slice(0, 20_000) }
+      } finally {
+        pluginBusy = false
+      }
+    })
+  })
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -733,9 +733,9 @@ fn add_creates_a_server_in_json_and_toml_hides_env_values_and_rolls_back() {
     assert!(plan_s(&e, &remote("antigravity", "https://example.com/mcp")).is_err());
     assert!(plan_s(&e, &remote("claude-desktop", "https://example.com/mcp")).is_err());
 
-    // точка в имени: указатель в плане заключает ключ в кавычки
-    let p = plan_s(&e, &add_local("codex", "my.server")).unwrap();
-    assert_eq!(p.pointer, "mcp_servers.\"my.server\"");
+    // точка в имени: Codex её не принимает, остальным можно
+    assert!(plan_s(&e, &add_local("codex", "my.server")).is_err());
+    assert!(plan_s(&e, &add_local("claude-code", "my.server")).is_ok());
 
     // добавление не входит в пакет
     let items = [add_local("codex", "in-batch")];
