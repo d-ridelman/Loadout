@@ -181,6 +181,15 @@ pub fn cut(text: &str, oi: usize, ei: usize) -> Result<(String, String), String>
         .collect();
     // сверка: остальное то же, этой записи нет
     let (before, after) = (entries_of(text)?, entries_of(&new)?);
+    // сама вырезанная запись тоже должна разобраться в то же значение (строка блочного скаляра на `#` иначе осиротела бы)
+    let cut_entry = YamlLoader::load_from_str(&raw).ok().and_then(|d| {
+        d.first()
+            .and_then(Yaml::as_vec)
+            .and_then(|v| v.first().cloned())
+    });
+    if cut_entry.as_ref() != before[oi].get(ei) {
+        return Err("вырезанные строки не равны записи: правка отказана".into());
+    }
     let mut want = before;
     want[oi].remove(ei);
     if want != after {
@@ -198,9 +207,11 @@ pub fn put(text: &str, oi: usize, ei: usize, raw: &str) -> Result<String, String
         .and_then(Option::as_ref)
         .ok_or("нет такой операции")?;
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    // переводы строк как в файле: добавленная строка не должна делать CRLF-файл смешанным
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let mut chunk = raw.to_owned();
     if !chunk.ends_with('\n') {
-        chunk.push('\n');
+        chunk.push_str(nl);
     }
     let at = if seq.entries.is_empty() {
         seq.key_line // сразу под `insert:`
@@ -216,7 +227,7 @@ pub fn put(text: &str, oi: usize, ei: usize, raw: &str) -> Result<String, String
         new.push_str(l);
         // последняя строка файла могла быть без перевода строки
         if i + 1 == at && !l.ends_with('\n') {
-            new.push('\n');
+            new.push_str(nl);
         }
         if i + 1 == at {
             new.push_str(&chunk);
@@ -270,6 +281,23 @@ mod tests {
             );
             assert_eq!(put(&cut, oi, ei, &raw).unwrap(), t, "{oi}/{ei}");
         }
+    }
+
+    #[test]
+    fn block_scalar_line_starting_with_a_hash_is_not_mistaken_for_a_comment() {
+        let t = "- insert:\n    - id: a\n      script: |\n        echo hi\n        # end\n";
+        assert!(
+            cut(t, 0, 0).is_err(),
+            "строка `# end` — часть значения: вырезать нельзя"
+        );
+    }
+
+    #[test]
+    fn crlf_file_without_trailing_newline_gets_crlf_not_lf_back() {
+        let t = "- insert:\r\n    - id: a\r\n      name: p\r\n    - id: b\r\n      name: q";
+        let (c, raw) = cut(t, 0, 1).unwrap();
+        let back = put(&c, 0, 1, &raw).unwrap();
+        assert!(!back.replace("\r\n", "").contains('\n'), "{back:?}");
     }
 
     #[test]

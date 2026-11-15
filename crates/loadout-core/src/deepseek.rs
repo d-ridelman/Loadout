@@ -63,7 +63,13 @@ fn patch(c: &mut Ctx, path: &Path, scope: &str) {
             continue;
         };
         for (ei, entry) in entries.iter().enumerate() {
-            let ptr = format!("/{oi}/insert/{ei}");
+            // В указателе (а с ним и в id записи) стоит `id` записи, а не её номер: после выноса соседней записи номера
+            // сдвигаются, и позиционный id менялся бы посреди пакета.
+            let key = entry["id"]
+                .as_str()
+                .and_then(mask::safe_name)
+                .map_or_else(|| ei.to_string(), str::to_owned);
+            let ptr = format!("/{oi}/insert/{key}");
             insert_entry(c, &file, &ptr, scope, entry, (path, oi, ei));
         }
     }

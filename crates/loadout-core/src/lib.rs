@@ -394,6 +394,14 @@ fn scrub(v: &mut Value, forms: &[String]) {
     }
 }
 
+/// Путь домашнего каталога в строке (во всех формах `home_forms`) заменяется на `~`: для планов и журнала записи,
+/// куда попадают введённые пользователем команды и скопированные аргументы.
+pub(crate) fn scrub_home(home: &Path, s: &str) -> String {
+    let mut out = s.to_owned();
+    scrub_str(&mut out, &home_forms(home));
+    out
+}
+
 /// Все записи домашнего каталога, как они могут встретиться в чужих файлах:
 /// `C:\Users\x`, `C:/Users/x`, Git Bash `/c/Users/x`, WSL `/mnt/c/Users/x`.
 fn home_forms(home: &Path) -> Vec<String> {

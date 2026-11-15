@@ -177,16 +177,15 @@ function writeCore(): Sidecar {
   return s
 }
 
-/** Для записи нужен уровень не ниже требуемого операцией; проверка здесь, а не на странице. */
-function needLevel(level: 'R1' | 'R2'): void {
+/**
+ * Уровень, который main разрешает для этой операции. Передаётся ядру в том же запросе, что и сама запись
+ * (`maxLevel`), и ядро отказывает, если операции нужен выше: схема «спросили план, проверили, потом применили»
+ * поддавалась гонке (между вызовами можно вклинить `profileSave`).
+ */
+function grantedLevel(): 'R1' | 'R2' {
   const have = readWriteLevel()
-  if (LEVEL_RANK[have] < LEVEL_RANK[level]) {
-    throw new Error(
-      have === 'R0'
-        ? `запись выключена (R0): для этой операции включите уровень ${level} в шапке окна`
-        : `для этой операции нужен уровень ${level}: включите его в шапке окна`,
-    )
-  }
+  if (have === 'R0') throw new Error('запись выключена (R0): включите уровень записи в шапке окна')
+  return have
 }
 
 const CLIENT_IDS: readonly string[] = CLIENTS.map((c) => c.id)
@@ -314,9 +313,8 @@ void app.whenReady().then(() => {
     return guarded(async () => {
       const intent = validateIntent(raw)
       if (typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) throw new Error('неверные параметры')
-      // нужный уровень знает ядро (флаг — R1, корзина, правка, копирование — R2): спрашиваем у него, а не у страницы
-      needLevel(validatePlan(await writeCore().request('plan', intent)).level)
-      return validateApplied(await writeCore().request('apply', { ...intent, baseSha }))
+      // нужный операции уровень (флаг — R1, корзина, правка, копирование — R2) знает и проверяет ядро
+      return validateApplied(await writeCore().request('apply', { ...intent, baseSha, maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('journal', (e) => {
@@ -327,17 +325,14 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => {
       if (typeof op !== 'string' || !OP_RE.test(op)) throw new Error('неверный номер операции')
-      const entry = validateJournal(await writeCore().request('journal')).find((j) => j.id === op)
-      needLevel(entry?.level ?? 'R2') // операции не нашли в журнале: на всякий случай требуем высший уровень
-      return validateApplied(await writeCore().request('rollback', { op }))
+      return validateApplied(await writeCore().request('rollback', { op, maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('rollbackBatch', (e, batch: unknown) => {
     guard(e)
     return guarded(async () => {
       if (typeof batch !== 'string' || !BATCH_RE.test(batch)) throw new Error('неверный номер пакета')
-      needLevel('R2')
-      const done: unknown = await writeCore().request('rollbackBatch', { batch })
+      const done: unknown = await writeCore().request('rollbackBatch', { batch, maxLevel: grantedLevel() })
       if (!Array.isArray(done)) throw new Error('ядро вернуло ответ неожиданной формы')
       return done.map(validateApplied)
     })
@@ -376,8 +371,7 @@ void app.whenReady().then(() => {
     return guarded(async () => {
       if (typeof batchSha !== 'string' || !SHA_RE.test(batchSha)) throw new Error('неверные параметры')
       const n = validateName(name)
-      needLevel(validateBatchPlan(await writeCore().request('planProfile', { name: n })).level)
-      return validateBatchApplied(await writeCore().request('applyProfile', { name: n, batchSha }))
+      return validateBatchApplied(await writeCore().request('applyProfile', { name: n, batchSha, maxLevel: grantedLevel() }))
     })
   })
   createWindow()

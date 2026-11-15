@@ -1,12 +1,36 @@
 //! Запись R1 на копии фикстур во временном каталоге: настоящий дом и `fixtures/` не трогаются никогда.
 
 use loadout_core::model::{Client, Kind, ScanResult, State};
-use loadout_core::write::{self, journal, rollback, Applied, Intent, Plan};
+use loadout_core::write::{self, journal, Applied, Intent, Plan};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static N: AtomicU32 = AtomicU32::new(0);
+
+/// Тесты работают на уровне R2: ядро проверяет `max_level`, который в приложении приходит от main.
+const ML: &str = "R2";
+
+fn wapply(home: &Path, store: &Path, i: &Intent, sha: &str) -> Result<Applied, String> {
+    write::apply(home, store, i, sha, ML)
+}
+
+fn rollback(home: &Path, store: &Path, op: &str) -> Result<Applied, String> {
+    write::rollback(home, store, op, ML)
+}
+
+fn wbatch(
+    home: &Path,
+    store: &Path,
+    items: &[Intent],
+    sha: &str,
+) -> Result<(String, Vec<Applied>), String> {
+    write::apply_batch(home, store, items, sha, ML)
+}
+
+fn wrollback_batch(home: &Path, store: &Path, batch: &str) -> Result<Vec<Applied>, String> {
+    write::rollback_batch(home, store, batch, ML)
+}
 
 fn tog(id: &str, enable: bool) -> Intent {
     Intent::Toggle {
@@ -21,7 +45,7 @@ fn plan(home: &Path, id: &str, enable: bool) -> Result<Plan, String> {
 }
 
 fn apply(home: &Path, store: &Path, id: &str, enable: bool, sha: &str) -> Result<Applied, String> {
-    write::apply(home, store, &tog(id, enable), sha)
+    wapply(home, store, &tog(id, enable), sha)
 }
 
 struct Env {
@@ -402,7 +426,7 @@ fn plan_s(e: &Env, i: &Intent) -> Result<Plan, String> {
 
 fn apply_i(e: &Env, i: &Intent) -> Result<Applied, String> {
     let p = plan_s(e, i)?;
-    write::apply(&e.home, &e.store, i, &p.base_sha)
+    wapply(&e.home, &e.store, i, &p.base_sha)
 }
 
 fn ag_cfg(e: &Env) -> PathBuf {
@@ -419,7 +443,7 @@ fn mcp_without_flag_goes_to_trash_and_comes_back_with_the_same_id() {
         (p.level.as_str(), p.to.as_str()),
         ("R2", "в корзине Loadout")
     );
-    let done = write::apply(&e.home, &e.store, &tog(&id, false), &p.base_sha).unwrap();
+    let done = wapply(&e.home, &e.store, &tog(&id, false), &p.base_sha).unwrap();
 
     let after = read_json(&ag_cfg(&e));
     assert!(after["mcpServers"].get("tool-b").is_none());
@@ -490,10 +514,19 @@ fn owners_stash_entry_returns_inside_the_file_and_other_stash_keys_stay() {
     let live = id_in(&e, Client::ClaudeCode, "old");
     assert_ne!(live, id);
     assert_eq!(state_in(&e, &live), Some(State::On));
-    // обратно уходит в корзину Loadout, а не в стэш: стэш — самодеятельность владельца
+    // откат при неизменном файле возвращает запись в стэш владельца (файл из бэкапа), а не в корзину Loadout
     assert!(journal(&e.home, &e.store)[0].can_rollback);
+    let before = fs::read(&cj).unwrap();
     rollback(&e.home, &e.store, &done.op).unwrap();
-    assert_eq!(state_in(&e, &live), Some(State::Off));
+    assert_ne!(fs::read(&cj).unwrap(), before);
+    let v = read_json(&cj);
+    assert_eq!(v["_disabledMcpServers"]["old"]["command"], "old");
+    assert!(v["mcpServers"].get("old").is_none());
+    assert_eq!(state_in(&e, &id), Some(State::Off));
+    assert!(
+        !e.store.join("trash").join(format!("{id}.json")).exists(),
+        "корзина не использована"
+    );
 }
 
 #[test]
@@ -518,7 +551,7 @@ fn edit_replaces_command_and_args_masks_the_log_and_rolls_back_to_identical_byte
     assert_eq!(p.level, "R2");
     assert!(!format!("{p:?}").contains("FAKE-SECRET"), "{p:?}");
     assert!(p.to.contains("<masked>"), "{}", p.to);
-    let done = write::apply(&e.home, &e.store, &i, &p.base_sha).unwrap();
+    let done = wapply(&e.home, &e.store, &i, &p.base_sha).unwrap();
     let v = read_json(&path);
     assert_eq!(v["mcpServers"]["desk-tool"]["command"], "new-cmd");
     assert_eq!(v["mcpServers"]["desk-tool"]["args"][1], "FAKE-SECRET-NEW");
@@ -586,7 +619,7 @@ fn copy_translates_between_json_and_toml_keeps_secrets_inside_the_core() {
     assert!(!format!("{p:?}").contains("FAKE-SECRET"), "{p:?}");
     let cfg = codex_cfg(&e);
     let original = fs::read(&cfg).unwrap();
-    let done = write::apply(&e.home, &e.store, &to_codex, &p.base_sha).unwrap();
+    let done = wapply(&e.home, &e.store, &to_codex, &p.base_sha).unwrap();
     let t: toml::Table = fs::read_to_string(&cfg).unwrap().parse().unwrap();
     let s = &t["mcp_servers"]["desk-tool"];
     assert_eq!(s["command"].as_str(), Some("desk-tool"));
@@ -612,7 +645,7 @@ fn copy_translates_between_json_and_toml_keeps_secrets_inside_the_core() {
     )
     .unwrap();
     assert_eq!(p.client, Client::ClaudeCode);
-    write::apply(
+    wapply(
         &e.home,
         &e.store,
         &Intent::Copy {
@@ -701,7 +734,7 @@ fn deepseek_entry_goes_to_trash_by_lines_and_returns_byte_identical() {
         ("R2", "в корзине Loadout")
     );
     assert!(!format!("{p:?}").contains("FAKE-SECRET"));
-    let done = write::apply(&e.home, &e.store, &tog(&id, false), &p.base_sha).unwrap();
+    let done = wapply(&e.home, &e.store, &tog(&id, false), &p.base_sha).unwrap();
 
     let text = fs::read_to_string(&patch).unwrap();
     assert!(
@@ -739,6 +772,133 @@ fn deepseek_entry_goes_to_trash_by_lines_and_returns_byte_identical() {
         "{after}"
     );
     let _ = (done, back);
+}
+
+#[test]
+fn deepseek_profile_with_two_entries_of_one_operation_applies_both() {
+    let e = env();
+    let patch = e.home.join(".dsh/cordis.patch.yml");
+    let text = fs::read_to_string(&patch).unwrap();
+    // вторая запись MCP в той же операции: после выноса первой её номер сдвигается, а id остаётся прежним
+    let extra = "    - id: mcp-two\n      name: \"@deepseek-ai/dsh-mcp-client\"\n      config:\n        serverName: two\n        transport: stdio\n        command: two.exe\n";
+    let marker = "- insert:\n    - id: demo-hooks";
+    assert!(text.contains(marker));
+    fs::write(&patch, text.replace(marker, &format!("{extra}{marker}"))).unwrap();
+    let original = fs::read(&patch).unwrap();
+
+    let item = |name: &str| loadout_core::profiles::Item {
+        client: "deepseek".into(),
+        kind: "mcp".into(),
+        scope: "user".into(),
+        name: name.into(),
+        enable: false,
+    };
+    let prof = loadout_core::profiles::Profile {
+        name: "dsh".into(),
+        items: vec![item("demo"), item("two")],
+    };
+    loadout_core::profiles::save(&e.store, prof).unwrap();
+    let (items, missing) = loadout_core::profiles::intents(&e.home, &e.store, "dsh").unwrap();
+    assert!(missing.is_empty() && items.len() == 2);
+    let bp = write::plan_batch(&e.home, Some(&e.store), &items);
+    assert_eq!(bp.plans.iter().filter(|p| !p.noop).count(), 2);
+    let (batch, applied) = wbatch(&e.home, &e.store, &items, &bp.batch_sha).unwrap();
+    assert_eq!(
+        applied.len(),
+        2,
+        "обе записи выключены, ни одна не пропущена молча"
+    );
+    let r = loadout_core::scan_with(&e.home, Some(&e.store));
+    let off = |n: &str| {
+        r.entities
+            .iter()
+            .any(|x| x.client == Client::DeepSeek && x.name == n && x.state == State::Off)
+    };
+    assert!(off("demo") && off("two"));
+    wrollback_batch(&e.home, &e.store, &batch).unwrap();
+    assert_eq!(fs::read(&patch).unwrap(), original);
+}
+
+#[test]
+fn core_enforces_the_level_that_main_grants() {
+    let e = env();
+    let id = id_in(&e, Client::Antigravity, "tool-b");
+    let i = tog(&id, false); // вынос в корзину: R2
+    let p = plan_s(&e, &i).unwrap();
+    let err = write::apply(&e.home, &e.store, &i, &p.base_sha, "R1").unwrap_err();
+    assert!(err.contains("R2"), "{err}");
+    assert!(journal(&e.home, &e.store).is_empty());
+    let done = write::apply(&e.home, &e.store, &i, &p.base_sha, "R2").unwrap();
+    // откат операции R2 тоже требует R2
+    assert!(write::rollback(&e.home, &e.store, &done.op, "R1").is_err());
+    assert!(write::rollback(&e.home, &e.store, &done.op, "R2").is_ok());
+    // флаг (R1) проходит и с R1
+    let flag = id_of(
+        &loadout_core::scan(&e.home),
+        Client::Codex,
+        Kind::Plugin,
+        "p1@bundled",
+    );
+    let fp = plan_s(&e, &tog(&flag, false)).unwrap();
+    assert!(write::apply(&e.home, &e.store, &tog(&flag, false), &fp.base_sha, "R1").is_ok());
+}
+
+#[test]
+fn plan_and_journal_have_no_home_path_and_edit_keeps_crlf() {
+    let e = env();
+    let id = id_in(&e, Client::ClaudeDesktop, "desk-tool");
+    let path = e
+        .home
+        .join("AppData/Roaming/Claude/claude_desktop_config.json");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replace('\n', "\r\n")).unwrap();
+    let home = e.home.to_string_lossy().replace('\\', "/");
+    let i = Intent::Edit {
+        entity: id.clone(),
+        command: format!("{home}/bin/tool.exe"),
+        args: vec!["--root".into(), format!("{home}/work"), "-y".into()],
+    };
+    let p = plan_s(&e, &i).unwrap();
+    assert!(!p.to.contains(&home) && p.to.contains('~'), "{}", p.to);
+    let done = wapply(&e.home, &e.store, &i, &p.base_sha).unwrap();
+    let shown = format!(
+        "{}{:?}",
+        serde_json::to_string(&journal(&e.home, &e.store)).unwrap(),
+        done
+    );
+    assert!(!shown.contains(&home), "{shown}");
+    let out = fs::read_to_string(&path).unwrap();
+    assert!(
+        !out.replace("\r\n", "").contains('\n'),
+        "в CRLF-файле появились голые LF: {out:?}"
+    );
+
+    // копирование: путь в замаскированной команде тоже заменяется на `~`
+    let b = id_in(&e, Client::Antigravity, "tool-b");
+    let cp = plan_s(
+        &e,
+        &Intent::Copy {
+            entity: b,
+            to: "claude-desktop".into(),
+        },
+    )
+    .unwrap();
+    assert!(!cp.to.contains(&home), "{}", cp.to);
+}
+
+#[test]
+fn stale_trash_item_does_not_block_the_next_removal() {
+    let e = env();
+    let id = id_in(&e, Client::Antigravity, "tool-b");
+    let original = fs::read(ag_cfg(&e)).unwrap();
+    apply_i(&e, &tog(&id, false)).unwrap();
+    // запись вернули руками (например, `claude mcp add`): в корзине осталась устаревшая копия с тем же id
+    fs::write(ag_cfg(&e), &original).unwrap();
+    assert_eq!(state_in(&e, &id), Some(State::On));
+    assert!(e.store.join("trash").join(format!("{id}.json")).exists());
+    apply_i(&e, &tog(&id, false)).unwrap();
+    assert_eq!(state_in(&e, &id), Some(State::Off));
+    assert!(read_json(&ag_cfg(&e))["mcpServers"].get("tool-b").is_none());
 }
 
 #[test]
@@ -783,9 +943,9 @@ fn profile_applies_as_one_batch_and_rolls_back_together() {
         2,
         "меняются ровно две записи"
     );
-    assert!(write::apply_batch(&e.home, &e.store, &items, "стухшая подпись").is_err());
+    assert!(wbatch(&e.home, &e.store, &items, "стухшая подпись").is_err());
 
-    let (batch, applied) = write::apply_batch(&e.home, &e.store, &items, &bp.batch_sha).unwrap();
+    let (batch, applied) = wbatch(&e.home, &e.store, &items, &bp.batch_sha).unwrap();
     assert_eq!(applied.len(), 2);
     assert_eq!(state_in(&e, &id_p1), Some(State::Off));
     assert_eq!(state_in(&e, &id_b), Some(State::Off));
@@ -797,12 +957,12 @@ fn profile_applies_as_one_batch_and_rolls_back_together() {
         2
     );
 
-    let undone = write::rollback_batch(&e.home, &e.store, &batch).unwrap();
+    let undone = wrollback_batch(&e.home, &e.store, &batch).unwrap();
     assert_eq!(undone.len(), 2);
     assert_eq!(fs::read(codex_cfg(&e)).unwrap(), before_cfg);
     assert_eq!(read_json(&ag_cfg(&e)), before_ag);
     assert!(
-        write::rollback_batch(&e.home, &e.store, &batch).is_err(),
+        wrollback_batch(&e.home, &e.store, &batch).is_err(),
         "второй раз нечего откатывать"
     );
 
@@ -841,7 +1001,22 @@ fn real_machine_plans_are_dry_and_succeed() {
     eprintln!("планов построено: {planned}");
     assert!(planned > 0, "на машине нет ни одной переключаемой записи");
     let after: Vec<_> = files.iter().map(|f| fs::read(f).ok()).collect();
-    assert_eq!(before, after, "plan не должен менять файлы");
+    for (i, f) in files.iter().enumerate() {
+        // `~/.claude.json` — файл самой сессии Claude Code, он переписывается постоянно: для него побайтово сравнивать
+        // нельзя (раньше проходило по везению). Что `plan` ничего не пишет, видно и по отсутствию наших временных файлов.
+        if f.file_name().is_some_and(|n| n == ".claude.json") {
+            continue;
+        }
+        assert_eq!(before[i], after[i], "plan не должен менять {f:?}");
+    }
+    for f in &files {
+        let mut tmp = f.clone().into_os_string();
+        tmp.push(".loadout.tmp");
+        assert!(
+            !Path::new(&tmp).exists(),
+            "после plan остался временный файл записи"
+        );
+    }
 }
 
 #[test]

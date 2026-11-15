@@ -574,9 +574,18 @@ fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() 
         json!({ "op": "toggle", "entity": id, "enable": false }),
     );
     assert_eq!(plan["result"]["level"], "R2", "{plan}");
-    let done = s.call_with(
+    // без разрешения main (maxLevel) операция R2 не проходит, значит, уровень проверяет и ядро
+    let denied = s.call_with(
         "apply",
         json!({ "op": "toggle", "entity": id, "enable": false, "baseSha": plan["result"]["baseSha"] }),
+    );
+    assert!(
+        denied["error"]["message"].as_str().unwrap().contains("R2"),
+        "{denied}"
+    );
+    let done = s.call_with(
+        "apply",
+        json!({ "op": "toggle", "entity": id, "enable": false, "baseSha": plan["result"]["baseSha"], "maxLevel": "R2" }),
     );
     assert!(done["result"]["op"].is_string(), "{done}");
     s.wait_method("changed", Duration::from_secs(5))
@@ -598,6 +607,7 @@ fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() 
     assert_eq!(p["result"]["op"], "edit", "{p}");
     let mut ap = edit.clone();
     ap["baseSha"] = p["result"]["baseSha"].clone();
+    ap["maxLevel"] = json!("R2");
     let d = s.call_with("apply", ap);
     assert!(d["result"]["op"].is_string(), "{d}");
     let copy = json!({ "op": "copy", "entity": id_a, "to": "codex" });
@@ -641,11 +651,11 @@ fn profiles_save_plan_apply_and_roll_back_over_jsonrpc() {
     );
     let ap = s.call_with(
         "applyProfile",
-        json!({ "name": "рабочий", "batchSha": bp["result"]["batchSha"] }),
+        json!({ "name": "рабочий", "batchSha": bp["result"]["batchSha"], "maxLevel": "R2" }),
     );
     let batch = ap["result"]["batch"].clone();
     assert_eq!(ap["result"]["applied"].as_array().unwrap().len(), 1, "{ap}");
-    let rb = s.call_with("rollbackBatch", json!({ "batch": batch }));
+    let rb = s.call_with("rollbackBatch", json!({ "batch": batch, "maxLevel": "R2" }));
     assert_eq!(rb["result"].as_array().unwrap().len(), 1, "{rb}");
     let del = s.call_with("profileDelete", json!({ "name": "рабочий" }));
     assert_eq!(del["result"].as_array().unwrap().len(), 0);

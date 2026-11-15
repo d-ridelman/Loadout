@@ -173,6 +173,13 @@ impl Server {
             }
             serde_json::from_value(v).map_err(|_| "неверные параметры намерения".to_owned())
         };
+        // Наибольший уровень записи, который main разрешил для этого вызова; без параметра — только флаги (R1).
+        let max_level = || {
+            p.get("maxLevel")
+                .and_then(Value::as_str)
+                .filter(|l| matches!(*l, "R1" | "R2"))
+                .unwrap_or("R1")
+        };
         let profile_name = || {
             str_of("name").and_then(|n| {
                 if loadout_core::profiles::valid_name(n) {
@@ -194,12 +201,19 @@ impl Server {
                 &store()?,
                 &intent()?,
                 str_of("baseSha")?,
+                max_level(),
             )?)?,
-            "rollback" => json(&write::rollback(&self.home, &store()?, str_of("op")?)?)?,
+            "rollback" => json(&write::rollback(
+                &self.home,
+                &store()?,
+                str_of("op")?,
+                max_level(),
+            )?)?,
             "rollbackBatch" => json(&write::rollback_batch(
                 &self.home,
                 &store()?,
                 str_of("batch")?,
+                max_level(),
             )?)?,
             "profiles" => json(&loadout_core::profiles::list(&store()?))?,
             "profileSave" => {
@@ -235,7 +249,7 @@ impl Server {
                 let (items, _) =
                     loadout_core::profiles::intents(&self.home, &st, &profile_name()?)?;
                 let (batch, applied) =
-                    write::apply_batch(&self.home, &st, &items, str_of("batchSha")?)?;
+                    write::apply_batch(&self.home, &st, &items, str_of("batchSha")?, max_level())?;
                 json(&json!({ "batch": batch, "applied": applied }))?
             }
             _ => return Err("неизвестный метод".into()),

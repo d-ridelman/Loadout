@@ -138,10 +138,12 @@ fn put_json_text(body: &str, path: &[String], raw: &str, replace: bool) -> Resul
             let r = v.range();
             // многострочное значение встаёт с отступом строки, на которой начинается заменяемое
             let ind = line_indent(t, r.start);
+            // переводы строк как в файле: многострочный `args` не должен сделать CRLF-файл смешанным
+            let nl = if t.contains("\r\n") { "\r\n" } else { "\n" };
             Ok(format!(
                 "{}{}{}",
                 &t[..r.start],
-                reindent(&raw.replace("\r\n", "\n"), ind, "\n"),
+                reindent(&raw.replace("\r\n", "\n"), ind, nl),
                 &t[r.end..]
             ))
         }

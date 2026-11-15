@@ -33,7 +33,7 @@ pub fn why_not(e: &Entity) -> &'static str {
             "запрещён в deniedMcpServers по имени: ключ disableClaudeAiConnectors этого не снимает"
         }
         (Client::DeepSeek, Kind::Mcp) => {
-            "DeepSeek хранит записи в YAML с тегами (`!!js`): точечный перенос в корзину для него не сделан"
+            "запись не определилась как блок `- id: …` в cordis.patch.yml: вынос по строкам для неё не поддержан"
         }
         (_, Kind::Mcp) => "запись лежит в проекте или в плагине: их файлы Loadout не правит",
         _ => "правка записей этого типа не поддержана",
@@ -293,9 +293,9 @@ fn prep_toggle(
             .into();
             if !enable {
                 let (key, parent) = t.path.split_last().ok_or("пустой путь")?;
-                if store.is_some_and(|s| trash::read(s, &e.id).is_some()) {
-                    return Err("в корзине уже лежит запись с этим id".into());
-                }
+                // Запись с таким id в корзине, пока живая в файле, устаревшая (её заново добавили руками или возврат
+                // не дочистил корзину): перезаписываем, прежнюю копию храним в манифесте.
+                let stale = store.and_then(|s| trash::read(s, &e.id));
                 let (nt, raw) = match t.format {
                     Format::Yaml => {
                         let (oi, ei) = yaml_pos(&t.path)?;
@@ -306,7 +306,7 @@ fn prep_toggle(
                 new = nt.into_bytes();
                 trash = Some(TrashChange {
                     id: e.id.clone(),
-                    before: None,
+                    before: stale,
                     after: Some(trash::Item {
                         id: e.id.clone(),
                         format: if t.format == Format::Yaml {
@@ -600,6 +600,23 @@ fn prepare(
     scan: &ScanResult,
     i: &Intent,
 ) -> Result<Prepared, String> {
+    let mut p = prepare_raw(home, store, scan, i)?;
+    // В план и журнал уходят введённая команда и скопированные аргументы: путь домашнего каталога в них заменяется на `~`
+    for s in [&mut p.plan.from, &mut p.plan.to] {
+        *s = crate::scrub_home(home, s);
+    }
+    for n in &mut p.plan.notes {
+        *n = crate::scrub_home(home, n);
+    }
+    Ok(p)
+}
+
+fn prepare_raw(
+    home: &Path,
+    store: Option<&Path>,
+    scan: &ScanResult,
+    i: &Intent,
+) -> Result<Prepared, String> {
     match i {
         Intent::Toggle { entity, enable } => prep_toggle(home, store, scan, entity, *enable),
         Intent::Edit {
@@ -811,9 +828,13 @@ fn commit(
         }
     }
     if let Err(e) = atomic_write(&p.file, &p.new) {
-        if let Some(t) = &p.trash {
-            if t.before.is_none() {
-                trash::remove(store, &t.id);
+        // вынос не состоялся: корзина возвращается к прежнему виду (новой копии нет, устаревшая на месте)
+        if let Some(t) = p.trash.as_ref().filter(|t| t.after.is_some()) {
+            match &t.before {
+                None => trash::remove(store, &t.id),
+                Some(old) => {
+                    let _ = trash::write(store, old);
+                }
             }
         }
         return fail(e);
@@ -843,15 +864,35 @@ fn op_name(i: &Intent) -> &'static str {
     }
 }
 
+fn rank(level: &str) -> u8 {
+    match level {
+        "R2" => 2,
+        "R1" => 1,
+        _ => 0,
+    }
+}
+
+/// Уровень записи проверяет и ядро: `max_level` приходит от main одним запросом вместе с самой операцией, поэтому
+/// между проверкой и записью нельзя вклинить запрос, который подменит план (проверка «спросили план, потом применили»
+/// такой гонке поддавалась).
+fn need_level(need: &str, max_level: &str) -> Result<(), String> {
+    if rank(need) > rank(max_level) {
+        return Err(format!("для этой операции нужен уровень {need}"));
+    }
+    Ok(())
+}
+
 fn apply_one(
     home: &Path,
     store: &Path,
     i: &Intent,
     base_sha: Option<&str>,
     batch: Option<&str>,
+    max_level: &str,
 ) -> Result<Applied, String> {
     let scan = crate::scan_with(home, Some(store));
     let p = prepare(home, Some(store), &scan, i)?;
+    need_level(&p.plan.level, max_level)?;
     if base_sha.is_some_and(|b| b != p.plan.base_sha) {
         return Err("файл изменился после предпросмотра: постройте план заново".into());
     }
@@ -862,8 +903,14 @@ fn apply_one(
 }
 
 /// Выполняет намерение. `base_sha` — хеш файла из предпросмотра: если файл с тех пор изменился, отказ.
-pub fn apply(home: &Path, store: &Path, i: &Intent, base_sha: &str) -> Result<Applied, String> {
-    apply_one(home, store, i, Some(base_sha), None)
+pub fn apply(
+    home: &Path,
+    store: &Path,
+    i: &Intent,
+    base_sha: &str,
+    max_level: &str,
+) -> Result<Applied, String> {
+    apply_one(home, store, i, Some(base_sha), None, max_level)
 }
 
 /// План пакета (профиль): по каждому намерению, которое нашло запись, и список пропущенных.
@@ -917,21 +964,32 @@ pub fn apply_batch(
     store: &Path,
     items: &[Intent],
     batch_sha: &str,
+    max_level: &str,
 ) -> Result<(String, Vec<Applied>), String> {
     let bp = plan_batch(home, Some(store), items);
     if bp.batch_sha != batch_sha {
         return Err("состояние изменилось после предпросмотра: постройте план заново".into());
     }
+    need_level(&bp.level, max_level)?;
     let batch = format!("{:013}", now_ms());
     let mut done = Vec::new();
     for (n, i) in items.iter().enumerate() {
-        // уже в нужном состоянии (или записи нет): пропускаем, это не ошибка пакета
         let scan = crate::scan_with(home, Some(store));
         match prepare(home, Some(store), &scan, i) {
-            Ok(p) if !p.plan.noop => {}
-            _ => continue,
+            // уже в нужном состоянии: пропускаем, это не ошибка пакета
+            Ok(p) if p.plan.noop => continue,
+            Ok(_) => {}
+            // записи не было и в предпросмотре (он её пропустил): пропускаем; а если она была и пропала посреди
+            // пакета, молча пропускать нельзя: пакет остановится с ошибкой
+            Err(_) if !bp.plans.iter().any(|p| p.entity == i.entity()) => continue,
+            Err(e) => {
+                return Err(format!(
+                    "{e} (выполнено {} записей; сделанное можно откатить в журнале)",
+                    done.len()
+                ))
+            }
         }
-        match apply_one(home, store, i, None, Some(&batch)) {
+        match apply_one(home, store, i, None, Some(&batch), max_level) {
             Ok(a) => done.push(a),
             Err(e) => {
                 return Err(format!(
@@ -1039,15 +1097,22 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
 /// Откат операции. Флаги, правки и копии возвращают файл из бэкапа, только если после операции его никто не менял.
 /// Вынос в корзину и возврат откатываются обратной операцией над текущим файлом: `~/.claude.json` клиент переписывает
 /// постоянно, и сверка хеша там почти всегда отказывала бы.
-pub fn rollback(home: &Path, store: &Path, op: &str) -> Result<Applied, String> {
+pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<Applied, String> {
     let m = read_manifest(store, op)?;
+    need_level(&m.level, max_level)?;
     if m.op == "rollback" {
         return Err("откатывать можно только саму операцию, а не откат".into());
     }
     if manifests(store).iter().any(|x| x.of.as_deref() == Some(op)) {
         return Err("операция уже откатана".into());
     }
-    if let Some(enable) = m.inverse_enable {
+    // Обратная операция — когда в деле корзина или файл с тех пор менялся. Возврат из стэша владельца при неизменном
+    // файле откатывается возвратом файла из бэкапа: запись снова оказывается в стэше, а не в корзине Loadout.
+    let inverse = m.inverse_enable.filter(|_| {
+        m.trash_id.is_some()
+            || file_sha(Path::new(&m.path)).as_deref() != Some(m.sha_after.as_str())
+    });
+    if let Some(enable) = inverse {
         let scan = crate::scan_with(home, Some(store));
         let id = resolve_entity(&scan, &m)
             .ok_or("запись не найдена: возможно, её изменили вручную")?
@@ -1109,7 +1174,12 @@ pub fn rollback(home: &Path, store: &Path, op: &str) -> Result<Applied, String> 
 }
 
 /// Откатывает пакет целиком, начиная с последней операции. Останавливается на первой ошибке.
-pub fn rollback_batch(home: &Path, store: &Path, batch: &str) -> Result<Vec<Applied>, String> {
+pub fn rollback_batch(
+    home: &Path,
+    store: &Path,
+    batch: &str,
+    max_level: &str,
+) -> Result<Vec<Applied>, String> {
     let ops: Vec<String> = manifests(store)
         .into_iter()
         .filter(|m| m.batch.as_deref() == Some(batch) && m.op != "rollback")
@@ -1121,7 +1191,7 @@ pub fn rollback_batch(home: &Path, store: &Path, batch: &str) -> Result<Vec<Appl
         if all.iter().any(|x| x.of.as_deref() == Some(id.as_str())) {
             continue;
         }
-        done.push(rollback(home, store, &id)?);
+        done.push(rollback(home, store, &id, max_level)?);
     }
     if done.is_empty() {
         return Err("в пакете нечего откатывать".into());
