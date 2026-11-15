@@ -73,7 +73,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
         </div>
       ) : (
         <div className="hud tablewrap">
-          <table aria-label="Журнал операций">
+          <table className="left" aria-label="Журнал операций">
             <thead>
               <tr>
                 <th scope="col">ВРЕМЯ</th>
@@ -81,7 +81,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
                 <th scope="col">ЗАПИСЬ</th>
                 <th scope="col">ЗНАЧЕНИЕ</th>
                 <th scope="col">СТАТУС</th>
-                <th scope="col" />
+                <th scope="col">ДЕЙСТВИЯ</th>
               </tr>
             </thead>
             <tbody>
@@ -102,7 +102,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
                       <div className="mute small">{CLIENTS.find((c) => c.id === j.client)?.name} · {j.pointer}</div>
                     </td>
                     <td className="mono vcell wrap">{j.from} → {j.to}</td>
-                    <td className="nw">{j.rolledBack ? '↺ откатано' : j.op === 'rollback' ? 'откат записан' : j.canRollback ? 'можно откатить' : 'уже менялось'}</td>
+                    <td className="nw">{j.rolledBack ? '↺ откатано' : j.op === 'rollback' ? 'откат записан' : j.canRollback ? 'в силе' : 'уже менялось'}</td>
                     <td>
                       <div className="actions col">
                         <button

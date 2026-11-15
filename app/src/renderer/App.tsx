@@ -291,7 +291,7 @@ export function App() {
   const problems = findings.filter((f) => f.severity === 'error').length
 
   return (
-    <div id="app">
+    <div id="app" className={view === 'matrix' ? undefined : 'noaside'}>
       <header>
         <span className="brand">
           <Logo />
@@ -366,7 +366,8 @@ export function App() {
         )}
       </main>
 
-      <aside aria-label="Инспектор">
+      {/* инспектор показывает запись матрицы: в других разделах он не относится к экрану и скрыт */}
+      <aside aria-label="Инспектор" hidden={view !== 'matrix'}>
         <Inspector
           row={selRow}
           sel={sel}

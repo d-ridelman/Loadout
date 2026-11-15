@@ -17,7 +17,9 @@ export function CopyDialog({ entity, onSubmit, onClose }: Props) {
   const [to, setTo] = useState<ClientId | null>(null)
   return (
     <Modal label={`Копировать в другой клиент: ${entity.name}`} onEscape={onClose}>
-      <h2>Копировать в клиент</h2>
+      <h2>
+        Копировать в клиент <span className="lvl">R2</span>
+      </h2>
       <p>
         <b>{entity.name}</b>
       </p>

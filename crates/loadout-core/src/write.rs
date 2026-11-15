@@ -264,8 +264,19 @@ fn prep_toggle(
             // `disableClaudeAiConnectors: true` значит «выключено»
             let want = enable != t.inverted;
             plan.noop = cur == Some(want) || (cur.is_none() && enabled(e.state) == Some(enable));
-            plan.from = cur.map_or_else(|| "не задан".to_owned(), |b| b.to_string());
-            plan.to = want.to_string();
+            // Словами «включено/выключено», а не значением ключа: у `disableClaudeAiConnectors` `true` значит «выключено».
+            let word = |on: bool| {
+                if on {
+                    "включено"
+                } else {
+                    "выключено"
+                }
+            };
+            plan.from = cur.map_or_else(
+                || "не задан".to_owned(),
+                |b| word(b != t.inverted).to_owned(),
+            );
+            plan.to = word(enable).to_owned();
             if !plan.noop {
                 new = edit::set_bool(t.format, &text, &t.path, want)?.into_bytes();
             }

@@ -76,7 +76,10 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
         {title(plan, intent)} {plan ? <span className="lvl">{plan.level}</span> : null}
       </h2>
       <p>
-        <b>{entity.name}</b> <span className="mute">· {client}</span>
+        <b>{entity.name}</b>{' '}
+        <span className="mute">
+          · {plan?.op === 'copy' ? `${CLIENTS.find((c) => c.id === entity.client)?.name ?? entity.client} → ${client}` : client}
+        </span>
       </p>
       {state.status === 'loading' ? (
         <p className="mute" role="status">Строю план…</p>

@@ -19,7 +19,9 @@ export function EditDialog({ entity, onSubmit, onClose }: Props) {
   const ok = command.trim() !== '' && command.length <= 500 && lines.length <= 64 && lines.every((l) => l.length <= 500)
   return (
     <Modal label={`Править команду: ${entity.name}`} onEscape={onClose}>
-      <h2>Править команду</h2>
+      <h2>
+        Править команду <span className="lvl">R2</span>
+      </h2>
       <p>
         <b>{entity.name}</b>
       </p>

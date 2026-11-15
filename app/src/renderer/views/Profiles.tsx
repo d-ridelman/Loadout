@@ -141,7 +141,7 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
   const canApply = levelOk(level, 'R2')
   const nameOk = /^[\p{L}\p{N} _.-]{1,40}$/u.test(name) && name.trim() === name
   return (
-    <>
+    <div className="page">
       <h2>Профили</h2>
       <div className="hud card">
         <form
@@ -209,7 +209,7 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
                   >
                     Сохранить изменения
                   </button>
-                  <button onClick={() => void run(window.loadout.deleteProfile(p.name), `Профиль «${p.name}» удалён`)}>Удалить профиль</button>
+                  <button className="danger" onClick={() => void run(window.loadout.deleteProfile(p.name), `Профиль «${p.name}» удалён`)}>Удалить профиль</button>
                 </div>
               </section>
             )
@@ -226,6 +226,6 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
           }}
         />
       ) : null}
-    </>
+    </div>
   )
 }

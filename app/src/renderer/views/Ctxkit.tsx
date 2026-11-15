@@ -86,7 +86,7 @@ export function Ctxkit({ level, onNotice }: Props) {
   const canApply = level === 'R2' && previewKey === key && !busy
 
   return (
-    <>
+    <div className="page">
       <h2>ctxkit</h2>
       <p className="mute small">
         Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и переключает рутину на дешёвые модели. Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.
@@ -120,7 +120,7 @@ export function Ctxkit({ level, onNotice }: Props) {
         >
           <fieldset className="choices">
             <legend className="mute small">Что настроить</legend>
-            <label><input type="checkbox" checked disabled /> Claude Code: хуки, модели, агенты Explore и checker</label>
+            <label><input type="checkbox" checked disabled /> Claude Code: хуки, модели, агенты Explore и checker (всегда)</label>
             <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> Блок правил в CLAUDE.md</label>
             <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> Claude Desktop (пресеты; закройте его перед применением)</label>
             <label><input type="checkbox" checked={opts.antigravity} onChange={(e) => change({ antigravity: e.target.checked })} /> Antigravity</label>
@@ -216,7 +216,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             <p className="mute small">
               Вызовы по агентам: {sum.agents.length ? sum.agents.map(([k, n]) => `${k} ×${n}`).join(', ') : 'нет'}.
             </p>
-            <table aria-label="Ходы по дням">
+            <table className="left" aria-label="Ходы по дням">
               <thead>
                 <tr>
                   <th scope="col">ДЕНЬ</th>
@@ -250,6 +250,6 @@ export function Ctxkit({ level, onNotice }: Props) {
         ) : null}
         <div className="actions col"><button onClick={reloadReport}>Пересчитать</button></div>
       </section>
-    </>
+    </div>
   )
 }

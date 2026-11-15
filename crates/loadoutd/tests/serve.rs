@@ -460,7 +460,7 @@ fn write_methods_refuse_without_backups_but_plan_works() {
     let mut s = Server::start();
     let id = entity_id(&s.call("snapshot"), "codex", "p1@bundled");
     let plan = s.call_with("plan", json!({ "entity": id, "enable": false }));
-    assert_eq!(plan["result"]["to"], "false", "{plan}");
+    assert_eq!(plan["result"]["to"], "выключено", "{plan}");
     for (m, p) in [
         (
             "apply",

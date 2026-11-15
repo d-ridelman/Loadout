@@ -139,7 +139,7 @@ fn toggle_roundtrip_changes_one_value_and_rolls_back_to_identical_bytes() {
     );
     let original = fs::read_to_string(codex_cfg(&e)).unwrap();
     let p = plan(&e.home, &id, false).unwrap();
-    assert!(!p.noop && (p.from.as_str(), p.to.as_str()) == ("true", "false"));
+    assert!(!p.noop && (p.from.as_str(), p.to.as_str()) == ("включено", "выключено"));
 
     let done = apply(&e.home, &e.store, &id, false, &p.base_sha).unwrap();
     let after = fs::read_to_string(codex_cfg(&e)).unwrap();
@@ -254,7 +254,8 @@ fn connectors_share_one_key_and_the_plan_says_so() {
     assert!(conns.len() >= 2, "в фикстуре несколько коннекторов");
     assert!(conns.iter().all(|c| c.state == State::Off));
     let p = plan(&e.home, &conns[0].id, true).unwrap();
-    assert_eq!((p.from.as_str(), p.to.as_str()), ("true", "false"));
+    // у `disableClaudeAiConnectors` значение `true` значит «выключено»: словами это видно без знания ключа
+    assert_eq!((p.from.as_str(), p.to.as_str()), ("выключено", "включено"));
     assert_eq!(p.affects.len(), conns.len() - 1);
     apply(&e.home, &e.store, &conns[0].id, true, &p.base_sha).unwrap();
     let r = loadout_core::scan(&e.home);
@@ -387,7 +388,7 @@ fn codex_app_flag_toggles_through_the_apps_table() {
         "demo-app",
     );
     let p = plan(&e.home, &id, true).unwrap();
-    assert_eq!((p.from.as_str(), p.to.as_str()), ("false", "true"));
+    assert_eq!((p.from.as_str(), p.to.as_str()), ("выключено", "включено"));
     apply(&e.home, &e.store, &id, true, &p.base_sha).unwrap();
     assert_eq!(state_of(&e.home, &id), Some(State::On));
     let text = fs::read_to_string(codex_cfg(&e)).unwrap();

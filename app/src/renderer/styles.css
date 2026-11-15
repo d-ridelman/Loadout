@@ -58,7 +58,18 @@ footer > span.sp { flex: 1; min-width: 0; }
 footer > #notice { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 footer > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 td.nw { white-space: nowrap; }
-td.vcell { max-width: 260px; text-align: left; }
+td.vcell { max-width: 260px; text-align: left; word-break: normal; overflow-wrap: break-word; }
+/* таблицы с текстом (журнал, дни ctxkit): и заголовки, и ячейки по левому краю, чтобы колонки читались */
+table.left th, table.left td { text-align: left; }
+table.left td.name { word-break: normal; overflow-wrap: break-word; }
+/* без инспектора (разделы кроме матрицы): страница на всю ширину, строки текста не растягиваются */
+#app.noaside { grid-template-columns: 172px 1fr; }
+#app.noaside header, #app.noaside footer { grid-column: 1 / 3; }
+aside[hidden] { display: none; }
+.page { max-width: 980px; }
+.form select { max-width: 360px; }
+button.danger { border-color: var(--red); color: var(--red-text); }
+button.danger:hover:not(:disabled) { background: rgba(255, 85, 85, 0.12); border-color: var(--red); }
 .logo { font: 700 15px var(--mono); letter-spacing: 0.28em; color: var(--cyan); text-shadow: 0 0 10px rgba(139, 233, 253, 0.55); }
 .logo i { color: var(--pink); font-style: normal; }
 
@@ -97,7 +108,8 @@ body.paused * { animation-play-state: paused !important; }
 .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
 .bar .chip[aria-pressed='true'] { border-color: var(--pink); background: rgba(255, 121, 198, 0.12); }
 .check { display: inline-flex; gap: 6px; align-items: center; color: var(--mute); }
-.tablewrap { padding: 2px 8px 8px; overflow-x: auto; }
+/* `clip`, а не `auto`: у `auto` прокручиваемым предком становилась обёртка и шапка таблицы (sticky) не залипала при прокрутке страницы */
+.tablewrap { padding: 2px 8px 8px; overflow-x: clip; }
 table { border-collapse: collapse; width: 100%; }
 th { font: 600 11px var(--mono); text-align: center; color: var(--mute); padding: 8px 6px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
 th:first-child { text-align: left; }
@@ -184,7 +196,8 @@ button.level[aria-pressed='true'] { border-color: var(--orange); background: rgb
 .form label { display: flex; flex-direction: column; gap: 4px; color: var(--mute); }
 .form input, .form textarea, select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--fg); font: 13px var(--mono); }
 .form textarea { resize: vertical; min-height: 80px; }
-.choices { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.choices { border: 0; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.choices legend { padding: 0 0 4px; }
 .choices label, .form .choices label { display: flex; flex-direction: row; gap: 8px; align-items: center; color: var(--fg); }
 .cards { display: flex; flex-direction: column; gap: 12px; }
 .card h3 { margin: 0 0 8px; font: 600 12px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); }

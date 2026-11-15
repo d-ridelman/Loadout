@@ -382,7 +382,7 @@ try {
   await dialog.waitFor({ timeout: 8000 })
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   const dText = await dialog.innerText()
-  must(dText.includes('~/.codex/config.toml') && dText.includes('true') && dText.includes('false'), `предпросмотр без файла и значений: ${dText}`)
+  must(dText.includes('~/.codex/config.toml') && dText.includes('включено') && dText.includes('выключено'), `предпросмотр без файла и значений: ${dText}`)
   must(!dText.includes('FAKE-SECRET') && !dText.includes(home.replaceAll('\\', '/')), 'в предпросмотре секрет или путь дома')
   const v1 = await axeCheck(page, 'предпросмотр')
   must(v1.length === 0, `axe: предпросмотр: ${v1.map((x) => x.id).join(', ')}`)
