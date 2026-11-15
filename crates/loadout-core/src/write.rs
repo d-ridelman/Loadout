@@ -9,6 +9,7 @@
 use crate::edit;
 use crate::mask;
 use crate::model::{Client, Entity, Format, Kind, ScanResult, Source, State, TargetKind};
+use crate::tilde;
 use crate::trash;
 use crate::yaml_edit;
 use serde::{Deserialize, Serialize};
@@ -103,20 +104,6 @@ pub(crate) fn sha(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
-}
-
-/// `~/…` с прямыми слэшами: путь для показа без имени пользователя.
-fn tilde(home: &Path, p: &Path) -> String {
-    let (s, h) = (
-        p.to_string_lossy().replace('\\', "/"),
-        home.to_string_lossy().replace('\\', "/"),
-    );
-    let h = h.trim_end_matches('/');
-    if s.len() > h.len() && s[..h.len()].eq_ignore_ascii_case(h) && s.as_bytes()[h.len()] == b'/' {
-        format!("~{}", &s[h.len()..])
-    } else {
-        s
-    }
 }
 
 /// Что пользователь хочет сделать. Все поля — из окна, поэтому проверяются при разборе плана.

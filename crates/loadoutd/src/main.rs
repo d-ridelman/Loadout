@@ -15,6 +15,17 @@ fn home_or_default(home: Option<PathBuf>) -> Option<PathBuf> {
     })
 }
 
+fn no_home() -> ExitCode {
+    eprintln!(
+        "{}",
+        loadout_core::tr!(
+            "не удалось определить домашний каталог, укажите --home",
+            "cannot determine the home directory, pass --home"
+        )
+    );
+    ExitCode::from(2)
+}
+
 /// `loadout serve [--home ПУТЬ] [--backups КАТАЛОГ] [--lang ru|en]`: постоянный процесс для окна (JSON-RPC по stdio и сторож файлов).
 /// Без `--backups` методы записи (R1) отказывают.
 fn serve_main(args: &[String]) -> ExitCode {
@@ -35,14 +46,7 @@ fn serve_main(args: &[String]) -> ExitCode {
         }
     }
     let Some(home) = home_or_default(home) else {
-        eprintln!(
-            "{}",
-            loadout_core::tr!(
-                "не удалось определить домашний каталог, укажите --home",
-                "cannot determine the home directory, pass --home"
-            )
-        );
-        return ExitCode::from(2);
+        return no_home();
     };
     serve::run(&home, backups);
     ExitCode::SUCCESS
@@ -89,19 +93,8 @@ fn main() -> ExitCode {
             }
         }
     }
-    let Some(home) = home.or_else(|| {
-        std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from)
-    }) else {
-        eprintln!(
-            "{}",
-            loadout_core::tr!(
-                "не удалось определить домашний каталог, укажите --home",
-                "cannot determine the home directory, pass --home"
-            )
-        );
-        return ExitCode::from(2);
+    let Some(home) = home_or_default(home) else {
+        return no_home();
     };
 
     let mut res: ScanResult = loadout_core::scan(&home);
