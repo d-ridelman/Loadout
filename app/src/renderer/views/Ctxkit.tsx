@@ -25,7 +25,7 @@ const copyText = (k: CtxkitStatus['hook']): string =>
 const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'var(--orange)', other: 'var(--deco)' } as const
 
 /** Язык хуков по умолчанию — язык интерфейса (потом настройка независима); функция, а не константа: язык выбирается после импорта. */
-const defaults = (): SetupOptions => ({ withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: getLang(), advisor: 'fable' })
+const defaults = (): SetupOptions => ({ withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: getLang(), advisor: 'keep' })
 
 type Loaded<T> = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; data: T }
 
@@ -107,8 +107,8 @@ export function Ctxkit({ level, onNotice }: Props) {
       <h2>ctxkit</h2>
       <p className="mute small">
         {t(
-          'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и подсказывает агентам дешёвый поиск и независимую проверку. Основную модель Claude Code и effort окно не меняет (пресеты Claude Desktop правятся только по галочке ниже). Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.',
-          'A bundled toolkit that keeps agent context in check: limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review. The window does not change the Claude Code main model or effort (Claude Desktop presets are edited only with the checkbox below). Hooks are written into client settings, so applying requires level R2.',
+          'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и подсказывает агентам дешёвый поиск и независимую проверку. Основную модель Claude Code и effort окно не меняет, модель советника — только если выбрать её в форме ниже (пресеты Claude Desktop правятся только по галочке ниже). Хуки пишутся в настройки клиентов, поэтому применение требует уровня R2.',
+          'A bundled toolkit that keeps agent context in check: limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review. The window does not change the Claude Code main model or effort, and the advisor model only if you pick one in the form below (Claude Desktop presets are edited only with the checkbox below). Hooks are written into client settings, so applying requires level R2.',
         )}
       </p>
 
@@ -140,7 +140,7 @@ export function Ctxkit({ level, onNotice }: Props) {
         >
           <fieldset className="choices">
             <legend className="mute small">{t('Что настроить', 'What to configure')}</legend>
-            <label><input type="checkbox" checked disabled /> {t('Claude Code: хуки, агенты Explore и checker (всегда); основная модель и effort не меняются', 'Claude Code: hooks, Explore and checker agents (always); main model and effort are not changed')}</label>
+            <label><input type="checkbox" checked disabled /> {t('Claude Code: хуки, агенты Explore и checker (всегда); основная модель, effort и советник не меняются, пока не выбраны ниже', 'Claude Code: hooks, Explore and checker agents (always); main model, effort and advisor are not changed unless chosen below')}</label>
             <label><input type="checkbox" checked={!opts.noStopGate} onChange={(e) => { setGateTouched(true); change({ noStopGate: !e.target.checked }) }} /> {t('Шлюз Stop: один раз за ход возвращает модель, если правки кода остались без checker или советника', 'Stop gate: once per turn sends the model back if code edits were not followed by checker or the advisor')}</label>
             <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил в CLAUDE.md', 'Rules block in CLAUDE.md')}</label>
             <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> {t('Claude Desktop (пресеты; закройте его перед применением)', 'Claude Desktop (presets; close it before applying)')}</label>
@@ -155,9 +155,10 @@ export function Ctxkit({ level, onNotice }: Props) {
             </select>
           </label>
           <label>
-            {t('Модель-советник (записывается в advisorModel при применении)', 'Advisor model (written to advisorModel when applied)')}
+            {t('Модель-советник (advisorModel ставится только если выбрать её здесь)', 'Advisor model (advisorModel is set only if you pick one here)')}
             <select value={opts.advisor} onChange={(e) => change({ advisor: e.target.value as SetupOptions['advisor'] })}>
-              <option value="fable">{t('Fable (по умолчанию)', 'Fable (default)')}</option>
+              <option value="keep">{t('Не менять (по умолчанию)', 'Keep as is (default)')}</option>
+              <option value="fable">Fable</option>
               <option value="opus">Opus</option>
               <option value="none">{t('без советника', 'no advisor')}</option>
             </select>

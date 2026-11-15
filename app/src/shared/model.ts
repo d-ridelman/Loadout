@@ -174,7 +174,8 @@ export interface SetupOptions {
   /** true — не ставить хук Stop (шлюз) и убрать наш, если он есть */
   noStopGate: boolean
   lang: 'en' | 'ru'
-  advisor: 'fable' | 'opus' | 'none'
+  /** 'keep' — `--advisor` не передаётся: advisorModel остаётся как есть (значение по умолчанию не выбор пользователя) */
+  advisor: 'keep' | 'fable' | 'opus' | 'none'
 }
 
 export interface SetupResult {

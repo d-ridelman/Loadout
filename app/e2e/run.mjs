@@ -676,7 +676,7 @@ try {
   const claudeDir = join(home, '.claude')
   const hookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
-  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'fable' }
+  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep' } // форма по умолчанию: советник «не менять»
   // Настоящий профиль владельца ctxkit трогать не должен: хеши файлов, которые `setup` пишет, до и после всего шага.
   // `~/.claude.json` не сравниваем: его переписывает работающий Claude Code, ctxkit его только читает (в проверках с --claude-json на копию).
   const realHome = homedir()
@@ -703,6 +703,7 @@ try {
   const leaks = [realHome, realHome.replaceAll('\\', '/')].some((h) => preview.toLowerCase().includes(h.toLowerCase()))
   must(preview.includes('Stop gate: on'), `в предпросмотре нет строки про шлюз Stop: ${preview.slice(0, 300)}`)
   must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
+  must(preview.includes('advisorModel: (unset) (kept'), `предпросмотр с формой по умолчанию должен оставлять advisorModel: ${preview.slice(0, 400)}`)
   must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
   await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')
   await page.getByLabel('Язык подсказок и хуков').selectOption('en')
@@ -730,6 +731,19 @@ try {
   const v4 = await axeCheck(page, 'ctxkit')
   must(v4.length === 0, `axe: ctxkit: ${v4.map((x) => x.id).join(', ')}`)
   await noSecretOnPage('ctxkit')
+  // применение с формой по умолчанию (советник «не менять») не создаёт model, advisorModel и effortLevel
+  const sKeep = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  const sBase = JSON.parse(settingsBefore)
+  for (const k of ['model', 'advisorModel', 'effortLevel', 'modelSettings']) must(JSON.stringify(sKeep[k]) === JSON.stringify(sBase[k]) && !(k in sKeep), `форма по умолчанию записала ${k}: ${JSON.stringify(sKeep[k])}`)
+  // явный выбор Fable: предпросмотр показывает смену, применение пишет advisorModel
+  await page.getByLabel('Модель-советник').selectOption('fable')
+  must(await applyBtn.isDisabled(), 'после выбора советника старый предпросмотр не должен разрешать применение')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с советником Fable')
+  must((await page.locator('pre.out').innerText()).includes('advisorModel: (unset) -> fable'), 'предпросмотр с Fable не показал запись advisorModel')
+  must(!('advisorModel' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'предпросмотр с Fable записал advisorModel')
+  await applyBtn.click()
+  await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).advisorModel === 'fable', 'явный выбор Fable записал advisorModel')
   // шлюз Stop: по умолчанию ставится (хук + находка stop_gate «ok»), со снятой галочкой хук убирается (находка «нет шлюза»)
   const ourStop = () => (JSON.parse(readFileSync(settingsFile, 'utf8')).hooks?.Stop ?? []).filter((g) => (g.hooks ?? []).some((h) => /(^|[\\/"])ctxkit(\.exe)?("|\s|$)/i.test(h.command ?? ''))).length
   const findings = () => page.locator('ul[aria-label="Находки диагностики"]').innerText()
@@ -746,7 +760,7 @@ try {
   await waitFor(() => ourStop() === 0, 'ctxkit убрал хук Stop при снятой галочке')
   await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор: нет шлюза Stop')
   must(JSON.parse(readFileSync(settingsFile, 'utf8')).hooks.PreToolUse !== undefined, 'снятие шлюза затронуло остальные хуки')
-  // окно передаёт только --advisor: основная модель и effort остаются как были, советник — выбор из формы
+  // окно передаёт --advisor только при явном выборе: основная модель и effort остаются как были, советник — выбор из формы (Fable выбран выше)
   const sNow = JSON.parse(readFileSync(settingsFile, 'utf8'))
   const sPre = JSON.parse(settingsBefore)
   must(sNow.model === sPre.model && sNow.effortLevel === sPre.effortLevel && JSON.stringify(sNow.modelSettings) === JSON.stringify(sPre.modelSettings), 'окно изменило model, effortLevel или modelSettings')

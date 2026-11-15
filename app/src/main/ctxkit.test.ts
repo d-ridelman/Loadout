@@ -37,6 +37,8 @@ describe('ctxkit: параметры setup', () => {
     expect(() => parseSetupOptions({ ...ok, noStopGate: undefined })).toThrow()
     expect(() => parseSetupOptions({ ...ok, lang: 'de' })).toThrow()
     expect(() => parseSetupOptions({ ...ok, advisor: '--hook-cmd evil.exe' })).toThrow()
+    expect(parseSetupOptions({ ...ok, advisor: 'keep' }).advisor).toBe('keep')
+    expect(() => parseSetupOptions({ ...ok, advisor: 'KEEP' })).toThrow()
     expect(() => parseSetupOptions({ ...ok, desktop: 'yes' })).toThrow()
     expect(() => parseSetupOptions(null)).toThrow()
   })
@@ -44,6 +46,8 @@ describe('ctxkit: параметры setup', () => {
   it('аргументы: предпросмотр с --dry-run, без путей страницы; в разработке пути уходят в LOADOUT_HOME', () => {
     const a = setupArgs(parseSetupOptions(ok), true)
     expect(a).toEqual(['setup', '--dry-run', '--with-rules', '--antigravity', '--lang', 'ru', '--advisor', 'fable'])
+    // «не менять»: --advisor не передаётся вовсе, остальное как было
+    expect(setupArgs(parseSetupOptions({ ...ok, advisor: 'keep' }), true)).toEqual(['setup', '--dry-run', '--with-rules', '--antigravity', '--lang', 'ru'])
     expect(setupArgs(parseSetupOptions(ok), false)).not.toContain('--dry-run')
     expect(setupArgs(parseSetupOptions({ ...ok, noStopGate: true }), true)).toContain('--no-stop-gate')
     expect(a).not.toContain('--no-stop-gate')
