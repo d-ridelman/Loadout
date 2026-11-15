@@ -17,7 +17,15 @@ pub fn scan(c: &mut Ctx) {
     let mcp = c.home.join(".gemini/config/mcp_config.json");
     if let Some(v) = c.read_json(&mcp) {
         let file = c.tilde(&mcp);
-        scan_mcp_servers(c, CLIENT, &file, "/mcpServers", "user", v.get("mcpServers"));
+        scan_mcp_servers(
+            c,
+            CLIENT,
+            &file,
+            "/mcpServers",
+            "user",
+            v.get("mcpServers"),
+            Some(&mcp),
+        );
     }
     hooks(c);
     plugins(c);
@@ -89,7 +97,16 @@ fn plugins(c: &mut Ctx) {
         let mcp = d.path().join("mcp_config.json");
         if let Some(v) = c.read_json(&mcp) {
             let file = c.tilde(&mcp);
-            scan_mcp_servers(c, CLIENT, &file, "/mcpServers", &scope, v.get("mcpServers"));
+            // файлы плагинов принадлежат плагину: Loadout в них не пишет
+            scan_mcp_servers(
+                c,
+                CLIENT,
+                &file,
+                "/mcpServers",
+                &scope,
+                v.get("mcpServers"),
+                None,
+            );
         }
         scan_skills(c, CLIENT, &d.path().join("skills"), &scope);
     }

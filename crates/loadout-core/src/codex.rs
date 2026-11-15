@@ -1,7 +1,7 @@
 //! Адаптер ChatGPT / Codex (приложение `OpenAI.Codex`, конфиг `~/.codex`). Источники — таблица §2 CONCEPT.md.
 
 use crate::mask::{self, mcp_detail};
-use crate::model::{Client, Entity, Format, Kind, State, Target};
+use crate::model::{Client, Entity, Format, Kind, Src, State, Target, TargetKind};
 use crate::{scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Value};
 
@@ -30,6 +30,7 @@ fn flag(file: &std::path::Path, table: &[&str]) -> Target {
         format: Format::Toml,
         path,
         inverted: false,
+        kind: TargetKind::Flag,
     }
 }
 
@@ -127,6 +128,11 @@ fn config(c: &mut Ctx) {
             format!("mcp_servers.{}", toml_key(name)),
         )
         .target(flag(&path, &["mcp_servers", name]))
+        .src(Src {
+            file: path.clone(),
+            format: Format::Toml,
+            path: vec!["mcp_servers".to_owned(), name.clone()],
+        })
         .detail(mcp_detail(m));
         c.push(e);
     }

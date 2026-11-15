@@ -82,10 +82,38 @@ pub enum Format {
 pub struct Target {
     pub file: std::path::PathBuf,
     pub format: Format,
-    /// Ключи от корня файла до булева значения.
+    /// Ключи от корня файла до булева значения (`Flag`) или до самой записи (`Cut`, `Restore`).
     pub path: Vec<String>,
     /// `true` в файле значит «выключено» (`disableClaudeAiConnectors`).
     pub inverted: bool,
+    pub kind: TargetKind,
+}
+
+/// Откуда вернуть вырезанную запись.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Source {
+    /// Корзина Loadout (`<бэкапы>/trash/<id>.json`).
+    Trash(String),
+    /// Стэш владельца в том же файле (`_disabledMcpServers`): путь до объекта-стэша.
+    Stash(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TargetKind {
+    /// Булев ключ.
+    Flag,
+    /// Включённая запись без флага: «выключить» вырезает её в корзину.
+    Cut,
+    /// Выключенная запись вне файла (корзина) или в стэше: «включить» возвращает её на место.
+    Restore(Source),
+}
+
+/// Где лежит запись целиком (MCP): оттуда читается и копируется, и туда пишется правка.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Src {
+    pub file: std::path::PathBuf,
+    pub format: Format,
+    pub path: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -112,6 +140,10 @@ pub struct Entity {
     /// Как переключить запись; `None` — переключатель не поддержан (см. [`crate::write::why_not`]).
     #[serde(skip)]
     pub target: Option<Target>,
+    #[serde(skip)]
+    pub src: Option<Src>,
+    /// Запись можно править и копировать (есть `src`).
+    pub can_edit: bool,
     /// Заполняется в конце скана из `target`: окно по нему решает, давать ли переключатель.
     pub can_toggle: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,6 +216,8 @@ impl Entity {
             detail: json!({}),
             fs_named: false,
             target: None,
+            src: None,
+            can_edit: false,
             can_toggle: false,
             toggle_why: None,
         }
@@ -191,6 +225,11 @@ impl Entity {
 
     pub fn target(mut self, t: Target) -> Self {
         self.target = Some(t);
+        self
+    }
+
+    pub fn src(mut self, s: Src) -> Self {
+        self.src = Some(s);
         self
     }
 

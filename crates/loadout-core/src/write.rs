@@ -1,11 +1,17 @@
-//! Запись R1 (CONCEPT.md §5): план, предпросмотр, оптимистичная блокировка, бэкап, атомарная запись, проверка, откат.
+//! Запись R1 и R2 (CONCEPT.md §5): план, предпросмотр, оптимистичная блокировка, бэкап, атомарная запись, проверка, откат.
 //!
-//! Наружу — только id записи и желаемое состояние: цель записи (путь и сырой ключ) берётся из свежего скана внутри ядра.
-//! В плане и журнале нет содержимого файлов: только очищенные имя и указатель и старое/новое значение одного ключа.
+//! Наружу — только намерение (`Intent`: id записи и что с ней сделать): цель записи (путь и сырой ключ) берётся
+//! из свежего скана внутри ядра, путей от страницы нет. В плане и журнале нет содержимого файлов: только очищенные
+//! имя и указатель, старое и новое значение одного ключа (команды — через маскирование) и имена ключей `env`.
+//!
+//! Уровни: R1 — булев флаг; R2 — вынос в корзину и возврат, правка команды MCP, копирование между клиентами.
 
 use crate::edit;
-use crate::model::{Client, Entity, Kind, ScanResult, State, Target};
+use crate::mask;
+use crate::model::{Client, Entity, Format, Kind, ScanResult, Source, State, TargetKind};
+use crate::trash;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -25,8 +31,11 @@ pub fn why_not(e: &Entity) -> &'static str {
         (Client::ClaudeCode, Kind::Connector) => {
             "запрещён в deniedMcpServers по имени: ключ disableClaudeAiConnectors этого не снимает"
         }
-        (_, Kind::Mcp) => "у записи нет флага «выключено»: выключение переносит её в корзину (M4)",
-        _ => "правка записей этого типа — уровень R2 (M4)",
+        (Client::DeepSeek, Kind::Mcp) => {
+            "DeepSeek хранит записи в YAML с тегами (`!!js`): точечный перенос в корзину для него не сделан"
+        }
+        (_, Kind::Mcp) => "запись лежит в проекте или в плагине: их файлы Loadout не правит",
+        _ => "правка записей этого типа не поддержана",
     }
 }
 
@@ -39,105 +48,515 @@ fn enabled(s: State) -> Option<bool> {
 }
 
 /// Писать можно только в эти файлы клиентов, какой бы путь ни лежал в записи или в манифесте.
+/// В `antigravity/mcp/*` и в файлы плагинов Loadout не пишет никогда.
 fn allowed(home: &Path, file: &Path) -> bool {
     let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
-    [".claude/settings.json", ".codex/config.toml"]
-        .iter()
-        .any(|rel| norm(&home.join(rel)) == norm(file))
+    [
+        ".claude/settings.json",
+        ".claude.json",
+        ".codex/config.toml",
+        "AppData/Roaming/Claude/claude_desktop_config.json",
+        ".gemini/config/mcp_config.json",
+    ]
+    .iter()
+    .any(|rel| norm(&home.join(rel)) == norm(file))
 }
 
-fn sha(bytes: &[u8]) -> String {
+pub(crate) fn sha(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
 }
 
+/// `~/…` с прямыми слэшами: путь для показа без имени пользователя.
+fn tilde(home: &Path, p: &Path) -> String {
+    let (s, h) = (
+        p.to_string_lossy().replace('\\', "/"),
+        home.to_string_lossy().replace('\\', "/"),
+    );
+    let h = h.trim_end_matches('/');
+    if s.len() > h.len() && s[..h.len()].eq_ignore_ascii_case(h) && s.as_bytes()[h.len()] == b'/' {
+        format!("~{}", &s[h.len()..])
+    } else {
+        s
+    }
+}
+
+/// Что пользователь хочет сделать. Все поля — из окна, поэтому проверяются при разборе плана.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "op", rename_all = "camelCase")]
+pub enum Intent {
+    /// Включить или выключить запись (флаг, корзина или стэш: ядро выбирает по цели).
+    Toggle { entity: String, enable: bool },
+    /// Заменить `command` и `args` MCP целиком. Старых значений окно не получает.
+    Edit {
+        entity: String,
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    /// Скопировать MCP в другой клиент (`to` — короткое имя клиента).
+    Copy { entity: String, to: String },
+}
+
+impl Intent {
+    fn entity(&self) -> &str {
+        match self {
+            Intent::Toggle { entity, .. }
+            | Intent::Edit { entity, .. }
+            | Intent::Copy { entity, .. } => entity,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
+    /// `toggle`, `edit` или `copy`.
+    pub op: String,
+    /// Какой уровень записи нужен: `R1` или `R2`.
+    pub level: String,
     pub entity: String,
+    /// Клиент, в файл которого пишем (для копирования это получатель).
     pub client: Client,
     pub kind: Kind,
     pub name: String,
     pub file: String,
     pub pointer: String,
     pub enable: bool,
-    /// Значение ключа в файле до и после: `true`, `false` или «не задан».
+    /// Значение до и после: `true`/`false`, «включено», «в корзине Loadout» или замаскированная команда.
     pub from: String,
     pub to: String,
     /// Запись уже в нужном состоянии, писать нечего.
     pub noop: bool,
     /// Другие записи, которые меняет тот же ключ (все коннекторы `disableClaudeAiConnectors`).
     pub affects: Vec<String>,
+    /// Что стоит знать до подтверждения (что не переносится, какие ключи `env` копируются).
+    pub notes: Vec<String>,
     pub base_sha: String,
 }
 
-struct Built {
-    plan: Plan,
-    target: Target,
-    old: Vec<u8>,
-    new: Vec<u8>,
+struct TrashChange {
+    id: String,
+    before: Option<trash::Item>,
+    after: Option<trash::Item>,
 }
 
-fn build(home: &Path, scan: &ScanResult, id: &str, enable: bool) -> Result<Built, String> {
-    let e = scan
-        .entities
+struct Prepared {
+    plan: Plan,
+    entity: String,
+    file: PathBuf,
+    old: Vec<u8>,
+    new: Vec<u8>,
+    trash: Option<TrashChange>,
+    /// Для вынесенных и возвращённых записей откат — обратная операция, а не возврат файла целиком.
+    inverse_enable: Option<bool>,
+}
+
+fn find<'a>(scan: &'a ScanResult, id: &str) -> Result<&'a Entity, String> {
+    scan.entities
         .iter()
         .find(|e| e.id == id)
-        .ok_or("запись не найдена: обновите список")?;
-    let t = e.target.clone().ok_or_else(|| why_not(e).to_owned())?;
-    if !allowed(home, &t.file) {
+        .ok_or_else(|| "запись не найдена: обновите список".to_owned())
+}
+
+/// Файл клиента: из списка разрешённых и не символьная ссылка (запись заменила бы ссылку, а не файл за ней).
+fn guard_file(home: &Path, file: &Path) -> Result<(), String> {
+    if !allowed(home, file) {
         return Err("файл не входит в список разрешённых для записи".into());
     }
-    refuse_symlink(&t.file)?;
-    let old = std::fs::read(&t.file).map_err(|_| "файл клиента не прочитан".to_owned())?;
-    let text = std::str::from_utf8(&old).map_err(|_| "файл клиента не в UTF-8".to_owned())?;
-    let cur = edit::get_bool(t.format, text, &t.path)?;
-    // `disableClaudeAiConnectors: true` значит «выключено»
-    let want = enable != t.inverted;
-    let already = cur == Some(want) || (cur.is_none() && enabled(e.state) == Some(enable));
-    let new = if already {
-        old.clone()
-    } else {
-        edit::set_bool(t.format, text, &t.path, want)?.into_bytes()
-    };
-    let affects = scan
-        .entities
-        .iter()
-        .filter(|o| {
-            o.id != e.id
-                && o.target
-                    .as_ref()
-                    .is_some_and(|x| x.file == t.file && x.path == t.path)
-        })
-        .map(|o| o.id.clone())
+    match std::fs::symlink_metadata(file) {
+        Ok(m) if m.file_type().is_symlink() => {
+            Err("файл клиента — символьная ссылка: запись заменила бы ссылку, а не файл".into())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn read_text(file: &Path) -> Result<(Vec<u8>, String), String> {
+    let old = std::fs::read(file).map_err(|_| "файл клиента не прочитан".to_owned())?;
+    let text = String::from_utf8(old.clone()).map_err(|_| "файл клиента не в UTF-8".to_owned())?;
+    Ok((old, text))
+}
+
+fn masked_line(tokens: &[String]) -> String {
+    mask::join_line(&mask::mask_args(tokens))
+}
+
+fn tokens_of(entry: &Value) -> Vec<String> {
+    let mut t: Vec<String> = entry
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .into_iter()
         .collect();
-    let plan = Plan {
+    if let Some(a) = entry.get("args").and_then(Value::as_array) {
+        t.extend(a.iter().filter_map(|x| x.as_str().map(str::to_owned)));
+    }
+    t
+}
+
+fn plan_for(e: &Entity, op: &str, level: &str, file: String, old: &[u8]) -> Plan {
+    Plan {
+        op: op.to_owned(),
+        level: level.to_owned(),
         entity: e.id.clone(),
         client: e.client,
         kind: e.kind,
         name: e.name.clone(),
-        file: e.origin.file.clone(),
+        file,
         pointer: e.origin.pointer.clone(),
-        enable,
-        from: cur.map_or_else(|| "не задан".to_owned(), |b| b.to_string()),
-        to: want.to_string(),
-        noop: already,
-        affects,
-        base_sha: sha(&old),
-    };
-    Ok(Built {
+        enable: true,
+        from: String::new(),
+        to: String::new(),
+        noop: false,
+        affects: Vec::new(),
+        notes: Vec::new(),
+        base_sha: sha(old),
+    }
+}
+
+fn prep_toggle(
+    home: &Path,
+    store: Option<&Path>,
+    scan: &ScanResult,
+    id: &str,
+    enable: bool,
+) -> Result<Prepared, String> {
+    let e = find(scan, id)?;
+    let t = e.target.clone().ok_or_else(|| why_not(e).to_owned())?;
+    guard_file(home, &t.file)?;
+    let (old, text) = read_text(&t.file)?;
+    let mut plan = plan_for(e, "toggle", "R1", e.origin.file.clone(), &old);
+    plan.enable = enable;
+    let mut new = old.clone();
+    let (mut trash, mut inverse) = (None, None);
+    match &t.kind {
+        TargetKind::Flag => {
+            let cur = edit::get_bool(t.format, &text, &t.path)?;
+            // `disableClaudeAiConnectors: true` значит «выключено»
+            let want = enable != t.inverted;
+            plan.noop = cur == Some(want) || (cur.is_none() && enabled(e.state) == Some(enable));
+            plan.from = cur.map_or_else(|| "не задан".to_owned(), |b| b.to_string());
+            plan.to = want.to_string();
+            if !plan.noop {
+                new = edit::set_bool(t.format, &text, &t.path, want)?.into_bytes();
+            }
+            plan.affects = scan
+                .entities
+                .iter()
+                .filter(|o| {
+                    o.id != e.id
+                        && o.target
+                            .as_ref()
+                            .is_some_and(|x| x.file == t.file && x.path == t.path)
+                })
+                .map(|o| o.id.clone())
+                .collect();
+        }
+        TargetKind::Cut => {
+            plan.level = "R2".into();
+            plan.noop = enable;
+            plan.from = "включено".into();
+            plan.to = if enable {
+                "включено"
+            } else {
+                "в корзине Loadout"
+            }
+            .into();
+            if !enable {
+                let (key, parent) = t.path.split_last().ok_or("пустой путь")?;
+                if store.is_some_and(|s| trash::read(s, &e.id).is_some()) {
+                    return Err("в корзине уже лежит запись с этим id".into());
+                }
+                let (nt, raw) = edit::cut_json(&text, &t.path)?;
+                new = nt.into_bytes();
+                trash = Some(TrashChange {
+                    id: e.id.clone(),
+                    before: None,
+                    after: Some(trash::Item {
+                        id: e.id.clone(),
+                        client: e.client.slug().to_owned(),
+                        scope: e.scope.clone(),
+                        name: e.name.clone(),
+                        file: e.origin.file.clone(),
+                        pointer: e.origin.pointer.clone(),
+                        path: t.file.to_string_lossy().into_owned(),
+                        parent: parent.to_vec(),
+                        key: key.clone(),
+                        value: raw,
+                        time: now_ms(),
+                    }),
+                });
+                inverse = Some(true);
+                plan.notes.push(
+                    "Запись вырезается из файла клиента и лежит в корзине Loadout; клиент её больше не запускает. Включение вернёт её на то же место.".into(),
+                );
+            }
+        }
+        TargetKind::Restore(src) => {
+            plan.level = "R2".into();
+            plan.noop = !enable;
+            plan.from = match src {
+                Source::Trash(_) => "в корзине Loadout",
+                Source::Stash(_) => "в стэше владельца",
+            }
+            .into();
+            plan.to = if enable {
+                "включено".to_owned()
+            } else {
+                plan.from.clone()
+            };
+            if enable {
+                let (base, raw, live) = match src {
+                    Source::Trash(tid) => {
+                        let s = store
+                            .ok_or("корзина недоступна: ядро запущено без каталога бэкапов")?;
+                        let it = trash::read(s, tid).ok_or("запись корзины не найдена")?;
+                        if Path::new(&it.path) != t.file {
+                            return Err("запись корзины относится к другому файлу".into());
+                        }
+                        let mut live = it.parent.clone();
+                        live.push(it.key.clone());
+                        let raw = it.value.clone();
+                        trash = Some(TrashChange {
+                            id: tid.clone(),
+                            before: Some(it),
+                            after: None,
+                        });
+                        (text.clone(), raw, live)
+                    }
+                    Source::Stash(_) => {
+                        let (nt, raw) = edit::cut_json(&text, &t.path)?;
+                        let key = t.path.last().ok_or("пустой путь")?.clone();
+                        (nt, raw, vec!["mcpServers".to_owned(), key])
+                    }
+                };
+                new = edit::put_raw_json(&base, &live, &raw, false)
+                    .map_err(|e| format!("вернуть запись нельзя: {e}"))?
+                    .into_bytes();
+                inverse = Some(false);
+            }
+        }
+    }
+    Ok(Prepared {
         plan,
-        target: t,
+        entity: e.id.clone(),
+        file: t.file,
         old,
         new,
+        trash,
+        inverse_enable: inverse,
     })
 }
 
+fn clean_arg(s: &str) -> bool {
+    s.len() <= 500 && !s.chars().any(char::is_control)
+}
+
+fn prep_edit(
+    home: &Path,
+    scan: &ScanResult,
+    id: &str,
+    command: &str,
+    args: &[String],
+) -> Result<Prepared, String> {
+    let e = find(scan, id)?;
+    let s = e
+        .src
+        .clone()
+        .ok_or("запись нельзя править: она не в файле клиента")?;
+    guard_file(home, &s.file)?;
+    if command.trim().is_empty() || !clean_arg(command) {
+        return Err("команда пустая, слишком длинная или с управляющими символами".into());
+    }
+    if args.len() > 64 || !args.iter().all(|a| clean_arg(a)) {
+        return Err("аргументы: не больше 64, до 500 знаков, без управляющих символов".into());
+    }
+    let (old, text) = read_text(&s.file)?;
+    let entry = edit::get_value(s.format, &text, &s.path)?.ok_or("записи нет в файле")?;
+    if entry.get("command").and_then(Value::as_str).is_none() {
+        return Err("у записи нет command: это не локальный сервер (адрес править нельзя)".into());
+    }
+    let key = |k: &str| {
+        let mut p = s.path.clone();
+        p.push(k.to_owned());
+        p
+    };
+    let mut new_text = edit::put_value(s.format, &text, &key("command"), &json!(command), true)?;
+    if !args.is_empty() || entry.get("args").is_some() {
+        new_text = edit::put_value(s.format, &new_text, &key("args"), &json!(args), true)?;
+    }
+    let mut plan = plan_for(e, "edit", "R2", e.origin.file.clone(), &old);
+    plan.from = masked_line(&tokens_of(&entry));
+    let mut now = vec![command.to_owned()];
+    now.extend(args.iter().cloned());
+    plan.to = masked_line(&now);
+    plan.noop = new_text.as_bytes() == old.as_slice();
+    plan.notes
+        .push("Заменяются только command и args; env и заголовки не меняются. Секретные на вид значения в предпросмотре и журнале скрыты.".into());
+    Ok(Prepared {
+        plan,
+        entity: e.id.clone(),
+        file: s.file,
+        old,
+        new: new_text.into_bytes(),
+        trash: None,
+        inverse_enable: None,
+    })
+}
+
+/// Файл, формат и ключ с записями MCP у клиента-получателя.
+fn client_target(home: &Path, c: Client) -> Option<(PathBuf, Format, &'static str)> {
+    Some(match c {
+        Client::ClaudeCode => (home.join(".claude.json"), Format::Json, "mcpServers"),
+        Client::ClaudeDesktop => (
+            home.join("AppData/Roaming/Claude/claude_desktop_config.json"),
+            Format::Json,
+            "mcpServers",
+        ),
+        Client::Antigravity => (
+            home.join(".gemini/config/mcp_config.json"),
+            Format::Json,
+            "mcpServers",
+        ),
+        Client::Codex => (home.join(".codex/config.toml"), Format::Toml, "mcp_servers"),
+        Client::DeepSeek => return None,
+    })
+}
+
+/// Запись MCP в формате получателя. Что не переносится, возвращается именами ключей.
+fn translate(v: &Value, to: Client) -> Result<(Value, Vec<String>), String> {
+    let obj = v.as_object().ok_or("запись не объект")?;
+    let mut out = serde_json::Map::new();
+    let mut skipped = Vec::new();
+    for (k, val) in obj {
+        match k.as_str() {
+            "command" | "args" | "env" | "url" => {
+                out.insert(k.clone(), val.clone());
+            }
+            "headers" | "http_headers" => {
+                let name = if to == Client::Codex {
+                    "http_headers"
+                } else {
+                    "headers"
+                };
+                out.insert(name.to_owned(), val.clone());
+            }
+            "type" => {} // выводится из url
+            other => skipped.push(mask::scrub_words(other)),
+        }
+    }
+    if to == Client::ClaudeCode && out.contains_key("url") {
+        out.insert("type".to_owned(), json!("http"));
+    }
+    skipped.sort();
+    Ok((Value::Object(out), skipped))
+}
+
+fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepared, String> {
+    let e = find(scan, id)?;
+    let s = e
+        .src
+        .clone()
+        .ok_or("запись нельзя копировать: она не в файле клиента")?;
+    guard_file(home, &s.file)?;
+    let dest = Client::from_slug(to).ok_or("неизвестный клиент-получатель")?;
+    if dest == e.client {
+        return Err("получатель совпадает с источником".into());
+    }
+    let (file, format, root) = client_target(home, dest)
+        .ok_or("в этого клиента копировать нельзя: формат файла не поддержан")?;
+    guard_file(home, &file)?;
+    let key = s.path.last().ok_or("пустой путь")?.clone();
+    if mask::safe_name(&key).is_none() {
+        return Err("имя записи недопустимо для копирования".into());
+    }
+    let (_, src_text) = read_text(&s.file)?;
+    let entry = edit::get_value(s.format, &src_text, &s.path)?.ok_or("записи нет в файле")?;
+    let (old, text) = read_text(&file)
+        .map_err(|_| "файл клиента-получателя не найден: клиент не установлен".to_owned())?;
+    let path = vec![root.to_owned(), key.clone()];
+    if edit::get_value(format, &text, &path)?.is_some()
+        || scan.entities.iter().any(|o| {
+            o.client == dest && o.kind == Kind::Mcp && o.scope == "user" && o.name == e.name
+        })
+    {
+        return Err("в клиенте-получателе уже есть запись с таким именем".into());
+    }
+    let (value, skipped) = translate(&entry, dest)?;
+    let new_text = edit::put_value(format, &text, &path, &value, false)?;
+
+    let mut plan = plan_for(e, "copy", "R2", tilde(home, &file), &old);
+    plan.client = dest;
+    plan.pointer = match format {
+        Format::Json => format!("/{root}/{key}"),
+        Format::Toml => format!("{root}.{key}"),
+    };
+    plan.from = "нет записи".into();
+    plan.to = format!("копия: {}", {
+        let t = tokens_of(&value);
+        if t.is_empty() {
+            value
+                .get("url")
+                .and_then(Value::as_str)
+                .map_or_else(String::new, |u| masked_line(&[u.to_owned()]))
+        } else {
+            masked_line(&t)
+        }
+    });
+    let env_keys = mask::mcp_detail(&entry)
+        .get("envKeys")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    if !env_keys.is_empty() {
+        plan.notes.push(format!(
+            "Копируются ключи env: {env_keys}. Значения (в том числе секреты) переносятся как есть и в окне не показываются."
+        ));
+    }
+    if !skipped.is_empty() {
+        plan.notes
+            .push(format!("Не переносятся: {}.", skipped.join(", ")));
+    }
+    Ok(Prepared {
+        plan,
+        entity: e.id.clone(),
+        file,
+        old,
+        new: new_text.into_bytes(),
+        trash: None,
+        inverse_enable: None,
+    })
+}
+
+fn prepare(
+    home: &Path,
+    store: Option<&Path>,
+    scan: &ScanResult,
+    i: &Intent,
+) -> Result<Prepared, String> {
+    match i {
+        Intent::Toggle { entity, enable } => prep_toggle(home, store, scan, entity, *enable),
+        Intent::Edit {
+            entity,
+            command,
+            args,
+        } => prep_edit(home, scan, entity, command, args),
+        Intent::Copy { entity, to } => prep_copy(home, scan, entity, to),
+    }
+}
+
 /// Предпросмотр: ничего не пишет.
-pub fn plan(home: &Path, id: &str, enable: bool) -> Result<Plan, String> {
-    build(home, &crate::scan(home), id, enable).map(|b| b.plan)
+pub fn plan(home: &Path, store: Option<&Path>, i: &Intent) -> Result<Plan, String> {
+    let scan = crate::scan_with(home, store);
+    prepare(home, store, &scan, i).map(|p| p.plan)
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -146,9 +565,22 @@ struct Manifest {
     version: u32,
     id: String,
     time: u64,
-    /// `toggle` или `rollback`.
+    /// `toggle`, `edit`, `copy` или `rollback`.
     op: String,
     of: Option<String>,
+    #[serde(default)]
+    batch: Option<String>,
+    /// id записи, к которой относится операция (откат корзинных операций строится по нему).
+    #[serde(default)]
+    entity: String,
+    /// Какое значение `enable` вернёт запись обратно (только у выноса и возврата из корзины).
+    #[serde(default)]
+    inverse_enable: Option<bool>,
+    /// Состояние корзины до операции: при откате файла возвращается и оно.
+    #[serde(default)]
+    trash_id: Option<String>,
+    #[serde(default)]
+    trash_before: Option<trash::Item>,
     path: String,
     sha_before: String,
     sha_after: String,
@@ -169,6 +601,7 @@ pub struct Entry {
     pub time: u64,
     pub op: String,
     pub of: Option<String>,
+    pub batch: Option<String>,
     pub client: String,
     pub kind: String,
     pub name: String,
@@ -239,7 +672,7 @@ fn atomic_write(file: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// Запись с `sync_all`: бэкап и манифест должны дойти до диска раньше, чем меняется файл клиента.
-fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::fs::File::create(path)?;
     f.write_all(bytes)?;
@@ -251,84 +684,198 @@ fn write_manifest(dir: &Path, m: &Manifest) -> Result<(), String> {
     write_synced(&dir.join("manifest.json"), &json).map_err(|e| format!("манифест не записан: {e}"))
 }
 
-/// Запись через символьную ссылку заменила бы саму ссылку, а не файл за ней.
-fn refuse_symlink(file: &Path) -> Result<(), String> {
-    match std::fs::symlink_metadata(file) {
-        Ok(m) if m.file_type().is_symlink() => {
-            Err("файл клиента — символьная ссылка: запись заменила бы ссылку, а не файл".into())
-        }
-        _ => Ok(()),
-    }
-}
-
-fn kind_str(k: Kind) -> String {
+/// Короткое имя типа (`mcp`, `plugin`…), как в JSON.
+pub fn kind_name(k: Kind) -> String {
     serde_json::to_value(k)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_default()
 }
 
-/// Переключает запись. `base_sha` — хеш файла из предпросмотра: если файл с тех пор изменился, отказ.
-pub fn apply(
-    home: &Path,
+/// Общий конвейер записи: бэкап → манифест → (корзина) → временный файл и `rename` → проверка.
+fn commit(
     store: &Path,
-    id: &str,
-    enable: bool,
-    base_sha: &str,
+    p: Prepared,
+    op: &str,
+    of: Option<String>,
+    batch: Option<&str>,
 ) -> Result<Applied, String> {
-    let b = build(home, &crate::scan(home), id, enable)?;
-    if b.plan.base_sha != base_sha {
-        return Err("файл изменился после предпросмотра: постройте план заново".into());
-    }
-    if b.plan.noop {
-        return Err("запись уже в нужном состоянии".into());
-    }
-    let (op, dir) = new_op_dir(store)?;
+    let (id, dir) = new_op_dir(store)?;
     let fail = |e: String| {
         let _ = std::fs::remove_dir_all(&dir);
         Err(e)
     };
-    if let Err(e) = write_synced(&dir.join("before"), &b.old) {
+    if let Err(e) = write_synced(&dir.join("before"), &p.old) {
         return fail(format!("бэкап не записан: {e}"));
     }
     // второй раз перед самой записью: между планом и бэкапом клиент мог переписать файл
-    if std::fs::read(&b.target.file).ok().as_deref() != Some(b.old.as_slice()) {
+    if std::fs::read(&p.file).ok().as_deref() != Some(p.old.as_slice()) {
         return fail("файл изменился во время записи бэкапа: повторите".into());
     }
     let m = Manifest {
-        version: 1,
-        id: op.clone(),
+        version: 2,
+        id: id.clone(),
         time: now_ms(),
-        op: "toggle".into(),
-        of: None,
-        path: b.target.file.to_string_lossy().into_owned(),
-        sha_before: b.plan.base_sha.clone(),
-        sha_after: sha(&b.new),
-        client: b.plan.client.slug().into(),
-        kind: kind_str(b.plan.kind),
-        name: b.plan.name.clone(),
-        pointer: b.plan.pointer.clone(),
-        file: b.plan.file.clone(),
-        from: b.plan.from.clone(),
-        to: b.plan.to.clone(),
+        op: op.to_owned(),
+        of,
+        batch: batch.map(str::to_owned),
+        entity: p.entity.clone(),
+        inverse_enable: p.inverse_enable,
+        trash_id: p.trash.as_ref().map(|t| t.id.clone()),
+        trash_before: p.trash.as_ref().and_then(|t| t.before.clone()),
+        path: p.file.to_string_lossy().into_owned(),
+        sha_before: p.plan.base_sha.clone(),
+        sha_after: sha(&p.new),
+        client: p.plan.client.slug().into(),
+        kind: kind_name(p.plan.kind),
+        name: p.plan.name.clone(),
+        pointer: p.plan.pointer.clone(),
+        file: p.plan.file.clone(),
+        from: p.plan.from.clone(),
+        to: p.plan.to.clone(),
     };
     if let Err(e) = write_manifest(&dir, &m) {
         return fail(e);
     }
-    if let Err(e) = atomic_write(&b.target.file, &b.new) {
+    // вынос: сначала текст записи в корзину, и только потом вырезаем из файла (иначе при сбое запись потеряна)
+    if let Some(item) = p.trash.as_ref().and_then(|t| t.after.as_ref()) {
+        if let Err(e) = trash::write(store, item) {
+            return fail(e);
+        }
+    }
+    if let Err(e) = atomic_write(&p.file, &p.new) {
+        if let Some(t) = &p.trash {
+            if t.before.is_none() {
+                trash::remove(store, &t.id);
+            }
+        }
         return fail(e);
+    }
+    // возврат: запись уже на месте в файле, теперь её копию из корзины убираем
+    if let Some(t) = p.trash.as_ref().filter(|t| t.after.is_none()) {
+        trash::remove(store, &t.id);
     }
     // Проверка: перечитали и получили ровно «исходник + план». Несовпадение значит, что клиент записал файл сразу после нас:
     // возвращать исходный нельзя (затёрли бы его свежую запись), поэтому операция остаётся в журнале, а бэкап цел.
-    if std::fs::read(&b.target.file).ok().as_deref() != Some(b.new.as_slice()) {
+    if std::fs::read(&p.file).ok().as_deref() != Some(p.new.as_slice()) {
         return Err("файл изменён другим процессом сразу после записи: проверьте результат, бэкап и строка журнала сохранены".into());
     }
     Ok(Applied {
-        op,
-        entity: b.plan.entity,
-        from: b.plan.from,
-        to: b.plan.to,
+        op: id,
+        entity: p.plan.entity,
+        from: p.plan.from,
+        to: p.plan.to,
     })
+}
+
+fn op_name(i: &Intent) -> &'static str {
+    match i {
+        Intent::Toggle { .. } => "toggle",
+        Intent::Edit { .. } => "edit",
+        Intent::Copy { .. } => "copy",
+    }
+}
+
+fn apply_one(
+    home: &Path,
+    store: &Path,
+    i: &Intent,
+    base_sha: Option<&str>,
+    batch: Option<&str>,
+) -> Result<Applied, String> {
+    let scan = crate::scan_with(home, Some(store));
+    let p = prepare(home, Some(store), &scan, i)?;
+    if base_sha.is_some_and(|b| b != p.plan.base_sha) {
+        return Err("файл изменился после предпросмотра: постройте план заново".into());
+    }
+    if p.plan.noop {
+        return Err("запись уже в нужном состоянии".into());
+    }
+    commit(store, p, op_name(i), None, batch)
+}
+
+/// Выполняет намерение. `base_sha` — хеш файла из предпросмотра: если файл с тех пор изменился, отказ.
+pub fn apply(home: &Path, store: &Path, i: &Intent, base_sha: &str) -> Result<Applied, String> {
+    apply_one(home, store, i, Some(base_sha), None)
+}
+
+/// План пакета (профиль): по каждому намерению, которое нашло запись, и список пропущенных.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchPlan {
+    pub plans: Vec<Plan>,
+    /// Намерения, для которых записи уже нет (имена для показа).
+    pub skipped: Vec<String>,
+    pub level: String,
+    /// Подпись всего пакета: если за время предпросмотра что-то изменилось, она не совпадёт.
+    pub batch_sha: String,
+}
+
+pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchPlan {
+    let scan = crate::scan_with(home, store);
+    let (mut plans, mut skipped) = (Vec::new(), Vec::new());
+    for i in items {
+        match prepare(home, store, &scan, i) {
+            Ok(p) => plans.push(p.plan),
+            Err(_) => skipped.push(
+                scan.entities
+                    .iter()
+                    .find(|e| e.id == i.entity())
+                    .map_or_else(|| "запись исчезла".to_owned(), |e| e.name.clone()),
+            ),
+        }
+    }
+    let level = if plans.iter().any(|p| p.level == "R2") {
+        "R2"
+    } else {
+        "R1"
+    }
+    .to_owned();
+    let sig: String = plans
+        .iter()
+        .map(|p| format!("{}|{}|{}|{}\n", p.entity, p.enable, p.noop, p.base_sha))
+        .collect();
+    BatchPlan {
+        plans,
+        skipped,
+        level,
+        batch_sha: sha(sig.as_bytes()),
+    }
+}
+
+/// Применяет пакет по одному намерению, каждое со своим бэкапом и строкой журнала; общий номер пакета позволяет
+/// откатить всё сразу. При первой ошибке останавливается: сделанное остаётся в журнале.
+pub fn apply_batch(
+    home: &Path,
+    store: &Path,
+    items: &[Intent],
+    batch_sha: &str,
+) -> Result<(String, Vec<Applied>), String> {
+    let bp = plan_batch(home, Some(store), items);
+    if bp.batch_sha != batch_sha {
+        return Err("состояние изменилось после предпросмотра: постройте план заново".into());
+    }
+    let batch = format!("{:013}", now_ms());
+    let mut done = Vec::new();
+    for (n, i) in items.iter().enumerate() {
+        // уже в нужном состоянии (или записи нет): пропускаем, это не ошибка пакета
+        let scan = crate::scan_with(home, Some(store));
+        match prepare(home, Some(store), &scan, i) {
+            Ok(p) if !p.plan.noop => {}
+            _ => continue,
+        }
+        match apply_one(home, store, i, None, Some(&batch)) {
+            Ok(a) => done.push(a),
+            Err(e) => {
+                return Err(format!(
+                    "{e} (выполнено {} из {}; сделанное можно откатить в журнале)",
+                    done.len(),
+                    items.len() - n + done.len()
+                ))
+            }
+        }
+    }
+    Ok((batch, done))
 }
 
 fn read_manifest(store: &Path, id: &str) -> Result<Manifest, String> {
@@ -351,7 +898,7 @@ fn manifests(store: &Path) -> Vec<Manifest> {
     };
     let mut ids: Vec<String> = rd
         .flatten()
-        .filter(|e| e.path().is_dir())
+        .filter(|e| e.path().is_dir() && e.file_name() != "trash")
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     ids.sort_unstable_by(|a, b| b.cmp(a));
@@ -360,24 +907,53 @@ fn manifests(store: &Path) -> Vec<Manifest> {
         .collect()
 }
 
+/// Запись, к которой относилась операция. Возврат из стэша владельца меняет указатель, а с ним и id
+/// (`/_disabledMcpServers/x` → `/mcpServers/x`), поэтому после поиска по id ищем по клиенту, типу и имени.
+fn resolve_entity<'a>(scan: &'a ScanResult, m: &Manifest) -> Option<&'a Entity> {
+    scan.entities.iter().find(|e| e.id == m.entity).or_else(|| {
+        scan.entities.iter().find(|e| {
+            e.client.slug() == m.client
+                && kind_name(e.kind) == m.kind
+                && e.scope == "user"
+                && e.name == m.name
+        })
+    })
+}
+
 /// Журнал наших операций, новые первыми. Изменения клиентов извне в него не попадают.
 pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
     let all = manifests(store);
     let undone: std::collections::HashSet<&str> =
         all.iter().filter_map(|m| m.of.as_deref()).collect();
+    // состояние записей нужно только для откатов вынесенных в корзину: один скан на весь журнал
+    let scan: Option<ScanResult> = all
+        .iter()
+        .take(200)
+        .any(|m| m.inverse_enable.is_some())
+        .then(|| crate::scan_with(home, Some(store)));
     all.iter()
         .take(200)
         .map(|m| {
             let rolled_back = undone.contains(m.id.as_str());
-            let can_rollback = m.op == "toggle"
+            let can_rollback = m.op != "rollback"
                 && !rolled_back
-                && allowed(home, Path::new(&m.path))
-                && file_sha(Path::new(&m.path)).as_deref() == Some(m.sha_after.as_str());
+                && match m.inverse_enable {
+                    // вынос и возврат откатываются обратной операцией, пока запись в том состоянии, которое оставила операция
+                    Some(inv) => scan
+                        .as_ref()
+                        .and_then(|s| resolve_entity(s, m))
+                        .is_some_and(|e| enabled(e.state) == Some(!inv)),
+                    None => {
+                        allowed(home, Path::new(&m.path))
+                            && file_sha(Path::new(&m.path)).as_deref() == Some(m.sha_after.as_str())
+                    }
+                };
             Entry {
                 id: m.id.clone(),
                 time: m.time,
                 op: m.op.clone(),
                 of: m.of.clone(),
+                batch: m.batch.clone(),
                 client: m.client.clone(),
                 kind: m.kind.clone(),
                 name: m.name.clone(),
@@ -392,21 +968,32 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
         .collect()
 }
 
-/// Откат операции: возвращает файл из бэкапа, только если после неё его никто не менял.
+/// Откат операции. Флаги, правки и копии возвращают файл из бэкапа, только если после операции его никто не менял.
+/// Вынос в корзину и возврат откатываются обратной операцией над текущим файлом: `~/.claude.json` клиент переписывает
+/// постоянно, и сверка хеша там почти всегда отказывала бы.
 pub fn rollback(home: &Path, store: &Path, op: &str) -> Result<Applied, String> {
     let m = read_manifest(store, op)?;
-    if m.op != "toggle" {
-        return Err("откатывать можно только переключения".into());
+    if m.op == "rollback" {
+        return Err("откатывать можно только саму операцию, а не откат".into());
     }
     if manifests(store).iter().any(|x| x.of.as_deref() == Some(op)) {
         return Err("операция уже откатана".into());
     }
+    if let Some(enable) = m.inverse_enable {
+        let scan = crate::scan_with(home, Some(store));
+        let id = resolve_entity(&scan, &m)
+            .ok_or("запись не найдена: возможно, её изменили вручную")?
+            .id
+            .clone();
+        let p = prep_toggle(home, Some(store), &scan, &id, enable)?;
+        if p.plan.noop {
+            return Err("запись уже в нужном состоянии: откатывать нечего".into());
+        }
+        return commit(store, p, "rollback", Some(op.to_owned()), None);
+    }
     let file = PathBuf::from(&m.path);
     // манифест лежит в каталоге пользователя: его путь не доверенный, проверяем по списку так же, как при записи
-    if !allowed(home, &file) {
-        return Err("файл не входит в список разрешённых для записи".into());
-    }
-    refuse_symlink(&file)?;
+    guard_file(home, &file)?;
     let current = std::fs::read(&file).map_err(|_| "файл клиента не прочитан".to_owned())?;
     if sha(&current) != m.sha_after {
         return Err("файл изменился после операции: откат затёр бы чужие правки".into());
@@ -451,4 +1038,25 @@ pub fn rollback(home: &Path, store: &Path, op: &str) -> Result<Applied, String> 
         from: r.from,
         to: r.to,
     })
+}
+
+/// Откатывает пакет целиком, начиная с последней операции. Останавливается на первой ошибке.
+pub fn rollback_batch(home: &Path, store: &Path, batch: &str) -> Result<Vec<Applied>, String> {
+    let ops: Vec<String> = manifests(store)
+        .into_iter()
+        .filter(|m| m.batch.as_deref() == Some(batch) && m.op != "rollback")
+        .map(|m| m.id)
+        .collect(); // manifests() отдаёт новые первыми, это и нужный порядок отката
+    let all = manifests(store);
+    let mut done = Vec::new();
+    for id in ops {
+        if all.iter().any(|x| x.of.as_deref() == Some(id.as_str())) {
+            continue;
+        }
+        done.push(rollback(home, store, &id)?);
+    }
+    if done.is_empty() {
+        return Err("в пакете нечего откатывать".into());
+    }
+    Ok(done)
 }

@@ -53,7 +53,7 @@ struct Server {
 
 impl Server {
     fn new(home: &Path, backups: Option<PathBuf>, watcher: Option<RecommendedWatcher>) -> Self {
-        let last = loadout_core::scan(home);
+        let last = loadout_core::scan_with(home, backups.as_deref());
         let targets = Targets::from_scan(home, &last);
         let mut s = Server {
             home: home.to_path_buf(),
@@ -131,7 +131,7 @@ impl Server {
 
     /// Новый скан; события шлются только при смысловом отличии от прошлого.
     fn rescan(&mut self, announce: bool, reset: bool) {
-        let new = loadout_core::scan(&self.home);
+        let new = loadout_core::scan_with(&self.home, self.backups.as_deref());
         // набор путей пересобирается на каждом скане, даже без смысловых изменений: каталог мог появиться или исчезнуть
         self.targets = Targets::from_scan(&self.home, &new);
         self.sync_watches(reset);
@@ -157,11 +157,6 @@ impl Server {
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("нет параметра {k}"))
         };
-        let enable = || {
-            p.get("enable")
-                .and_then(Value::as_bool)
-                .ok_or("нет параметра enable")
-        };
         let store = || {
             self.backups
                 .clone()
@@ -170,19 +165,85 @@ impl Server {
         fn json<T: serde::Serialize>(v: &T) -> Result<Value, String> {
             serde_json::to_value(v).map_err(|e| e.to_string())
         }
+        // Намерение: `op` по умолчанию `toggle` (так звал окно в M3); неизвестные поля и варианты — ошибка разбора.
+        let intent = || -> Result<write::Intent, String> {
+            let mut v = p.clone();
+            if let Some(o) = v.as_object_mut() {
+                o.entry("op").or_insert(json!("toggle"));
+            }
+            serde_json::from_value(v).map_err(|_| "неверные параметры намерения".to_owned())
+        };
+        let profile_name = || {
+            str_of("name").and_then(|n| {
+                if loadout_core::profiles::valid_name(n) {
+                    Ok(n.to_owned())
+                } else {
+                    Err("недопустимое имя профиля".to_owned())
+                }
+            })
+        };
         let out = match method {
-            "plan" => json(&write::plan(&self.home, str_of("entity")?, enable()?)?)?,
+            "plan" => json(&write::plan(
+                &self.home,
+                self.backups.as_deref(),
+                &intent()?,
+            )?)?,
             "journal" => json(&write::journal(&self.home, &store()?))?,
             "apply" => json(&write::apply(
                 &self.home,
                 &store()?,
-                str_of("entity")?,
-                enable()?,
+                &intent()?,
                 str_of("baseSha")?,
             )?)?,
-            _ => json(&write::rollback(&self.home, &store()?, str_of("op")?)?)?,
+            "rollback" => json(&write::rollback(&self.home, &store()?, str_of("op")?)?)?,
+            "rollbackBatch" => json(&write::rollback_batch(
+                &self.home,
+                &store()?,
+                str_of("batch")?,
+            )?)?,
+            "profiles" => json(&loadout_core::profiles::list(&store()?))?,
+            "profileSave" => {
+                let name = profile_name()?;
+                let profile = match p.get("items") {
+                    // без `items` профиль снимается с текущего состояния
+                    None | Some(Value::Null) => {
+                        loadout_core::profiles::from_current(&self.home, &store()?, &name)
+                    }
+                    Some(items) => loadout_core::profiles::Profile {
+                        name,
+                        items: serde_json::from_value(items.clone())
+                            .map_err(|_| "неверные записи профиля".to_owned())?,
+                    },
+                };
+                loadout_core::profiles::save(&store()?, profile)?;
+                json(&loadout_core::profiles::list(&store()?))?
+            }
+            "profileDelete" => {
+                loadout_core::profiles::delete(&store()?, &profile_name()?)?;
+                json(&loadout_core::profiles::list(&store()?))?
+            }
+            "planProfile" => {
+                let st = store()?;
+                let (items, missing) =
+                    loadout_core::profiles::intents(&self.home, &st, &profile_name()?)?;
+                let mut bp = write::plan_batch(&self.home, Some(&st), &items);
+                bp.skipped.extend(missing);
+                json(&bp)?
+            }
+            "applyProfile" => {
+                let st = store()?;
+                let (items, _) =
+                    loadout_core::profiles::intents(&self.home, &st, &profile_name()?)?;
+                let (batch, applied) =
+                    write::apply_batch(&self.home, &st, &items, str_of("batchSha")?)?;
+                json(&json!({ "batch": batch, "applied": applied }))?
+            }
+            _ => return Err("неизвестный метод".into()),
         };
-        if matches!(method, "apply" | "rollback") {
+        if matches!(
+            method,
+            "apply" | "rollback" | "rollbackBatch" | "applyProfile"
+        ) {
             // окно узнаёт об изменении сразу, а не после срабатывания сторожа
             self.rescan(true, false);
         }
@@ -205,12 +266,13 @@ impl Server {
             Some("status") => {
                 json!({ "result": { "watching": self.watched.len(), "seq": self.seq, "writable": self.backups.is_some() } })
             }
-            Some(m @ ("plan" | "apply" | "journal" | "rollback")) => {
-                match self.write_method(m, req.get("params").unwrap_or(&Value::Null)) {
-                    Ok(v) => json!({ "result": v }),
-                    Err(e) => json!({ "error": { "message": e } }),
-                }
-            }
+            Some(
+                m @ ("plan" | "apply" | "journal" | "rollback" | "rollbackBatch" | "profiles"
+                | "profileSave" | "profileDelete" | "planProfile" | "applyProfile"),
+            ) => match self.write_method(m, req.get("params").unwrap_or(&Value::Null)) {
+                Ok(v) => json!({ "result": v }),
+                Err(e) => json!({ "error": { "message": e } }),
+            },
             Some(other) => {
                 json!({ "error": { "message": format!("неизвестный метод: {other:.40}") } })
             }

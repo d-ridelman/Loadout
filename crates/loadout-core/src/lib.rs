@@ -11,6 +11,8 @@ pub mod facts;
 pub mod frontmatter;
 pub mod mask;
 pub mod model;
+pub mod profiles;
+pub mod trash;
 pub mod watch;
 pub mod write;
 
@@ -102,6 +104,8 @@ pub(crate) fn scan_mcp_servers(
     root_ptr: &str,
     scope: &str,
     servers: Option<&Value>,
+    // Файл клиента, в который Loadout может писать (R1/R2); у записей плагинов и чужих каталогов `None`.
+    writable: Option<&Path>,
 ) {
     for (name, cfg) in servers.and_then(Value::as_object).into_iter().flatten() {
         let Some(shown) = mask::safe_name(name) else {
@@ -109,7 +113,7 @@ pub(crate) fn scan_mcp_servers(
                 .push(format!("{file}: MCP-сервер с недопустимым именем пропущен"));
             continue;
         };
-        let e = Entity::new(
+        let mut e = Entity::new(
             client,
             Kind::Mcp,
             scope,
@@ -119,6 +123,28 @@ pub(crate) fn scan_mcp_servers(
             format!("{root_ptr}/{}", esc_ptr(name)),
         )
         .detail(mask::mcp_detail(cfg));
+        if let Some(file_path) = writable {
+            // у записи нет флага «выключено»: выключение вырезает её в корзину (trash.rs)
+            let mut path: Vec<String> = root_ptr
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect();
+            path.push(name.clone());
+            e = e
+                .target(model::Target {
+                    file: file_path.to_path_buf(),
+                    format: model::Format::Json,
+                    path: path.clone(),
+                    inverted: false,
+                    kind: model::TargetKind::Cut,
+                })
+                .src(model::Src {
+                    file: file_path.to_path_buf(),
+                    format: model::Format::Json,
+                    path,
+                });
+        }
         c.push(e);
     }
 }
@@ -412,6 +438,11 @@ fn home_forms(home: &Path) -> Vec<String> {
 }
 
 pub fn scan(home: &Path) -> ScanResult {
+    scan_with(home, None)
+}
+
+/// Скан с корзиной Loadout (`store` — каталог бэкапов приложения): вынесенные записи видны как выключенные.
+pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
     let mut c = Ctx {
         home: home.to_path_buf(),
         entities: Vec::new(),
@@ -422,12 +453,16 @@ pub fn scan(home: &Path) -> ScanResult {
     codex::scan(&mut c);
     antigravity::scan(&mut c);
     deepseek::scan(&mut c);
+    if let Some(store) = store {
+        trash::inject(&mut c, store);
+    }
 
     // Последний рубеж: путь домашнего каталога не должен остаться ни в одном строковом поле.
     let forms = home_forms(home);
     let mut seen_ids: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for e in &mut c.entities {
         e.can_toggle = e.target.is_some();
+        e.can_edit = e.src.is_some();
         if !e.can_toggle {
             e.toggle_why = Some(write::why_not(e).to_owned());
         }

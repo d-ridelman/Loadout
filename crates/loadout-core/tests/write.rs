@@ -1,12 +1,28 @@
 //! Запись R1 на копии фикстур во временном каталоге: настоящий дом и `fixtures/` не трогаются никогда.
 
 use loadout_core::model::{Client, Kind, ScanResult, State};
-use loadout_core::write::{apply, journal, plan, rollback};
+use loadout_core::write::{self, journal, rollback, Applied, Intent, Plan};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static N: AtomicU32 = AtomicU32::new(0);
+
+fn tog(id: &str, enable: bool) -> Intent {
+    Intent::Toggle {
+        entity: id.to_owned(),
+        enable,
+    }
+}
+
+/// Переключение флага без корзины (R1): так же звало окно в M3.
+fn plan(home: &Path, id: &str, enable: bool) -> Result<Plan, String> {
+    write::plan(home, None, &tog(id, enable))
+}
+
+fn apply(home: &Path, store: &Path, id: &str, enable: bool, sha: &str) -> Result<Applied, String> {
+    write::apply(home, store, &tog(id, enable), sha)
+}
 
 struct Env {
     home: PathBuf,
@@ -255,7 +271,9 @@ fn noop_and_unsupported_entities_are_refused_with_a_reason() {
 
     let skill = r.entities.iter().find(|x| x.kind == Kind::Skill).unwrap();
     assert!(!skill.can_toggle && skill.toggle_why.is_some());
-    assert!(plan(&e.home, &skill.id, false).unwrap_err().contains("R2"));
+    assert!(plan(&e.home, &skill.id, false)
+        .unwrap_err()
+        .contains("не поддержана"));
     assert!(plan(&e.home, "нет-такого", false).is_err());
 }
 
@@ -355,6 +373,390 @@ fn codex_app_flag_toggles_through_the_apps_table() {
     );
 }
 
+// ---- M4: корзина, правка, копирование, профили ----
+
+fn state_in(e: &Env, id: &str) -> Option<State> {
+    loadout_core::scan_with(&e.home, Some(&e.store))
+        .entities
+        .iter()
+        .find(|x| x.id == id)
+        .map(|x| x.state)
+}
+
+fn id_in(e: &Env, client: Client, name: &str) -> String {
+    id_of(
+        &loadout_core::scan_with(&e.home, Some(&e.store)),
+        client,
+        Kind::Mcp,
+        name,
+    )
+}
+
+fn read_json(p: &Path) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(p).unwrap()).unwrap()
+}
+
+fn plan_s(e: &Env, i: &Intent) -> Result<Plan, String> {
+    write::plan(&e.home, Some(&e.store), i)
+}
+
+fn apply_i(e: &Env, i: &Intent) -> Result<Applied, String> {
+    let p = plan_s(e, i)?;
+    write::apply(&e.home, &e.store, i, &p.base_sha)
+}
+
+fn ag_cfg(e: &Env) -> PathBuf {
+    e.home.join(".gemini/config/mcp_config.json")
+}
+
+#[test]
+fn mcp_without_flag_goes_to_trash_and_comes_back_with_the_same_id() {
+    let e = env();
+    let id = id_in(&e, Client::Antigravity, "tool-b");
+    let original = read_json(&ag_cfg(&e));
+    let p = plan_s(&e, &tog(&id, false)).unwrap();
+    assert_eq!(
+        (p.level.as_str(), p.to.as_str()),
+        ("R2", "в корзине Loadout")
+    );
+    let done = write::apply(&e.home, &e.store, &tog(&id, false), &p.base_sha).unwrap();
+
+    let after = read_json(&ag_cfg(&e));
+    assert!(after["mcpServers"].get("tool-b").is_none());
+    assert_eq!(
+        after["mcpServers"]["tool-a"],
+        original["mcpServers"]["tool-a"]
+    );
+    // запись видна как выключенная с тем же id, а без корзины в скан не попадает
+    assert_eq!(state_in(&e, &id), Some(State::Off));
+    assert!(loadout_core::scan(&e.home)
+        .entities
+        .iter()
+        .all(|x| x.id != id));
+    let trash_text = fs::read_to_string(e.store.join("trash").join(format!("{id}.json"))).unwrap();
+    assert!(
+        trash_text.contains("FAKE-SECRET-AG-ENV"),
+        "значения лежат в корзине как есть"
+    );
+    let shown = format!(
+        "{}{}{}",
+        serde_json::to_string(&p).unwrap(),
+        serde_json::to_string(&done).unwrap(),
+        serde_json::to_string(&journal(&e.home, &e.store)).unwrap()
+    );
+    assert!(!shown.contains("FAKE-SECRET"), "{shown}");
+
+    // включить: файл семантически равен исходному, корзина пуста
+    let back = apply_i(&e, &tog(&id, true)).unwrap();
+    assert_eq!(read_json(&ag_cfg(&e)), original);
+    assert_eq!(state_in(&e, &id), Some(State::On));
+    assert!(!e.store.join("trash").join(format!("{id}.json")).exists());
+    assert!(back.op > done.op);
+}
+
+#[test]
+fn trash_rollback_is_an_inverse_operation_even_after_the_client_rewrote_the_file() {
+    let e = env();
+    let id = id_in(&e, Client::ClaudeCode, "github");
+    let cj = e.home.join(".claude.json");
+    let original = read_json(&cj);
+    let done = apply_i(&e, &tog(&id, false)).unwrap();
+    assert!(read_json(&cj)["mcpServers"].get("github").is_none());
+    // клиент переписал файл (так он делает постоянно): откат по хешу отказал бы, обратная операция проходит
+    let mut v = read_json(&cj);
+    v["numStartups"] = serde_json::json!(7);
+    fs::write(&cj, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    let j = journal(&e.home, &e.store);
+    assert!(j[0].can_rollback, "обратная операция возможна");
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    let mut want = original;
+    want["numStartups"] = serde_json::json!(7);
+    assert_eq!(read_json(&cj), want);
+    assert_eq!(state_in(&e, &id), Some(State::On));
+    assert!(journal(&e.home, &e.store)[1].rolled_back);
+}
+
+#[test]
+fn owners_stash_entry_returns_inside_the_file_and_other_stash_keys_stay() {
+    let e = env();
+    let id = id_in(&e, Client::ClaudeCode, "old");
+    let cj = e.home.join(".claude.json");
+    let done = apply_i(&e, &tog(&id, true)).unwrap();
+    let v = read_json(&cj);
+    assert_eq!(v["mcpServers"]["old"]["command"], "old");
+    assert!(v["_disabledMcpServers"].get("old").is_none());
+    assert_eq!(v["_disabledMcpServers"]["_note"], "стэш");
+    // указатель меняется (`/mcpServers/old`), а с ним и id: запись ищем по имени
+    let live = id_in(&e, Client::ClaudeCode, "old");
+    assert_ne!(live, id);
+    assert_eq!(state_in(&e, &live), Some(State::On));
+    // обратно уходит в корзину Loadout, а не в стэш: стэш — самодеятельность владельца
+    assert!(journal(&e.home, &e.store)[0].can_rollback);
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert_eq!(state_in(&e, &live), Some(State::Off));
+}
+
+#[test]
+fn edit_replaces_command_and_args_masks_the_log_and_rolls_back_to_identical_bytes() {
+    let e = env();
+    let id = id_in(&e, Client::ClaudeDesktop, "desk-tool");
+    let path = e
+        .home
+        .join("AppData/Roaming/Claude/claude_desktop_config.json");
+    let original = fs::read(&path).unwrap();
+    let i = Intent::Edit {
+        entity: id.clone(),
+        command: "new-cmd".into(),
+        args: vec![
+            "--token".into(),
+            "FAKE-SECRET-NEW".into(),
+            "--port".into(),
+            "8080".into(),
+        ],
+    };
+    let p = plan_s(&e, &i).unwrap();
+    assert_eq!(p.level, "R2");
+    assert!(!format!("{p:?}").contains("FAKE-SECRET"), "{p:?}");
+    assert!(p.to.contains("<masked>"), "{}", p.to);
+    let done = write::apply(&e.home, &e.store, &i, &p.base_sha).unwrap();
+    let v = read_json(&path);
+    assert_eq!(v["mcpServers"]["desk-tool"]["command"], "new-cmd");
+    assert_eq!(v["mcpServers"]["desk-tool"]["args"][1], "FAKE-SECRET-NEW");
+    assert_eq!(
+        v["mcpServers"]["desk-tool"]["env"]["TOKEN"], "FAKE-SECRET-DESKENV",
+        "env не тронут"
+    );
+    assert_eq!(v["preferences"]["sidebarMode"], "chat");
+    let shown = format!(
+        "{}{}",
+        serde_json::to_string(&done).unwrap(),
+        serde_json::to_string(&journal(&e.home, &e.store)).unwrap()
+    );
+    assert!(!shown.contains("FAKE-SECRET"), "{shown}");
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+
+    // пустая команда, управляющие символы и запись без command отказывают
+    for bad in [
+        Intent::Edit {
+            entity: id.clone(),
+            command: "  ".into(),
+            args: vec![],
+        },
+        Intent::Edit {
+            entity: id.clone(),
+            command: "a\nb".into(),
+            args: vec![],
+        },
+        Intent::Edit {
+            entity: id.clone(),
+            command: "a".into(),
+            args: vec!["x\u{0}".into()],
+        },
+    ] {
+        assert!(plan_s(&e, &bad).is_err(), "{bad:?}");
+    }
+    let http = id_in(&e, Client::ClaudeCode, "github");
+    let err = plan_s(
+        &e,
+        &Intent::Edit {
+            entity: http,
+            command: "x".into(),
+            args: vec![],
+        },
+    )
+    .unwrap_err();
+    assert!(err.contains("command"), "{err}");
+}
+
+#[test]
+fn copy_translates_between_json_and_toml_keeps_secrets_inside_the_core() {
+    let e = env();
+    let id = id_in(&e, Client::ClaudeDesktop, "desk-tool");
+    let to_codex = Intent::Copy {
+        entity: id.clone(),
+        to: "codex".into(),
+    };
+    let p = plan_s(&e, &to_codex).unwrap();
+    assert_eq!(
+        (p.client, p.file.as_str()),
+        (Client::Codex, "~/.codex/config.toml")
+    );
+    assert!(p.notes.iter().any(|n| n.contains("TOKEN")), "{:?}", p.notes);
+    assert!(!format!("{p:?}").contains("FAKE-SECRET"), "{p:?}");
+    let cfg = codex_cfg(&e);
+    let original = fs::read(&cfg).unwrap();
+    let done = write::apply(&e.home, &e.store, &to_codex, &p.base_sha).unwrap();
+    let t: toml::Table = fs::read_to_string(&cfg).unwrap().parse().unwrap();
+    let s = &t["mcp_servers"]["desk-tool"];
+    assert_eq!(s["command"].as_str(), Some("desk-tool"));
+    assert_eq!(
+        s["env"]["TOKEN"].as_str(),
+        Some("FAKE-SECRET-DESKENV"),
+        "значение скопировано как есть"
+    );
+    // уже есть: второй раз отказ
+    assert!(plan_s(&e, &to_codex).unwrap_err().contains("уже есть"));
+    // откат копии возвращает файл побайтово
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert_eq!(fs::read(&cfg).unwrap(), original);
+
+    // Codex → Claude Code: http_headers → headers, type добавляется
+    let remote = id_in(&e, Client::Codex, "remote");
+    let p = plan_s(
+        &e,
+        &Intent::Copy {
+            entity: remote.clone(),
+            to: "claude-code".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(p.client, Client::ClaudeCode);
+    write::apply(
+        &e.home,
+        &e.store,
+        &Intent::Copy {
+            entity: remote,
+            to: "claude-code".into(),
+        },
+        &p.base_sha,
+    )
+    .unwrap();
+    let v = read_json(&e.home.join(".claude.json"));
+    assert_eq!(v["mcpServers"]["remote"]["type"], "http");
+    assert!(v["mcpServers"]["remote"]["headers"]["Authorization"]
+        .as_str()
+        .unwrap()
+        .contains("FAKE-SECRET-CXHDR"));
+    assert!(v["mcpServers"]["remote"].get("http_headers").is_none());
+}
+
+#[test]
+fn copy_refuses_same_client_deepseek_and_taken_names() {
+    let e = env();
+    let id = id_in(&e, Client::Antigravity, "tool-a");
+    for to in ["antigravity", "deepseek", "nonsense"] {
+        assert!(
+            plan_s(
+                &e,
+                &Intent::Copy {
+                    entity: id.clone(),
+                    to: to.into()
+                }
+            )
+            .is_err(),
+            "{to}"
+        );
+    }
+    // `github` есть в Claude Code: копия из Codex с таким же именем отказывает
+    let local = id_in(&e, Client::Antigravity, "tool-b");
+    let ok = plan_s(
+        &e,
+        &Intent::Copy {
+            entity: local,
+            to: "claude-desktop".into(),
+        },
+    );
+    assert!(ok.is_ok(), "{ok:?}");
+}
+
+#[test]
+fn plugin_files_deepseek_and_denied_entries_have_no_write_target() {
+    let e = env();
+    let r = loadout_core::scan_with(&e.home, Some(&e.store));
+    let plugin_mcp = r
+        .entities
+        .iter()
+        .find(|x| x.client == Client::Antigravity && x.kind == Kind::Mcp && x.scope != "user")
+        .expect("в фикстуре есть MCP плагина Antigravity");
+    assert!(!plugin_mcp.can_toggle && !plugin_mcp.can_edit);
+    let ds = r
+        .entities
+        .iter()
+        .find(|x| x.client == Client::DeepSeek && x.kind == Kind::Mcp)
+        .unwrap();
+    assert!(ds.toggle_why.as_deref().unwrap().contains("DeepSeek"));
+    assert!(plan_s(
+        &e,
+        &Intent::Copy {
+            entity: ds.id.clone(),
+            to: "codex".into()
+        }
+    )
+    .is_err());
+    assert!(loadout_core::trash::read(&e.store, "../x").is_none());
+}
+
+#[test]
+fn profile_applies_as_one_batch_and_rolls_back_together() {
+    let e = env();
+    let id_p1 = id_of(
+        &loadout_core::scan(&e.home),
+        Client::Codex,
+        Kind::Plugin,
+        "p1@bundled",
+    );
+    let id_b = id_in(&e, Client::Antigravity, "tool-b");
+    let before_cfg = fs::read(codex_cfg(&e)).unwrap();
+    let before_ag = read_json(&ag_cfg(&e));
+
+    let mut prof = loadout_core::profiles::from_current(&e.home, &e.store, "рабочий");
+    assert!(prof.items.len() > 5);
+    for it in &mut prof.items {
+        if (it.client == "codex" && it.name == "p1@bundled")
+            || (it.client == "antigravity" && it.name == "tool-b")
+        {
+            it.enable = false;
+        }
+    }
+    loadout_core::profiles::save(&e.store, prof).unwrap();
+    assert_eq!(loadout_core::profiles::list(&e.store).len(), 1);
+    assert!(loadout_core::profiles::save(
+        &e.store,
+        loadout_core::profiles::Profile {
+            name: "../x".into(),
+            items: vec![]
+        }
+    )
+    .is_err());
+
+    let (items, missing) = loadout_core::profiles::intents(&e.home, &e.store, "рабочий").unwrap();
+    assert!(missing.is_empty());
+    let bp = write::plan_batch(&e.home, Some(&e.store), &items);
+    assert_eq!(bp.level, "R2");
+    assert_eq!(
+        bp.plans.iter().filter(|p| !p.noop).count(),
+        2,
+        "меняются ровно две записи"
+    );
+    assert!(write::apply_batch(&e.home, &e.store, &items, "стухшая подпись").is_err());
+
+    let (batch, applied) = write::apply_batch(&e.home, &e.store, &items, &bp.batch_sha).unwrap();
+    assert_eq!(applied.len(), 2);
+    assert_eq!(state_in(&e, &id_p1), Some(State::Off));
+    assert_eq!(state_in(&e, &id_b), Some(State::Off));
+    let j = journal(&e.home, &e.store);
+    assert_eq!(
+        j.iter()
+            .filter(|x| x.batch.as_deref() == Some(batch.as_str()))
+            .count(),
+        2
+    );
+
+    let undone = write::rollback_batch(&e.home, &e.store, &batch).unwrap();
+    assert_eq!(undone.len(), 2);
+    assert_eq!(fs::read(codex_cfg(&e)).unwrap(), before_cfg);
+    assert_eq!(read_json(&ag_cfg(&e)), before_ag);
+    assert!(
+        write::rollback_batch(&e.home, &e.store, &batch).is_err(),
+        "второй раз нечего откатывать"
+    );
+
+    // профиль живёт дальше; удалённой записи он пропускает, а не падает
+    loadout_core::profiles::delete(&e.store, "рабочий").unwrap();
+    assert!(loadout_core::profiles::list(&e.store).is_empty());
+}
+
 /// Сухой прогон на настоящих конфигах (`cargo test -- --ignored`): только `plan`, ничего не пишется.
 /// Каждая переключаемая запись даёт план, файлы клиентов после прогона не изменились.
 #[test]
@@ -367,7 +769,10 @@ fn real_machine_plans_are_dry_and_succeed() {
     );
     let files = [
         home.join(".claude/settings.json"),
+        home.join(".claude.json"),
         home.join(".codex/config.toml"),
+        home.join("AppData/Roaming/Claude/claude_desktop_config.json"),
+        home.join(".gemini/config/mcp_config.json"),
     ];
     let before: Vec<_> = files.iter().map(|f| fs::read(f).ok()).collect();
     let r = loadout_core::scan(&home);

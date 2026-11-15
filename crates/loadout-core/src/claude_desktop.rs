@@ -18,6 +18,7 @@ pub fn scan(c: &mut Ctx) {
             "/mcpServers",
             "user",
             v.get("mcpServers"),
+            Some(&path),
         );
     }
 }

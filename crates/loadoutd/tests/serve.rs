@@ -553,3 +553,100 @@ fn write_methods_validate_params() {
     }
     assert!(s.call("snapshot")["result"].is_object(), "процесс жив");
 }
+
+#[test]
+fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() {
+    let mut s = Server::start_writable();
+    let snap = s.call("snapshot");
+    let id = entity_id(&snap, "antigravity", "tool-b");
+    let e = snap["result"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == json!(id))
+        .unwrap();
+    assert_eq!(e["canToggle"], true);
+    assert_eq!(e["canEdit"], true);
+
+    // вынос в корзину: R2, запись остаётся в списке выключенной с тем же id
+    let plan = s.call_with(
+        "plan",
+        json!({ "op": "toggle", "entity": id, "enable": false }),
+    );
+    assert_eq!(plan["result"]["level"], "R2", "{plan}");
+    let done = s.call_with(
+        "apply",
+        json!({ "op": "toggle", "entity": id, "enable": false, "baseSha": plan["result"]["baseSha"] }),
+    );
+    assert!(done["result"]["op"].is_string(), "{done}");
+    s.wait_method("changed", Duration::from_secs(5))
+        .expect("changed после выноса");
+    let after = s.call("snapshot");
+    let e = after["result"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == json!(id))
+        .expect("запись из корзины видна с прежним id");
+    assert_eq!(e["state"], "off");
+
+    // правка и копирование (R2): в ответах нет значений секретов
+    let id_a = entity_id(&s.call("snapshot"), "antigravity", "tool-a");
+    let edit =
+        json!({ "op": "edit", "entity": id_a, "command": "npx", "args": ["-y", "tool-a-mcp@2"] });
+    let p = s.call_with("plan", edit.clone());
+    assert_eq!(p["result"]["op"], "edit", "{p}");
+    let mut ap = edit.clone();
+    ap["baseSha"] = p["result"]["baseSha"].clone();
+    let d = s.call_with("apply", ap);
+    assert!(d["result"]["op"].is_string(), "{d}");
+    let copy = json!({ "op": "copy", "entity": id_a, "to": "codex" });
+    let p = s.call_with("plan", copy.clone());
+    assert_eq!(p["result"]["client"], "codex", "{p}");
+    let bad = s.call_with("plan", json!({ "op": "delete", "entity": id_a }));
+    assert!(
+        bad["error"]["message"].is_string(),
+        "неизвестная операция не проходит: {bad}"
+    );
+
+    let all = format!("{plan}{done}{p}{d}{}", s.call("journal"));
+    assert!(!all.contains("FAKE-SECRET"), "{all}");
+    assert!(
+        !all.contains(&s.home.to_string_lossy().replace('\\', "/")),
+        "{all}"
+    );
+}
+
+#[test]
+fn profiles_save_plan_apply_and_roll_back_over_jsonrpc() {
+    let mut s = Server::start_writable();
+    let saved = s.call_with("profileSave", json!({ "name": "рабочий" }));
+    let list = saved["result"].as_array().expect("список профилей");
+    assert_eq!(list.len(), 1, "{saved}");
+    let mut items = list[0]["items"].clone();
+    for it in items.as_array_mut().unwrap() {
+        if it["client"] == "codex" && it["name"] == "p1@bundled" {
+            it["enable"] = json!(false);
+        }
+    }
+    s.call_with("profileSave", json!({ "name": "рабочий", "items": items }));
+    assert!(s.call_with("profileSave", json!({ "name": "../x" }))["error"].is_object());
+
+    let bp = s.call_with("planProfile", json!({ "name": "рабочий" }));
+    let plans = bp["result"]["plans"].as_array().unwrap();
+    assert_eq!(
+        plans.iter().filter(|p| p["noop"] == false).count(),
+        1,
+        "{bp}"
+    );
+    let ap = s.call_with(
+        "applyProfile",
+        json!({ "name": "рабочий", "batchSha": bp["result"]["batchSha"] }),
+    );
+    let batch = ap["result"]["batch"].clone();
+    assert_eq!(ap["result"]["applied"].as_array().unwrap().len(), 1, "{ap}");
+    let rb = s.call_with("rollbackBatch", json!({ "batch": batch }));
+    assert_eq!(rb["result"].as_array().unwrap().len(), 1, "{rb}");
+    let del = s.call_with("profileDelete", json!({ "name": "рабочий" }));
+    assert_eq!(del["result"].as_array().unwrap().len(), 0);
+}

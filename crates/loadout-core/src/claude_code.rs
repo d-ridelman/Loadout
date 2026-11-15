@@ -1,7 +1,7 @@
 //! Адаптер Claude Code (CLI и вкладка Code в Claude Desktop). Источники — таблица §2 CONCEPT.md.
 
 use crate::mask::{self, mcp_detail};
-use crate::model::{Client, Entity, Format, Kind, State, Target};
+use crate::model::{Client, Entity, Format, Kind, Source, Src, State, Target, TargetKind};
 use crate::{esc_ptr, frontmatter, scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -49,6 +49,7 @@ fn settings_flag(c: &Ctx, path: &[&str]) -> Target {
         format: Format::Json,
         path: path.iter().map(|s| (*s).to_owned()).collect(),
         inverted: false,
+        kind: TargetKind::Flag,
     }
 }
 
@@ -205,7 +206,8 @@ fn marketplaces(c: &mut Ctx) {
 }
 
 fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
-    let Some(v) = c.read_json(&c.home.join(".claude.json")) else {
+    let claude_json = c.home.join(".claude.json");
+    let Some(v) = c.read_json(&claude_json) else {
         return;
     };
     let file = "~/.claude.json";
@@ -252,6 +254,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
         .into_iter()
         .flatten()
     {
+        let live = vec!["mcpServers".to_owned(), name.clone()];
         found.push(
             Entity::new(
                 CLIENT,
@@ -262,7 +265,20 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
                 file,
                 format!("/mcpServers/{}", esc_ptr(name)),
             )
-            .detail(mcp_detail(cfg)),
+            .detail(mcp_detail(cfg))
+            // выключение вырезает запись в корзину Loadout (у MCP нет флага «выключено»)
+            .target(Target {
+                file: claude_json.clone(),
+                format: Format::Json,
+                path: live.clone(),
+                inverted: false,
+                kind: TargetKind::Cut,
+            })
+            .src(Src {
+                file: claude_json.clone(),
+                format: Format::Json,
+                path: live,
+            }),
         );
     }
     for key in STASH_KEYS {
@@ -281,7 +297,15 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
                     format!("/{key}/{}", esc_ptr(name)),
                 )
                 .note("лежит вне mcpServers, Claude Code его не запускает (стэш, не штатный ключ)")
-                .detail(mcp_detail(cfg)),
+                .detail(mcp_detail(cfg))
+                // включение переносит запись обратно в mcpServers внутри того же файла
+                .target(Target {
+                    file: claude_json.clone(),
+                    format: Format::Json,
+                    path: vec![key.to_owned(), name.clone()],
+                    inverted: false,
+                    kind: TargetKind::Restore(Source::Stash(vec![key.to_owned()])),
+                }),
             );
         }
     }
