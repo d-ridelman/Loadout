@@ -53,7 +53,13 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if res.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-    res.map_err(|e| format!("write {}: {e}", path.display()))
+    res.map_err(|e| {
+        msg!(
+            "write {}: {e}",
+            "не удалось записать {}: {e}",
+            path.display()
+        )
+    })
 }
 
 #[cfg(test)]

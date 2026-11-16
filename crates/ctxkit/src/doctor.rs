@@ -398,7 +398,9 @@ pub fn run_doctor(args: &[String]) -> i32 {
         eprintln!("ERR: cannot determine USERPROFILE / HOME directory");
         return 1;
     };
-    let findings = diagnose(&profile, detect_lang(args));
+    let lang = detect_lang(args);
+    crate::set_lang(lang); // the helpers shared with setup (parse errors of ctxkit.json, ...) speak the same language
+    let findings = diagnose(&profile, lang);
     let failed = findings.iter().any(|x| x.severity == "error");
     if json_out {
         let list: Vec<Value> = findings

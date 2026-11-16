@@ -13,10 +13,14 @@ pub(super) fn preflight(profile: &Path) -> Result<(), String> {
     if !p.exists() {
         return Ok(());
     }
-    let text = fs::read_to_string(&p).map_err(|e| format!("read {}: {e}", p.display()))?;
-    policy::parse(&text)
-        .map(|_| ())
-        .map_err(|e| format!("{}: {e}; fix or delete the file, then rerun", p.display()))
+    let text = read_text(&p)?;
+    policy::parse(&text).map(|_| ()).map_err(|e| {
+        msg!(
+            "{}: {e}; fix or delete the file, then rerun",
+            "{}: {e}; исправьте или удалите файл и запустите снова",
+            p.display()
+        )
+    })
 }
 
 /// Applies `--policy` (when given) and returns the policies as they are after this run.
@@ -37,8 +41,9 @@ pub(super) fn run(
                 .and_then(|t| policy::parse(&t))
                 .err();
             if let Some(e) = broken {
-                println!(
+                say!(
                     "  [warn] {}: {e}; every policy is off until it is fixed or deleted",
+                    "  [warn] {}: {e}; все политики выключены, пока файл не исправлен или не удалён",
                     p.display()
                 );
             }
@@ -58,16 +63,26 @@ pub(super) fn run(
     let orig = read_json_object(&p)?;
     let before = policy::parse(&orig.to_string())?;
     let mut next = orig.clone();
-    let root = next
-        .as_object_mut()
-        .ok_or("ctxkit.json root is not object")?;
+    let root = next.as_object_mut().ok_or_else(|| {
+        msg!(
+            "ctxkit.json root is not object",
+            "корень ctxkit.json не является объектом"
+        )
+    })?;
     sel.apply(root);
     if !existed {
         root.insert("created_by".to_string(), json!(policy::CREATED_BY));
     }
     let after = policy::parse(&next.to_string())?;
 
-    let onoff = |b: bool| Some(if b { "on" } else { "off" });
+    let onoff = |b: bool| {
+        Some(match (b, is_ru()) {
+            (true, false) => "on",
+            (false, false) => "off",
+            (true, true) => "вкл",
+            (false, true) => "выкл",
+        })
+    };
     for (label, old, new) in [
         (
             "commit_hygiene",
@@ -83,20 +98,27 @@ pub(super) fn run(
     ] {
         println!(
             "{}",
-            change_line(&format!("policy {label}"), onoff(old), onoff(new))
+            change_line(
+                &msg!("policy {label}", "политика {label}"),
+                onoff(old),
+                onoff(new)
+            )
         );
     }
     let slots = |c: &Config| c.build_slots.map(|n| n.to_string());
     println!(
         "{}",
         change_line(
-            "policy build_slots",
-            slots(&before).as_deref().or(Some("off")),
-            slots(&after).as_deref().or(Some("off"))
+            &msg!("policy build_slots", "политика build_slots"),
+            slots(&before).as_deref().or(onoff(false)),
+            slots(&after).as_deref().or(onoff(false))
         )
     );
     if !existed && after == Config::default() {
-        println!("  policies: none, so no ctxkit.json is created");
+        say!(
+            "  policies: none, so no ctxkit.json is created",
+            "  policies: нет, поэтому ctxkit.json не создаётся"
+        );
         return Ok(after);
     }
     write_json_if_changed(&p, Some(backup_dir), &orig, &next, dry_run, "ctxkit.json")?;

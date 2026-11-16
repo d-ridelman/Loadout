@@ -144,7 +144,7 @@ fn restore_bytes(
         return Ok(());
     }
     let b = backup_file(path, backup_dir)?;
-    println!("  backup -> {}", b.display());
+    say!("  backup -> {}", "  копия -> {}", b.display());
     write_atomic(path, bytes)?;
     println!("  {what}: {}", path.display());
     Ok(())
@@ -157,37 +157,47 @@ fn delete_created(path: &Path, backup_dir: &Path, what: &str, dry_run: bool) -> 
         return Ok(());
     }
     let b = backup_file(path, backup_dir)?;
-    println!("  backup -> {}", b.display());
-    fs::remove_file(path).map_err(|e| format!("remove {}: {e}", path.display()))?;
+    say!("  backup -> {}", "  копия -> {}", b.display());
+    remove_file(path)?;
     println!("  {what}: {}", path.display());
     Ok(())
 }
 
 fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
     if !path.exists() {
-        println!("  skip rules (not found): {}", path.display());
+        say!(
+            "  skip rules (not found): {}",
+            "  правила пропущены (не найдены): {}",
+            path.display()
+        );
         return Ok(());
     }
-    let existing = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let existing = read_text(path)?;
     let updated = strip_rules_blocks(&existing);
     // Markers that are still unbalanced after the whole blocks are gone (a start without an end).
     if marker_lines_left(&updated) {
-        println!(
+        say!(
             "  [warn] {}: a ctxkit start or end marker has no pair; remove the leftover block by hand",
+            "  [warn] {}: у начального или конечного маркера ctxkit нет пары; удалите оставшийся блок вручную",
             path.display()
         );
     }
     if existing == updated {
         if !marker_lines_left(&updated) {
-            println!("  ok rules block (not present): {}", path.display());
+            say!(
+                "  ok rules block (not present): {}",
+                "  ок блока правил нет: {}",
+                path.display()
+            );
         }
         return Ok(());
     }
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let backups = read_backups(backup_dir, name);
     if let Some((from, bytes)) = exact_text_backup(&updated, &backups, |t| !marker_lines_left(t)) {
-        let what = format!(
+        let what = msg!(
             "removed rules block (restored byte for byte from {})",
+            "блок правил убран (файл возвращён байт в байт из {})",
             from.display()
         );
         return restore_bytes(path, backup_dir, bytes, &what, dry_run);
@@ -203,7 +213,10 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
         return delete_created(
             path,
             backup_dir,
-            "removed rules file (setup had created it)",
+            &msg!(
+                "removed rules file (setup had created it)",
+                "файл правил удалён (его создал setup)"
+            ),
             dry_run,
         );
     }
@@ -211,7 +224,7 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
         path,
         backup_dir,
         updated.as_bytes(),
-        "removed rules block",
+        &msg!("removed rules block", "блок правил убран"),
         dry_run,
     )
 }
@@ -277,18 +290,29 @@ fn settings_outcome(next: &Value, backups: &[Saved], hook_cmd: &str) -> Settings
 fn remove_policies(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
     let path = policies::path(profile);
     if !path.exists() {
-        println!("  ok ctxkit.json (not present): {}", path.display());
+        say!(
+            "  ok ctxkit.json (not present): {}",
+            "  ок ctxkit.json нет: {}",
+            path.display()
+        );
         return Ok(());
     }
     let orig = match read_json_object(&path) {
         Ok(v) => v,
         Err(e) => {
-            println!("  [warn] {e}; ctxkit.json left as it is");
+            say!(
+                "  [warn] {e}; ctxkit.json left as it is",
+                "  [warn] {e}; ctxkit.json оставлен как есть"
+            );
             return Ok(());
         }
     };
     let Some(root) = orig.as_object().filter(|r| r.contains_key("policies")) else {
-        println!("  ok ctxkit.json (no policies section): {}", path.display());
+        say!(
+            "  ok ctxkit.json (no policies section): {}",
+            "  ок в ctxkit.json нет раздела policies: {}",
+            path.display()
+        );
         return Ok(());
     };
     let created = root.get("created_by") == Some(&json!(policy::CREATED_BY));
@@ -301,14 +325,24 @@ fn remove_policies(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
         return delete_created(
             &path,
             backup_dir,
-            "removed ctxkit.json (setup had created it)",
+            &msg!(
+                "removed ctxkit.json (setup had created it)",
+                "ctxkit.json удалён (его создал setup)"
+            ),
             dry_run,
         );
     }
     let note = if left.is_empty() {
-        "kept the file, now empty: setup did not create it".to_string()
+        msg!(
+            "kept the file, now empty: setup did not create it",
+            "файл оставлен, теперь пустой: setup его не создавал"
+        )
     } else {
-        format!("kept your keys: {}", left.join(", "))
+        msg!(
+            "kept your keys: {}",
+            "оставлены ваши ключи: {}",
+            left.join(", ")
+        )
     };
     write_json_if_changed(
         &path,
@@ -316,7 +350,10 @@ fn remove_policies(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
         &orig,
         &Value::Object(next),
         dry_run,
-        "ctxkit.json (policies section removed)",
+        &msg!(
+            "ctxkit.json (policies section removed)",
+            "ctxkit.json (раздел policies убран)"
+        ),
     )?;
     println!("  {note}");
     Ok(())
@@ -324,7 +361,11 @@ fn remove_policies(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
 
 fn remove_antigravity_hooks(path: &Path, dry_run: bool) -> Result<(), String> {
     if !path.exists() {
-        println!("  skip antigravity hooks (not found): {}", path.display());
+        say!(
+            "  skip antigravity hooks (not found): {}",
+            "  хуки Antigravity пропущены (не найдены): {}",
+            path.display()
+        );
         return Ok(());
     }
     let orig = read_json_object(path)?;
@@ -333,50 +374,57 @@ fn remove_antigravity_hooks(path: &Path, dry_run: bool) -> Result<(), String> {
         root.remove("ctxkit");
         root.remove("claude-guard");
     }
-    write_json_if_changed(path, None, &orig, &next, dry_run, "antigravity hooks.json")
+    write_json_if_changed(path, None, &orig, &next, dry_run, "Antigravity hooks.json")
 }
 
 fn remove_dsh(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
     let hooks_path = dsh_home.join("ctxkit-hooks.json");
     if !hooks_path.exists() {
-        println!(
+        say!(
             "  ok DeepSeek Harness hooks (not present): {}",
+            "  ок хуков DeepSeek Harness нет: {}",
             hooks_path.display()
         );
     } else if dry_run {
-        println!(
+        say!(
             "  [dry-run] remove DeepSeek Harness hooks: {}",
+            "  [dry-run] удаление хуков DeepSeek Harness: {}",
             hooks_path.display()
         );
     } else {
         let b = backup_file(&hooks_path, &dsh_home.join("backups"))?;
-        println!("  backup -> {}", b.display());
-        fs::remove_file(&hooks_path)
-            .map_err(|e| format!("remove {}: {e}", hooks_path.display()))?;
-        println!("  removed DeepSeek Harness hooks: {}", hooks_path.display());
+        say!("  backup -> {}", "  копия -> {}", b.display());
+        remove_file(&hooks_path)?;
+        say!(
+            "  removed DeepSeek Harness hooks: {}",
+            "  удалены хуки DeepSeek Harness: {}",
+            hooks_path.display()
+        );
     }
     let profile = dsh_home.join("profiles").join("desktop");
     let patch = profile.join("cordis.patch.yml");
     if !patch.exists() {
         return Ok(());
     }
-    let existing =
-        fs::read_to_string(&patch).map_err(|e| format!("read {}: {e}", patch.display()))?;
+    let existing = read_text(&patch)?;
     let Ok(updated) = strip_dsh_block(&existing) else {
-        println!(
+        say!(
             "  [warn] {}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand",
+            "  [warn] {}: у начального маркера ctxkit нет конечного; удалите оставшийся блок ctxkit вручную",
             patch.display()
         );
         return Ok(());
     };
     if existing == updated {
-        println!(
+        say!(
             "  ok DeepSeek Harness profile patch (no ctxkit block): {}",
+            "  ок в патче профиля DeepSeek Harness нет блока ctxkit: {}",
             patch.display()
         );
     } else if dry_run {
-        println!(
+        say!(
             "  [dry-run] remove ctxkit block from DeepSeek Harness profile patch: {}",
+            "  [dry-run] удаление блока ctxkit из патча профиля DeepSeek Harness: {}",
             patch.display()
         );
     } else {
@@ -385,14 +433,18 @@ fn remove_dsh(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
         let (bytes, what) = match exact {
             Some((from, b)) => (
                 b.clone(),
-                format!(
+                msg!(
                     "removed ctxkit block from DeepSeek Harness profile patch (restored byte for byte from {})",
+                    "блок ctxkit убран из патча профиля DeepSeek Harness (файл возвращён байт в байт из {})",
                     from.display()
                 ),
             ),
             None => (
                 updated.into_bytes(),
-                "removed ctxkit block from DeepSeek Harness profile patch".to_string(),
+                msg!(
+                    "removed ctxkit block from DeepSeek Harness profile patch",
+                    "блок ctxkit убран из патча профиля DeepSeek Harness"
+                ),
             ),
         };
         restore_bytes(&patch, &profile, &bytes, &what, false)?;
@@ -429,7 +481,7 @@ fn list_backups(dir: &Path) -> Vec<PathBuf> {
 
 fn show(v: &Value) -> String {
     if v.is_null() {
-        "(not set)".to_string()
+        msg!("(not set)", "(не задано)")
     } else {
         v.to_string()
     }
@@ -462,7 +514,7 @@ fn print_kept(
     for name in ["Explore.md", "checker.md"] {
         let p = profile.join("agents").join(name);
         if p.exists() {
-            println!("  agent file: {}", p.display());
+            say!("  agent file: {}", "  файл агента: {}", p.display());
         }
     }
     if let Some(d) = desktop.filter(|d| d.exists()) {
@@ -474,9 +526,14 @@ fn print_kept(
                     .into_iter()
                     .flat_map(|m| m.values());
                 for p in presets.chain(built_ins) {
-                    let name = p["name"].as_str().unwrap_or("(built-in)");
-                    println!(
+                    let name = p["name"].as_str().unwrap_or(if is_ru() {
+                        "(встроенный)"
+                    } else {
+                        "(built-in)"
+                    });
+                    say!(
                         "  desktop preset {name}: model {}, effort {}",
+                        "  пресет Desktop {name}: model {}, effort {}",
                         show(&p["settings"]["modelId"]),
                         show(&p["settings"]["effort"])
                     );
@@ -521,11 +578,17 @@ fn backup_lines(
         }
     };
     let mut out = vec![
-        format!(
+        msg!(
             "  settings.json backups: {}",
+            "  копии settings.json: {}",
             last.parent().unwrap_or(profile).display()
         ),
-        format!("    latest:   {}{}", last.display(), note(last)),
+        msg!(
+            "    latest:   {}{}",
+            "    последняя: {}{}",
+            last.display(),
+            note(last)
+        ),
     ];
     if first != last {
         let hint = if earlier.contains(first) {
@@ -538,7 +601,11 @@ fn backup_lines(
         } else {
             note(first)
         };
-        out.push(format!("    earliest: {}{hint}", first.display()));
+        out.push(msg!(
+            "    earliest: {}{hint}",
+            "    ранняя:    {}{hint}",
+            first.display()
+        ));
     }
     out.push(format!(
         "  {}",
@@ -565,13 +632,20 @@ fn remove_bin(path: &Path, running: &Path, dry_run: bool, lang: Lang) {
         (Ok(a), Ok(b)) if a == b
     );
     if dry_run {
-        println!("  [dry-run] remove bin {}", path.display());
+        say!(
+            "  [dry-run] remove bin {}",
+            "  [dry-run] удаление bin {}",
+            path.display()
+        );
     } else if is_running {
-        manual("this is the binary that is running now");
+        manual(&msg!(
+            "this is the binary that is running now",
+            "это запущенный сейчас бинарник"
+        ));
     } else if let Err(e) = fs::remove_file(path) {
         manual(&e.to_string());
     } else {
-        println!("  removed bin {}", path.display());
+        say!("  removed bin {}", "  удалён bin {}", path.display());
         // `hooks/` was created by setup; remove_dir only succeeds when nothing else is in it.
         if let Some(dir) = path.parent().filter(|d| d.ends_with("hooks")) {
             let _ = fs::remove_dir(dir);
@@ -589,7 +663,11 @@ pub(super) fn run(
     hook_cmd: &str,
 ) -> i32 {
     let tag = if opts.dry_run { "[dry-run] " } else { "" };
-    println!("{tag}Removing ctxkit from profile: {}", profile.display());
+    say!(
+        "{tag}Removing ctxkit from profile: {}",
+        "{tag}Удаление ctxkit из профиля: {}",
+        profile.display()
+    );
     let backup_dir = profile.join("backups");
     let settings_path = profile.join("settings.json");
     // Listed before any write, to tell the backup made by this very run from the old ones.
@@ -641,8 +719,9 @@ pub(super) fn run(
                 &settings_path,
                 &backup_dir,
                 &bytes,
-                &format!(
+                &msg!(
                     "restored settings.json byte for byte from {}",
+                    "settings.json возвращён байт в байт из {}",
                     from.display()
                 ),
                 opts.dry_run,
@@ -650,7 +729,10 @@ pub(super) fn run(
             SettingsOutcome::Delete => delete_created(
                 &settings_path,
                 &backup_dir,
-                "removed settings.json (setup had created it)",
+                &msg!(
+                    "removed settings.json (setup had created it)",
+                    "settings.json удалён (его создал setup)"
+                ),
                 opts.dry_run,
             )?,
         }
@@ -728,7 +810,11 @@ pub(super) fn run(
         if local_is_ours {
             remove_bin(&local, &exe, opts.dry_run, opts.lang);
         } else if !custom_profile && local.exists() {
-            println!("  left (differs from ours): {}", local.display());
+            say!(
+                "  left (differs from ours): {}",
+                "  оставлен (отличается от нашего): {}",
+                local.display()
+            );
         }
     }
     0

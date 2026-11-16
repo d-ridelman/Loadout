@@ -55,7 +55,7 @@ impl Config {
             on.push(format!("build_slots={n}"));
         }
         if on.is_empty() {
-            "none".to_string()
+            msg!("none", "нет")
         } else {
             on.join(", ")
         }
@@ -124,22 +124,34 @@ fn strings(root: &Map<String, Value>, key: &str, rules: bool) -> Result<Vec<Stri
     let Some(v) = root.get(key) else {
         return Ok(Vec::new());
     };
-    let arr = v
-        .as_array()
-        .ok_or_else(|| format!("'{key}' is not an array of strings"))?;
+    let arr = v.as_array().ok_or_else(|| {
+        msg!(
+            "'{key}' is not an array of strings",
+            "'{key}' не является массивом строк"
+        )
+    })?;
     let mut out = Vec::new();
     for item in arr {
         let s = item
             .as_str()
-            .ok_or_else(|| format!("'{key}' holds something that is not a string"))?
+            .ok_or_else(|| {
+                msg!(
+                    "'{key}' holds something that is not a string",
+                    "'{key}' содержит не строку"
+                )
+            })?
             .trim();
         if s.is_empty() {
-            return Err(format!("'{key}' holds an empty string"));
+            return Err(msg!(
+                "'{key}' holds an empty string",
+                "'{key}' содержит пустую строку"
+            ));
         }
         // A rules line lands in CLAUDE.md between the ctxkit markers: no line break, no marker text.
         if rules && (s.contains(['\n', '\r']) || s.contains("<!--")) {
-            return Err(format!(
-                "'{key}' item must be one line without `<!--`: {s:?}"
+            return Err(msg!(
+                "'{key}' item must be one line without `<!--`: {s:?}",
+                "элемент '{key}' должен быть одной строкой без `<!--`: {s:?}"
             ));
         }
         out.push(s.to_string());
@@ -151,14 +163,27 @@ fn strings(root: &Map<String, Value>, key: &str, rules: bool) -> Result<Vec<Stri
 pub fn parse(text: &str) -> Result<Config, String> {
     let v: Value =
         serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
-    let root = v.as_object().ok_or("the top level is not a JSON object")?;
+    let root = v.as_object().ok_or_else(|| {
+        msg!(
+            "the top level is not a JSON object",
+            "верхний уровень не является JSON-объектом"
+        )
+    })?;
     let mut c = Config::default();
     if let Some(p) = root.get("policies") {
-        let p = p.as_object().ok_or("'policies' is not a JSON object")?;
+        let p = p.as_object().ok_or_else(|| {
+            msg!(
+                "'policies' is not a JSON object",
+                "'policies' не является JSON-объектом"
+            )
+        })?;
         let flag = |k: &str| match p.get(k) {
             None | Some(Value::Null) => Ok(false),
             Some(Value::Bool(b)) => Ok(*b),
-            Some(_) => Err(format!("'policies.{k}' must be true or false")),
+            Some(_) => Err(msg!(
+                "'policies.{k}' must be true or false",
+                "'policies.{k}' должно быть true или false"
+            )),
         };
         c.commit_hygiene = flag("commit_hygiene")?;
         c.confirm_irreversible = flag("confirm_irreversible")?;
@@ -169,12 +194,18 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 Some(0) => None,
                 Some(n) if n <= MAX_SLOTS => Some(n as u32),
                 _ => {
-                    return Err(format!(
-                        "'policies.build_slots' must be a whole number from 1 to {MAX_SLOTS}"
+                    return Err(msg!(
+                        "'policies.build_slots' must be a whole number from 1 to {MAX_SLOTS}",
+                        "'policies.build_slots' должно быть целым числом от 1 до {MAX_SLOTS}"
                     ))
                 }
             },
-            Some(_) => return Err("'policies.build_slots' must be a number (or false)".to_string()),
+            Some(_) => {
+                return Err(msg!(
+                    "'policies.build_slots' must be a number (or false)",
+                    "'policies.build_slots' должно быть числом (или false)"
+                ))
+            }
         };
     }
     c.stray_patterns = strings(root, "stray_patterns", false)?;
@@ -196,13 +227,19 @@ pub fn parse_selection(list: &str) -> Result<Selection, String> {
     let mut sel = Selection::default();
     let items: Vec<&str> = list.split(',').map(str::trim).collect();
     if items.iter().any(|i| i.is_empty()) {
-        return Err("--policy: empty item in the list".to_string());
+        return Err(msg!(
+            "--policy: empty item in the list",
+            "--policy: пустой элемент в списке"
+        ));
     }
     if items.iter().any(|i| i.eq_ignore_ascii_case("none")) {
         return if items.len() == 1 {
             Ok(sel)
         } else {
-            Err("--policy: `none` cannot be combined with other names".to_string())
+            Err(msg!(
+                "--policy: `none` cannot be combined with other names",
+                "--policy: `none` нельзя сочетать с другими именами"
+            ))
         };
     }
     for item in items {
@@ -216,7 +253,10 @@ pub fn parse_selection(list: &str) -> Result<Selection, String> {
                 *slot = true;
                 Ok(())
             }
-            Some(_) => Err(format!("--policy: `{name}` takes no value")),
+            Some(_) => Err(msg!(
+                "--policy: `{name}` takes no value",
+                "--policy: у `{name}` не бывает значения"
+            )),
         };
         match name.as_str() {
             "commit-hygiene" => on(&mut sel.commit_hygiene)?,
@@ -230,13 +270,17 @@ pub fn parse_selection(list: &str) -> Result<Selection, String> {
                         .ok()
                         .filter(|n| (1..=MAX_SLOTS as u32).contains(n))
                         .ok_or_else(|| {
-                            format!("--policy: build-slots=N needs a whole number from 1 to {MAX_SLOTS}, got `{v}`")
+                            msg!(
+                                "--policy: build-slots=N needs a whole number from 1 to {MAX_SLOTS}, got `{v}`",
+                                "--policy: build-slots=N требует целое число от 1 до {MAX_SLOTS}, получено `{v}`"
+                            )
                         })?,
                 })
             }
             _ => {
-                return Err(format!(
-                    "--policy: unknown policy `{item}` (use commit-hygiene, confirm-irreversible, stray-files, build-slots=N, or none)"
+                return Err(msg!(
+                    "--policy: unknown policy `{item}` (use commit-hygiene, confirm-irreversible, stray-files, build-slots=N, or none)",
+                    "--policy: неизвестная политика `{item}` (допустимо commit-hygiene, confirm-irreversible, stray-files, build-slots=N или none)"
                 ))
             }
         }

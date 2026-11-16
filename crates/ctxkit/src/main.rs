@@ -1,3 +1,26 @@
+/// `msg!("english {x}", "русский {x}", args..)` -> `String` in the language of this run (`set_lang`; English by default).
+/// Both texts are `format!` strings with the same placeholders (same idea as `tr!` in loadout-core). Markup that the
+/// window and the tests parse (`[dry-run]`, `[warn]`, `[note]`, `[ok]`, `[info]`, `ERR:`, ` -> `) and names (paths,
+/// flags, model names) are not translated. Defined before the modules so that all of them can use it.
+macro_rules! msg {
+    ($en:literal, $ru:literal $(, $arg:expr)* $(,)?) => {{
+        #[allow(clippy::useless_format)]
+        let s: String = if $crate::is_ru() {
+            format!($ru $(, $arg)*)
+        } else {
+            format!($en $(, $arg)*)
+        };
+        s
+    }};
+}
+
+/// `println!` of a `msg!`.
+macro_rules! say {
+    ($($t:tt)*) => {
+        println!("{}", msg!($($t)*))
+    };
+}
+
 mod backslash;
 mod check;
 mod commit;
@@ -43,6 +66,20 @@ pub fn parse_lang(s: &str) -> Option<Lang> {
     } else {
         None
     }
+}
+
+thread_local! {
+    /// The language of what `setup` / `setup --uninstall` / `doctor` print: set once from `--lang`, read by `msg!`.
+    /// Per thread, so parallel unit tests do not see each other's language.
+    static LANG: std::cell::Cell<Lang> = const { std::cell::Cell::new(Lang::En) };
+}
+
+pub fn set_lang(lang: Lang) {
+    LANG.with(|c| c.set(lang));
+}
+
+pub fn is_ru() -> bool {
+    LANG.with(std::cell::Cell::get) == Lang::Ru
 }
 
 pub fn t(lang: Lang, en: &'static str, ru: &'static str) -> &'static str {
