@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN_NAME = process.platform === 'win32' ? 'context-toolkit.exe' : 'context-toolkit';
 const OLD_BIN_NAME = process.platform === 'win32' ? 'ctxkit.exe' : 'ctxkit';
-// Инструменты контекста лежат в воркспейсе Loadout (crates/context-toolkit): сборка — в target корня репозитория
+// Context Toolkit lives in the Loadout workspace (crates/context-toolkit): the build is in the repository root target
 const exe = process.env.CONTEXT_TOOLKIT_BIN || process.env.CTXKIT_BIN || join(ROOT, '..', '..', 'target', 'release', BIN_NAME);
 // Our variables (either name) from the session that runs the tests must reach no child: a case sets its own.
 for (const k of Object.keys(process.env)) if (/^(CONTEXT_TOOLKIT|CTXKIT)_/i.test(k)) delete process.env[k];

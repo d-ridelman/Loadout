@@ -4,7 +4,7 @@ param([switch]$DryRun)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'user-path.ps1')
 
-# Инструменты контекста лежат в Cargo-воркспейсе Loadout (crates/context-toolkit): lock и target — в корне репозитория
+# Context Toolkit lives in the Loadout Cargo workspace (crates/context-toolkit): the lock file and target are at the repository root
 $CrateRoot = Split-Path -Parent $PSScriptRoot
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $CrateRoot)
 
