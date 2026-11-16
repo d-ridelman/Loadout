@@ -192,7 +192,7 @@ loadoutd (Rust, sidecar)  ──  loadout-core (библиотека)
 
 Один экземпляр: `app.requestSingleInstanceLock()` вызывается после `setPath('userData')`, второй запуск выводит первое окно вперёд (`second-instance`) и выходит сам. Замок Electron привязан к каталогу `userData` (проверено на двух процессах Electron: разные `userData` через `setPath` и через `--user-data-dir` оба получают замок, один и тот же — только первый), поэтому проверочные прогоны со своим профилем (`LOADOUT_USER_DATA`, `--user-data-dir` у `pack-check`) не мешают друг другу и установленной копии.
 
-Структура репозитория (как сейчас):
+Структура репозитория (позже: заменена на нынешнюю, в концепте была без `context-toolkit`, `shared`, `e2e`, `screenshots` и `state`):
 ```
 Loadout/
   crates/loadout-core/     модель, адаптеры, диф, бэкап, конвейер записи, сторож

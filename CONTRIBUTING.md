@@ -6,7 +6,7 @@ Thanks for looking. Loadout writes into the config files of other programs, so t
 
 ## Set up
 
-Requirements: Windows 11 x64 (Windows 10 is not tested), Rust 1.89 or newer with the MSVC toolchain, Node.js 22.12 or newer, `git`.
+Requirements: Windows 11 x64 (Windows 10 is not tested), Rust 1.91 or newer with the MSVC toolchain (the minimum comes from `notify-types` in `Cargo.lock`), Node.js 22.12+, 24 or 26+ (vitest does not support 23 and 25), `git`.
 
 ```bash
 git clone https://github.com/d-ridelman/Loadout.git

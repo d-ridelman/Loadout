@@ -6,7 +6,7 @@ Loadout пишет в конфиги чужих программ, поэтому
 
 ## Подготовка
 
-Нужны: Windows 11 x64 (Windows 10 не проверялась), Rust 1.89 или новее с набором MSVC, Node.js 22.12 или новее, `git`.
+Нужны: Windows 11 x64 (Windows 10 не проверялась), Rust 1.91 или новее с набором MSVC (нижняя граница от `notify-types` в `Cargo.lock`), Node.js 22.12+, 24 или 26+ (23 и 25 vitest не поддерживает), `git`.
 
 ```bash
 git clone https://github.com/d-ridelman/Loadout.git

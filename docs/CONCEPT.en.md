@@ -192,7 +192,7 @@ Single instance: `app.requestSingleInstanceLock()` is called after `setPath('use
 
 Electron security: `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, a strict CSP without `unsafe-eval`, no remote URLs, IPC only via an allow-list, file names from the UI are validated by the core (writes only to the known adapter paths).
 
-Repository structure (as it is now):
+Repository structure (later: replaced with the current one; the concept had no `context-toolkit`, `shared`, `e2e`, `screenshots` or `state`):
 ```
 Loadout/
   crates/loadout-core/     model, adapters, diff, backup, write pipeline, watcher

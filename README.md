@@ -36,7 +36,7 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 - **Journal** of every write with one-click rollback. Before any write the file is copied to a backup.
 - **Context Toolkit** built in: preview, apply, roll back, optional policies, and an "Efficiency" report (see below).
 - **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; core messages follow the choice too.
-- **Read-only by default** (R0). Raising the write level needs an OS confirmation dialog. Only one window runs at a time; a second launch brings the first one forward.
+- **Client files are read-only by default** (R0). Raising the write level needs an OS confirmation dialog. Only one window runs at a time; a second launch brings the first one forward.
 
 ### Safe write pipeline
 
@@ -48,7 +48,7 @@ Operation backups and the Loadout trash keep client configs **in full and as pla
 
 - The last 100 operations not older than 90 days are kept. Older ones are deleted before a new write, by the "Clean up old copies…" button in the journal, and by `loadout prune` (default folder `%APPDATA%\loadout-app\backups`, another one with `--backups`). Rolling back an operation whose copy was deleted is refused with a clear message.
 - The trash (`backups\trash`) is not cleaned automatically: it holds the only copy of a trashed MCP entry, which goes back into the client file when you turn the entry on. Profiles (`backups\profiles.json`) live in the same folder.
-- Context Toolkit makes its own backups before it writes: `~/.claude/backups` for Claude Code, a `backups` folder next to the file for the other clients. These copies are also full files.
+- Context Toolkit makes its own backups before it writes: `~/.claude/backups` for Claude Code, next to the changed file for the other clients (usually in a `backups` subfolder). These copies are also full files.
 
 ## Screenshots
 
@@ -89,11 +89,11 @@ In the app it is the **Context Toolkit** section (key `7`):
 - Optional **policies** in `context-toolkit.json`, off until you turn them on: commit hygiene (blocks a commit with `Co-Authored-By` / `Generated with`), confirm irreversible commands (asks before `git push`, `reset --hard`, `rm -rf` and the like), stray report files, a parallel build limit.
 - **Diagnostics** (`doctor`) and **Efficiency** (`report`): Claude Code turns by model, subagent and advisor calls, blocked reads, by day for 7, 14 or 30 days.
 
-The app runs only the `context-toolkit.exe` shipped with it. Context Toolkit can also be installed on its own, see its README.
+The window starts only the `context-toolkit.exe` shipped with it, never one from `PATH`. Context Toolkit can also be installed on its own, see its README.
 
 ## Install
 
-1. Download `Loadout.Setup.<version>.exe` from [Releases](https://github.com/d-ridelman/Loadout/releases/latest) and run it. It installs for the current user, by default into `%LOCALAPPDATA%\Programs\Loadout`; the folder can be changed.
+1. Download `Loadout.Setup.<version>.exe` from [Releases](https://github.com/d-ridelman/Loadout/releases/latest) and run it. By default it installs for the current user into `%LOCALAPPDATA%\Programs\Loadout`; the installer also offers an install for all users and another folder (the paths below assume the default).
 2. **The installer is not signed.** Windows SmartScreen may show "Windows protected your PC": click "More info", then "Run anyway". The SHA-256 of the installer is in the release notes.
 3. Silent install: `Loadout.Setup.<version>.exe /S`.
 
@@ -103,7 +103,7 @@ Installing plugins needs the `claude` CLI (Claude Code); installing skills from 
 
 ## Build from source
 
-Requirements: Windows 11 x64 (Windows 10 is not tested), Rust 1.89 or newer with the MSVC toolchain, Node.js 22.12 or newer, `git`.
+Requirements: Windows 11 x64 (Windows 10 is not tested), Rust 1.91 or newer with the MSVC toolchain (the minimum comes from `notify-types` in `Cargo.lock`), Node.js 22.12+, 24 or 26+ (vitest does not support 23 and 25), `git`.
 
 ```bash
 git clone https://github.com/d-ridelman/Loadout.git
