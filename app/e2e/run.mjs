@@ -355,6 +355,22 @@ try {
   await page.keyboard.press('Escape')
   must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'Esc did not close the palette')
   await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after Esc focus returned to the table, not to the input field')
+  // Ctrl+K is not the single key k: the selection stays put (a row below the first, so that k would have moved it),
+  // and the palette offers the action for the selected entry, not for its neighbour
+  await page.locator('tbody tr', { has: page.locator('td.name b', { hasText: /^p1$/ }) }).locator('td').nth(3).click()
+  const selRow = await page.evaluate(() => [...document.querySelectorAll('tbody tr')].findIndex((r) => r.querySelector('td[aria-selected="true"]')))
+  must(selRow >= 1, `the Ctrl+K check needs a row below the first, got ${selRow}`)
+  const selBefore = await page.locator('td[aria-selected="true"]').getAttribute('id')
+  const selName = (await page.locator('aside b').first().innerText()).toLowerCase()
+  await page.keyboard.press('Control+k')
+  await page.getByRole('combobox', { name: 'Команда' }).waitFor()
+  must((await page.locator('td[aria-selected="true"]').getAttribute('id')) === selBefore, 'Ctrl+K moved the selection in the matrix')
+  const palAction = await page.getByRole('option').filter({ hasText: /^(Включить|Выключить): / }).first().innerText()
+  must(palAction.toLowerCase().includes(selName), `the palette offers an action for another entry: "${palAction}", selected "${selName}"`)
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Команда')
+  await page.keyboard.press('Escape')
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after Esc focus returned to the table')
+  must((await page.locator('td[aria-selected="true"]').getAttribute('id')) === selBefore, 'Ctrl+K and Esc moved the selection in the matrix')
 
   // sections by digits
   await page.keyboard.press('2')
@@ -551,11 +567,44 @@ try {
   await page.waitForTimeout(250)
   await shot(page, 'm3-journal-1920')
   await resize(app, 1280, 800)
-  await page.getByRole('button', { name: 'Откатить' }).click()
+  // the reason a rollback is not possible is text in the row, not a tooltip
+  const jRow = page.locator('table[aria-label="Журнал операций"] tbody tr').first()
+  // a comment changes no entry, so the watcher may stay silent: the journal is reopened to read it again
+  const reopenJournal = async () => {
+    await page.keyboard.press('1')
+    await page.keyboard.press('5')
+    await jRow.waitFor({ timeout: 8000 })
+  }
+  writeFileSync(cfg, `${asOff}# чужая правка\n`)
+  await reopenJournal()
+  await waitFor(async () => (await jRow.innerText()).includes('файл изменён после операции'), 'the journal row says the file changed after the operation')
+  must(await jRow.getByRole('button', { name: 'Откатить', exact: true }).isDisabled(), 'the rollback button is active over a changed file')
+  writeFileSync(cfg, asOff)
+  await reopenJournal()
+  await waitFor(async () => !(await jRow.getByRole('button', { name: 'Откатить', exact: true }).isDisabled()), 'the rollback is possible again once the file is back')
+  // the rollback goes through the same preview: file, key, before → after; nothing is written before confirmation
+  await jRow.getByRole('button', { name: 'Откатить', exact: true }).click()
+  await dialog.waitFor({ timeout: 8000 })
+  const rbText = await dialog.innerText()
+  must(rbText.includes('~/.codex/config.toml') && rbText.includes('plugins."p1@bundled".enabled') && rbText.includes('выключено') && rbText.includes('включено'), `rollback preview: ${rbText}`)
+  must(readFileSync(cfg, 'utf8') === asOff, 'the rollback wrote before confirmation')
+  await dialog.getByRole('button', { name: 'Откатить', exact: true }).click()
+  await dialog.waitFor({ state: 'detached', timeout: 8000 })
   await waitFor(async () => (await page.locator('table[aria-label="Журнал операций"] tbody tr').count()) === 2, 'the rollback is recorded in the journal')
   must(readFileSync(cfg, 'utf8') === original, 'after the rollback the file is byte-for-byte as before the write')
+  must((await page.locator('#notice').innerText()).includes('p1@bundled'), 'the rollback message does not name the entry')
   await page.keyboard.press('1')
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'after the rollback the p1 glyph came back')
+  // a Claude Code plugin is found in installed_plugins.json but switched in settings.json: the inspector and the preview name the latter
+  await clickCell('alpha', 0)
+  must((await page.locator('aside').innerText()).includes('~/.claude/settings.json'), 'the inspector does not name the file the switch writes')
+  await page.keyboard.press('Space')
+  await dialog.waitFor({ timeout: 8000 })
+  await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
+  const plugText = await dialog.innerText()
+  must(plugText.includes('~/.claude/settings.json') && plugText.includes('/enabledPlugins/alpha@mp') && !plugText.includes('installed_plugins'), `the plugin preview names another file: ${plugText}`)
+  await page.keyboard.press('Escape')
+  await dialog.waitFor({ state: 'detached', timeout: 8000 })
   // ---- R2: trash, edit, copy, profiles (also on a fixture copy) ----
   await stubDialog(1)
   await levelSel.selectOption('R2')
@@ -575,6 +624,15 @@ try {
   const openPlan = async () => {
     await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
     return dialog.innerText()
+  }
+  /** A journal rollback: the button in `where` opens the same preview, the dialog's button writes. Returns the preview text. */
+  const rollbackRow = async (where, label = 'Откатить') => {
+    await where.getByRole('button', { name: label, exact: true }).click()
+    await dialog.waitFor({ timeout: 8000 })
+    const text = await dialog.innerText()
+    await dialog.getByRole('button', { name: 'Откатить', exact: true }).click()
+    await dialog.waitFor({ state: 'detached', timeout: 8000 })
+    return text
   }
   const noSecretOnPage = async (what) => must(!(await page.evaluate(() => document.body.innerText)).includes('FAKE-SECRET'), `${what}: FAKE-SECRET found in the window`)
 
@@ -629,7 +687,8 @@ try {
   must(editedDesk.env.TOKEN === 'FAKE-SECRET-DESKENV' && editedDesk.args[1] === 'FAKE-SECRET-NEW', 'the edit touched env or wrote the wrong arguments')
   await noSecretOnPage('edit')
   await page.keyboard.press('5')
-  await page.getByRole('row', { name: /правка/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
+  const editRb = await rollbackRow(page.getByRole('row', { name: /правка/ }))
+  must(editRb.includes('claude_desktop_config.json') && editRb.includes('/mcpServers/desk-tool') && !editRb.includes('FAKE-SECRET'), `edit rollback preview: ${editRb}`)
   await waitFor(() => readFileSync(deskFile).equals(deskOrig), 'the edit rollback restored the file byte for byte')
 
   // copying to another client: the format is converted by itself, env values stay inside the core
@@ -646,17 +705,47 @@ try {
   await waitFor(() => readFileSync(cfg, 'utf8').includes('[mcp_servers.tool-a]'), 'the entry was copied to Codex config.toml')
   await waitFor(async () => String(await cellLabel(page, 'tool-a', 2)).includes('включено'), 'the matrix has a tool-a entry for Codex')
   await page.keyboard.press('5')
-  await page.getByRole('row', { name: /копия/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
+  await rollbackRow(page.getByRole('row', { name: /копия/ }))
   await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'the copy rollback restored config.toml byte for byte')
 
   // adding a new MCP: env values go only to the core, the rollback restores the file byte for byte
   await page.keyboard.press('1')
+  // a taken name is reported by the form itself, before any plan
+  await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
+  await dialog.getByLabel('Клиент').selectOption({ label: 'Antigravity' })
+  await dialog.getByLabel('Имя', { exact: true }).fill('tool-a')
+  await dialog.getByLabel('Команда', { exact: true }).fill('npx')
+  await dialog.locator('[role=alert]').waitFor({ timeout: 8000 })
+  must((await dialog.locator('[role=alert]').innerText()).includes('уже есть MCP-сервер «tool-a»'), 'the form does not say the name is taken')
+  must(await dialog.getByRole('button', { name: 'Предпросмотр' }).isDisabled(), 'the preview is offered for a taken name')
+  await dialog.getByRole('button', { name: 'Отмена' }).click()
+  await dialog.waitFor({ state: 'detached', timeout: 8000 })
+  // a refusal of the core is shown as the core said it, and "Back to the form" keeps everything typed, env included
+  writeFileSync(cfg, cfgBeforeCopy.toString('utf8').replace('\n', '\r\n'))
+  await page.waitForTimeout(600)
+  const addEnv = 'API_TOKEN=FAKE-SECRET-ADDED'
   await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
   await dialog.getByLabel('Клиент').selectOption({ label: 'ChatGPT / Codex' })
   await dialog.getByLabel('Имя', { exact: true }).fill('e2e-added')
   await dialog.getByLabel('Команда', { exact: true }).fill('npx')
   await dialog.getByLabel('Аргументы, по одному в строке').fill('-y\nsome-mcp')
-  await dialog.getByLabel(/Переменные окружения/).fill('API_TOKEN=FAKE-SECRET-ADDED')
+  await dialog.getByLabel(/Переменные окружения/).fill(addEnv)
+  await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
+  await dialog.locator('[role=alert]').waitFor({ timeout: 8000 })
+  const coreRefusal = await dialog.locator('[role=alert]').innerText()
+  must(coreRefusal.includes('смешанные') && !coreRefusal.includes('ядро не ответило'), `a core refusal must be shown as is: ${coreRefusal}`)
+  await dialog.getByRole('button', { name: 'Назад к форме' }).click()
+  await dialog.getByLabel('Имя', { exact: true }).waitFor({ timeout: 8000 })
+  const kept = {
+    to: await dialog.getByLabel('Клиент').inputValue(),
+    name: await dialog.getByLabel('Имя', { exact: true }).inputValue(),
+    command: await dialog.getByLabel('Команда', { exact: true }).inputValue(),
+    args: await dialog.getByLabel('Аргументы, по одному в строке').inputValue(),
+    env: await dialog.getByLabel(/Переменные окружения/).inputValue(),
+  }
+  must(kept.to === 'codex' && kept.name === 'e2e-added' && kept.command === 'npx' && kept.args === '-y\nsome-mcp' && kept.env === addEnv, `"Back to the form" lost what was typed: ${JSON.stringify({ ...kept, env: kept.env === addEnv })}`)
+  writeFileSync(cfg, cfgBeforeCopy)
+  await page.waitForTimeout(600)
   await shot(page, 'm4-add-dialog-1280')
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
   const addText = await openPlan()
@@ -665,7 +754,7 @@ try {
   await waitFor(() => readFileSync(cfg, 'utf8').includes('[mcp_servers.e2e-added]'), 'the new server was written to Codex config.toml')
   await noSecretOnPage('add')
   await page.keyboard.press('5')
-  await page.getByRole('row', { name: /добавление/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
+  await rollbackRow(page.getByRole('row', { name: /добавление/ }))
   await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'the add rollback restored config.toml byte for byte')
 
   // installing a Claude Code CLI plugin: first the command, then a separate confirmation; bad names are rejected
@@ -733,7 +822,7 @@ try {
   const skillRow = page.locator('tbody tr', { has: page.locator('td.name b', { hasText: /^web-search$/ }) })
   await waitFor(async () => (await skillRow.count()) === 1, 'the installed skill is visible in the matrix')
   await page.keyboard.press('5')
-  await page.getByRole('row', { name: /установка скила/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
+  await rollbackRow(page.getByRole('row', { name: /установка скила/ }))
   await waitFor(() => !existsSync(skillDir), 'the rollback removed the skill')
   await page.keyboard.press('1')
   await waitFor(async () => (await skillRow.count()) === 0, 'after the skill rollback it is not in the matrix')
@@ -771,7 +860,8 @@ try {
   await page.keyboard.press('1')
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'profile applied: p1 disabled')
   await page.keyboard.press('5')
-  await page.getByRole('button', { name: 'Откатить пакет' }).click()
+  const batchRb = await rollbackRow(page.locator('table[aria-label="Журнал операций"]'), 'Откатить пакет')
+  must(batchRb.includes('p1@bundled') && batchRb.includes('~/.codex/config.toml'), `batch rollback preview: ${batchRb}`)
   await page.keyboard.press('1')
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'bundle rolled back: p1 came back')
   must(readFileSync(cfg).equals(cfgBeforeCopy), 'after the bundle rollback config.toml equals the original')
@@ -1272,15 +1362,14 @@ try {
     await en.waitForTimeout(300)
     await enOk('palette')
     await en.keyboard.press('Escape')
-    // add: a core error (the name is taken) and a core plan — both in English
+    // add: a taken name (the form says so before any plan) and a core plan — both in English
     const enDialog = en.locator('[role=dialog][aria-modal=true]')
     await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
     await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
     await enDialog.getByLabel('Name', { exact: true }).fill('tool-a')
     await enDialog.getByLabel('Command', { exact: true }).fill('npx')
-    await enDialog.getByRole('button', { name: 'Preview' }).click()
     await enDialog.locator('[role=alert]').waitFor({ timeout: 8000 })
-    await enOk('add: core error')
+    await enOk('add: taken name')
     await shot(en, 'en-add-error-1280')
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
     await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
@@ -1334,6 +1423,10 @@ try {
     await enOk('journal after the skill install')
     await shot(en, 'en-journal-skill-1280')
     await skillRowEn.getByRole('button', { name: 'Roll back', exact: true }).click()
+    await enDialog.getByRole('button', { name: 'Roll back', exact: true }).waitFor({ timeout: 8000 })
+    await enOk('rollback preview')
+    await enDialog.getByRole('button', { name: 'Roll back', exact: true }).click()
+    await enDialog.waitFor({ state: 'detached', timeout: 8000 })
     await waitFor(() => !existsSync(enSkill), 'skill (EN) rolled back from the journal')
     await enOk('journal after the skill rollback')
     await en.keyboard.press('1')
@@ -1382,6 +1475,8 @@ try {
     await enDialog.waitFor({ state: 'detached', timeout: 8000 })
     await en.keyboard.press('5')
     await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().getByRole('button', { name: 'Roll back', exact: true }).click()
+    await enDialog.getByRole('button', { name: 'Roll back', exact: true }).click()
+    await enDialog.waitFor({ state: 'detached', timeout: 8000 })
     await en.waitForTimeout(800)
     await enOk('journal after rollback')
     must(enErrors.length === 0, `page errors (EN): ${enErrors.join(' | ')}`)

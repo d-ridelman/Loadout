@@ -4,6 +4,7 @@ import type { JournalEntry, WriteLevel } from '../../shared/model'
 import { BACKUP_DIR_HINT, backupNotice } from '../../shared/backups'
 import { getLang, t } from '../../shared/i18n'
 import { levelOk } from './Inspector'
+import { RollbackDialog } from './PlanDialog'
 
 // t() only during render, not when the module is imported
 const opLabel = (op: JournalEntry['op']): string =>
@@ -35,30 +36,11 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
     void load()
   }, [load, refreshKey])
 
-  const rollback = async (id: string) => {
-    setBusy(id)
-    try {
-      const r = await window.loadout.rollback(id)
-      onNotice(r.ok ? t('Откат выполнен', 'Rolled back') : r.error)
-    } catch (e) {
-      onNotice(e instanceof Error ? e.message : t('откат не удался', 'rollback failed'))
-    } finally {
-      setBusy(null)
-      void load()
-    }
-  }
-
-  const rollbackBatch = async (batch: string) => {
-    setBusy(batch)
-    try {
-      const r = await window.loadout.rollbackBatch(batch)
-      onNotice(r.ok ? t(`Пакет откатан: ${r.data.length} записей`, `Batch rolled back: ${r.data.length} entries`) : r.error)
-    } catch (e) {
-      onNotice(e instanceof Error ? e.message : t('откат пакета не удался', 'batch rollback failed'))
-    } finally {
-      setBusy(null)
-      void load()
-    }
+  /** The rollback waiting for confirmation: one line, or the lines of a batch still in effect. */
+  const [confirm, setConfirm] = useState<{ rows: JournalEntry[]; batch: string | null } | null>(null)
+  const closeConfirm = () => {
+    setConfirm(null)
+    void load()
   }
 
   const prune = async () => {
@@ -93,7 +75,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
         </div>
       ) : state.rows.length === 0 ? (
         <div className="hud card">
-          <p>{t('Операций пока не было. Переключатель в инспекторе (или клавиша Space на выбранной ячейке) записывает сюда каждое изменение, и каждое можно откатить.', 'No operations yet. The toggle in the Inspector (or the Space key on a selected cell) records every change here, and every change can be rolled back.')}</p>
+          <p>{t('Операций пока не было. Сюда попадают переключения (кнопка в инспекторе или Space на ячейке), корзина, правка, копирование и добавление MCP, профили и скилы; каждую можно откатить после предпросмотра. Плагины ставит сам claude, их здесь нет; у Инструментов контекста свой откат.', 'No operations yet. Toggles (the Inspector button or Space on a cell), the trash, MCP edits, copies and additions, profiles and skills land here; each can be rolled back after a preview. Plugins are installed by claude itself and are not here; Context Toolkit has its own rollback.')}</p>
         </div>
       ) : (
         <div className="hud tablewrap">
@@ -129,22 +111,23 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
                     <td className="nw">{j.rolledBack ? t('↺ откатано', '↺ rolled back') : j.op === 'rollback' ? t('откат записан', 'rollback recorded') : j.canRollback ? t('в силе', 'in effect') : t('уже менялось', 'changed since')}</td>
                     <td>
                       <div className="actions col">
-                        <button
-                          disabled={!j.canRollback || !ok || busy !== null}
-                          title={!ok ? t(`Включите уровень ${j.level} в шапке`, `Enable level ${j.level} in the header`) : !j.canRollback ? t('Откат невозможен: файл менялся после операции или операция уже откатана', 'Rollback is not possible: the file changed after the operation or it was already rolled back') : undefined}
-                          onClick={() => void rollback(j.id)}
-                        >
-                          {t('Откатить', 'Roll back')}
-                        </button>
+                        {j.op === 'rollback' ? null : (
+                          <button disabled={!j.canRollback || !ok || busy !== null} onClick={() => setConfirm({ rows: [j], batch: null })}>
+                            {t('Откатить', 'Roll back')}
+                          </button>
+                        )}
                         {batchHead ? (
                           <button
                             disabled={!levelOk(level, 'R2') || busy !== null}
-                            title={!levelOk(level, 'R2') ? t('Включите уровень R2 в шапке', 'Enable level R2 in the header') : t('Откатить весь пакет профиля, начиная с последней записи', 'Roll back the whole profile batch, starting from the latest entry')}
-                            onClick={() => void rollbackBatch(j.batch ?? '')}
+                            title={t('Откатить весь пакет профиля, начиная с последней записи', 'Roll back the whole profile batch, starting from the latest entry')}
+                            onClick={() => setConfirm({ rows: state.rows.filter((x) => x.batch === j.batch && x.op !== 'rollback' && !x.rolledBack), batch: j.batch })}
                           >
                             {t('Откатить пакет', 'Roll back batch')}
                           </button>
                         ) : null}
+                        {/* the reason is text in the row, not a tooltip on a disabled button */}
+                        {j.op !== 'rollback' && !j.canRollback && !j.rolledBack && j.why ? <span className="mute small">{t(`Нельзя: ${j.why}`, `Not possible: ${j.why}`)}</span> : null}
+                        {(j.canRollback || batchHead) && !ok ? <span className="mute small">{t(`Нужен уровень ${j.level} в шапке`, `Needs level ${j.level} in the header`)}</span> : null}
                       </div>
                     </td>
                   </tr>
@@ -154,6 +137,17 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
           </table>
         </div>
       )}
+      {confirm ? (
+        <RollbackDialog
+          rows={confirm.rows}
+          batch={confirm.batch}
+          onClose={closeConfirm}
+          onDone={(m) => {
+            closeConfirm()
+            onNotice(m)
+          }}
+        />
+      ) : null}
     </>
   )
 }

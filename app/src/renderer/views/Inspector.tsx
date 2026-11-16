@@ -77,7 +77,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
         <Panel>
           <KindBadge kinds={row.kinds} /> <b>{row.name}</b>
           {strip}
-          <p className="mute">{t(`В ${client?.name} этой сущности нет. Копирование между клиентами — этап M4.`, `This entity is not in ${client?.name}. Copying between clients is milestone M4.`)}</p>
+          <p className="mute">{t(`В ${client?.name} этой сущности нет. MCP-сервер можно скопировать сюда из ячейки другого клиента: «Копировать в клиент…».`, `This entity is not in ${client?.name}. An MCP server can be copied here from another client’s cell: “Copy to client…”.`)}</p>
         </Panel>
       </>
     )
@@ -103,6 +103,13 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
           {e.version ? (<><dt>{t('версия', 'version')}</dt><dd>{e.version}</dd></>) : null}
           <dt>{t('файл', 'file')}</dt><dd className="wrap"><Path p={e.origin.file} /></dd>
           <dt>{t('указатель', 'pointer')}</dt><dd className="wrap">{e.origin.pointer}</dd>
+          {/* found in one file, switched in another (a Claude Code plugin: settings.json → enabledPlugins) */}
+          {e.toggleAt ? (
+            <>
+              <dt>{t('переключатель', 'switch')}</dt>
+              <dd className="wrap"><Path p={e.toggleAt.file} /> · {e.toggleAt.pointer}</dd>
+            </>
+          ) : null}
         </dl>
       </Panel>
 

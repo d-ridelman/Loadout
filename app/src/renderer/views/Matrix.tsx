@@ -26,7 +26,12 @@ export function keyOf(e: { key: string; code: string }): string {
   return e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : e.key
 }
 
-const STATES: EntityState[] = ['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
+/** Ctrl, Meta or Alt is held: single-key shortcuts (`j/k/h/l`, digits, `/`, Space, `r`) leave such presses alone, so Ctrl+K opens the palette without moving the selection. */
+export function withModifier(e: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }): boolean {
+  return e.ctrlKey || e.metaKey || e.altKey
+}
+
+const STATES: EntityState[] =['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
 
 interface Props {
   rows: Row[]
@@ -53,6 +58,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTableElement>) => {
+    if (withModifier(e)) return
     const k = keyOf(e.nativeEvent)
     const move: Record<string, [number, number]> = {
       j: [1, 0], ArrowDown: [1, 0], k: [-1, 0], ArrowUp: [-1, 0],

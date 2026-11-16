@@ -27,6 +27,7 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', (l
   const m = JSON.parse(l)
   if (m.method === 'crash') process.exit(3)
   if (m.method === 'silent') return
+  if (m.method === 'refuse') return send({ id: m.id, error: { code: -32000, message: 'у этого клиента уже есть запись с таким именем' } })
   if (m.method === 'push') { send({ method: 'changed', params: { added: [], removed: [], changed: ['x'] } }) }
   send({ id: m.id, result: { echo: m.method } })
 }).on('close', () => { note('eof'); process.exit(0) })
@@ -86,6 +87,12 @@ describe('Sidecar', () => {
     await expect(s.request('crash')).rejects.toThrow('ядро не ответило')
     expect(await s.request('snapshot')).toEqual({ echo: 'snapshot' })
     expect(starts()).toBe(2)
+  })
+
+  it('an error the core answered with is shown as is: "the core did not respond" is only for a dead or silent core', async () => {
+    const { s } = setup()
+    s.start()
+    await expect(s.request('refuse')).rejects.toThrow(/^у этого клиента уже есть запись с таким именем$/)
   })
 
   it('restart limits: once exhausted a request fails immediately, a repeated request starts over', async () => {
@@ -223,6 +230,14 @@ describe('validate', () => {
     expect(() => validateJournal({})).toThrow()
     expect(validateJournal([{ ...row, op: 'copy', batch: '1700000000000', level: 'R2' }])[0]).toMatchObject({ op: 'copy', batch: '1700000000000', level: 'R2' })
     expect(() => validateJournal([{ ...row, level: 'R9' }])).toThrow()
+    expect(validateJournal([{ ...row, why: 'уже откатано' }])[0]?.why).toBe('уже откатано')
+  })
+
+  it('toggleAt passes only as a file and pointer pair', () => {
+    const at = { file: '~/.claude/settings.json', pointer: '/enabledPlugins/a@b' }
+    const out = validateScan({ ...ok, entities: [{ ...ok.entities[0], toggleAt: { ...at, leak: 'L' } }] })
+    expect(out.entities[0]?.toggleAt).toEqual(at)
+    expect(validateScan({ ...ok, entities: [{ ...ok.entities[0], toggleAt: { file: 1 } }] }).entities[0]).not.toHaveProperty('toggleAt')
   })
 
   it('profiles and batch plan: extra fields are dropped, malformed shapes are rejected', () => {

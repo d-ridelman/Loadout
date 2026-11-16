@@ -19,21 +19,32 @@ import { PluginDialog } from './views/PluginDialog'
 import { SkillDialog } from './views/SkillDialog'
 import { Profiles } from './views/Profiles'
 import { Ctxkit } from './views/Ctxkit'
-import { Matrix, keyOf } from './views/Matrix'
+import { Matrix, keyOf, withModifier } from './views/Matrix'
 import type { Filters, Sel } from './views/Matrix'
 import { Palette } from './views/Palette'
 import type { PaletteItem } from './views/Palette'
 import { Radar } from './views/Radar'
 
 type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal' | 'profiles' | 'ctxkit'
+/** A form before the write preview; `draft` is what was typed, when the preview sends the person back to it. */
+type Form =
+  | { type: 'edit'; entity: Entity; draft?: Extract<Intent, { op: 'edit' }> }
+  | { type: 'copy'; entity: Entity; draft?: Extract<Intent, { op: 'copy' }> }
+  | { type: 'add'; draft?: Extract<Intent, { op: 'add' }> }
 /** What is currently open over the window: a form, then the write preview. */
 type Flow =
-  | { type: 'plan'; entity: Entity | null; intent: Intent }
-  | { type: 'edit'; entity: Entity }
-  | { type: 'copy'; entity: Entity }
-  | { type: 'add' }
+  | { type: 'plan'; entity: Entity | null; intent: Intent; back?: Form }
+  | Form
   | { type: 'plugin' }
   | { type: 'skill' }
+
+/** The form an intent came from, filled with it (env values stay in this state only, never saved). */
+function formOf(entity: Entity | null, intent: Intent): Form | undefined {
+  if (intent.op === 'add') return { type: 'add', draft: intent }
+  if (intent.op === 'edit' && entity) return { type: 'edit', entity, draft: intent }
+  if (intent.op === 'copy' && entity) return { type: 'copy', entity, draft: intent }
+  return undefined
+}
 type Fx = 'off' | 'low' | 'full'
 type ScanState =
   | { status: 'loading' }
@@ -280,6 +291,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         setHelp(false)
         return
       }
+      if (withModifier(e)) return
       const tg = e.target
       if (tg instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(tg.tagName)) return
       if (palette) return
@@ -294,7 +306,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         searchRef.current?.focus()
       } else if (/^[1-7]$/.test(e.key)) {
         setView(views()[Number(e.key) - 1]?.id ?? 'matrix')
-      } else if (k === 'r' && !e.ctrlKey && !e.metaKey) {
+      } else if (k === 'r') {
         void load(true)
       } else if (view === 'matrix' && /^[jkhl]$/.test(k)) {
         const grid = document.getElementById('grid')
@@ -331,6 +343,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
     [rows, load, showRow, level, changeLevel, selEntity, requestToggle, requestAdd, requestPlugin, requestSkill],
   )
 
+  const planBack = flow?.type === 'plan' ? flow.back : undefined
   const problems = findings.filter((f) => f.severity === 'error').length
   const scanText =
     scan.status === 'ready' ? t(`скан: ${scan.ms} мс`, `scan: ${scan.ms} ms`) : scan.status === 'loading' ? t('скан…', 'scan…') : t('скан не удался', 'scan failed')
@@ -472,6 +485,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         <PlanDialog
           entity={flow.entity}
           intent={flow.intent}
+          onBack={planBack ? () => setFlow(planBack) : undefined}
           onClose={closeFlow}
           onDone={(m) => {
             closeFlow()
@@ -480,10 +494,10 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         />
       ) : null}
       {flow?.type === 'edit' ? (
-        <EditDialog entity={flow.entity} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent })} />
+        <EditDialog entity={flow.entity} draft={flow.draft} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent, back: formOf(flow.entity, intent) })} />
       ) : null}
       {flow?.type === 'add' ? (
-        <AddDialog onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: null, intent })} />
+        <AddDialog entities={entities} draft={flow.draft} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: null, intent, back: formOf(null, intent) })} />
       ) : null}
       {flow?.type === 'plugin' ? (
         <PluginDialog
@@ -498,7 +512,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         <SkillDialog onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: null, intent })} />
       ) : null}
       {flow?.type === 'copy' ? (
-        <CopyDialog entity={flow.entity} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent })} />
+        <CopyDialog entity={flow.entity} draft={flow.draft} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent, back: formOf(flow.entity, intent) })} />
       ) : null}
     </div>
   )

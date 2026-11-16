@@ -66,6 +66,9 @@ export function validateScan(raw: unknown): ScanResult {
       canEdit: e['canEdit'] as boolean,
       ...(isStr(e['toggleWhy']) ? { toggleWhy: e['toggleWhy'] } : {}),
       ...(e['toggleLevel'] === 'R1' || e['toggleLevel'] === 'R2' ? { toggleLevel: e['toggleLevel'] as Level } : {}),
+      ...(isObj(e['toggleAt']) && isStr(e['toggleAt']['file']) && isStr(e['toggleAt']['pointer'])
+        ? { toggleAt: { file: e['toggleAt']['file'], pointer: e['toggleAt']['pointer'] } }
+        : {}),
     }
   })
   if (!(warnings as unknown[]).every(isStr)) throw new Error(t('предупреждения ядра неожиданной формы', 'the core warnings have an unexpected shape'))
@@ -197,6 +200,7 @@ export function validateJournal(raw: unknown): JournalEntry[] {
       id: r['id'], time: r['time'], op: r['op'], of: r['of'], batch: r['batch'], level: r['level'], client: r['client'], kind: r['kind'],
       name: r['name'], pointer: r['pointer'], file: r['file'], from: r['from'], to: r['to'],
       rolledBack: r['rolledBack'], canRollback: r['canRollback'],
+      ...(isStr(r['why']) ? { why: r['why'] } : {}),
     }
   })
 }

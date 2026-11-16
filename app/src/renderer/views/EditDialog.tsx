@@ -5,6 +5,8 @@ import { Modal } from './Modal'
 
 interface Props {
   entity: Entity
+  /** What was typed before the preview ("Back to the form"). */
+  draft?: Extract<Intent, { op: 'edit' }>
   onSubmit: (intent: Intent) => void
   onClose: () => void
 }
@@ -13,9 +15,9 @@ interface Props {
  * Edit an MCP command (R2). The window does not receive the current values (they are masked in the list), so the new command
  * is entered in full: the core replaces `command` and `args` and leaves the rest (env, headers) alone.
  */
-export function EditDialog({ entity, onSubmit, onClose }: Props) {
-  const [command, setCommand] = useState('')
-  const [args, setArgs] = useState('')
+export function EditDialog({ entity, draft, onSubmit, onClose }: Props) {
+  const [command, setCommand] = useState(draft?.command ?? '')
+  const [args, setArgs] = useState(draft?.args.join('\n') ?? '')
   const lines = args.split('\n').filter((l) => l !== '')
   const ok = command.trim() !== '' && command.length <= 500 && lines.length <= 64 && lines.every((l) => l.length <= 500)
   return (

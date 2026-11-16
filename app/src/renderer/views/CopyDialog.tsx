@@ -6,6 +6,8 @@ import { Modal } from './Modal'
 
 interface Props {
   entity: Entity
+  /** The choice made before the preview ("Back to the form"). */
+  draft?: Extract<Intent, { op: 'copy' }>
   onSubmit: (intent: Intent) => void
   onClose: () => void
 }
@@ -13,9 +15,9 @@ interface Props {
 /** DeepSeek stores entries in tagged YAML: copying into it is not allowed (CONCEPT.md §11). */
 const TARGETS = CLIENTS.filter((c) => c.id !== 'deepseek')
 
-export function CopyDialog({ entity, onSubmit, onClose }: Props) {
+export function CopyDialog({ entity, draft, onSubmit, onClose }: Props) {
   const options = TARGETS.filter((c) => c.id !== entity.client)
-  const [to, setTo] = useState<ClientId | null>(null)
+  const [to, setTo] = useState<ClientId | null>(draft?.to ?? null)
   return (
     <Modal label={t(`Копировать в другой клиент: ${entity.name}`, `Copy to another client: ${entity.name}`)} onEscape={onClose}>
       <h2>

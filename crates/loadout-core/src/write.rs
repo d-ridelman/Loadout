@@ -1100,6 +1100,9 @@ pub struct Entry {
     pub to: String,
     pub rolled_back: bool,
     pub can_rollback: bool,
+    /// Why the operation cannot be rolled back (none for a rollback line itself): the window shows it as text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1632,20 +1635,44 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
     all.iter()
         .map(|m| {
             let rolled_back = undone.contains(m.id.as_str());
-            let can_rollback = m.op != "rollback"
-                && !rolled_back
-                && match m.inverse_enable {
-                    None if m.op == "installSkill" => skill::can_rollback(home, m),
+            let why = if m.op == "rollback" {
+                None
+            } else if rolled_back {
+                Some(crate::tr!("уже откатано", "already rolled back"))
+            } else {
+                match m.inverse_enable {
+                    None if m.op == "installSkill" => (!skill::can_rollback(home, m)).then(|| {
+                        crate::tr!(
+                            "скил изменён или удалён после установки",
+                            "the skill was changed or removed after the install"
+                        )
+                    }),
                     // move and restore are rolled back by the inverse operation while the entry is in the state the operation left
-                    Some(inv) => scan
+                    Some(inv) => (!scan
                         .as_ref()
                         .and_then(|s| resolve_entity(s, m))
-                        .is_some_and(|e| enabled(e.state) == Some(!inv)),
-                    None => {
-                        allowed(home, Path::new(&m.path))
-                            && file_sha(Path::new(&m.path)).as_deref() == Some(m.sha_after.as_str())
-                    }
-                };
+                        .is_some_and(|e| enabled(e.state) == Some(!inv)))
+                    .then(|| {
+                        crate::tr!(
+                            "запись переключили после операции или её больше нет",
+                            "the entry was switched after the operation or is gone"
+                        )
+                    }),
+                    None if !allowed(home, Path::new(&m.path)) => Some(crate::tr!(
+                        "файл не входит в список разрешённых для записи",
+                        "the file is not on the list of files allowed for writing"
+                    )),
+                    None => (file_sha(Path::new(&m.path)).as_deref()
+                        != Some(m.sha_after.as_str()))
+                    .then(|| {
+                        crate::tr!(
+                            "файл изменён после операции: откат затёр бы чужие правки",
+                            "the file changed after the operation: the rollback would overwrite someone else's edits"
+                        )
+                    }),
+                }
+            };
+            let can_rollback = m.op != "rollback" && why.is_none();
             Entry {
                 id: m.id.clone(),
                 time: m.time,
@@ -1667,6 +1694,7 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
                 to: relang(&m.to),
                 rolled_back,
                 can_rollback,
+                why,
             }
         })
         .collect()

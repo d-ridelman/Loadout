@@ -161,6 +161,8 @@ fn toggle_roundtrip_changes_one_value_and_rolls_back_to_identical_bytes() {
     let j = journal(&e.home, &e.store);
     assert_eq!(j.len(), 2);
     assert!(j[1].rolled_back && !j[1].can_rollback && j[0].op == "rollback");
+    assert_eq!(j[1].why.as_deref(), Some("уже откатано"));
+    assert_eq!(j[0].why, None);
     assert!(
         rollback(&e.home, &e.store, &done.op).is_err(),
         "cannot roll back twice"
@@ -207,7 +209,14 @@ fn rollback_refuses_when_the_file_changed_after_the_operation() {
     let mut text = fs::read_to_string(codex_cfg(&e)).unwrap();
     text.push_str("# чужая правка\n");
     fs::write(codex_cfg(&e), &text).unwrap();
-    assert!(!journal(&e.home, &e.store)[0].can_rollback);
+    let j = journal(&e.home, &e.store);
+    assert!(!j[0].can_rollback);
+    // the window shows the reason as text, not only as a disabled button
+    assert!(
+        j[0].why.as_deref().is_some_and(|w| w.contains("изменён")),
+        "{:?}",
+        j[0].why
+    );
     assert!(rollback(&e.home, &e.store, &done.op).is_err());
     assert_eq!(fs::read_to_string(codex_cfg(&e)).unwrap(), text);
 }

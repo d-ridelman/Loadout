@@ -144,7 +144,8 @@ export class Sidecar {
       if (!p) return
       this.pending.delete(msg.id)
       clearTimeout(p.timer)
-      if (msg.error) p.reject(new Error(t(`ядро не ответило: ${String(msg.error.message ?? 'ошибка')}`, `the core did not respond: ${String(msg.error.message ?? 'error')}`)))
+      // the core did answer: its own words (already in the window language), not "the core did not respond"
+      if (msg.error) p.reject(new Error(typeof msg.error.message === 'string' && msg.error.message ? msg.error.message : t('ядро отказало без пояснения', 'the core refused without an explanation')))
       else p.resolve(msg.result)
     } else if (typeof msg.method === 'string') {
       this.o.onNotification(msg.method, msg.params)

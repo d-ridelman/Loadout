@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
-import type { Entity, Intent, Plan } from '../../shared/model'
+import type { Entity, Intent, JournalEntry, Plan } from '../../shared/model'
 import { t } from '../../shared/i18n'
 import { Path } from '../ui'
 import { Modal } from './Modal'
@@ -14,9 +14,98 @@ interface Props {
   /** `null` when adding a new server: there is no entry yet. */
   entity: Entity | null
   intent: Intent
+  /** Back to the form the intent came from, with what was typed (forms only). */
+  onBack?: () => void
   onClose: () => void
   /** The write is done: the window gets fresh data from the watcher, so only a message is needed here. */
   onDone: (message: string) => void
+}
+
+const clientName = (id: string): string => CLIENTS.find((c) => c.id === id)?.name ?? id
+
+/** File, key and the value before and after: the same block for a write and for a rollback. */
+function Change({ file, pointer, from, to }: { file: string; pointer: string; from: string; to: string }) {
+  return (
+    <dl className="kv">
+      <dt>{t('файл', 'file')}</dt><dd className="wrap"><Path p={file} /></dd>
+      {pointer ? (
+        <>
+          <dt>{t('ключ', 'key')}</dt><dd className="wrap">{pointer}</dd>
+        </>
+      ) : null}
+      <dt>{t('было', 'before')}</dt><dd className="wrap mono">{from}</dd>
+      <dt>{t('станет', 'after')}</dt><dd className="wrap mono"><b>{to}</b></dd>
+    </dl>
+  )
+}
+
+interface RollbackProps {
+  /** Journal lines to undo, newest first: one operation, or every line of a profile batch still in effect. */
+  rows: JournalEntry[]
+  batch: string | null
+  onClose: () => void
+  onDone: (message: string) => void
+}
+
+/**
+ * Rollback preview from the journal: the journal line turned around (what it became goes back to what it was).
+ * Nothing is written before confirmation, and the core checks the file again right before the write.
+ */
+export function RollbackDialog({ rows, batch, onClose, onDone }: RollbackProps) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const applyRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => applyRef.current?.focus(), [])
+  const names = rows.map((r) => r.name).join(', ')
+  const head = batch !== null ? t('Откатить пакет профиля', 'Roll back the profile batch') : t('Откатить', 'Roll back')
+  const run = async () => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      if (batch !== null) {
+        const r = await window.loadout.rollbackBatch(batch)
+        if (r.ok) onDone(t(`Пакет откатан: ${names}`, `Batch rolled back: ${names}`))
+        else setError(r.error)
+      } else if (rows[0]) {
+        const r = await window.loadout.rollback(rows[0].id)
+        if (r.ok) onDone(t(`Откачено: ${rows[0].name} · ${clientName(rows[0].client)}`, `Rolled back: ${rows[0].name} · ${clientName(rows[0].client)}`))
+        else setError(r.error)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('откат не удался', 'rollback failed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal label={`${head}: ${names}`} onEscape={onClose}>
+      <h2>
+        {head} <span className="lvl">{rows.some((r) => r.level === 'R2') ? 'R2' : 'R1'}</span>
+      </h2>
+      {rows.map((r) => (
+        <div key={r.id}>
+          <p>
+            <b>{r.name}</b> <span className="mute">· {clientName(r.client)}</span>
+          </p>
+          <Change file={r.file} pointer={r.pointer} from={r.to} to={r.from} />
+        </div>
+      ))}
+      <p className="mute small">
+        {t(
+          'Перед записью копия файла сохранится в бэкап, остальное содержимое не меняется. Если файл изменили после операции, откат не пройдёт.',
+          'Before writing, a copy of the file is saved as a backup; nothing else in it changes. If the file changed after the operation, the rollback will not go through.',
+        )}
+      </p>
+      {error ? <p className="s-broken" role="alert">{error}</p> : null}
+      <div className="actions">
+        <button ref={applyRef} disabled={busy || rows.length === 0} onClick={() => void run()}>
+          {busy ? t('Откатываю…', 'Rolling back…') : t('Откатить', 'Roll back')}
+        </button>
+        <button onClick={onClose}>{t('Отмена', 'Cancel')}</button>
+      </div>
+    </Modal>
+  )
 }
 
 function title(p: Plan | undefined, intent: Intent): string {
@@ -40,7 +129,7 @@ function applyLabel(p: Plan | undefined, intent: Intent): string {
 }
 
 /** Preview of any write (CONCEPT.md §5, steps 1-2): what exactly will change, and the write happens only after confirmation. */
-export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
+export function PlanDialog({ entity, intent, onBack, onClose, onDone }: Props) {
   const [state, setState] = useState<PlanState>({ status: 'loading' })
   const shown = entity?.name ?? (intent.op === 'add' || intent.op === 'installSkill' ? intent.name : '')
   const [busy, setBusy] = useState(false)
@@ -105,16 +194,7 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
         <p className="s-broken" role="alert">{state.error}</p>
       ) : (
         <>
-          <dl className="kv">
-            <dt>{t('файл', 'file')}</dt><dd className="wrap"><Path p={state.plan.file} /></dd>
-            {state.plan.pointer ? (
-              <>
-                <dt>{t('ключ', 'key')}</dt><dd className="wrap">{state.plan.pointer}</dd>
-              </>
-            ) : null}
-            <dt>{t('было', 'before')}</dt><dd className="wrap mono">{state.plan.from}</dd>
-            <dt>{t('станет', 'after')}</dt><dd className="wrap mono"><b>{state.plan.to}</b></dd>
-          </dl>
+          <Change file={state.plan.file} pointer={state.plan.pointer} from={state.plan.from} to={state.plan.to} />
           {state.plan.noop ? <p className="mute">{t('Запись уже в нужном состоянии, писать нечего.', 'The entry is already in the right state, nothing to write.')}</p> : null}
           {state.plan.affects.length > 0 ? (
             <p className="s-stale">
@@ -154,6 +234,7 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
           {busy ? t('Записываю…', 'Writing…') : applyLabel(plan, intent)}
         </button>
         {applyError ? <button onClick={() => void build()}>{t('Обновить предпросмотр', 'Refresh preview')}</button> : null}
+        {onBack ? <button disabled={busy} onClick={onBack}>{t('Назад к форме', 'Back to the form')}</button> : null}
         <button ref={cancelRef} onClick={onClose}>{t('Отмена', 'Cancel')}</button>
       </div>
     </Modal>

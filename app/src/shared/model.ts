@@ -32,6 +32,8 @@ export interface Entity {
   toggleWhy?: string
   /** Level needed to toggle: flag is R1, trash is R2. */
   toggleLevel?: Level
+  /** Where toggling writes, when that is not `origin` (a Claude Code plugin is switched in `settings.json`). */
+  toggleAt?: { file: string; pointer: string }
   /** MCP in a client file: its command can be edited and it can be copied to another client (R2). */
   canEdit: boolean
 }
@@ -161,6 +163,8 @@ export interface JournalEntry {
   to: string
   rolledBack: boolean
   canRollback: boolean
+  /** Why it cannot be rolled back (the file changed, already rolled back…), shown as text in the row. */
+  why?: string
 }
 
 /** R0 is read-only, R1 is flags, R2 is trash, edit, copy, profiles. Each level includes the previous ones. */

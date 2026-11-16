@@ -1,10 +1,16 @@
 import { useState } from 'react'
 import { CLIENTS } from '../../shared/model'
-import type { ClientId, Intent } from '../../shared/model'
+import type { ClientId, Entity, Intent } from '../../shared/model'
 import { t } from '../../shared/i18n'
 import { Modal } from './Modal'
 
+type AddIntent = Extract<Intent, { op: 'add' }>
+
 interface Props {
+  /** Entries already loaded: a taken name is reported in the form, before any plan. */
+  entities: Entity[]
+  /** What was typed before the preview ("Back to the form"): env values stay in memory only, never stored. */
+  draft?: AddIntent
   onSubmit: (intent: Intent) => void
   onClose: () => void
 }
@@ -14,18 +20,24 @@ const TARGETS = CLIENTS.filter((c) => c.id !== 'deepseek')
 const NAME_OK = /^[A-Za-z0-9._-]{1,64}$/
 const KEY_OK = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
 
+/** The client already has an MCP with this name (the same check the core makes, Loadout trash included). */
+export function nameTaken(entities: readonly Entity[], to: ClientId, name: string): boolean {
+  return entities.some((e) => e.client === to && e.kind === 'mcp' && e.scope === 'user' && e.name === name)
+}
+
 /**
  * Add an MCP server to a client (R2). env values go only to the core and are not shown in the preview.
  * Packages are not installed here: the window writes a launch line, and `npx`/`uvx` downloads the package on the client's first launch.
  */
-export function AddDialog({ onSubmit, onClose }: Props) {
-  const [to, setTo] = useState<ClientId>(TARGETS[0]?.id ?? 'claude-code')
-  const [name, setName] = useState('')
-  const [wantRemote, setRemote] = useState(false)
-  const [command, setCommand] = useState('')
-  const [args, setArgs] = useState('')
-  const [url, setUrl] = useState('')
-  const [env, setEnv] = useState('')
+export function AddDialog({ entities, draft, onSubmit, onClose }: Props) {
+  const [to, setTo] = useState<ClientId>(draft?.to ?? TARGETS[0]?.id ?? 'claude-code')
+  const [name, setName] = useState(draft?.name ?? '')
+  const [wantRemote, setRemote] = useState(!!draft?.url)
+  const [command, setCommand] = useState(draft?.command ?? '')
+  const [args, setArgs] = useState(draft?.args.join('\n') ?? '')
+  const [url, setUrl] = useState(draft?.url ?? '')
+  const [env, setEnv] = useState(draft?.env.map((p) => `${p.key}=${p.value}`).join('\n') ?? '')
+  const taken = nameTaken(entities, to, name)
   // the remote-server form has been checked only for Claude Code and Codex
   const remoteOk = to === 'claude-code' || to === 'codex'
   const remote = wantRemote && remoteOk
@@ -37,7 +49,7 @@ export function AddDialog({ onSubmit, onClose }: Props) {
   })
   const envOk = pairs.every((p) => KEY_OK.test(p.key)) && pairs.length <= 30
   const ok =
-    NAME_OK.test(name) && envOk && (remote ? remoteOk && /^https?:\/\/[^\s/?#@:]\S*$/.test(url.trim()) : command.trim() !== '' && lines.length <= 64)
+    NAME_OK.test(name) && !taken && envOk && (remote ? remoteOk && /^https?:\/\/[^\s/?#@:]\S*$/.test(url.trim()) : command.trim() !== '' && lines.length <= 64)
   return (
     <Modal label={t('Добавить MCP-сервер', 'Add MCP server')} onEscape={onClose}>
       <h2>
@@ -69,8 +81,16 @@ export function AddDialog({ onSubmit, onClose }: Props) {
         </label>
         <label>
           {t('Имя', 'Name')}
-          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" maxLength={64} spellCheck={false} />
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="my-server" maxLength={64} spellCheck={false} aria-invalid={taken || undefined} aria-describedby={taken ? 'add-taken' : undefined} />
         </label>
+        {taken ? (
+          <p id="add-taken" className="s-broken small" role="alert">
+            {t(
+              `У ${CLIENTS.find((c) => c.id === to)?.name ?? to} уже есть MCP-сервер «${name}»: выберите другое имя или другого клиента.`,
+              `${CLIENTS.find((c) => c.id === to)?.name ?? to} already has an MCP server named “${name}”: pick another name or client.`,
+            )}
+          </p>
+        ) : null}
         <fieldset className="choices">
           <legend className="mute small">{t('Тип', 'Type')}</legend>
           <label><input type="radio" name="kind" checked={!remote} onChange={() => setRemote(false)} /> {t('локальный (команда)', 'local (command)')}</label>

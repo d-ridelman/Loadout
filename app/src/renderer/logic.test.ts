@@ -4,6 +4,8 @@ import { policiesNow, stopGateOff } from './ctxkit-stats'
 import { buildRows, onlyUnknown, scopeRank } from './aggregate'
 import { plural } from '../shared/i18n'
 import { diagnose } from './doctor'
+import { nameTaken } from './views/AddDialog'
+import { withModifier } from './views/Matrix'
 
 let n = 0
 const ent = (over: Partial<Entity>): Entity => ({
@@ -19,6 +21,33 @@ const ent = (over: Partial<Entity>): Entity => ({
   canToggle: false,
   canEdit: false,
   ...over,
+})
+
+describe('"Add MCP" form', () => {
+  it('a name the client already has (its own MCP of the user scope, the trash included) is taken before any plan', () => {
+    const list = [
+      ent({ kind: 'mcp', client: 'antigravity', name: 'tool-a' }),
+      ent({ kind: 'mcp', client: 'codex', name: 'proj-only', scope: '~/work/p' }),
+      ent({ kind: 'plugin', client: 'antigravity', name: 'plug' }),
+      ent({ kind: 'mcp', client: 'antigravity', name: 'gone', state: 'off' }),
+    ]
+    expect(nameTaken(list, 'antigravity', 'tool-a')).toBe(true)
+    expect(nameTaken(list, 'antigravity', 'gone')).toBe(true)
+    expect(nameTaken(list, 'codex', 'tool-a')).toBe(false)
+    expect(nameTaken(list, 'codex', 'proj-only')).toBe(false)
+    expect(nameTaken(list, 'antigravity', 'plug')).toBe(false)
+    expect(nameTaken(list, 'antigravity', 'Tool-A')).toBe(false)
+  })
+})
+
+describe('single-key shortcuts', () => {
+  it('a press with Ctrl, Meta or Alt is not a single-key shortcut (Ctrl+K must not move the selection)', () => {
+    const k = (o: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean }>) => withModifier({ ctrlKey: false, metaKey: false, altKey: false, ...o })
+    expect(k({})).toBe(false)
+    expect(k({ ctrlKey: true })).toBe(true)
+    expect(k({ metaKey: true })).toBe(true)
+    expect(k({ altKey: true })).toBe(true)
+  })
 })
 
 describe('aggregate', () => {
