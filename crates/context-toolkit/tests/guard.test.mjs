@@ -857,6 +857,10 @@ const cases = [
     };
     const fresh = make('fresh', false);
     const migrated = make('old', true);
+    // the preview writes nothing and promises what the run does (the old binary goes: this run moves every client)
+    const untouched = JSON.stringify(migrated.files());
+    const pv = migrated.setup('--dry-run');
+    if (pv.status !== 0 || JSON.stringify(migrated.files()) !== untouched || pv.stdout.includes('старый бинарь оставлен') || !pv.stdout.includes('[dry-run] удаление bin') || !pv.stdout.includes('[dry-run] старое имя: удаление')) return `preview: ${pv.stdout}`;
     const r1 = fresh.setup();
     const r2 = migrated.setup();
     if (r1.status !== 0 || r2.status !== 0) return `setup: ${r1.stderr} ${r2.stderr}`;
@@ -883,8 +887,9 @@ const cases = [
     return true;
   }],
 
-  // The old hook binary is kept while a file setup did not rewrite still runs it (Antigravity without --antigravity),
-  // and an old policy file of the owner's is copied and kept
+  // The old hook binary is kept while a file setup did not rewrite still runs it (Antigravity without --antigravity;
+  // the path written another way, `/./`, still counts), and so is the policy file of the old name it reads; the run
+  // with --antigravity moves the hook, then both go. A preview of that run says so before anything is written.
   [true, () => {
     const root = join(dir, 'migrate-keep');
     const profile = join(root, 'profile');
@@ -892,38 +897,52 @@ const cases = [
     const oldBin = join(profile, 'hooks', OLD_BIN_NAME);
     copyFileSync(exe, oldBin);
     const agyFile = join(root, 'hooks.json');
-    writeFileSync(agyFile, JSON.stringify({ ctxkit: { PreToolUse: [{ hooks: [{ command: `${oldBin.replace(/\\/g, '/')} --agy` }] }] } }));
-    const own = '{"policies":{"commit_hygiene":true},"rules":["my own rule of five words"]}';
-    writeFileSync(join(profile, 'ctxkit.json'), own);
+    writeFileSync(agyFile, JSON.stringify({ ctxkit: { PreToolUse: [{ hooks: [{ command: `${profile.replace(/\\/g, '/')}/./hooks/${OLD_BIN_NAME} --agy` }] }] } }));
+    const ours = '{"created_by":"ctxkit setup","policies":{"commit_hygiene":true}}';
+    const oldCfg = join(profile, 'ctxkit.json');
+    writeFileSync(oldCfg, ours);
     const cj = join(root, 'c.json');
     writeFileSync(cj, '{}');
-    const r = spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--agy-file', agyFile, '--dsh-home', join(root, 'dsh'), '--skip-version-check', '--no-agents'], { encoding: 'utf8' });
+    const base = ['setup', '--profile', profile, '--claude-json', cj, '--agy-file', agyFile, '--dsh-home', join(root, 'dsh'), '--skip-version-check', '--no-agents'];
+    const r = spawnSync(exe, base, { encoding: 'utf8' });
     if (r.status !== 0 || !existsSync(oldBin) || !r.stdout.includes('old binary kept') || !r.stdout.includes('context-toolkit setup --antigravity')) return `kept: ${r.status} ${r.stdout}`;
-    if (readFileSync(join(profile, 'ctxkit.json'), 'utf8') !== own || readFileSync(join(profile, 'context-toolkit.json'), 'utf8') !== own || !r.stdout.includes('no longer read')) return 'the owner\'s policy file';
-    const r2 = spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--antigravity', '--agy-file', agyFile, '--dsh-home', join(root, 'dsh'), '--skip-version-check', '--no-agents'], { encoding: 'utf8' });
-    return (r2.status === 0 && !existsSync(oldBin) && !readFileSync(agyFile, 'utf8').includes('ctxkit')) || `with --antigravity: ${r2.stdout}`;
+    if (readFileSync(oldCfg, 'utf8') !== ours || readFileSync(join(profile, 'context-toolkit.json'), 'utf8') !== ours || !r.stdout.includes('reads only this file')) return `the old policy file must stay for the old binary: ${r.stdout}`;
+    const preview = spawnSync(exe, [...base, '--antigravity', '--dry-run'], { encoding: 'utf8' });
+    if (preview.status !== 0 || preview.stdout.includes('old binary kept') || !preview.stdout.includes('[dry-run] remove bin') || !preview.stdout.includes('[dry-run] old name: remove')) return `the preview of --antigravity: ${preview.stdout}`;
+    const r2 = spawnSync(exe, [...base, '--antigravity'], { encoding: 'utf8' });
+    return (r2.status === 0 && !existsSync(oldBin) && !existsSync(oldCfg) && !readFileSync(agyFile, 'utf8').includes('ctxkit')) || `with --antigravity: ${r2.stdout}`;
   }],
 
   // ~/.local/bin/ctxkit.exe goes only when it is ours: a foreign program of that name (another --version) stays
   [true, () => {
-    const runHome = (name, local) => {
+    const runHome = (name, local, md = null, extra = []) => {
       const home = join(dir, `localbin-${name}`);
       mkdirSync(join(home, '.local', 'bin'), { recursive: true });
       mkdirSync(join(home, '.claude', 'hooks'), { recursive: true });
       copyFileSync(exe, join(home, '.claude', 'hooks', OLD_BIN_NAME));
       const localBin = join(home, '.local', 'bin', OLD_BIN_NAME);
       copyFileSync(local, localBin);
+      if (md !== null) writeFileSync(join(home, '.claude', 'CLAUDE.md'), md);
       writeFileSync(join(home, 'c.json'), '{}');
       const env = { ...process.env, USERPROFILE: home, HOME: home };
       delete env.CLAUDE_CONFIG_DIR;
-      const r = spawnSync(exe, ['setup', '--claude-json', join(home, 'c.json'), '--skip-version-check', '--no-agents', '--agy-file', join(home, 'none.json'), '--dsh-home', join(home, '.dsh')], { encoding: 'utf8', env });
-      return { r, localBin, home };
+      delete env.DSH_HOME;
+      const run = (...a) => spawnSync(exe, ['setup', '--claude-json', join(home, 'c.json'), '--skip-version-check', '--no-agents', '--agy-file', join(home, 'none.json'), '--dsh-home', join(home, '.dsh'), ...a], { encoding: 'utf8', env });
+      return { r: run(...extra), run, localBin, home };
     };
     const foreign = runHome('foreign', process.execPath);
     if (foreign.r.status !== 0 || !existsSync(foreign.localBin) || !foreign.r.stdout.includes('not this product')) return `foreign: ${foreign.r.stdout} ${foreign.r.stderr}`;
     if (existsSync(join(foreign.home, '.claude', 'hooks', OLD_BIN_NAME)) || !existsSync(join(foreign.home, '.local', 'bin', BIN_NAME))) return 'foreign: the hook copy should move';
+    // a preview does not start a program it does not know
+    const fp = foreign.run('--dry-run');
+    if (fp.status !== 0 || !fp.stdout.includes('only if its --version says')) return `foreign preview: ${fp.stdout}`;
     const ours = runHome('ours', exe);
-    return (ours.r.status === 0 && !existsSync(ours.localBin)) || `ours: ${ours.r.stdout}`;
+    if (ours.r.status !== 0 || existsSync(ours.localBin)) return `ours: ${ours.r.stdout}`;
+    // the old rules block still says `ctxkit check`: the copy on PATH stays until --with-rules moves the block
+    const rules = runHome('rules', exe, '# Mine\n\n<!-- ctxkit:start -->\n- run `ctxkit check <cmd>`\n<!-- ctxkit:end -->\n');
+    if (rules.r.status !== 0 || !existsSync(rules.localBin) || !rules.r.stdout.includes('still says `ctxkit check`')) return `rules: ${rules.r.stdout}`;
+    const moved = rules.run('--with-rules');
+    return (moved.status === 0 && !existsSync(rules.localBin)) || `rules moved: ${moved.stdout}`;
   }],
 
   // Windows: the old binary runs as a hook right now (Claude Code started it) and cannot be deleted. Setup still

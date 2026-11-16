@@ -23,22 +23,20 @@ pub(super) fn preflight(profile: &Path) -> Result<(), String> {
     })
 }
 
-/// The policy file of the old name (`ctxkit.json`) goes to `context-toolkit.json`, byte for byte. One that setup
-/// had created (its `created_by` mark) is moved: the old file goes after the new one is written (a backup stays).
-/// One the owner wrote is copied and kept, and the output says it is no longer read. With both files present
-/// nothing moves: the new one is read, and the old one is named.
-pub(super) fn migrate(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
+/// Whether the bytes of a policy file carry the mark of a file setup created.
+fn made_by_setup(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok())
+        .is_some_and(|v| policy::made_by_setup(v.get("created_by")))
+}
+
+/// The policy file of the old name (`ctxkit.json`) is copied to `context-toolkit.json` byte for byte while only the
+/// old one exists. One that setup had created (its `created_by` mark) is removed by `drop_old` at the end of the
+/// run; one the owner wrote stays, and the output says it is no longer read.
+pub(super) fn migrate(profile: &Path, dry_run: bool) -> Result<(), String> {
     let (new, old) = (path(profile), profile.join(policy::LEGACY_FILE));
     if !old.exists() {
-        return Ok(());
-    }
-    if new.exists() {
-        say!(
-            "  [note] {} is not read while {} exists; delete it when you no longer need it",
-            "  [note] {} не читается, пока есть {}; удалите его, когда он больше не нужен",
-            old.display(),
-            new.display()
-        );
         return Ok(());
     }
     let bytes = fs::read(&old).map_err(|e| {
@@ -48,19 +46,22 @@ pub(super) fn migrate(profile: &Path, backup_dir: &Path, dry_run: bool) -> Resul
             old.display()
         )
     })?;
-    let ours = std::str::from_utf8(&bytes)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok())
-        .is_some_and(|v| policy::made_by_setup(v.get("created_by")));
+    let ours = made_by_setup(&bytes);
+    if new.exists() {
+        if !ours {
+            say!(
+                "  [note] {} is not read while {} exists; delete it when you no longer need it",
+                "  [note] {} не читается, пока есть {}; удалите его, когда он больше не нужен",
+                old.display(),
+                new.display()
+            );
+        }
+        return Ok(());
+    }
     if dry_run {
         say!(
-            "  [dry-run] old name: {} {} -> {}",
-            "  [dry-run] старое имя: {} {} -> {}",
-            if ours {
-                msg!("move", "перенос")
-            } else {
-                msg!("copy", "копирование")
-            },
+            "  [dry-run] old name: copy {} -> {}",
+            "  [dry-run] старое имя: копирование {} -> {}",
             old.display(),
             new.display()
         );
@@ -68,12 +69,9 @@ pub(super) fn migrate(profile: &Path, backup_dir: &Path, dry_run: bool) -> Resul
     }
     write_atomic(&new, &bytes)?;
     if ours {
-        let b = backup_file(&old, backup_dir)?;
-        say!("  backup -> {}", "  копия -> {}", b.display());
-        remove_file(&old)?;
         say!(
-            "  old name: moved {} -> {}",
-            "  старое имя: перенесён {} -> {}",
+            "  old name: copied {} -> {}",
+            "  старое имя: скопирован {} -> {}",
             old.display(),
             new.display()
         );
@@ -86,6 +84,53 @@ pub(super) fn migrate(profile: &Path, backup_dir: &Path, dry_run: bool) -> Resul
         );
     }
     Ok(())
+}
+
+/// End of the run: the policy file of the old name that setup had created goes (after a backup) once its content
+/// is in `context-toolkit.json`, unless the old binary stays for a client (it reads only the old file). Trouble here
+/// leaves the file and says so: the new file is the one that is read.
+pub(super) fn drop_old(profile: &Path, backup_dir: &Path, old_bin_kept: bool, dry_run: bool) {
+    let (new, old) = (path(profile), profile.join(policy::LEGACY_FILE));
+    let Ok(bytes) = fs::read(&old) else {
+        return;
+    };
+    // a dry run has not copied it yet
+    if !made_by_setup(&bytes) || !(new.exists() || dry_run) {
+        return;
+    }
+    if old_bin_kept {
+        say!(
+            "  [note] {} kept: the old binary that is still in use reads only this file",
+            "  [note] {} оставлен: старый бинарь, который ещё используется, читает только этот файл",
+            old.display()
+        );
+        return;
+    }
+    if dry_run {
+        say!(
+            "  [dry-run] old name: remove {}",
+            "  [dry-run] старое имя: удаление {}",
+            old.display()
+        );
+        return;
+    }
+    let done = backup_file(&old, backup_dir).and_then(|b| {
+        say!("  backup -> {}", "  копия -> {}", b.display());
+        remove_file(&old)
+    });
+    match done {
+        Ok(()) => say!(
+            "  old name: removed {} (its policies are in {})",
+            "  старое имя: удалён {} (его политики теперь в {})",
+            old.display(),
+            new.display()
+        ),
+        Err(e) => say!(
+            "  [warn] {e}; remove it by hand: {}",
+            "  [warn] {e}; удалите его вручную: {}",
+            old.display()
+        ),
+    }
 }
 
 /// Applies `--policy` (when given) and returns the policies as they are after this run.
@@ -301,16 +346,22 @@ mod tests {
         let d = temp_profile("migrate");
         let (new, old, bak) = (path(&d), d.join(policy::LEGACY_FILE), d.join("backups"));
         // nothing to move
-        migrate(&d, &bak, false).unwrap();
+        migrate(&d, false).unwrap();
+        drop_old(&d, &bak, false, false);
         assert!(!new.exists() && !bak.exists());
-        // made by setup under the old name: a dry run moves nothing, a real run moves it byte for byte
+        // made by setup under the old name: a dry run changes nothing, a real run copies it byte for byte,
+        // and the old file goes at the end of the run, unless the old binary is still in use
         let ours = "{\"created_by\":\"ctxkit setup\",\r\n \"policies\":{\"stray_files\":true}}";
         fs::write(&old, ours).unwrap();
-        migrate(&d, &bak, true).unwrap();
+        migrate(&d, true).unwrap();
+        drop_old(&d, &bak, false, true);
         assert!(old.exists() && !new.exists(), "dry run");
-        migrate(&d, &bak, false).unwrap();
-        assert!(!old.exists());
+        migrate(&d, false).unwrap();
         assert_eq!(fs::read_to_string(&new).unwrap(), ours);
+        drop_old(&d, &bak, true, false);
+        assert!(old.exists(), "the old binary still reads it");
+        drop_old(&d, &bak, false, false);
+        assert!(!old.exists());
         assert_eq!(
             fs::read_dir(&bak).unwrap().count(),
             1,
@@ -318,13 +369,15 @@ mod tests {
         );
         assert!(policy::load_from(&d).stray_files);
         // a second run: nothing left to move
-        migrate(&d, &bak, false).unwrap();
+        migrate(&d, false).unwrap();
+        drop_old(&d, &bak, false, false);
         assert_eq!(fs::read_to_string(&new).unwrap(), ours);
         // the owner's own old file: copied, and it stays
         let e = temp_profile("migrate-own");
         let own = r#"{"policies":{"commit_hygiene":true},"rules":["mine of five words"]}"#;
         fs::write(e.join(policy::LEGACY_FILE), own).unwrap();
-        migrate(&e, &e.join("backups"), false).unwrap();
+        migrate(&e, false).unwrap();
+        drop_old(&e, &e.join("backups"), false, false);
         assert_eq!(fs::read_to_string(path(&e)).unwrap(), own);
         assert_eq!(
             fs::read_to_string(e.join(policy::LEGACY_FILE)).unwrap(),
@@ -332,7 +385,7 @@ mod tests {
         );
         // both present: nothing moves, the new file is the one read
         fs::write(path(&e), r#"{"policies":{}}"#).unwrap();
-        migrate(&e, &e.join("backups"), false).unwrap();
+        migrate(&e, false).unwrap();
         assert_eq!(fs::read_to_string(path(&e)).unwrap(), r#"{"policies":{}}"#);
         assert!(!policy::load_from(&e).commit_hygiene);
         // `--policy` on an old file in a dry run reads it and writes nothing

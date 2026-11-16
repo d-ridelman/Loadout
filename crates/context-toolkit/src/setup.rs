@@ -356,7 +356,7 @@ pub fn run_setup(args: &[String]) -> i32 {
         };
 
     // The policy file of the old name goes to the new one before `--policy` reads and writes it.
-    if let Err(e) = policies::migrate(&profile, &backup_dir, opts.dry_run) {
+    if let Err(e) = policies::migrate(&profile, opts.dry_run) {
         eprintln!("ERR: {e}");
         return 1;
     }
@@ -494,10 +494,13 @@ pub fn run_setup(args: &[String]) -> i32 {
         }
     }
 
-    // Last: every file that could run the old binary is rewritten by now.
-    if opts.hook_cmd.is_none() {
-        remove_old_binaries(&opts, &home, &profile, custom_profile, &settings_root);
-    }
+    // Last: every file that could run the old binary is rewritten by now. With --hook-cmd no binary is touched,
+    // so an old hook copy (and the policy file of the old name it reads) stays.
+    let old_bin_kept = match opts.hook_cmd {
+        None => remove_old_binaries(&opts, &home, &profile, custom_profile, &settings_root),
+        Some(_) => profile.join("hooks").join(OLD_BIN_NAME).exists(),
+    };
+    policies::drop_old(&profile, &backup_dir, old_bin_kept, opts.dry_run);
 
     let claude_json = opts
         .claude_json
@@ -593,15 +596,22 @@ fn install_binary(
     Ok(())
 }
 
-/// `path` with `/` separators and in lower case, for comparing paths written in config files.
-fn norm_path(path: &str) -> String {
-    path.replace("\\\\", "/").replace('\\', "/").to_lowercase()
+/// Whether a hook command anywhere in `v` (a `"command"` string at any depth) runs a binary of the old name
+/// `ctxkit`, wherever it lies: the same folder can be written in many ways (`./`, 8.3 names, junctions,
+/// `$HOME`), so the file name decides, not the path.
+fn runs_old_name(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => m.iter().any(|(k, x)| {
+            (k == "command" && x.as_str().and_then(our_name) == Some("ctxkit")) || runs_old_name(x)
+        }),
+        Value::Array(a) => a.iter().any(runs_old_name),
+        _ => false,
+    }
 }
 
-/// Whether the text of `file` names `bin` (a hook command that would run it). Unreadable: no.
-fn file_mentions(file: &Path, bin: &Path) -> bool {
-    fs::read_to_string(file)
-        .is_ok_and(|t| norm_path(&t).contains(&norm_path(&bin.to_string_lossy())))
+/// `runs_old_name` of a JSON file; a file that exists but cannot be read or parsed counts as running it.
+fn file_runs_old_name(file: &Path) -> bool {
+    file.exists() && read_json_object(file).map_or(true, |v| runs_old_name(&v))
 }
 
 /// Whether `out` (the stdout of `--version`) is the version line of this product, under either name.
@@ -628,6 +638,15 @@ pub(crate) fn version_says_ours(exe: &Path) -> bool {
         return false;
     };
     let deadline = Instant::now() + Duration::from_secs(5);
+    // stdout is read on its own thread: a child of the program that keeps the pipe open must not hang setup
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Some(mut s) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut out = String::new();
+            let _ = s.read_to_string(&mut out);
+            let _ = tx.send(out);
+        });
+    }
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -639,68 +658,68 @@ pub(crate) fn version_says_ours(exe: &Path) -> bool {
             }
         }
     }
-    let mut out = String::new();
-    child
-        .stdout
-        .take()
-        .is_some_and(|mut s| s.read_to_string(&mut out).is_ok())
-        && is_our_version_line(&out)
+    let left = deadline.saturating_duration_since(Instant::now());
+    rx.recv_timeout(left.max(Duration::from_millis(200)))
+        .is_ok_and(|out| is_our_version_line(&out))
 }
 
 /// Migration from the old name: `hooks/ctxkit.exe` and our `~/.local/bin/ctxkit.exe` go once nothing runs them.
-/// Called after settings.json (and, with their flags, the Antigravity and DSH files) were written. The hook
-/// copy stays while a file that setup did not rewrite still points at it; a copy Windows will not let go
-/// (it is running as a hook right now) is named for removal by hand, and setup still succeeds.
+/// Called last, after settings.json (and, with their flags, the Antigravity and DSH files) were written. The hook
+/// copy stays while a hook that this run did not rewrite still runs a `ctxkit` binary; a copy Windows will not let
+/// go (it is running as a hook right now) is named for removal by hand, and setup still succeeds. The copy on PATH
+/// stays while a rules block of the old name still tells the model to run `ctxkit check`. Returns whether the hook
+/// copy stays for such a client: the policy file of the old name, which that binary reads, then stays too.
 fn remove_old_binaries(
     opts: &SetupOpts,
     home: &Path,
     profile: &Path,
     custom_profile: bool,
     settings: &Value,
-) {
+) -> bool {
     let old_hook = profile.join("hooks").join(OLD_BIN_NAME);
     let local = home.join(".local").join("bin").join(OLD_BIN_NAME);
     let exe = env::current_exe().unwrap_or_default();
     // Decided before the hook copy goes: a byte copy of it (setup put the same file in both places) is ours.
-    let local_ours = !custom_profile
-        && local.is_file()
-        && (same_file_bytes(&old_hook, &local)
-            || same_file_bytes(&exe, &local)
-            || version_says_ours(&local));
+    let local_same = same_file_bytes(&old_hook, &local) || same_file_bytes(&exe, &local);
+    let dsh_home = opts
+        .dsh_home
+        .clone()
+        .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
+        .unwrap_or_else(|| home.join(".dsh"));
+    let agy = opts
+        .agy_file
+        .clone()
+        .unwrap_or_else(|| home.join(".gemini").join("config").join("hooks.json"));
+    // A dry run has not rewritten the files that this run would: they count as moved (as `update_*` would leave them).
+    let agy_used = !(opts.dry_run && opts.antigravity) && file_runs_old_name(&agy);
+    let dsh_moves = opts.dsh
+        && dsh_home.join("profiles").join("desktop").exists()
+        && !fs::read_to_string(dsh_home.join("cordis.patch.yml"))
+            .is_ok_and(|t| t.contains(OLD_DSH_HOOKS_FILE));
+    let dsh_used =
+        !(opts.dry_run && dsh_moves) && file_runs_old_name(&dsh_home.join(OLD_DSH_HOOKS_FILE));
+    let mut kept = false;
     if old_hook.exists() {
-        let dsh_home = opts
-            .dsh_home
-            .clone()
-            .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
-            .unwrap_or_else(|| home.join(".dsh"));
-        let agy = opts
-            .agy_file
-            .clone()
-            .unwrap_or_else(|| home.join(".gemini").join("config").join("hooks.json"));
-        let in_settings =
-            norm_path(&settings.to_string()).contains(&norm_path(&old_hook.to_string_lossy()));
-        let users: Vec<(&str, &str)> = [
-            (in_settings, "settings.json", ""),
-            (
-                file_mentions(&agy, &old_hook),
-                "Antigravity",
-                " --antigravity",
-            ),
-            (
-                file_mentions(&dsh_home.join(OLD_DSH_HOOKS_FILE), &old_hook),
-                "DeepSeek Harness",
-                " --dsh",
-            ),
+        if runs_old_name(&settings["hooks"]) {
+            kept = true;
+            say!(
+                "  [note] old binary kept: {} is still run by a hook in settings.json that setup does not manage; point that hook at {BIN_NAME} by hand",
+                "  [note] старый бинарь оставлен: {} ещё запускает хук в settings.json, которым setup не управляет; переведите этот хук на {BIN_NAME} вручную",
+                old_hook.display()
+            );
+        }
+        let clients: Vec<(&str, &str)> = [
+            (agy_used, "Antigravity", " --antigravity"),
+            (dsh_used, "DeepSeek Harness", " --dsh"),
         ]
         .into_iter()
         .filter(|(used, ..)| *used)
         .map(|(_, who, flag)| (who, flag))
         .collect();
-        if users.is_empty() {
-            uninstall::remove_bin(&old_hook, &exe, opts.dry_run, opts.lang);
-        } else {
-            let who: Vec<&str> = users.iter().map(|u| u.0).collect();
-            let flags: String = users.iter().map(|u| u.1).collect();
+        if !clients.is_empty() {
+            kept = true;
+            let who: Vec<&str> = clients.iter().map(|u| u.0).collect();
+            let flags: String = clients.iter().map(|u| u.1).collect();
             say!(
                 "  [note] old binary kept: {} is still run by {}; rerun `context-toolkit setup{flags}` to move that too",
                 "  [note] старый бинарь оставлен: {} ещё запускают хуки {}; повторите `context-toolkit setup{flags}`, чтобы перевести и их",
@@ -708,16 +727,48 @@ fn remove_old_binaries(
                 who.join(", ")
             );
         }
+        if !kept {
+            uninstall::remove_bin(&old_hook, &exe, opts.dry_run, opts.lang);
+            if !opts.dry_run && !old_hook.exists() {
+                say!(
+                    "  [note] Claude Code sessions that are open now keep the hooks they started with: restart them",
+                    "  [note] уже открытые сессии Claude Code держат хуки, с которыми запущены: перезапустите их"
+                );
+            }
+        }
     }
-    if local_ours {
+    if custom_profile || !local.is_file() {
+        return kept;
+    }
+    // `ctxkit check` in a rules block of the old name runs the copy on PATH: it stays until the block is moved.
+    let old_rules = |md: &Path| fs::read_to_string(md).is_ok_and(|t| has_old_markers(&t));
+    if (!opts.with_rules && old_rules(&profile.join("CLAUDE.md")))
+        || (!(opts.with_rules && opts.dsh) && old_rules(&dsh_home.join("AGENTS.md")))
+    {
+        say!(
+            "  [note] {} kept: a rules block of the old name still says `ctxkit check`; rerun `context-toolkit setup --with-rules` (with --dsh for DeepSeek Harness)",
+            "  [note] {} оставлен: блок правил старого имени ещё велит запускать `ctxkit check`; повторите `context-toolkit setup --with-rules` (для DeepSeek Harness — с --dsh)",
+            local.display()
+        );
+    } else if local_same {
         uninstall::remove_bin(&local, &exe, opts.dry_run, opts.lang);
-    } else if !custom_profile && local.exists() {
+    } else if opts.dry_run {
+        // a preview does not start a program it does not know
+        say!(
+            "  [dry-run] {}: removed on apply only if its --version says it is this product",
+            "  [dry-run] {}: при применении удаляется, только если по --version это наш продукт",
+            local.display()
+        );
+    } else if version_says_ours(&local) {
+        uninstall::remove_bin(&local, &exe, false, opts.lang);
+    } else {
         say!(
             "  left (not this product, by --version): {}",
             "  оставлен (по --version это не наш продукт): {}",
             local.display()
         );
     }
+    kept
 }
 
 fn same_file_bytes(a: &Path, b: &Path) -> bool {
@@ -2754,7 +2805,7 @@ fn print_help() {
          - Перед записью делает копии существующих конфигов\n\
          - Создаёт агентов Explore (haiku) и checker (opus); модель, советник и effort НЕ меняются, пока не переданы --main-model / --advisor / --effort (прежняя схема: --main-model sonnet --advisor fable --effort high). Изменения печатаются как «было -> стало»; свои env/хуки/плагины сохраняются\n\
          - Подключает хуки Инструментов контекста PreToolUse/PostToolUse с \"onFailure\": \"continue\" (упавший хук не блокирует вызов; claude 2.1.295+) вместо старых записей ctxkit / claude-guard / no-inline-backslash\n\
-         - Переводит установку прежнего имени ctxkit: хуки на hooks/ctxkit.exe, env.CTXKIT_LANG, ctxkit.json (созданный setup переносится, ваш копируется и остаётся), ключ ctxkit в Antigravity, блок и ctxkit-hooks.json в DSH, блок правил с маркерами ctxkit (с --with-rules). Старый hooks/ctxkit.exe удаляется после записи settings.json, если его больше ничто не запускает (запущенный сейчас называется для удаления вручную), ~/.local/bin/ctxkit.exe — только если это наш бинарь (сверка байтов или --version)\n\
+         - Переводит установку прежнего имени ctxkit: хуки на hooks/ctxkit.exe, env.CTXKIT_LANG, ctxkit.json (копируется в context-toolkit.json; старый, созданный setup, удаляется, когда старый бинарь больше не нужен, ваш остаётся), ключ ctxkit в Antigravity, блок и ctxkit-hooks.json в DSH, блок правил с маркерами ctxkit (с --with-rules). Старый hooks/ctxkit.exe удаляется после записи settings.json, если его больше ничто не запускает (запущенный сейчас называется для удаления вручную), ~/.local/bin/ctxkit.exe — только если это наш бинарь (сверка байтов или --version) и блок правил старого имени уже не велит запускать ctxkit check\n\
          - До копирования и записи отказывается от файла, который не может обработать (необычный settings.json, битые пресеты/хуки/YAML, CLAUDE.md с удвоенным или непарным маркером блока правил); файлы пишутся атомарно\n\
          - Подключает шлюз Stop, срабатывающий раз за ход: ход, где правился код без последующего checker/советника, возвращается один раз\n\
          - Проверяет включённые плагины, размер CLAUDE.md, глобальные MCP, версию Claude CLI и конфиги Antigravity\n\n\
@@ -2789,7 +2840,7 @@ fn print_help() {
          - Backs up existing configs before writing\n\
          - Creates the Explore (haiku) and checker (opus) agents; model, advisor and effort are NOT changed unless you pass --main-model / --advisor / --effort (the previous scheme: --main-model sonnet --advisor fable --effort high). Changes are printed as \"was -> became\"; custom env/hooks/plugins are preserved\n\
          - Wires Context Toolkit PreToolUse/PostToolUse hooks with \"onFailure\": \"continue\" (a failing hook never blocks the call; claude 2.1.295+) replacing old ctxkit / claude-guard / no-inline-backslash entries\n\
-         - Moves an installation of the old name ctxkit: hooks on hooks/ctxkit.exe, env.CTXKIT_LANG, ctxkit.json (moved when setup created it, copied and kept when it is yours), the Antigravity key ctxkit, the DSH block and ctxkit-hooks.json, the rules block with ctxkit markers (with --with-rules). The old hooks/ctxkit.exe is deleted after settings.json is written when nothing runs it any more (one that is running right now is named for removal by hand), ~/.local/bin/ctxkit.exe only when it is ours (same bytes, or --version)\n\
+         - Moves an installation of the old name ctxkit: hooks on hooks/ctxkit.exe, env.CTXKIT_LANG, ctxkit.json (copied to context-toolkit.json; the old one goes when setup created it and the old binary is no longer needed, yours stays), the Antigravity key ctxkit, the DSH block and ctxkit-hooks.json, the rules block with ctxkit markers (with --with-rules). The old hooks/ctxkit.exe is deleted after settings.json is written when nothing runs it any more (one that is running right now is named for removal by hand), ~/.local/bin/ctxkit.exe only when it is ours (same bytes, or --version) and no rules block of the old name still says ctxkit check\n\
          - Refuses, before copying or writing anything, a file it cannot handle (odd settings.json, broken presets/hooks/YAML, a CLAUDE.md with a doubled or unpaired rules-block marker); files are written atomically\n\
          - Wires a once-per-turn Stop gate: a turn that edited code without checker/advisor afterwards is sent back once\n\
          - Audits enabled plugins, CLAUDE.md size, global MCPs, Claude CLI version, and Antigravity configs\n\n\

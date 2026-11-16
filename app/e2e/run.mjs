@@ -1104,7 +1104,7 @@ try {
   const legacyPreview = await page.locator('pre.out').innerText()
   // старый бинарь ещё запускают хуки DeepSeek Harness фикстуры (~/.dsh/ctxkit-hooks.json, а профиля desktop, который
   // setup --dsh переписал бы, у фикстуры нет): переход его оставляет и говорит почему, иначе DSH остался бы с хуком на пустое место
-  for (const line of ['старое имя: хуки на ctxkit.exe ->', 'старое имя: env.CTXKIT_LANG -> env.CONTEXT_TOOLKIT_LANG', '[dry-run] старое имя: перенос', 'старый бинарь оставлен']) must(legacyPreview.includes(line), `предпросмотр перехода без строки «${line}»: ${legacyPreview.slice(0, 800)}`)
+  for (const line of ['старое имя: хуки на ctxkit.exe ->', 'старое имя: env.CTXKIT_LANG -> env.CONTEXT_TOOLKIT_LANG', '[dry-run] старое имя: копирование', 'старый бинарь оставлен', 'читает только этот файл']) must(legacyPreview.includes(line), `предпросмотр перехода без строки «${line}»: ${legacyPreview.slice(0, 800)}`)
   must(englishLeft(legacyPreview).length === 0, `английские фразы в русском предпросмотре перехода: ${englishLeft(legacyPreview).slice(0, 5).join(' // ')}`)
   must(existsSync(oldHookExe) && readFileSync(settingsFile, 'utf8').includes('ctxkit.exe'), 'предпросмотр перехода изменил файлы')
   await applyBtn.click()
@@ -1118,13 +1118,14 @@ try {
   must(JSON.stringify(foreignCmds(sMoved)) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'переход тронул чужие хуки')
   const mdMoved = readFileSync(claudeMd, 'utf8')
   must(mdMoved.includes('<!-- context-toolkit:start -->') && !mdMoved.includes('ctxkit:') && mdMoved.startsWith(mdOwn.trimEnd()), `переход: блок правил: ${mdMoved.slice(-400)}`)
-  must(!existsSync(join(claudeDir, 'ctxkit.json')) && JSON.parse(readFileSync(ctxkitJson, 'utf8')).policies?.stray_files === true, 'переход: файл политик не перенесён')
+  // ctxkit.json, созданный setup, остаётся вместе со старым бинарём, который его читает; новый файл — его копия
+  must(existsSync(join(claudeDir, 'ctxkit.json')) && JSON.parse(readFileSync(ctxkitJson, 'utf8')).policies?.stray_files === true, 'переход: файл политик не скопирован или старый убран, пока старый бинарь ещё нужен')
   await waitFor(async () => { const m = await page.locator('main').innerText(); return !m.includes('Установлена прежняя версия') && m.includes('~/.claude/hooks/context-toolkit.exe: ● совпадает') }, 'после перехода строка о прежней версии осталась')
   await page.locator('section[aria-label="Установка"]').screenshot({ path: join(stateDir, 'm5-ctxkit-legacy-left-1280.png') })
   await undoPreviewBtn.click()
   await waitFor(() => undoGoBtn.isEnabled(), 'предпросмотр отката после перехода')
   await undoGoBtn.click()
-  await waitFor(() => !existsSync(hookExe) && !existsSync(oldHookExe) && !existsSync(ctxkitJson), 'откат после перехода убирает оба бинаря и файл политик')
+  await waitFor(() => !existsSync(hookExe) && !existsSync(oldHookExe) && !existsSync(ctxkitJson) && !existsSync(join(claudeDir, 'ctxkit.json')), 'откат после перехода убирает оба бинаря и оба файла политик')
   must(!/context-toolkit|ctxkit/i.test(readFileSync(settingsFile, 'utf8')) && JSON.stringify(foreignCmds(JSON.parse(readFileSync(settingsFile, 'utf8')))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'откат после перехода оставил наше или тронул чужое')
   await page.keyboard.press('1')
   await levelSel.selectOption('R0') // понижение подтверждения не требует

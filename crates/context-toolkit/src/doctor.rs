@@ -383,6 +383,20 @@ fn legacy_name(
     });
     let old_markers = md.is_some_and(|m| crate::setup::has_old_markers(m));
     let hooks_dir = profile.join("hooks");
+    // The owner's own old policy file next to the new one: setup leaves it (it is theirs), so only they can drop it.
+    let old_cfg = profile.join(crate::policy::LEGACY_FILE);
+    let owners_leftover = profile.join(crate::policy::FILE).exists()
+        && serde_json::from_slice::<Value>(&fs::read(&old_cfg).unwrap_or_default())
+            .map_or(true, |v| !crate::policy::made_by_setup(v.get("created_by")));
+    let cfg_part = if owners_leftover {
+        t(
+            lang,
+            "ctxkit.json (yours, no longer read: delete it by hand)",
+            "ctxkit.json (ваш, больше не читается: удалите вручную)",
+        )
+    } else {
+        crate::policy::LEGACY_FILE
+    };
     let parts: Vec<String> = [
         (
             old_hooks,
@@ -400,10 +414,7 @@ fn legacy_name(
             "env.CTXKIT_LANG".to_string(),
         ),
         (old_markers, "<!-- ctxkit:start -->".to_string()),
-        (
-            profile.join(crate::policy::LEGACY_FILE).exists(),
-            crate::policy::LEGACY_FILE.to_string(),
-        ),
+        (old_cfg.exists(), cfg_part.to_string()),
     ]
     .into_iter()
     .filter_map(|(on, what)| on.then_some(what))
@@ -411,20 +422,31 @@ fn legacy_name(
     if parts.is_empty() {
         return None;
     }
+    let only_owners = owners_leftover && parts.len() == 1;
     Some(f(
         "legacy_name",
         if old_hooks { "warn" } else { "info" },
-        t(
-            lang,
-            "parts of the installation still have the old name ctxkit: setup moves them to Context Toolkit",
-            "часть установки ещё на старом имени ctxkit: setup переведёт её на Инструменты контекста",
-        ),
-        Some(parts.join("; ")),
-        Some(if old_markers {
-            "context-toolkit setup --with-rules"
+        if only_owners {
+            t(
+                lang,
+                "a file of the old name ctxkit is left: your own policy file, which is no longer read",
+                "остался файл старого имени ctxkit: ваш файл политик, который больше не читается",
+            )
         } else {
-            "context-toolkit setup"
-        }),
+            t(
+                lang,
+                "parts of the installation still have the old name ctxkit: setup moves them to Context Toolkit",
+                "часть установки ещё на старом имени ctxkit: setup переведёт её на Инструменты контекста",
+            )
+        },
+        Some(parts.join("; ")),
+        if only_owners {
+            None
+        } else if old_markers {
+            Some("context-toolkit setup --with-rules")
+        } else {
+            Some("context-toolkit setup")
+        },
     ))
 }
 
@@ -615,6 +637,16 @@ mod tests {
         assert_eq!(legacy.detail.as_deref(), Some("ctxkit.json"));
         assert_eq!(legacy.fix, Some("context-toolkit setup"));
         assert!(legacy.message.contains("Инструменты контекста"));
+        // the owner's own old file next to the new one: setup leaves it, so there is no setup fix
+        fs::write(d.join("context-toolkit.json"), "{}").unwrap();
+        let v = diagnose(&d, Lang::Ru);
+        let legacy = v.iter().find(|x| x.id == "legacy_name").unwrap();
+        assert_eq!(legacy.fix, None);
+        assert!(legacy
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("больше не читается"));
         fs::remove_file(d.join("ctxkit.json")).unwrap();
         assert!(diagnose(&d, Lang::En).iter().all(|x| x.id != "legacy_name"));
         let _ = fs::remove_dir_all(&d);
