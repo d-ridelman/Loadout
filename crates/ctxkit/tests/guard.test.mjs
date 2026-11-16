@@ -177,6 +177,12 @@ const cases = [
     for (const c of ['git status', 'git push --dry-run', 'git stash push', 'git restore --staged .', 'rm -r dir', 'echo "git push"', 'git commit -m "git push --force"']) {
       if (ask('Bash', c) !== '') return `bash quiet: ${c}`;
     }
+    // cmd switches (`/q`, `/s`) are not drive roots in PowerShell, nor through Antigravity's both-shells pass
+    for (const c of ['del /q file.txt', 'rd /s /q build', 'Remove-Item /f x']) {
+      if (ask('PowerShell', c) !== '') return `ps quiet: ${c}`;
+    }
+    const agyQuiet = (CommandLine) => JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on })).reason === undefined;
+    if (!agyQuiet('del /q file.txt') || !agyQuiet('rd /s /q build') || !agyQuiet('Remove-Item /f x')) return 'agy quiet';
     const raw = JSON.parse(runHook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push --force' } }, [], { CLAUDE_CONFIG_DIR: on }));
     if (raw.hookSpecificOutput.hookEventName !== 'PreToolUse' || raw.hookSpecificOutput.permissionDecision !== 'ask' || !raw.hookSpecificOutput.permissionDecisionReason.includes('git push --force')) return 'ask format';
     if (!polReason(on, 'Bash', { command: 'git reset --hard' }, { env: { CTXKIT_LANG: 'ru' } }).includes('Подтверди запуск')) return 'ru';

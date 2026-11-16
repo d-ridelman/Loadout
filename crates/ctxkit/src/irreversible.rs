@@ -101,36 +101,42 @@ fn git_check(args: &[String]) -> Option<&'static str> {
 }
 
 /// `path` normalised for comparison: forward slashes, lower case, quotes off.
-fn norm(p: &str) -> String {
+fn norm(p: &str, git_bash: bool) -> String {
     let mut s = p
         .trim()
         .trim_matches(|c| c == '"' || c == '\'')
         .replace('\\', "/")
         .to_lowercase();
-    // Git Bash, WSL and Cygwin spell `C:\Users\x` as `/c/Users/x`, `/mnt/c/...`, `/cygdrive/c/...`
-    for prefix in ["/mnt/", "/cygdrive/"] {
-        if let Some(rest) = s.strip_prefix(prefix) {
-            s = format!("/{rest}");
-            break;
+    // Git Bash, WSL and Cygwin spell `C:\Users\x` as `/c/Users/x`, `/mnt/c/...`, `/cygdrive/c/...`; only a
+    // Bash `rm` reads it so (in PowerShell or cmd `/q` and `/s` are switches, not a drive)
+    if git_bash {
+        for prefix in ["/mnt/", "/cygdrive/"] {
+            if let Some(rest) = s.strip_prefix(prefix) {
+                s = format!("/{rest}");
+                break;
+            }
         }
-    }
-    let b = s.as_bytes();
-    if b.len() >= 2 && b[0] == b'/' && b[1].is_ascii_alphabetic() && (b.len() == 2 || b[2] == b'/')
-    {
-        s = format!("{}:{}", b[1] as char, &s[2..]);
+        let b = s.as_bytes();
+        if b.len() >= 2
+            && b[0] == b'/'
+            && b[1].is_ascii_alphabetic()
+            && (b.len() == 2 || b[2] == b'/')
+        {
+            s = format!("{}:{}", b[1] as char, &s[2..]);
+        }
     }
     s
 }
 
 /// The home directory in the form `is_root_or_home` compares with.
 pub fn home_norm() -> Option<String> {
-    crate::setup::home_dir().map(|h| norm(&h.to_string_lossy()))
+    crate::setup::home_dir().map(|h| norm(&h.to_string_lossy(), false))
 }
 
 /// A drive root (`C:\`, `/`), the home directory (`~`, `$HOME`, `$env:USERPROFILE`, `%USERPROFILE%`, its real
 /// path) or the contents of one of them (`C:\*`, `~/*`).
-fn is_root_or_home(target: &str, home: Option<&str>) -> bool {
-    let s = norm(target);
+fn is_root_or_home(target: &str, home: Option<&str>, git_bash: bool) -> bool {
+    let s = norm(target, git_bash);
     if s == "*" || s.is_empty() {
         return false;
     }
@@ -160,7 +166,7 @@ fn rm_check(args: &[String], home: Option<&str>) -> Option<&'static str> {
     let force = f.has_long(&["--force"]) || f.has_short('f');
     if recursive && force {
         Some("rm -rf (deletes recursively, with no way back)")
-    } else if recursive && f.pos.iter().any(|p| is_root_or_home(p, home)) {
+    } else if recursive && f.pos.iter().any(|p| is_root_or_home(p, home, true)) {
         Some("rm -r on a drive root or the home directory")
     } else {
         None
@@ -191,7 +197,7 @@ fn ps_remove_check(args: &[String], home: Option<&str>) -> Option<&'static str> 
     args.iter()
         .filter(|a| !a.starts_with('-'))
         .flat_map(|a| a.split(','))
-        .any(|p| is_root_or_home(p, home))
+        .any(|p| is_root_or_home(p, home, false))
         .then_some("Remove-Item on a drive root or the home directory")
 }
 
@@ -453,16 +459,41 @@ mod tests {
             .unwrap()
             .contains("git push."));
         // the home directory in its real spelling is found by comparison, not by name
-        assert!(is_root_or_home("C:\\Users\\Ann\\", Some("c:/users/ann")));
-        assert!(!is_root_or_home(
-            "C:\\Users\\Ann\\src",
-            Some("c:/users/ann")
-        ));
-        assert!(!is_root_or_home("", Some("c:/users/ann")));
-        assert!(is_root_or_home("/c/Users/Ann", Some("c:/users/ann")));
-        assert!(is_root_or_home("/mnt/c/Users/Ann/", Some("c:/users/ann")));
-        assert!(!is_root_or_home("/c/Users/Ann/src", Some("c:/users/ann")));
-        assert!(!is_root_or_home("/usr", Some("c:/users/ann")));
-        assert!(!is_root_or_home("/mnt/data", None));
+        let h = Some("c:/users/ann");
+        assert!(is_root_or_home("C:\\Users\\Ann\\", h, false));
+        assert!(!is_root_or_home("C:\\Users\\Ann\\src", h, false));
+        assert!(!is_root_or_home("", h, false));
+        // Git Bash spellings count for a Bash `rm` only
+        assert!(is_root_or_home("/c/Users/Ann", h, true));
+        assert!(is_root_or_home("/mnt/c/Users/Ann/", h, true));
+        assert!(!is_root_or_home("/c/Users/Ann/src", h, true));
+        assert!(!is_root_or_home("/usr", h, true));
+        assert!(!is_root_or_home("/mnt/data", None, true));
+        assert!(
+            !is_root_or_home("/c", h, false),
+            "not a drive for PowerShell"
+        );
+    }
+
+    #[test]
+    fn cmd_switches_are_not_drive_roots_in_powershell() {
+        for cmd in [
+            "del /q file.txt",
+            "rd /s /q build",
+            "rmdir /s /q build",
+            "Remove-Item /f x",
+            "Remove-Item /s x",
+            "erase /q /f x.tmp",
+        ] {
+            assert!(!ps(cmd), "{cmd}");
+        }
+        // the same words as a Git Bash path still count for `rm`
+        assert!(bash("rm -r /q"));
+        // and through Antigravity's both-dialects pass nothing new asks
+        let any = |c: &str| {
+            reason(c, Dialect::Ps, Lang::En, None).is_some()
+                || reason(c, Dialect::Posix, Lang::En, None).is_some()
+        };
+        assert!(!any("del /q file.txt") && !any("rd /s /q build"));
     }
 }
