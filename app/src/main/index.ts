@@ -604,7 +604,7 @@ void app.whenReady().then(() => {
               // хеш коммита: `--branch` его не принимает, поэтому второй шаг
               ...(isCommitRef(src.ref) ? [gitLine(checkoutArgs(src.ref!, shownDest))] : []),
               // ветка из адреса tree/… может содержать `/`: её находят по списку веток, этого шага в предпросмотре ещё нет
-              ...(src.treePath ? [t(`(перед этим: git ls-remote, чтобы отделить ветку ${src.treePath.join('/')} от пути внутри репозитория)`, `(first: git ls-remote, to tell the branch in ${src.treePath.join('/')} from the path inside the repository)`)] : []),
+              ...(src.treePath ? [t(`(перед этим: git ls-remote, чтобы отделить ветку ${src.treePath.join('/')} от пути внутри репозитория)`, `(first: git ls-remote, to tell the branch in ${src.treePath.join('/')} from the path inside the repository)`)] : isCommitRef(src.ref) ? [t('(перед этим: git ls-remote, чтобы убедиться, что это не ветка или тег с таким именем)', '(first: git ls-remote, to make sure this is not a branch or a tag with that name)')] : []),
             ].join('\n')
           : t(`копия ${tidy(src.path)} → ${shownDest}`, `copy ${tidy(src.path)} → ${shownDest}`)
       const key = JSON.stringify(src)
@@ -630,11 +630,12 @@ void app.whenReady().then(() => {
           // без окна входа и вопросов в консоли: на закрытом или несуществующем репозитории git сразу выходит с ошибкой
           // LFS-смазка не идёт: она обратилась бы к хосту из `.lfsconfig` репозитория
           const gitEnv = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_LFS_SKIP_SMUDGE: '1' }
-          if (src.treePath) {
-            // ветка со `/` в адресе tree/…: сверяем сегменты со списком веток и тегов; не вышло — остаётся «первый сегмент — ветка»
+          if (src.treePath || isCommitRef(src.ref)) {
+            // ветка со `/` в адресе tree/… и ветка, похожая на хеш: сверяем с настоящим списком веток и тегов; не вышло —
+            // остаётся «первый сегмент — ветка», а похожее на хеш считается хешем
             const ls = await ctxkit.run('git', ['-c', 'protocol.ext.allow=never', 'ls-remote', '--heads', '--tags', '--', remoteUrl(src, ghBase)], 60_000, gitEnv)
-            const pick = ls.code === 0 ? pickTreeRef(src.treePath, parseRefs(ls.stdout)) : undefined
-            if (pick) found = { ...src, ref: pick.ref, sub: pick.sub }
+            const pick = ls.code === 0 ? pickTreeRef(src.treePath ?? [src.ref!], parseRefs(ls.stdout)) : undefined
+            if (pick) found = { ...src, ref: pick.ref, sub: src.treePath ? pick.sub : src.sub, commit: pick.commit }
           }
           subDir = found.sub
           const r = await ctxkit.run('git', cloneArgs(found, ghBase, dest), 120_000, gitEnv)
@@ -642,7 +643,7 @@ void app.whenReady().then(() => {
             const hint = src.treePath && found === src ? t(' Если ветка в адресе содержит «/», а репозиторий не отвечает на список веток, укажите адрес без tree/… (owner/repo/путь).', ' If the branch in the address contains “/” and the repository does not answer the branch list, use an address without tree/… (owner/repo/path).') : ''
             throw new Error(t(`git clone не удался: ${tidy(r.stderr).slice(-400)}${hint}`, `git clone failed: ${tidy(r.stderr).slice(-400)}${hint}`))
           }
-          if (isCommitRef(found.ref)) {
+          if (found.commit ?? isCommitRef(found.ref)) {
             const co = await ctxkit.run('git', checkoutArgs(found.ref!, dest), 120_000, gitEnv)
             if (co.code !== 0) throw new Error(t(`коммит ${found.ref} не найден или не выгружен: ${tidy(co.stderr).slice(-400)}`, `commit ${found.ref} was not found or not checked out: ${tidy(co.stderr).slice(-400)}`))
           }

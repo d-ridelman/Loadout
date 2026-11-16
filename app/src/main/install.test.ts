@@ -36,9 +36,9 @@ describe('parseMarketplaceSource', () => {
     expect(parseMarketplaceSource('ssh://git@host.example.com/owner/repo.git')).toEqual({ kind: 'ssh', value: 'ssh://git@host.example.com/owner/repo.git' })
     expect(parseMarketplaceSource('ssh://host.example.com:2222/owner/repo')).toEqual({ kind: 'ssh', value: 'ssh://host.example.com:2222/owner/repo' })
   })
-  it('хеш коммита после # отклоняется понятным текстом: документация называет только ветку или тег', () => {
+  it('имя из 7–40 hex после # отклоняется понятным текстом: от хеша коммита его не отличить, а документация называет только ветку или тег', () => {
     for (const s of ['a/b#0123abc', 'a/b#' + 'f'.repeat(40), 'git@github.com:a/b.git#deadbeef']) {
-      expect(() => parseMarketplaceSource(s)).toThrow(/хеш коммита/)
+      expect(() => parseMarketplaceSource(s)).toThrow(/шестнадцатеричных/)
     }
     // ветка, похожая на хеш по длине, но не по знакам, — обычная ветка
     expect(parseMarketplaceSource('a/b#release-1')).toMatchObject({ value: 'a/b#release-1' })
@@ -89,14 +89,22 @@ it('parseRefs: ветки и теги из вывода ls-remote, у аннот
 describe('pickTreeRef: ветка со / в адресе tree/…', () => {
   const refs = new Set(['main', 'feature/x', 'release/2025/q1', 'v1'])
   it('берёт самое длинное начало, которое есть среди веток и тегов', () => {
-    expect(pickTreeRef(['main', 'web', 'a'], refs)).toEqual({ ref: 'main', sub: 'web/a' })
-    expect(pickTreeRef(['feature', 'x', 'skills', 'demo'], refs)).toEqual({ ref: 'feature/x', sub: 'skills/demo' })
-    expect(pickTreeRef(['release', '2025', 'q1', 'SKILL.md'], refs)).toEqual({ ref: 'release/2025/q1', sub: '' })
-    expect(pickTreeRef(['v1', 'web', 'SKILL.md'], refs)).toEqual({ ref: 'v1', sub: 'web' })
+    expect(pickTreeRef(['main', 'web', 'a'], refs)).toEqual({ ref: 'main', sub: 'web/a', commit: false })
+    expect(pickTreeRef(['feature', 'x', 'skills', 'demo'], refs)).toEqual({ ref: 'feature/x', sub: 'skills/demo', commit: false })
+    expect(pickTreeRef(['release', '2025', 'q1', 'SKILL.md'], refs)).toEqual({ ref: 'release/2025/q1', sub: '', commit: false })
+    expect(pickTreeRef(['v1', 'web', 'SKILL.md'], refs)).toEqual({ ref: 'v1', sub: 'web', commit: false })
   })
-  it('хеш коммита в первом сегменте — ссылка, если такой ветки нет', () => {
-    expect(pickTreeRef(['0123abc', 'web'], refs)).toEqual({ ref: '0123abc', sub: 'web' })
-    expect(pickTreeRef(['0123abc', 'web'], new Set(['0123abc']))).toEqual({ ref: '0123abc', sub: 'web' })
+  it('адрес на саму ветку со / без пути: весь хвост — ветка', () => {
+    expect(pickTreeRef(['feature', 'x'], refs)).toEqual({ ref: 'feature/x', sub: '', commit: false })
+    expect(pickTreeRef(['release', '2025', 'q1'], refs)).toEqual({ ref: 'release/2025/q1', sub: '', commit: false })
+    // единственный сегмент (адрес `tree/main`)
+    expect(pickTreeRef(['main'], refs)).toEqual({ ref: 'main', sub: '', commit: false })
+  })
+  it('хеш коммита в первом сегменте — ссылка, если такой ветки или тега нет; если есть, это имя, а не коммит', () => {
+    expect(pickTreeRef(['0123abc', 'web'], refs)).toEqual({ ref: '0123abc', sub: 'web', commit: true })
+    expect(pickTreeRef(['0123abc'], refs)).toEqual({ ref: '0123abc', sub: '', commit: true })
+    expect(pickTreeRef(['0123abc', 'web'], new Set(['0123abc']))).toEqual({ ref: '0123abc', sub: 'web', commit: false })
+    expect(pickTreeRef(['20240101'], new Set(['20240101']))).toEqual({ ref: '20240101', sub: '', commit: false })
   })
   it('не нашёл — undefined (останется прикидка «первый сегмент — ветка»); путь проверяется', () => {
     expect(pickTreeRef(['nope', 'web'], refs)).toBeUndefined()
@@ -114,6 +122,13 @@ describe('pickTreeRef: ветка со / в адресе tree/…', () => {
 it('isCommitRef: 7–40 шестнадцатеричных знаков', () => {
   for (const ok of ['0123abc', 'DEADBEEF', 'a'.repeat(40)]) expect(isCommitRef(ok), ok).toBe(true)
   for (const no of [undefined, '', '012345', 'a'.repeat(41), 'ghijklm', 'v1.0.0', 'main', '0123abc;x', '-0123abc']) expect(isCommitRef(no), String(no)).toBe(false)
+})
+
+it('cloneArgs: ветка, похожая на хеш и подтверждённая списком веток, идёт через --branch', () => {
+  const a = cloneArgs({ owner: 'a', repo: 'b', ref: '0123abc', commit: false }, 'https://github.com/', 'x')
+  expect(a[a.indexOf('--branch') + 1]).toBe('0123abc')
+  expect(a).toContain('--depth')
+  expect(cloneArgs({ owner: 'a', repo: 'b', ref: '0123abc', commit: true }, 'https://github.com/', 'x')).not.toContain('--branch')
 })
 
 it('cloneArgs для хеша коммита: без --branch и --depth, выгрузка вторым шагом', () => {

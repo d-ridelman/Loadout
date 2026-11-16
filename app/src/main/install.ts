@@ -105,7 +105,7 @@ export function parseMarketplaceSource(raw: unknown): MarketplaceSource {
   const ref = hash < 0 ? undefined : s.slice(hash + 1)
   if (ref !== undefined) {
     if (isCommitRef(ref)) {
-      throw new Error(t('маркетплейс: после # документация Claude Code называет ветку или тег, хеш коммита не принимается', 'marketplace: the Claude Code docs name a branch or a tag after #, a commit hash is not accepted'))
+      throw new Error(t('маркетплейс: после # документация Claude Code называет ветку или тег; имя из 7–40 шестнадцатеричных знаков не отличить от хеша коммита (его документация не называет), поэтому оно не принимается', 'marketplace: the Claude Code docs name a branch or a tag after #; a name of 7–40 hex characters cannot be told from a commit hash (which the docs do not name), so it is not accepted'))
     }
     if (!refOk(ref)) return failMarketplace()
   }
@@ -138,6 +138,8 @@ export type SkillSource =
       sub: string
       /** Только адрес `tree/…` или `blob/…`: все сегменты после него. `ref` и `sub` — прикидка «первый сегмент — ветка»; ветка со `/` уточняется по списку веток (`pickTreeRef`). */
       treePath?: string[]
+      /** Ссылка — хеш коммита (`true`) или имя ветки или тега (`false`), когда это установлено по списку веток; без него решает форма строки. */
+      commit?: boolean
     }
   | { kind: 'path'; path: string }
 
@@ -194,21 +196,22 @@ export function parseRefs(out: string): Set<string> {
  * есть среди веток и тегов (ветки `a` и `a/b` в git сосуществовать не могут, так что совпадение одно). Если ни одно не
  * подошло, а первый сегмент — хеш коммита, это он; иначе `undefined` (вызывающий оставляет «первый сегмент — ветка»).
  */
-export function pickTreeRef(segments: string[], refs: Set<string>): { ref: string; sub: string } | undefined {
+export function pickTreeRef(segments: string[], refs: Set<string>): { ref: string; sub: string; commit: boolean } | undefined {
   const sub = (from: number): string | undefined => {
     const rest = segments.slice(from)
     if (rest.at(-1) === 'SKILL.md') rest.pop()
     return rest.every((x) => SUB_PART.test(x) && x !== '.' && x !== '..' && x !== '.git') ? rest.join('/') : undefined
   }
-  for (let k = segments.length - 1; k >= 1; k--) {
+  // начало, равное всем сегментам, — адрес на саму ветку без пути (`tree/feature/x`)
+  for (let k = segments.length; k >= 1; k--) {
     const ref = segments.slice(0, k).join('/')
     const rest = sub(k)
-    if (refs.has(ref) && refOk(ref) && rest !== undefined) return { ref, sub: rest }
+    if (refs.has(ref) && refOk(ref) && rest !== undefined) return { ref, sub: rest, commit: false }
   }
   const first = segments[0]
   const rest = sub(1)
-  if (refs.has(first ?? '') || !isCommitRef(first) || rest === undefined) return undefined
-  return { ref: first!, sub: rest }
+  if (!isCommitRef(first) || rest === undefined) return undefined
+  return { ref: first!, sub: rest, commit: true }
 }
 
 const GIT_SAFE = ['-c', 'protocol.ext.allow=never', '-c', 'core.symlinks=false']
@@ -217,8 +220,8 @@ const GIT_SAFE = ['-c', 'protocol.ext.allow=never', '-c', 'core.symlinks=false']
  * Аргументы `git clone`: адрес собирается из проверенных частей, перед ним `--`, флаги фиксированы. Для хеша коммита
  * `--branch` не принимается: клон без выгрузки и без истории блобов, коммит выбирает `checkoutArgs`.
  */
-export function cloneArgs(src: { owner: string; repo: string; ref: string | undefined }, base: string, dest: string): string[] {
-  if (isCommitRef(src.ref)) return [...GIT_SAFE, 'clone', '--no-checkout', '--filter=blob:none', '--no-recurse-submodules', '--', remoteUrl(src, base), dest]
+export function cloneArgs(src: { owner: string; repo: string; ref: string | undefined; commit?: boolean }, base: string, dest: string): string[] {
+  if (src.commit ?? isCommitRef(src.ref)) return [...GIT_SAFE, 'clone', '--no-checkout', '--filter=blob:none', '--no-recurse-submodules', '--', remoteUrl(src, base), dest]
   return [
     ...GIT_SAFE,
     'clone', '--depth', '1', '--no-recurse-submodules',
