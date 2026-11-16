@@ -1,7 +1,7 @@
 import { t } from '../shared/i18n'
 import type { CtxkitDoctor, CtxkitReport, DayStats } from '../shared/model'
 
-/** Итоги по периоду. Только арифметика над счётчиками ctxkit: «сэкономленных токенов» здесь нет, базовой линии «до» у отчёта нет. */
+/** Итоги по периоду. Только арифметика над счётчиками Инструментов контекста: «сэкономленных токенов» здесь нет, базовой линии «до» у отчёта нет. */
 export interface Summary {
   days: number
   mainTurns: number
@@ -78,8 +78,8 @@ export function segments(d: DayStats): { key: 'sonnet' | 'haiku' | 'opusFable' |
 }
 
 /**
- * Стоит ли галочка «без шлюза Stop» по текущему состоянию профиля: `true`, если ctxkit установлен, а шлюза нет
- * (находка `stop_gate` уровня info), `false`, если шлюз есть. `null`, если ctxkit не установлен (находка `hooks`
+ * Стоит ли галочка «без шлюза Stop» по текущему состоянию профиля: `true`, если Инструменты контекста установлены, а шлюза нет
+ * (находка `stop_gate` уровня info), `false`, если шлюз есть. `null`, если они не установлены (находка `hooks`
  * уровня warn) или находок нет: тогда остаётся значение по умолчанию (шлюз ставится).
  */
 export function stopGateOff(d: CtxkitDoctor): boolean | null {
@@ -90,7 +90,7 @@ export function stopGateOff(d: CtxkitDoctor): boolean | null {
 }
 
 /**
- * Подпись «сейчас включены: …» для блока «Защиты» по находке `policies` (она есть, только если есть ctxkit.json):
+ * Подпись «сейчас включены: …» для блока «Защиты» по находке `policies` (она есть, только если есть файл политик):
  * `{ text, broken }` или `null`, если файла нет. Только подпись, в форму и в аргументы ничего отсюда не попадает.
  */
 export function policiesNow(d: CtxkitDoctor): { text: string; broken: boolean } | null {

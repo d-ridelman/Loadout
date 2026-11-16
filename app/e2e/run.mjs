@@ -1,7 +1,7 @@
 // Проверка окна: Playwright `_electron`, свой профиль, фикстурный домашний каталог. Запуск: `npm run e2e`.
 // Профиль владельца не трогается: APP_QA=1 + LOADOUT_USER_DATA=state/loadout-qa.
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -24,11 +24,12 @@ const SIZES = [
 const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Добавить|Применить|Установить$)/
 
 /**
- * Английские слова старого вывода ctxkit в строках русского окна (кроме разметки `[dry-run]`/`[warn]`/`ERR:`, `кода`, "значений",
- * --флагов, путей и имён): пусто — вывод русский. Тот же список и те же вырезки, что в `crates/ctxkit/tests/guard.test.mjs`.
+ * Английские слова старого вывода и перехода со старого имени (и английское имя Context Toolkit: по-русски «Инструменты
+ * контекста») в строках русского окна (кроме разметки `[dry-run]`/`[warn]`/`ERR:`, `кода`, "значений", --флагов, путей и имён):
+ * пусто — вывод русский. Тот же список и те же вырезки, что в `crates/context-toolkit/tests/guard.test.mjs`.
  */
 const englishLeft = (text) => {
-  const en = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|policies(?=:)|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass)\b/
+  const en = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|policies(?=:)|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass|old name|moved|copied|move|copy|left|still|Context|Toolkit)\b/
   const strip = (s) => s
     .replace(/\[(dry-run|warn|note|ok|info)\]/g, '')
     .replace(/^ERR:/gm, '')
@@ -231,7 +232,7 @@ let session
 try {
   must(existsSync(electronExe), `нет ${electronExe}: выполните npm install в app/`)
   must(existsSync(loadoutBin), `нет ${loadoutBin}: cargo build --release`)
-  must(existsSync(join(appDir, 'build', 'ctxkit.exe')), 'нет app/build/ctxkit.exe: npm run bundle:ctxkit')
+  must(existsSync(join(appDir, 'build', 'context-toolkit.exe')), 'нет app/build/context-toolkit.exe: npm run bundle:context-toolkit')
   mkdirSync(stateDir, { recursive: true })
   // чистый проверочный профиль каждый раз: настройки окна (FX) не должны переходить между прогонами
   rmSync(profile, { recursive: true, force: true })
@@ -778,24 +779,27 @@ try {
   await card.getByRole('button', { name: 'Удалить профиль' }).click()
   await waitFor(async () => (await card.count()) === 0, 'профиль удалён')
 
-  // ---- встроенный ctxkit: установить и применить на копии фикстуры, диагностика и эффективность ----
+  // ---- встроенные Инструменты контекста: установить и применить на копии фикстуры, диагностика и эффективность ----
   const claudeDir = join(home, '.claude')
-  const hookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
+  const hookExe = join(claudeDir, 'hooks', 'context-toolkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
   const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 } // форма по умолчанию: советник, основная модель, effort и политики «не менять»
-  const ctxkitJson = join(claudeDir, 'ctxkit.json')
-  // Настоящий профиль владельца ctxkit трогать не должен: хеши файлов, которые `setup` пишет, до и после всего шага.
-  // `~/.claude.json` не сравниваем: его переписывает работающий Claude Code, ctxkit его только читает (в проверках с --claude-json на копию).
+  const ctxkitJson = join(claudeDir, 'context-toolkit.json')
+  // Настоящий профиль владельца Инструменты контекста трогать не должны: хеши файлов, которые `setup` пишет, до и после всего шага.
+  // `~/.claude.json` не сравниваем: его переписывает работающий Claude Code, setup его только читает (в проверках с --claude-json на копию).
   const realHome = homedir()
-  const realFiles = ['.claude/settings.json', '.claude/CLAUDE.md', '.claude/hooks/ctxkit.exe', '.claude/agents/Explore.md', '.claude/agents/checker.md', '.local/bin/ctxkit.exe', '.gemini/config/hooks.json', '.dsh/ctxkit-hooks.json', '.dsh/cordis.patch.yml', 'AppData/Roaming/Claude/ccd-session-presets.json'].map((r) => join(realHome, r))
+  const realFiles = ['.claude/settings.json', '.claude/CLAUDE.md', '.claude/hooks/ctxkit.exe', '.claude/hooks/context-toolkit.exe', '.claude/ctxkit.json', '.claude/context-toolkit.json', '.claude/agents/Explore.md', '.claude/agents/checker.md', '.local/bin/ctxkit.exe', '.local/bin/context-toolkit.exe', '.gemini/config/hooks.json', '.dsh/ctxkit-hooks.json', '.dsh/context-toolkit-hooks.json', '.dsh/cordis.patch.yml', '.dsh/profiles/desktop/cordis.patch.yml', 'AppData/Roaming/Claude/ccd-session-presets.json'].map((r) => join(realHome, r))
   const realState = () => realFiles.map((f) => (existsSync(f) ? createHash('sha256').update(readFileSync(f)).digest('hex') : 'нет'))
   const realBefore = realState()
   const realBackups = () => (existsSync(join(realHome, '.claude', 'backups')) ? readdirSync(join(realHome, '.claude', 'backups')).filter((n) => !n.startsWith('.claude.json.backup')).length : 0)
   const realBackupsBefore = realBackups()
-  must(!existsSync(hookExe), 'в копии фикстуры уже есть ctxkit')
+  must(!existsSync(hookExe), 'в копии фикстуры уже есть Инструменты контекста')
   await page.keyboard.press('7')
-  await page.getByText('ctxkit 0.', { exact: false }).first().waitFor({ timeout: 15000 })
-  must((await page.locator('main').innerText()).includes('нет: «Применить» установит'), 'до установки копия ctxkit должна быть «нет»')
+  await page.getByText('context-toolkit 0.', { exact: false }).first().waitFor({ timeout: 15000 })
+  must(await page.getByRole('heading', { name: 'Инструменты контекста', level: 2 }).isVisible(), 'заголовок раздела не «Инструменты контекста»')
+  must(await page.locator('nav').getByRole('button', { name: /^Инструменты контекста/ }).isVisible(), 'в навигации нет «Инструменты контекста»')
+  must((await page.locator('main').innerText()).includes('нет: «Применить» установит'), 'до установки копия хуков должна быть «нет»')
+  must(!(await page.locator('main').innerText()).includes('прежняя версия'), 'на чистой копии фикстуры не должно быть строки о прежней версии')
   const applyBtn = page.getByRole('button', { name: /^Применить: установить/ })
   must(await applyBtn.isDisabled(), 'применение доступно без предпросмотра')
   // ядро-main отказывает и в обход страницы: без предпросмотра и без нужного уровня
@@ -809,17 +813,17 @@ try {
   // путь настоящего домашнего каталога (с именем пользователя) в выводе недопустим ни с прямыми, ни с обратными слэшами
   const leaks = [realHome, realHome.replaceAll('\\', '/')].some((h) => preview.toLowerCase().includes(h.toLowerCase()))
   must(preview.includes('Шлюз Stop: включён'), `в предпросмотре нет строки про шлюз Stop: ${preview.slice(0, 300)}`)
-  must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
+  must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр setup: ${preview.slice(0, 300)}`)
   must(preview.includes('advisorModel: (не задано) (оставлено'), `предпросмотр с формой по умолчанию должен оставлять advisorModel: ${preview.slice(0, 400)}`)
-  // форма по умолчанию «Политики: не менять»: ctxkit.json не создаётся и не упоминается как изменение
-  must(preview.includes('политики: нет (оставлено') && !existsSync(ctxkitJson), `«Политики: не менять» должно оставлять ctxkit.json: ${preview.slice(0, 600)}`)
+  // форма по умолчанию «Политики: не менять»: context-toolkit.json не создаётся и не упоминается как изменение
+  must(preview.includes('политики: нет (оставлено') && !existsSync(ctxkitJson), `«Политики: не менять» не должно создавать context-toolkit.json: ${preview.slice(0, 600)}`)
   // русский интерфейс: в предпросмотре нет английских служебных фраз старого вывода
-  must(englishLeft(preview).length === 0, `английские фразы в русском предпросмотре ctxkit: ${englishLeft(preview).slice(0, 5).join(' // ')}`)
+  must(englishLeft(preview).length === 0, `английские фразы в русском предпросмотре setup: ${englishLeft(preview).slice(0, 5).join(' // ')}`)
   must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
   await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')
-  await page.getByLabel('Язык подсказок, хуков и вывода ctxkit').selectOption('en')
+  await page.getByLabel('Язык подсказок, хуков и вывода Инструментов контекста').selectOption('en')
   must(await applyBtn.isDisabled(), 'после смены настроек старый предпросмотр не должен разрешать применение')
-  await page.getByLabel('Язык подсказок, хуков и вывода ctxkit').selectOption('ru')
+  await page.getByLabel('Язык подсказок, хуков и вывода Инструментов контекста').selectOption('ru')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await waitFor(() => applyBtn.isEnabled(), 'предпросмотр повторён')
   await shot(page, 'm5-ctxkit-1280')
@@ -828,10 +832,10 @@ try {
   await shot(page, 'm5-ctxkit-1920')
   await resize(app, 1280, 800)
   await applyBtn.click()
-  await waitFor(() => existsSync(hookExe), 'ctxkit установил бинарь хуков')
-  await waitFor(() => readFileSync(settingsFile, 'utf8').includes('ctxkit'), 'ctxkit прописал хуки в settings.json')
-  must(existsSync(join(claudeDir, 'backups')), 'ctxkit не сделал бэкап перед записью')
-  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/ctxkit.exe: ● совпадает'), 'статус: копия хуков совпадает со встроенной')
+  await waitFor(() => existsSync(hookExe), 'setup установил бинарь хуков')
+  await waitFor(() => readFileSync(settingsFile, 'utf8').includes('context-toolkit.exe'), 'setup прописал хуки в settings.json')
+  must(existsSync(join(claudeDir, 'backups')), 'setup не сделал бэкап перед записью')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/context-toolkit.exe: ● совпадает'), 'статус: копия хуков совпадает со встроенной')
   // диагностика и эффективность по транскриптам фикстуры
   await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 15000 })
   await page.locator('table[aria-label="Ходы по дням"] tbody tr').first().waitFor({ timeout: 30000 })
@@ -857,10 +861,10 @@ try {
   await page.locator('section[aria-label="Диагностика"]').screenshot({ path: join(stateDir, 'm5-ctxkit-diag-1280.png') })
   await page.locator('section[aria-label="Эффективность"]').screenshot({ path: join(stateDir, 'm5-ctxkit-efficiency-1280.png') })
   const ctxLayout = await page.evaluate(() => ({ h: document.documentElement.scrollWidth - document.documentElement.clientWidth, m: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth }))
-  must(ctxLayout.h <= 0 && ctxLayout.m <= 1, `горизонтальная прокрутка в разделе ctxkit: ${JSON.stringify(ctxLayout)}`)
-  const v4 = await axeCheck(page, 'ctxkit')
-  must(v4.length === 0, `axe: ctxkit: ${v4.map((x) => x.id).join(', ')}`)
-  await noSecretOnPage('ctxkit')
+  must(ctxLayout.h <= 0 && ctxLayout.m <= 1, `горизонтальная прокрутка в разделе Инструментов контекста: ${JSON.stringify(ctxLayout)}`)
+  const v4 = await axeCheck(page, 'Инструменты контекста')
+  must(v4.length === 0, `axe: Инструменты контекста: ${v4.map((x) => x.id).join(', ')}`)
+  await noSecretOnPage('Инструменты контекста')
   // применение с формой по умолчанию (советник «не менять») не создаёт model, advisorModel и effortLevel
   const sKeep = JSON.parse(readFileSync(settingsFile, 'utf8'))
   const sBase = JSON.parse(settingsBefore)
@@ -875,9 +879,9 @@ try {
   await applyBtn.click()
   await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).advisorModel === 'fable', 'явный выбор Fable записал advisorModel')
   // шлюз Stop: по умолчанию ставится (хук + находка stop_gate «ok»), со снятой галочкой хук убирается (находка «нет шлюза»)
-  const ourStop = () => (JSON.parse(readFileSync(settingsFile, 'utf8')).hooks?.Stop ?? []).filter((g) => (g.hooks ?? []).some((h) => /(^|[\\/"])ctxkit(\.exe)?("|\s|$)/i.test(h.command ?? ''))).length
+  const ourStop = () => (JSON.parse(readFileSync(settingsFile, 'utf8')).hooks?.Stop ?? []).filter((g) => (g.hooks ?? []).some((h) => /(^|[\\/"])context-toolkit(\.exe)?("|\s|$)/i.test(h.command ?? ''))).length
   const findings = () => page.locator('ul[aria-label="Находки диагностики"]').innerText()
-  must(ourStop() === 1, `после применения нет хука Stop ctxkit (${ourStop()})`)
+  must(ourStop() === 1, `после применения нет нашего хука Stop (${ourStop()})`)
   await waitFor(async () => (await findings()).includes('шлюз Stop установлен'), 'доктор: шлюз Stop установлен')
   const gateBox = page.getByRole('checkbox', { name: /Шлюз Stop/ })
   must(await gateBox.isChecked(), 'галочка «Шлюз Stop» по умолчанию должна стоять')
@@ -887,7 +891,7 @@ try {
   await waitFor(() => applyBtn.isEnabled(), 'предпросмотр без шлюза Stop')
   must(ourStop() === 1, 'предпросмотр без шлюза изменил settings.json')
   await applyBtn.click()
-  await waitFor(() => ourStop() === 0, 'ctxkit убрал хук Stop при снятой галочке')
+  await waitFor(() => ourStop() === 0, 'setup убрал хук Stop при снятой галочке')
   await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор: нет шлюза Stop')
   must(JSON.parse(readFileSync(settingsFile, 'utf8')).hooks.PreToolUse !== undefined, 'снятие шлюза затронуло остальные хуки')
   // окно передаёт --advisor только при явном выборе: основная модель и effort остаются как были, советник — выбор из формы (Fable выбран выше)
@@ -922,7 +926,7 @@ try {
   await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).model === 'sonnet', 'выбор Sonnet записал model')
   const sModel = JSON.parse(readFileSync(settingsFile, 'utf8'))
   must(sModel.modelSettings?.['claude-sonnet-5-5']?.effortLevel === 'high' && sModel.effortLevel === 'high', `effort high не записан: ${JSON.stringify({ ms: sModel.modelSettings, e: sModel.effortLevel })}`)
-  const foreignStart = (s) => s.hooks.SessionStart.flatMap((g) => g.hooks ?? []).map((h) => h.command).filter((c) => !/ctxkit/i.test(c))
+  const foreignStart = (s) => s.hooks.SessionStart.flatMap((g) => g.hooks ?? []).map((h) => h.command).filter((c) => !/context-toolkit|ctxkit/i.test(c))
   must(sModel.advisorModel === 'fable' && JSON.stringify(foreignStart(sModel)) === JSON.stringify(foreignStart(sPre)), `запись модели и effort затронула советника или чужие хуки: ${sModel.advisorModel} ${JSON.stringify(sModel.hooks.SessionStart)} / ${JSON.stringify(sPre.hooks.SessionStart)}`)
   // уход из раздела и возврат: галочка берётся из профиля (шлюза нет), а не сбрасывается на «шлюз включён»
   await page.keyboard.press('1')
@@ -933,16 +937,16 @@ try {
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await waitFor(async () => (await page.locator('pre.out').innerText()).includes('Шлюз Stop: выключен'), 'предпросмотр после возврата должен говорить «Шлюз Stop: выключен»')
   must(ourStop() === 0, 'предпросмотр после возврата вернул шлюз')
-  // ---- политики «Защиты» из окна: «не менять» не создаёт ctxkit.json; «включить выбранные» с двумя политиками создаёт его, предпросмотр показывает строки ----
-  must(!existsSync(ctxkitJson), 'до выбора политик ctxkit.json не должно быть: «не менять» его не создаёт')
+  // ---- политики «Защиты» из окна: «не менять» не создаёт context-toolkit.json; «включить выбранные» с двумя политиками создаёт его, предпросмотр показывает строки ----
+  must(!existsSync(ctxkitJson), 'до выбора политик context-toolkit.json не должно быть: «не менять» его не создаёт')
   const polSel = page.getByLabel('Политики', { exact: true })
   const hygiene = page.getByRole('checkbox', { name: /Гигиена коммитов/ })
   const slotsBox = page.getByRole('checkbox', { name: /Лимит параллельных сборок/ })
   const slotsNum = page.getByLabel('Лимит параллельных сборок, от 1 до 8')
   must((await polSel.inputValue()) === 'keep' && (await polSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Включить выбранные|Выключить все', 'селект политик: по умолчанию «Не менять»')
-  must((await page.locator('#ctx-policy-hint').innerText()).includes('ctxkit.json нет'), 'подпись под политиками без ctxkit.json должна говорить, что файла нет')
+  must((await page.locator('#ctx-policy-hint').innerText()).includes('файла политик нет'), 'подпись под политиками без файла политик должна говорить, что его нет')
   must(await hygiene.isDisabled() && await slotsBox.isDisabled() && await page.getByRole('checkbox', { name: /Неожиданные файлы-отчёты/ }).isDisabled() && await page.getByRole('checkbox', { name: /Подтверждение необратимого/ }).isDisabled(), 'при «Не менять» чекбоксы политик должны быть недоступны')
-  // отмеченное при «Не менять» не уходит в ctxkit: окно держит настройки, а main — аргументы (без --policy)
+  // отмеченное при «Не менять» не уходит в setup: окно держит настройки, а main — аргументы (без --policy)
   await polSel.selectOption('on')
   await hygiene.check()
   await slotsBox.check()
@@ -953,27 +957,27 @@ try {
   const polPreview = await page.locator('pre.out').innerText()
   for (const line of ['политика commit_hygiene: выкл -> вкл', 'политика build_slots: выкл -> 3', 'политика stray_files: выкл (без изменений)']) must(polPreview.includes(line), `предпросмотр политик без строки «${line}»: ${polPreview.slice(0, 700)}`)
   must(englishLeft(polPreview).length === 0, `английские фразы в русском предпросмотре политик: ${englishLeft(polPreview).slice(0, 5).join(' // ')}`)
-  must(!existsSync(ctxkitJson), 'предпросмотр политик создал ctxkit.json')
+  must(!existsSync(ctxkitJson), 'предпросмотр политик создал context-toolkit.json')
   await page.locator('fieldset.choices', { has: page.locator('#ctx-policy') }).screenshot({ path: join(stateDir, 'm5-ctxkit-policies-1280.png') })
   await applyBtn.click()
-  await waitFor(() => existsSync(ctxkitJson), 'применение создало ctxkit.json')
+  await waitFor(() => existsSync(ctxkitJson), 'применение создало context-toolkit.json')
   const polCfg = JSON.parse(readFileSync(ctxkitJson, 'utf8'))
-  must(polCfg.policies?.commit_hygiene === true && polCfg.policies?.build_slots === 3 && !polCfg.policies?.stray_files && polCfg.created_by === 'ctxkit setup', `ctxkit.json после применения: ${JSON.stringify(polCfg)}`)
+  must(polCfg.policies?.commit_hygiene === true && polCfg.policies?.build_slots === 3 && !polCfg.policies?.stray_files && polCfg.created_by === 'context-toolkit setup', `context-toolkit.json после применения: ${JSON.stringify(polCfg)}`)
   // подпись «сейчас включены» берётся из находки policies, а форму не меняет
   await waitFor(async () => (await page.locator('#ctx-policy-hint').innerText()).includes('Сейчас включены: commit_hygiene, build_slots=3'), 'подпись «Сейчас включены» из диагностики')
   must((await polSel.inputValue()) === 'on', 'подпись из диагностики изменила форму')
   await polSel.selectOption('keep')
-  // ---- откат ctxkit на копии фикстуры: предпросмотр, R2, чужие хуки на месте, повтор безопасен ----
+  // ---- откат на копии фикстуры: предпросмотр, R2, чужие хуки на месте, повтор безопасен ----
   const undoOpts = { antigravity: false, dsh: false }
   const undoRefusal = (o, dry) => page.evaluate(async ([x, d]) => (await window.loadout.ctxkitUninstall(x, d)).error ?? 'ok', [o, dry])
-  const undoPreviewBtn = page.getByRole('button', { name: 'Откатить ctxkit', exact: true })
+  const undoPreviewBtn = page.getByRole('button', { name: 'Откатить Инструменты контекста', exact: true })
   const undoGoBtn = page.getByRole('button', { name: 'Откатить: убрать хуки, блок правил и бинарь' })
-  const foreignCmds = (s) => Object.values(s.hooks ?? {}).flat().flatMap((g) => g.hooks ?? []).map((h) => h.command ?? '').filter((c) => !/(^|[\\/"])ctxkit(\.exe)?("|\s|$)/i.test(c)).sort()
+  const foreignCmds = (s) => Object.values(s.hooks ?? {}).flat().flatMap((g) => g.hooks ?? []).map((h) => h.command ?? '').filter((c) => !/(^|[\\/"])(context-toolkit|ctxkit)(\.exe)?("|\s|$)/i.test(c)).sort()
   const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v)
   const claudeMd = join(claudeDir, 'CLAUDE.md')
   const settingsHooked = readFileSync(settingsFile, 'utf8')
   must(foreignCmds(JSON.parse(settingsBefore)).length === 3 && JSON.stringify(foreignCmds(JSON.parse(settingsHooked))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'до отката чужие хуки фикстуры должны быть на месте')
-  must(existsSync(claudeMd) && readFileSync(claudeMd, 'utf8').toLowerCase().includes('ctxkit'), 'до отката в CLAUDE.md нет блока правил ctxkit')
+  must(existsSync(claudeMd) && readFileSync(claudeMd, 'utf8').includes('<!-- context-toolkit:start -->'), 'до отката в CLAUDE.md нет блока правил')
   must((await undoGoBtn.count()) === 0, 'кнопка отката видна без предпросмотра отката')
   must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'откат без предпросмотра отката (есть только предпросмотр setup) не отвергнут в main')
   must((await undoRefusal({ antigravity: 'yes', dsh: false }, true)).includes('параметры'), 'неверные параметры отката не отвергнуты')
@@ -981,8 +985,8 @@ try {
   // занятость: сразу после нажатия кнопка показывает «Считаю…» со спиннером, строка состояния говорит, что идёт, все кнопки заблокированы
   const busyNow = await page.evaluate(() => {
     const sec = document.querySelector('section[aria-label="Применение"]')
-    const b = [...sec.querySelectorAll('button')].find((x) => x.textContent === 'Откатить ctxkit')
-    // состояние снимается в первый же момент, когда DOM показал занятость (MutationObserver, а не пауза: ответ ctxkit быстрый)
+    const b = [...sec.querySelectorAll('button')].find((x) => x.textContent === 'Откатить Инструменты контекста')
+    // состояние снимается в первый же момент, когда DOM показал занятость (MutationObserver, а не пауза: ответ быстрый)
     return new Promise((resolve) => {
       const snap = () => ({ label: b.textContent, spin: !!b.querySelector('.spin'), status: sec.querySelector('[role=status]').textContent, allDisabled: [...sec.querySelectorAll('button')].every((x) => x.disabled) })
       const mo = new MutationObserver(() => {
@@ -1002,7 +1006,7 @@ try {
   must(undoPreview.includes('[dry-run]') && undoPreview.includes('Не тронуто') && undoPreview.includes('sonnet') && undoPreview.includes('fable'), `предпросмотр отката без списка «не тронуто» с model и advisorModel: ${undoPreview.slice(0, 600)}`)
   must(![realHome, realHome.replaceAll('\\', '/')].some((h) => undoPreview.toLowerCase().includes(h.toLowerCase())), 'предпросмотр отката показал путь настоящего профиля')
   must(englishLeft(undoPreview).length === 0, `английские фразы в русском предпросмотре отката: ${englishLeft(undoPreview).slice(0, 5).join(' // ')}`)
-  must(undoPreview.includes('ctxkit.json удалён (его создал setup)') && existsSync(ctxkitJson), `предпросмотр отката не обещает убрать ctxkit.json, созданный setup (и не должен трогать его): ${undoPreview.slice(0, 500)}`)
+  must(undoPreview.includes('context-toolkit.json удалён (его создал setup)') && existsSync(ctxkitJson), `предпросмотр отката не обещает убрать context-toolkit.json, созданный setup (и не должен трогать его): ${undoPreview.slice(0, 500)}`)
   must((await page.locator('main').innerText()).includes('Предпросмотр отката: файлы не менялись.'), 'нет подписи предпросмотра отката')
   must(readFileSync(settingsFile, 'utf8') === settingsHooked && existsSync(hookExe), 'предпросмотр отката изменил файлы')
   // предпросмотр отката не разрешает «Применить», а смена формы гасит предпросмотр отката
@@ -1038,28 +1042,28 @@ try {
     await resize(app, w, 800)
     await page.waitForTimeout(250)
     const f = await formLayout()
-    must(f.selDx <= 1 && f.lblDx <= 1 && f.lblSelDx <= 1 && f.btnCount === 4 && f.btnLeftDx <= 1 && f.btnWidthDx <= 1 && !f.btnClipped && f.btnsOrdered && !f.hintsOut && f.statusBelow && f.hScroll <= 0 && f.mScroll <= 1, `выравнивание формы ctxkit на ${w}: ${JSON.stringify(f)}`)
+    must(f.selDx <= 1 && f.lblDx <= 1 && f.lblSelDx <= 1 && f.btnCount === 4 && f.btnLeftDx <= 1 && f.btnWidthDx <= 1 && !f.btnClipped && f.btnsOrdered && !f.hintsOut && f.statusBelow && f.hScroll <= 0 && f.mScroll <= 1, `выравнивание формы Инструментов контекста на ${w}: ${JSON.stringify(f)}`)
     if (w !== 1100) await shot(page, `m5-ctxkit-undo-${w}`)
   }
   await resize(app, 1280, 800)
   await page.waitForTimeout(250)
-  const v5 = await axeCheck(page, 'ctxkit: предпросмотр отката')
-  must(v5.length === 0, `axe: форма ctxkit с предпросмотром отката: ${v5.map((x) => x.id).join(', ')}`)
+  const v5 = await axeCheck(page, 'Инструменты контекста: предпросмотр отката')
+  must(v5.length === 0, `axe: форма Инструментов контекста с предпросмотром отката: ${v5.map((x) => x.id).join(', ')}`)
   await undoGoBtn.click()
   await waitFor(() => !existsSync(hookExe), 'откат убрал бинарь хуков')
   await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'после отката нет подписи «Откат выполнен.»')
-  await waitFor(async () => (await page.locator('#notice').innerText().catch(() => '')).includes('Откат ctxkit выполнен'), 'после отката нет уведомления')
-  must(await page.evaluate(() => document.activeElement?.textContent === 'Откатить ctxkit'), 'после отката фокус не вернулся на кнопку предпросмотра отката')
+  await waitFor(async () => (await page.locator('#notice').innerText().catch(() => '')).includes('Откат Инструментов контекста выполнен'), 'после отката нет уведомления')
+  must(await page.evaluate(() => document.activeElement?.textContent === 'Откатить Инструменты контекста'), 'после отката фокус не вернулся на кнопку предпросмотра отката')
   must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'один предпросмотр отката разрешил второй откат')
-  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/ctxkit.exe: ✕ нет'), 'статус после отката: копии хуков нет')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/context-toolkit.exe: ✕ нет'), 'статус после отката: копии хуков нет')
   const undone = JSON.parse(readFileSync(settingsFile, 'utf8'))
-  must(!/ctxkit/i.test(JSON.stringify(undone)), `после отката в settings.json остались записи ctxkit: ${JSON.stringify(undone).slice(0, 400)}`)
+  must(!/context-toolkit|ctxkit/i.test(JSON.stringify(undone)), `после отката в settings.json остались наши записи: ${JSON.stringify(undone).slice(0, 400)}`)
   must(JSON.stringify(foreignCmds(undone)) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'откат тронул чужие хуки')
   must(undone.model === 'sonnet' && undone.advisorModel === 'fable' && undone.modelSettings?.['claude-sonnet-5-5']?.effortLevel === 'high', 'откат тронул модель, советника или effort: их он оставляет')
   const { model: _m, advisorModel: _a, effortLevel: _e, modelSettings: _s, ...rest } = undone
   must(JSON.stringify(canon(rest)) === JSON.stringify(canon(JSON.parse(settingsBefore))), `после отката settings.json без модели, советника и effort не равен исходному: ${JSON.stringify(canon(rest)).slice(0, 400)}`)
-  must(!existsSync(claudeMd) || !readFileSync(claudeMd, 'utf8').toLowerCase().includes('ctxkit'), 'откат оставил блок правил в CLAUDE.md')
-  must(!existsSync(ctxkitJson), 'откат из окна не убрал ctxkit.json, который создал setup')
+  must(!existsSync(claudeMd) || !/context-toolkit|ctxkit/i.test(readFileSync(claudeMd, 'utf8')), 'откат оставил блок правил в CLAUDE.md')
+  must(!existsSync(ctxkitJson), 'откат из окна не убрал context-toolkit.json, который создал setup')
   must(existsSync(join(claudeDir, 'agents', 'checker.md')) && existsSync(join(claudeDir, 'agents', 'Explore.md')), 'откат удалил агентов: он их оставляет')
   must((await page.locator('pre.out').innerText()).includes('backups'), 'в выводе отката нет пути к бэкапу settings.json')
   // повтор безопасен: второй откат ничего не меняет и не падает
@@ -1069,17 +1073,65 @@ try {
   await undoGoBtn.click()
   await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'повторный откат завершился')
   must(readFileSync(settingsFile, 'utf8') === settingsUndone && !existsSync(hookExe) && !(await page.locator('section[aria-label="Применение"] [role=alert]').count()), 'повторный откат изменил файлы или показал ошибку')
-  // галочки интеграций доходят до ctxkit: предпросмотр отката с Antigravity и DeepSeek Harness говорит про них (на копии, ничего не пишет)
+  // галочки интеграций доходят до setup: предпросмотр отката с Antigravity и DeepSeek Harness говорит про них (на копии, ничего не пишет)
   const integ = await page.evaluate(async () => (await window.loadout.ctxkitUninstall({ antigravity: true, dsh: true }, true)).data?.output ?? '')
   must(/antigravity/i.test(integ) && /DeepSeek/i.test(integ) && integ.includes('[dry-run]'), `предпросмотр отката с интеграциями без строк про Antigravity и DeepSeek: ${integ.slice(0, 400)}`)
   must(englishLeft(integ).length === 0, `английские фразы в русском предпросмотре отката с интеграциями: ${englishLeft(integ).slice(0, 5).join(' // ')}`)
   must(![realHome, realHome.replaceAll('\\', '/')].some((h) => integ.toLowerCase().includes(h.toLowerCase())), 'предпросмотр отката с интеграциями показал путь настоящего профиля')
+  // ---- переход с прежней установки (ctxkit) на копии фикстуры: строка о прежней версии, её кнопка предпросмотра,
+  // «Применить», итог на новом имени, чужое на месте; затем откат возвращает копию к состоянию до шага ----
+  const oldHookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
+  mkdirSync(join(claudeDir, 'hooks'), { recursive: true })
+  copyFileSync(join(appDir, 'build', 'context-toolkit.exe'), oldHookExe) // бинарь прежнего имени: его --version тоже «наш продукт»
+  const oldCmd = `"${oldHookExe.replaceAll('\\', '/')}"`
+  const sLegacy = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  sLegacy.env = { ...(sLegacy.env ?? {}), CTXKIT_LANG: 'ru' }
+  const oldGroup = (matcher) => ({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: oldCmd, timeout: 10 }] })
+  sLegacy.hooks = { ...sLegacy.hooks, PreToolUse: [oldGroup('Bash|PowerShell|Write|Read|Edit|MultiEdit'), ...(sLegacy.hooks?.PreToolUse ?? [])], PostToolUse: [oldGroup('Edit|Write|MultiEdit'), ...(sLegacy.hooks?.PostToolUse ?? [])] }
+  writeFileSync(settingsFile, JSON.stringify(sLegacy, null, 2))
+  const mdOwn = existsSync(claudeMd) ? readFileSync(claudeMd, 'utf8') : ''
+  writeFileSync(claudeMd, `${mdOwn}\n<!-- ctxkit:start -->\n## Команда моделей и экономия контекста (ctxkit)\n\n- старое правило\n<!-- ctxkit:end -->\n`)
+  writeFileSync(join(claudeDir, 'ctxkit.json'), JSON.stringify({ created_by: 'ctxkit setup', policies: { stray_files: true } }))
+  await page.keyboard.press('1')
+  await page.keyboard.press('7')
+  const legacyLine = 'Установлена прежняя версия (ctxkit): нажмите «Применить», чтобы перейти на «Инструменты контекста»'
+  await waitFor(async () => (await page.locator('main').innerText()).includes(legacyLine), 'раздел не увидел прежнюю установку (ctxkit)')
+  await waitFor(async () => (await findings()).includes('старом имени ctxkit'), 'доктор: нет находки о старом имени')
+  await page.locator('section[aria-label="Установка"]').screenshot({ path: join(stateDir, 'm5-ctxkit-legacy-1280.png') })
+  must((await axeCheck(page, 'Инструменты контекста: прежняя версия')).length === 0, 'axe: строка о прежней версии')
+  await page.getByRole('button', { name: 'Предпросмотр перехода', exact: true }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр перехода разрешил «Применить»')
+  const legacyPreview = await page.locator('pre.out').innerText()
+  // старый бинарь ещё запускают хуки DeepSeek Harness фикстуры (~/.dsh/ctxkit-hooks.json, а профиля desktop, который
+  // setup --dsh переписал бы, у фикстуры нет): переход его оставляет и говорит почему, иначе DSH остался бы с хуком на пустое место
+  for (const line of ['старое имя: хуки на ctxkit.exe ->', 'старое имя: env.CTXKIT_LANG -> env.CONTEXT_TOOLKIT_LANG', '[dry-run] старое имя: перенос', 'старый бинарь оставлен']) must(legacyPreview.includes(line), `предпросмотр перехода без строки «${line}»: ${legacyPreview.slice(0, 800)}`)
+  must(englishLeft(legacyPreview).length === 0, `английские фразы в русском предпросмотре перехода: ${englishLeft(legacyPreview).slice(0, 5).join(' // ')}`)
+  must(existsSync(oldHookExe) && readFileSync(settingsFile, 'utf8').includes('ctxkit.exe'), 'предпросмотр перехода изменил файлы')
+  await applyBtn.click()
+  await waitFor(() => existsSync(hookExe) && !readFileSync(settingsFile, 'utf8').includes('ctxkit.exe'), 'переход: хуки на новом бинаре')
+  const legacyOut = await page.locator('pre.out').innerText()
+  must(existsSync(oldHookExe) && legacyOut.includes('старый бинарь оставлен') && legacyOut.includes('DeepSeek Harness') && legacyOut.includes('context-toolkit setup --dsh'), `переход: старый бинарь, который ещё нужен DSH, должен остаться с объяснением: ${legacyOut.slice(-800)}`)
+  await waitFor(async () => (await page.locator('main').innerText()).includes('Остался бинарь прежней версии ~/.claude/hooks/ctxkit.exe'), 'после перехода нет строки об оставшемся старом бинаре')
+  const sMoved = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  must(!JSON.stringify(sMoved.hooks).includes('ctxkit.exe') && JSON.stringify(sMoved.hooks).includes('context-toolkit.exe'), `переход: хуки не на новом бинаре: ${JSON.stringify(sMoved.hooks).slice(0, 400)}`)
+  must(sMoved.env?.CONTEXT_TOOLKIT_LANG === 'ru' && !('CTXKIT_LANG' in (sMoved.env ?? {})), `переход: язык хуков: ${JSON.stringify(sMoved.env)}`)
+  must(JSON.stringify(foreignCmds(sMoved)) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'переход тронул чужие хуки')
+  const mdMoved = readFileSync(claudeMd, 'utf8')
+  must(mdMoved.includes('<!-- context-toolkit:start -->') && !mdMoved.includes('ctxkit:') && mdMoved.startsWith(mdOwn.trimEnd()), `переход: блок правил: ${mdMoved.slice(-400)}`)
+  must(!existsSync(join(claudeDir, 'ctxkit.json')) && JSON.parse(readFileSync(ctxkitJson, 'utf8')).policies?.stray_files === true, 'переход: файл политик не перенесён')
+  await waitFor(async () => { const m = await page.locator('main').innerText(); return !m.includes('Установлена прежняя версия') && m.includes('~/.claude/hooks/context-toolkit.exe: ● совпадает') }, 'после перехода строка о прежней версии осталась')
+  await page.locator('section[aria-label="Установка"]').screenshot({ path: join(stateDir, 'm5-ctxkit-legacy-left-1280.png') })
+  await undoPreviewBtn.click()
+  await waitFor(() => undoGoBtn.isEnabled(), 'предпросмотр отката после перехода')
+  await undoGoBtn.click()
+  await waitFor(() => !existsSync(hookExe) && !existsSync(oldHookExe) && !existsSync(ctxkitJson), 'откат после перехода убирает оба бинаря и файл политик')
+  must(!/context-toolkit|ctxkit/i.test(readFileSync(settingsFile, 'utf8')) && JSON.stringify(foreignCmds(JSON.parse(readFileSync(settingsFile, 'utf8')))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'откат после перехода оставил наше или тронул чужое')
   await page.keyboard.press('1')
   await levelSel.selectOption('R0') // понижение подтверждения не требует
-  must((await refusal(opts)).includes('R2'), 'при R0 применение ctxkit не отвергнуто в main')
-  must((await undoRefusal(undoOpts, false)).includes('R2'), 'при R0 откат ctxkit не отвергнут в main')
-  must(JSON.stringify(realState()) === JSON.stringify(realBefore), 'ctxkit изменил файл настоящего профиля владельца')
-  must(realBackups() === realBackupsBefore, 'ctxkit создал бэкап в настоящем профиле владельца')
+  must((await refusal(opts)).includes('R2'), 'при R0 применение не отвергнуто в main')
+  must((await undoRefusal(undoOpts, false)).includes('R2'), 'при R0 откат не отвергнут в main')
+  must(JSON.stringify(realState()) === JSON.stringify(realBefore), 'setup изменил файл настоящего профиля владельца')
+  must(realBackups() === realBackupsBefore, 'setup создал бэкап в настоящем профиле владельца')
   await waitFor(() => levelIs('R0'), 'уровень вернулся в R0')
 
   // reduced motion → «FX: выкл» по умолчанию применяется при загрузке; здесь проверяем переключатель
@@ -1172,43 +1224,45 @@ try {
       await enOk(name)
       await shot(en, `en-${name}-1280`)
     }
-    // ctxkit на английском: форма с политиками, предпросмотр и применение, предпросмотр и откат; вывод ядра (`pre.out`) тоже без кириллицы
+    // Context Toolkit на английском: форма с политиками, предпросмотр и применение, предпросмотр и откат; вывод ядра (`pre.out`) тоже без кириллицы
     {
-      const ctxJson = join(enHome, '.claude', 'ctxkit.json')
-      const ctxHook = join(enHome, '.claude', 'hooks', 'ctxkit.exe')
+      const ctxJson = join(enHome, '.claude', 'context-toolkit.json')
+      const ctxHook = join(enHome, '.claude', 'hooks', 'context-toolkit.exe')
       const enApply = en.getByRole('button', { name: /^Apply: install/ })
       const enPreview = en.getByRole('button', { name: /^Preview/ })
-      await en.getByText('ctxkit 0.', { exact: false }).first().waitFor({ timeout: 15000 })
+      await en.getByText('context-toolkit 0.', { exact: false }).first().waitFor({ timeout: 15000 })
+      must(await en.getByRole('heading', { name: 'Context Toolkit', level: 2 }).isVisible(), 'the section heading is not “Context Toolkit”')
+      must(await en.locator('nav').getByRole('button', { name: /^Context Toolkit/ }).isVisible(), 'the navigation does not say “Context Toolkit”')
       await enPreview.click()
       await en.locator('pre.out').waitFor({ timeout: 30000 })
       await enOk('ctxkit: preview')
       const pv = await en.locator('pre.out').innerText()
-      must(pv.includes('[dry-run] profile:') && pv.includes('Stop gate: on') && pv.includes('policies: none (kept; pass --policy'), `preview of ctxkit in English: ${pv.slice(0, 500)}`)
+      must(pv.includes('[dry-run] profile:') && pv.includes('Stop gate: on') && pv.includes('policies: none (kept; pass --policy'), `preview of Context Toolkit in English: ${pv.slice(0, 500)}`)
       await en.getByLabel('Policies', { exact: true }).selectOption('on')
       await en.getByRole('checkbox', { name: /^Commit hygiene/ }).check()
       await en.getByRole('checkbox', { name: /^Stray report files/ }).check()
-      must(await enApply.isDisabled(), 'ctxkit (EN): the old preview must not allow Apply after the form changed')
+      must(await enApply.isDisabled(), 'Context Toolkit (EN): the old preview must not allow Apply after the form changed')
       await enPreview.click()
-      await waitFor(() => enApply.isEnabled(), 'ctxkit (EN): preview with policies')
+      await waitFor(() => enApply.isEnabled(), 'Context Toolkit (EN): preview with policies')
       await enOk('ctxkit: preview with policies')
       const pv2 = await en.locator('pre.out').innerText()
       must(pv2.includes('policy commit_hygiene: off -> on') && pv2.includes('policy stray_files: off -> on') && !existsSync(ctxJson), `policy lines of the preview in English: ${pv2.slice(0, 700)}`)
       await en.locator('fieldset.choices', { has: en.locator('#ctx-policy') }).screenshot({ path: join(stateDir, 'en-ctxkit-policies-1280.png') })
       await enApply.click()
-      await waitFor(() => existsSync(ctxHook) && existsSync(ctxJson), 'ctxkit (EN): apply wrote the hook binary and ctxkit.json')
-      await waitFor(async () => (await en.locator('main').innerText()).includes('Applied.'), 'ctxkit (EN): no “Applied.” caption')
+      await waitFor(() => existsSync(ctxHook) && existsSync(ctxJson), 'Context Toolkit (EN): apply wrote the hook binary and context-toolkit.json')
+      await waitFor(async () => (await en.locator('main').innerText()).includes('Applied.'), 'Context Toolkit (EN): no “Applied.” caption')
       await enOk('ctxkit: applied')
-      await waitFor(async () => (await en.locator('#ctx-policy-hint').innerText()).includes('Currently on: commit_hygiene, stray_files'), 'ctxkit (EN): the “Currently on” caption from the doctor')
+      await waitFor(async () => (await en.locator('#ctx-policy-hint').innerText()).includes('Currently on: commit_hygiene, stray_files'), 'Context Toolkit (EN): the “Currently on” caption from the doctor')
       await enOk('ctxkit: policies caption')
-      await en.getByRole('button', { name: 'Roll back ctxkit', exact: true }).click()
+      await en.getByRole('button', { name: 'Roll back Context Toolkit', exact: true }).click()
       const enUndo = en.getByRole('button', { name: 'Roll back: remove hooks, rules block and binary' })
-      await waitFor(() => enUndo.isEnabled(), 'ctxkit (EN): rollback preview')
+      await waitFor(() => enUndo.isEnabled(), 'Context Toolkit (EN): rollback preview')
       await enOk('ctxkit: rollback preview')
-      must((await en.locator('pre.out').innerText()).includes('[dry-run]') && existsSync(ctxJson), 'ctxkit (EN): the rollback preview must write nothing')
+      must((await en.locator('pre.out').innerText()).includes('[dry-run]') && existsSync(ctxJson), 'Context Toolkit (EN): the rollback preview must write nothing')
       await shot(en, 'en-ctxkit-undo-1280')
       await enUndo.click()
-      await waitFor(async () => (await en.locator('main').innerText()).includes('Rolled back.'), 'ctxkit (EN): no “Rolled back.” caption')
-      await waitFor(() => !existsSync(ctxJson) && !existsSync(ctxHook), 'ctxkit (EN): rollback removed ctxkit.json and the binary')
+      await waitFor(async () => (await en.locator('main').innerText()).includes('Rolled back.'), 'Context Toolkit (EN): no “Rolled back.” caption')
+      await waitFor(() => !existsSync(ctxJson) && !existsSync(ctxHook), 'Context Toolkit (EN): rollback removed context-toolkit.json and the binary')
       await enOk('ctxkit: rolled back')
     }
     await en.keyboard.press('1')

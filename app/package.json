@@ -11,10 +11,10 @@
     "test": "vitest run",
     "core": "cargo build --release --manifest-path ../Cargo.toml",
     "e2e": "npm run core && electron-vite build && node e2e/run.mjs",
-    "bundle:ctxkit": "node scripts/bundle-ctxkit.mjs",
-    "pack": "npm run core && node scripts/bundle-ctxkit.mjs && electron-vite build && electron-builder --win --dir",
+    "bundle:context-toolkit": "node scripts/bundle-context-toolkit.mjs",
+    "pack": "npm run core && node scripts/bundle-context-toolkit.mjs && electron-vite build && electron-builder --win --dir",
     "pack:check": "node e2e/pack-check.mjs",
-    "dist": "npm run core && node scripts/bundle-ctxkit.mjs && electron-vite build && electron-builder --win"
+    "dist": "npm run core && node scripts/bundle-context-toolkit.mjs && electron-vite build && electron-builder --win"
   },
   "author": "Loadout",
   "build": {
@@ -25,7 +25,7 @@
     "extraResources": [
       { "from": "../target/release/loadout.exe", "to": "loadout.exe" },
       { "from": "build/icon.png", "to": "icon.png" },
-      { "from": "build/ctxkit.exe", "to": "ctxkit.exe" }
+      { "from": "build/context-toolkit.exe", "to": "context-toolkit.exe" }
     ],
     "asar": true,
     "publish": null,

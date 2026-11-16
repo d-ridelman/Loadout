@@ -1,16 +1,19 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { CtxkitReport } from '../shared/model'
 import { summarize, segments, pct, chars } from '../renderer/ctxkit-stats'
-import { parseDoctor, parseReport, parseSetupOptions, parseUninstallOptions, setupArgs, uninstallArgs } from './ctxkit'
+import { BIN, OLD_BIN, parseDoctor, parseReport, parseSetupOptions, parseUninstallOptions, setupArgs, status, uninstallArgs } from './ctxkit'
 
 const doctor = {
-  tool: 'ctxkit',
+  tool: 'context-toolkit',
   schema: 1,
   version: '0.1.0',
   profile: 'C:\\Users\\x\\.claude',
   findings: [
     { id: 'hooks', severity: 'ok', message: 'хук установлен', detail: null, fix: null, extra: 'x' },
-    { id: 'rules_block', severity: 'warn', message: 'блока правил нет', detail: null, fix: 'ctxkit setup --with-rules' },
+    { id: 'rules_block', severity: 'warn', message: 'блока правил нет', detail: null, fix: 'context-toolkit setup --with-rules' },
   ],
 }
 
@@ -127,17 +130,44 @@ describe('ctxkit: разбор ответов', () => {
     expect(d.findings[0]).toEqual({ id: 'hooks', severity: 'ok', message: 'хук установлен', detail: null, fix: null })
     expect(() => parseDoctor(JSON.stringify({ ...doctor, schema: 2 }))).toThrow('schema 1')
     expect(() => parseDoctor(JSON.stringify({ ...doctor, tool: 'other' }))).toThrow()
+    // a binary of the old name (`tool: ctxkit`) speaks the same contract
+    expect(parseDoctor(JSON.stringify({ ...doctor, tool: 'ctxkit' })).findings).toHaveLength(2)
     expect(() => parseDoctor('не json')).toThrow('не JSON')
     expect(() => parseDoctor(JSON.stringify({ ...doctor, findings: [{ id: 'x', severity: 'fatal', message: 'm' }] }))).toThrow()
   })
 
   it('report: счётчики по дням, ключи агентов фильтруются, мусор не ломает', () => {
-    const r = parseReport(JSON.stringify({ tool: 'ctxkit', schema: 1, days: { '2026-11-15': day, '2026-11-14': { main_turns: 'x' } } }))
+    const r = parseReport(JSON.stringify({ tool: 'context-toolkit', schema: 1, days: { '2026-11-15': day, '2026-11-14': { main_turns: 'x' } } }))
     expect(r.days['2026-11-15']?.mainTurns).toEqual({ sonnet: 89, haiku: 0, opusFable: 10, other: 1 })
     expect(r.days['2026-11-15']?.agentCalls).toEqual({ checker: 2 })
     expect(r.days['2026-11-14']?.mainTurns.sonnet).toBe(0)
     expect(() => parseReport(JSON.stringify({ tool: 'ctxkit', schema: 1, days: { 'вчера': day } }))).toThrow()
     expect(() => parseReport(JSON.stringify({ tool: 'ctxkit', schema: 1 }))).toThrow()
+  })
+})
+
+describe('ctxkit: состояние установки', () => {
+  it('копии нового имени сравниваются со встроенной, копия старого имени в hooks — признак прежней установки', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ctk-status-'))
+    try {
+      const hooks = join(root, 'hooks')
+      const bin = join(root, 'bin')
+      mkdirSync(hooks)
+      mkdirSync(bin)
+      const bundled = join(root, BIN)
+      writeFileSync(bundled, 'x') // не запускается: версия будет null, сравнение — по байтам
+      expect(await status(join(root, 'нет.exe'), hooks, bin)).toEqual({ available: false, version: null, hook: 'missing', bin: 'missing', legacy: false })
+      writeFileSync(join(hooks, OLD_BIN), 'old')
+      const old = await status(bundled, hooks, bin)
+      expect([old.hook, old.bin, old.legacy]).toEqual(['missing', 'missing', true])
+      writeFileSync(join(hooks, BIN), 'x')
+      writeFileSync(join(bin, BIN), 'y')
+      rmSync(join(hooks, OLD_BIN))
+      const now = await status(bundled, hooks, bin)
+      expect([now.hook, now.bin, now.legacy]).toEqual(['same', 'different', false])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
