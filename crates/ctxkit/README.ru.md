@@ -96,7 +96,7 @@ cd Loadout/crates/ctxkit
 | `--desktop-model <id>` | Идентификатор модели в пресетах Desktop (по умолчанию `claude-sonnet-5-5`) |
 | `--antigravity` | Зарегистрировать `ctxkit --agy` в `~/.gemini/config/hooks.json` (к своему `--hook-cmd` дописывается ` --agy`) и проверить MCP, плагины и модель `agy` CLI |
 | `--dsh` | Записать `~/.dsh/ctxkit-hooks.json` и подключить к нему мост `@deepseek-ai/dsh-hooks-claude-code` в профиле `desktop` DeepSeek Harness (`--dsh-home <path>` заменяет `~/.dsh`); если пакета моста нет, выводит точную команду `pnpm add` |
-| `--with-rules` | Добавить в `CLAUDE.md` блок правил (включая триггер `/advisor` и `/clear`) между маркерами `ctxkit` |
+| `--with-rules` | Добавить в `CLAUDE.md` блок правил (включая триггер `/advisor`) между маркерами `ctxkit` |
 | `--force-agents` | Перезаписать уже существующие `Explore.md` и `checker.md` |
 | `--no-stop-gate` | Не подключать шлюз Stop и убрать наш, если он есть. По умолчанию `setup` добавляет хук `Stop`: если за ход правились два и более файла с кодом (или сделано пять и более правок), а после последней не вызван ни `checker`, ни advisor, модель один раз возвращается к работе. Два раза подряд не срабатывает; `CTXKIT_GATE=0` отключает на сессию. В сообщении названо только то, что есть: `checker` (`agents/checker.md` в профиле или проекте) и/или advisor (`advisorModel` в `settings.json`); если нет ни того, ни другого (например, `--advisor none --no-agents`), шлюз молчит |
 | `--lang <en\|ru>` | Язык шаблонов и хуков (`en` по умолчанию; при `ru` пишет `CTXKIT_LANG=ru` в `settings.json` и `--lang ru` в `hooks.json`) |

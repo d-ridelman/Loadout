@@ -1561,7 +1561,6 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
 - Не объявляй задачу готовой без `checker` (Opus), кроме правки одного файла без изменения логики{gate}.\n\
 - Группируй независимые `Read`/`Edit`; не читай длинные файлы целиком: сначала `Grep` или LSP, затем диапазон.\n\
 - Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `ctxkit check <cmd>`.\n\
-- Закрывай длинную задачу через `/clear`, не тяни одну сессию дальше ~100-150 ходов.\n\
 {MARKER_END}",
                 sub = opts.subagent
             )
@@ -1585,7 +1584,6 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
 - Do not declare work done without `checker` (Opus), except a one-file change with no logic change{gate}.\n\
 - Batch independent `Read`/`Edit` calls; locate symbols via `Grep`/LSP first, then read tight line ranges.\n\
 - Run `ctxkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n\
-- Clear finished tasks with `/clear` instead of dragging sessions past ~100-150 turns.\n\
 {MARKER_END}",
                 sub = opts.subagent
             )
