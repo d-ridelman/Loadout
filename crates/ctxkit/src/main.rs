@@ -2,6 +2,7 @@ mod backslash;
 mod check;
 mod commit;
 mod doctor;
+mod dupes;
 mod fsx;
 mod gate;
 mod guard;

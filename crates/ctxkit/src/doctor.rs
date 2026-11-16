@@ -267,8 +267,8 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             None,
         ));
     }
-    match md {
-        Ok(md) if marker_span(&md).is_some() => {
+    match &md {
+        Ok(md) if marker_span(md).is_some() => {
             out.push(f("rules_block", "ok", t(lang, "ctxkit rules block present", "блок правил ctxkit есть"), None, None));
             let lines = md.lines().count();
             if lines > 200 || md.len() > 8192 {
@@ -296,6 +296,28 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             None,
             Some("ctxkit setup --with-rules"),
         )),
+    }
+    // The same rule in two places (the owner's sections and the ctxkit block): the copies drift apart.
+    let repeats = md
+        .as_ref()
+        .map(|m| crate::dupes::find(m))
+        .unwrap_or_default();
+    if !repeats.is_empty() {
+        out.push(f(
+            "rules_duplicate",
+            "warn",
+            t(
+                lang,
+                "CLAUDE.md says the same rule in two places: a model reads both copies and they drift apart",
+                "в CLAUDE.md одно и то же правило записано в двух местах: модель читает обе копии, и со временем они расходятся",
+            ),
+            Some(crate::dupes::describe(&repeats, lang)),
+            Some(t(
+                lang,
+                "keep each rule in one place: delete one of the two lines (the one outside the ctxkit block, if the block already says it)",
+                "оставь одно место для каждого правила: удали одну из двух строк (вне блока ctxkit, если блок это уже говорит)",
+            )),
+        ));
     }
 
     // ctxkit.json: silent when absent (the policies are opt-in); a broken file switches every policy off without a word.
