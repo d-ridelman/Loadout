@@ -139,6 +139,7 @@ The choice lives in `<profile>/ctxkit.json` (`CLAUDE_CONFIG_DIR`, else `~/.claud
 
 | Policy | What it does | Turn on | Turn off | Checked by |
 |---|---|---|---|---|
+| `commit_hygiene` | `PreToolUse` Bash / PowerShell: blocks a `git commit` whose **message** contains `Co-Authored-By`, `Generated with` or `🤖 Generated` (any case) and asks to remove those lines. The message is read from `-m` (also several, `-am`, `-m"..."`), `--message=`, `--trailer`, `-F -` with a heredoc or `<<<`, a readable `-F <file>`, and from `bash -c` / `pwsh -Command` scripts. Not triggered by `git log`, `--amend --no-edit`, a branch name, paths after `--`, `--author=`, `echo`, or an unreadable (unclosed-quote) command | `--policy commit-hygiene` | `--policy none` (or a list without it) | `commit.rs` and `shell.rs` unit tests (quotes, heredoc inside `"$(cat <<'EOF' ...)"`, PowerShell here-string, 40+ command lines), `tests/guard.test.mjs` (Claude Code, `--dsh`, `--agy`, off by default, broken file) |
 
 Roll back: `ctxkit setup --policy none` switches every policy off and keeps the file; `ctxkit setup --uninstall` removes the `policies` section, and the whole file only when `setup` created it (it marks such a file with `"created_by": "ctxkit setup"`) and nothing of yours is in it. Otherwise your keys stay and the output names them.
 

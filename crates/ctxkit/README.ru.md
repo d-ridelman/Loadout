@@ -138,6 +138,7 @@ ctxkit setup --policy none                                                      
 
 | Политика | Что делает | Как включить | Как выключить | Чем проверено |
 |---|---|---|---|---|
+| `commit_hygiene` | `PreToolUse` Bash / PowerShell: блокирует `git commit`, в **сообщении** которого есть `Co-Authored-By`, `Generated with` или `🤖 Generated` (в любом регистре), и просит убрать эти строки. Сообщение берётся из `-m` (в том числе несколько, `-am`, `-m"..."`), `--message=`, `--trailer`, `-F -` с heredoc или `<<<`, читаемого `-F <файл>` и из скриптов `bash -c` / `pwsh -Command`. Не срабатывает на `git log`, `--amend --no-edit`, имя ветки, пути после `--`, `--author=`, `echo` и на команду, которую нельзя разобрать (незакрытая кавычка) | `--policy commit-hygiene` | `--policy none` (или список без неё) | юнит-тесты `commit.rs` и `shell.rs` (кавычки, heredoc внутри `"$(cat <<'EOF' ...)"`, here-string PowerShell, 40+ строк команд), `tests/guard.test.mjs` (Claude Code, `--dsh`, `--agy`, выключено по умолчанию, битый файл) |
 
 Откат: `ctxkit setup --policy none` выключает все политики и оставляет файл; `ctxkit setup --uninstall` убирает секцию `policies`, а файл целиком — только если его создал `setup` (такой файл помечен `"created_by": "ctxkit setup"`) и твоего в нём ничего нет. Иначе твои ключи остаются, и вывод их называет.
 

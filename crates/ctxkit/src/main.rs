@@ -1,5 +1,6 @@
 mod backslash;
 mod check;
+mod commit;
 mod doctor;
 mod fsx;
 mod gate;
@@ -7,8 +8,10 @@ mod guard;
 mod policy;
 mod report;
 mod setup;
+mod shell;
 
 use serde_json::{json, Value};
+use shell::Dialect;
 use std::env;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -252,12 +255,27 @@ fn handle_antigravity(call: &Value, forced_post: bool, lang: Lang) {
         _ => None,
     };
 
+    // The policies of ctxkit.json (off unless the owner turned them on) come after the fixed guards.
+    let verdict = match (&reason, tool) {
+        (None, "run_command") => policy::shell(
+            &policy::load(),
+            args["CommandLine"].as_str().unwrap_or(""),
+            &[Dialect::Posix, Dialect::Ps],
+            lang,
+            cwd.as_deref(),
+        ),
+        _ => None,
+    };
+    let answer = |decision: &str, reason: String| {
+        print!("{}", json!({ "decision": decision, "reason": reason }));
+    };
     if let Some(reason) = reason {
-        let out = json!({
-            "decision": "deny",
-            "reason": reason
-        });
-        print!("{out}");
+        answer("deny", reason);
+    } else if let Some(v) = verdict {
+        match v {
+            policy::Verdict::Deny(r) => answer("deny", r),
+            policy::Verdict::Ask(r) => answer("ask", r),
+        }
     } else {
         // Delegate to Antigravity's built-in confirmation policy rather than auto-allowing.
         agy_pass(false);
@@ -401,19 +419,46 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
             guard::shell_read_guard(tool, command, client, lang, eff_cwd.as_deref())
         {
             deny_claude(reason);
+            return;
+        }
+        let dialect = if tool == "PowerShell" {
+            Dialect::Ps
+        } else {
+            Dialect::Posix
+        };
+        if let Some(v) = policy::shell(
+            &policy::load(),
+            command,
+            &[dialect],
+            lang,
+            eff_cwd.as_deref(),
+        ) {
+            match v {
+                policy::Verdict::Deny(r) => deny_claude(r),
+                policy::Verdict::Ask(r) => ask_claude(r),
+            }
         }
     }
 }
 
-fn deny_claude(reason: String) {
+/// PreToolUse answer, `hookSpecificOutput.permissionDecision` = `deny` (blocks) or `ask` (the user is asked).
+fn decide_claude(decision: &str, reason: String) {
     let out = json!({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": decision,
             "permissionDecisionReason": reason
         }
     });
     print!("{out}");
+}
+
+fn deny_claude(reason: String) {
+    decide_claude("deny", reason);
+}
+
+fn ask_claude(reason: String) {
+    decide_claude("ask", reason);
 }
 
 #[cfg(test)]

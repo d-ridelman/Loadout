@@ -8,6 +8,8 @@
 //!
 //! `ctxkit setup --policy ...` writes the file; hooks and `ctxkit check` only read it. A missing or
 //! broken file means every policy is off and the hook stays silent.
+use crate::shell::Dialect;
+use crate::Lang;
 use serde_json::{Map, Value};
 use std::env;
 use std::fs;
@@ -60,7 +62,6 @@ impl Config {
     }
 }
 
-#[allow(dead_code)] // wired to the hooks in the next commits
 pub fn profile_dir() -> Option<PathBuf> {
     env::var_os("CLAUDE_CONFIG_DIR")
         .filter(|v| !v.is_empty())
@@ -69,7 +70,6 @@ pub fn profile_dir() -> Option<PathBuf> {
 }
 
 /// The policies of the current profile; anything unreadable gives every policy off.
-#[allow(dead_code)] // wired to the hooks in the next commits
 pub fn load() -> Config {
     profile_dir().map(|d| load_from(&d)).unwrap_or_default()
 }
@@ -79,6 +79,34 @@ pub fn load_from(profile: &Path) -> Config {
         .ok()
         .and_then(|t| parse(&t).ok())
         .unwrap_or_default()
+}
+
+/// What a policy hook answers: `Deny` blocks the call, `Ask` leaves it to the user's confirmation.
+#[derive(Debug, PartialEq)]
+pub enum Verdict {
+    Deny(String),
+    #[allow(dead_code)] // first built by confirm_irreversible
+    Ask(String),
+}
+
+/// The policies for a shell command. `dialects` are the shells it may be written for (Bash, PowerShell, or
+/// both when the client does not say). A deny wins over an ask.
+pub fn shell(
+    cfg: &Config,
+    cmd: &str,
+    dialects: &[Dialect],
+    lang: Lang,
+    cwd: Option<&Path>,
+) -> Option<Verdict> {
+    if cfg.commit_hygiene {
+        if let Some(r) = dialects
+            .iter()
+            .find_map(|d| crate::commit::reason(cmd, *d, lang, cwd))
+        {
+            return Some(Verdict::Deny(r));
+        }
+    }
+    None
 }
 
 fn strings(root: &Map<String, Value>, key: &str, rules: bool) -> Result<Vec<String>, String> {

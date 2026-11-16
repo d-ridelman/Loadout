@@ -113,7 +113,57 @@ writeFileSync(fewLongLines, Array.from({ length: 10 }, () => 'x'.repeat(30000)).
 const midFile = join(dir, 'mid.txt');
 writeFileSync(midFile, Array.from({ length: 100 }, () => 'x'.repeat(300)).join('\n'));
 
+// Policies (ctxkit.json): a profile with the given config; `pol` runs a hook against it and returns the decision
+const polProfile = (name, cfg) => {
+  const p = join(dir, `pol-${name}`);
+  mkdirSync(p, { recursive: true });
+  writeFileSync(join(p, 'ctxkit.json'), typeof cfg === 'string' ? cfg : JSON.stringify(cfg));
+  return p;
+};
+const decisionOf = (out) => {
+  if (out === '') return '';
+  const j = JSON.parse(out); // exactly one JSON document on stdout
+  return j.hookSpecificOutput?.permissionDecision ?? j.decision;
+};
+const pol = (profile, tool_name, tool_input, { args = [], env = {}, cwd } = {}) =>
+  decisionOf(runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input, ...(cwd ? { cwd } : {}) }, args, { CLAUDE_CONFIG_DIR: profile, ...env }));
+const polReason = (profile, tool_name, tool_input, extra = {}) => {
+  const out = runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input }, extra.args ?? [], { CLAUDE_CONFIG_DIR: profile, ...(extra.env ?? {}) });
+  const j = JSON.parse(out);
+  return j.hookSpecificOutput?.permissionDecisionReason ?? j.reason;
+};
+const P = (name, policies, extra = {}) => polProfile(name, { policies, ...extra });
+const COAUTH = 'git commit -m "fix: x" -m "Co-Authored-By: Claude <c@x>"';
+
 const cases = [
+  // Policy commit_hygiene
+  [true, () => {
+    const on = P('commit', { commit_hygiene: true });
+    if (pol(on, 'Bash', { command: COAUTH }) !== 'deny') return 'deny expected';
+    if (pol(on, 'PowerShell', { command: "git commit -m @'\nfix\n\nCo-Authored-By: x\n'@" }) !== 'deny') return 'ps here-string';
+    if (pol(on, 'Bash', { command: "git commit -m \"$(cat <<'EOF'\nfix \"q\"\n\nGenerated with Claude Code\nEOF\n)\"" }) !== 'deny') return 'heredoc';
+    if (pol(on, 'Bash', { command: 'git commit -m "fix: clean"' }) !== '') return 'clean commit must pass silently';
+    if (pol(on, 'Bash', { command: 'git commit --amend --no-edit' }) !== '') return 'amend --no-edit';
+    if (pol(on, 'Bash', { command: 'git log --grep "Co-Authored-By"' }) !== '') return 'git log';
+    if (!polReason(on, 'Bash', { command: COAUTH }).includes('Remove those lines')) return 'en text';
+    if (!polReason(on, 'Bash', { command: COAUTH }, { env: { CTXKIT_LANG: 'ru' } }).includes('Убери эти строки из сообщения коммита')) return 'ru text';
+    // the other clients: DeepSeek Harness tool names, Antigravity run_command
+    if (pol(on, 'bash', { command: COAUTH }, { args: ['--dsh'] }) !== 'deny') return 'dsh';
+    const agy = JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine: COAUTH } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on }));
+    if (agy.decision !== 'deny' || !agy.reason.includes('Remove those lines')) return 'agy';
+    return true;
+  }],
+  // ...off by default, and a missing or broken ctxkit.json also means off
+  [true, () => {
+    if (pol(isoProfile, 'Bash', { command: COAUTH }) !== '') return 'no file';
+    if (pol(P('commit-off', { commit_hygiene: false }), 'Bash', { command: COAUTH }) !== '') return 'off';
+    if (pol(polProfile('commit-broken', '{"policies":'), 'Bash', { command: COAUTH }) !== '') return 'broken json';
+    if (pol(P('commit-badtype', { commit_hygiene: 'yes' }), 'Bash', { command: COAUTH }) !== '') return 'bad type';
+    if (pol(P('commit', { commit_hygiene: true }), 'Bash', { command: COAUTH }, { env: { CTXKIT_GUARD: '0' } }) !== '') return 'CTXKIT_GUARD=0';
+    const agyOff = JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine: COAUTH } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: isoProfile }));
+    return agyOff.decision === 'ask' && agyOff.reason === undefined;
+  }],
+
   // Second review pass: redirect detection must survive escapes and odd quotes
   [true, () => sh(`echo "C:${B}${B}dir${B}${B}" > f.txt`)],
   [true, () => sh(`printf 'it'${B}''s a${B}n' > f.txt`)],
