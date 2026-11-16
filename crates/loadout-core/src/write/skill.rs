@@ -70,6 +70,8 @@ fn walk(root: &Path) -> Result<Vec<(String, PathBuf, u64)>, String> {
             let ft = std::fs::symlink_metadata(e.path())
                 .map_err(|e| e.to_string())?
                 .file_type();
+            // На Windows `is_symlink` истинно и для junction (точка повторной обработки с битом name-surrogate): проверено
+            // тестом `junction_inside_the_skill_tree_is_refused`. Прочие точки (облачные заглушки) не ссылки и идут как файлы.
             if ft.is_symlink() {
                 return Err(bad(
                     &format!("в скиле есть символьная ссылка: {rel}{name}"),
@@ -98,21 +100,83 @@ fn walk(root: &Path) -> Result<Vec<(String, PathBuf, u64)>, String> {
     Ok(out)
 }
 
-/// Хеш дерева: пути и содержимое по порядку.
-fn tree_sha(files: &[(String, PathBuf, u64)]) -> Result<String, String> {
+/// Хеш дерева: пути и содержимое по порядку. `digest` даёт хеш одного файла (путь, размер).
+fn tree_sha_by(
+    files: &[(String, PathBuf, u64)],
+    digest: impl Fn(&Path, u64) -> Result<String, String>,
+) -> Result<String, String> {
     let mut buf = Vec::new();
-    for (rel, path, _) in files {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    for (rel, path, len) in files {
         buf.extend_from_slice(rel.as_bytes());
         buf.push(0);
-        buf.extend_from_slice(sha(&bytes).as_bytes());
+        buf.extend_from_slice(digest(path, *len)?.as_bytes());
         buf.push(b'\n');
     }
     Ok(sha(&buf))
 }
 
+fn tree_sha(files: &[(String, PathBuf, u64)]) -> Result<String, String> {
+    tree_sha_by(files, |path, _| {
+        std::fs::read(path)
+            .map(|b| sha(&b))
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Хеши файлов, уже посчитанные этим процессом: ключ — путь, значение — (время изменения, размер, хеш).
+/// Нужен только показу журнала (`can_rollback` на каждой из 200 строк); установка и откат хешируют заново.
+/// shortcut: правка файла с тем же размером в пределах точности mtime журнал не заметит, а откат всё равно пересчитает.
+static FILE_SHA: std::sync::Mutex<Option<ShaCache>> = std::sync::Mutex::new(None);
+type ShaCache = std::collections::HashMap<PathBuf, (std::time::SystemTime, u64, String)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Сколько файлов `cached_digest` реально прочитал в этом потоке (тест «второй показ не читает файлы»).
+    pub(super) static DISK_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn cached_digest(path: &Path, len: u64) -> Result<String, String> {
+    let mtime = std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    let mut guard = FILE_SHA.lock().unwrap_or_else(|p| p.into_inner());
+    let cache = guard.get_or_insert_with(Default::default);
+    if let Some((t, l, h)) = cache.get(path) {
+        if *t == mtime && *l == len {
+            return Ok(h.clone());
+        }
+    }
+    #[cfg(test)]
+    DISK_READS.with(|c| c.set(c.get() + 1));
+    let h = sha(&std::fs::read(path).map_err(|e| e.to_string())?);
+    if cache.len() >= 20_000 {
+        cache.clear();
+    }
+    cache.insert(path.to_path_buf(), (mtime, len, h.clone()));
+    Ok(h)
+}
+
 pub(super) fn dir_sha(dir: &Path) -> Option<String> {
     walk(dir).ok().and_then(|f| tree_sha(&f).ok())
+}
+
+// Швы для тестов: `NO_RENAME` имитирует `skills/` на другом томе (`rename` каталога не проходит), а `AFTER_BACKUP`
+// вызывается в откате после копии скила в бэкап и до удаления (там тест занимает файл, как это сделал бы чужой процесс).
+#[cfg(test)]
+type Hook = Box<dyn Fn()>;
+#[cfg(test)]
+thread_local! {
+    pub(super) static NO_RENAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(super) static AFTER_BACKUP: std::cell::RefCell<Option<Hook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn rename_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if NO_RENAME.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other("rename отключён тестом"));
+    }
+    std::fs::rename(from, to)
 }
 
 fn copy_files(files: &[(String, PathBuf, u64)], to: &Path) -> Result<(), String> {
@@ -318,7 +382,7 @@ pub fn apply(
                     "a skill with this name appeared during installation",
                 ));
             }
-            if std::fs::rename(&tmp, &c.target).is_ok() {
+            if rename_dir(&tmp, &c.target).is_ok() {
                 return Ok(());
             }
             // `skills` — ссылка на другой том: `rename` не пройдёт, копируем на место. `create_dir` откажет, если каталог
@@ -352,7 +416,11 @@ pub fn apply(
 
 /// Можно ли откатить установку: скил на месте и не менялся. Путь берётся из имени, а не из манифеста.
 pub(super) fn can_rollback(home: &Path, m: &Manifest) -> bool {
-    target(home, &m.name).and_then(|t| dir_sha(&t)).as_deref() == Some(m.sha_after.as_str())
+    target(home, &m.name)
+        .and_then(|t| walk(&t).ok())
+        .and_then(|f| tree_sha_by(&f, cached_digest).ok())
+        .as_deref()
+        == Some(m.sha_after.as_str())
 }
 
 pub(super) fn rollback(
@@ -385,13 +453,19 @@ pub(super) fn rollback(
     if let Err(e) = copy_files(&files, &dir.join("removed")) {
         return fail(e);
     }
+    #[cfg(test)]
+    AFTER_BACKUP.with(|h| {
+        if let Some(hook) = h.borrow().as_ref() {
+            hook();
+        }
+    });
     // Сначала каталог уходит с места (одним `rename`, если тот же том), и только потом пишется строка журнала:
     // недоделанное удаление не должно выглядеть откатом. Сорвалось удаление — возвращаем удалённое из копии.
     let gone = home
         .join(".claude")
         .join(format!(".{}.loadout.removed", m.name));
     let _ = std::fs::remove_dir_all(&gone);
-    let moved = std::fs::rename(&target, &gone).is_ok();
+    let moved = rename_dir(&target, &gone).is_ok();
     // Возврат после сорванного отката. Копирует всё, что может, не останавливаясь на занятом файле. Если вернуть целиком
     // не вышло, копия в каталоге операции остаётся, и ошибка называет её путь (строки журнала у неё нет).
     let restore = |why: String| -> Result<Applied, String> {
@@ -462,6 +536,68 @@ pub(super) fn rollback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("loadout-skill-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Манифест установленного скила: нужны только имя и хеш «после».
+    pub(super) fn manifest(name: &str, sha_after: String) -> Manifest {
+        Manifest {
+            version: 2,
+            id: "1731700000000-00".into(),
+            time: 0,
+            op: "installSkill".into(),
+            of: None,
+            batch: None,
+            level: "R2".into(),
+            entity: String::new(),
+            inverse_enable: None,
+            trash_id: None,
+            trash_before: None,
+            path: String::new(),
+            sha_before: String::new(),
+            sha_after,
+            client: "claude-code".into(),
+            kind: "skill".into(),
+            name: name.into(),
+            pointer: String::new(),
+            file: String::new(),
+            from: String::new(),
+            to: String::new(),
+        }
+    }
+
+    /// Дом со скилом `demo` из двух файлов.
+    pub(super) fn home_with_skill(tag: &str) -> (PathBuf, PathBuf) {
+        let home = tmp(tag);
+        let dir = home.join(".claude").join("skills").join("demo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\nname: demo\n---\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "один").unwrap();
+        (home, dir)
+    }
+
+    #[test]
+    fn journal_hashes_each_skill_file_once_until_it_changes() {
+        let (home, dir) = home_with_skill("cache");
+        let m = manifest("demo", dir_sha(&dir).unwrap());
+        let reads = || DISK_READS.with(std::cell::Cell::get);
+        assert!(can_rollback(&home, &m));
+        assert_eq!(reads(), 2, "первый показ читает оба файла");
+        for _ in 0..3 {
+            assert!(can_rollback(&home, &m));
+        }
+        assert_eq!(reads(), 2, "повторный показ файлы не читает");
+        // правка одного файла (другой размер и время): показ замечает и перечитывает только его
+        std::fs::write(dir.join("a.txt"), "изменён").unwrap();
+        assert!(!can_rollback(&home, &m));
+        assert_eq!(reads(), 3);
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn names_and_paths_are_checked() {

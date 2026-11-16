@@ -12,6 +12,7 @@ import type {
   OpKind,
   Plan,
   Profile,
+  Pruned,
   ScanDiff,
   ScanResult,
 } from '../shared/model'
@@ -173,6 +174,11 @@ export function validateApplied(raw: unknown): Applied {
     bad('результат записи', 'write result')
   }
   return { op: raw['op'], entity: raw['entity'], from: raw['from'], to: raw['to'] }
+}
+
+export function validatePruned(raw: unknown): Pruned {
+  if (!isObj(raw) || !isNum(raw['removed']) || !isNum(raw['kept'])) bad('итог очистки', 'cleanup result')
+  return { removed: raw['removed'], kept: raw['kept'] }
 }
 
 export function validateJournal(raw: unknown): JournalEntry[] {

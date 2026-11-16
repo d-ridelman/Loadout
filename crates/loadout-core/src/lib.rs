@@ -36,21 +36,27 @@ fn norm(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
+/// Путь для показа без имени пользователя: `~/…` с прямыми слэшами. Граница по символу и по `/`, регистр букв не важен
+/// (Windows: путь проекта в `.claude.json` может быть записан иначе, чем `USERPROFILE`). Единственная реализация:
+/// ею же пользуются запись и скил.
+pub(crate) fn tilde(home: &Path, p: &Path) -> String {
+    let (s, h) = (norm(p), norm(home));
+    let h = h.trim_end_matches('/');
+    let under = s.len() >= h.len()
+        && s.is_char_boundary(h.len())
+        && s[..h.len()].eq_ignore_ascii_case(h)
+        && (s.len() == h.len() || s.as_bytes()[h.len()] == b'/');
+    if under {
+        format!("~{}", &s[h.len()..])
+    } else {
+        s
+    }
+}
+
 impl Ctx {
-    /// Путь для вывода: `~/…` с прямыми слэшами, чтобы имя пользователя не попадало в отчёты.
-    /// Регистр букв не важен (Windows): путь проекта в `.claude.json` может быть записан иначе, чем `USERPROFILE`.
+    /// Путь для вывода, см. [`tilde`].
     pub fn tilde(&self, p: &Path) -> String {
-        let (s, h) = (norm(p), norm(&self.home));
-        let h = h.trim_end_matches('/');
-        let under = s.len() >= h.len()
-            && s.is_char_boundary(h.len())
-            && s[..h.len()].eq_ignore_ascii_case(h)
-            && (s.len() == h.len() || s.as_bytes()[h.len()] == b'/');
-        if under {
-            format!("~{}", &s[h.len()..])
-        } else {
-            s
-        }
+        tilde(&self.home, p)
     }
 
     /// Отсутствие файла — норма (клиент не установлен), остальное — предупреждение.

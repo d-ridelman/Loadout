@@ -9,6 +9,7 @@
 use crate::edit;
 use crate::mask;
 use crate::model::{Client, Entity, Format, Kind, ScanResult, Source, State, TargetKind};
+use crate::tilde;
 use crate::trash;
 use crate::yaml_edit;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,17 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod retention;
 pub mod skill;
+
+pub use retention::{prune as prune_backups, Pruned};
+
+#[cfg(test)]
+mod race_tests;
+#[cfg(test)]
+mod retention_tests;
+#[cfg(test)]
+mod skill_tests;
 
 /// Почему запись нельзя переключить (показывается в инспекторе).
 pub fn why_not(e: &Entity) -> String {
@@ -103,20 +114,6 @@ pub(crate) fn sha(bytes: &[u8]) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
-}
-
-/// `~/…` с прямыми слэшами: путь для показа без имени пользователя.
-fn tilde(home: &Path, p: &Path) -> String {
-    let (s, h) = (
-        p.to_string_lossy().replace('\\', "/"),
-        home.to_string_lossy().replace('\\', "/"),
-    );
-    let h = h.trim_end_matches('/');
-    if s.len() > h.len() && s[..h.len()].eq_ignore_ascii_case(h) && s.as_bytes()[h.len()] == b'/' {
-        format!("~{}", &s[h.len()..])
-    } else {
-        s
-    }
 }
 
 /// Что пользователь хочет сделать. Все поля — из окна, поэтому проверяются при разборе плана.
@@ -1098,17 +1095,65 @@ fn new_op_dir(store: &Path) -> Result<(String, PathBuf), String> {
     ))
 }
 
-/// Временный файл рядом: тот же том, значит `rename` атомарен. Имя оканчивается на `.tmp`, сторож его не видит.
-fn atomic_write(file: &Path, bytes: &[u8]) -> Result<(), String> {
+/// Временные файлы убитых ядер: у каждого pid своё имя, и без уборки такой файл (копия конфига целиком, с секретами)
+/// остался бы рядом с настоящим навсегда. Удаляются `<файл>.loadout.*.tmp` старше десяти минут; свежий чужой файл —
+/// запись другого ядра в этот момент — не трогаем.
+fn clean_stale_tmp(file: &Path) {
+    let (Some(dir), Some(name)) = (file.parent(), file.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.loadout.", name.to_string_lossy());
+    let old = |p: &Path| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(600))
+    };
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if n.starts_with(&prefix) && n.ends_with(".tmp") && old(&e.path()) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+// Шов для тестов гонок: колбэк вызывается между записью временного файла и сверкой с ожидаемым содержимым.
+#[cfg(test)]
+type Hook = Box<dyn Fn(&Path)>;
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BEFORE_SWAP: std::cell::RefCell<Option<Hook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Временный файл рядом: тот же том, значит `rename` атомарен. Имя `<файл>.loadout.<pid>.tmp` оканчивается на `.tmp`
+/// (сторож его не видит), а pid не даёт двум ядрам писать в один временный файл.
+/// Перед самым `rename` файл сверяется с `expect` (тем, что было при плане): если за время записи бэкапа и временного
+/// файла его успел переписать клиент, замены нет и ничего не записано.
+fn atomic_write(file: &Path, bytes: &[u8], expect: &[u8]) -> Result<(), String> {
     use std::io::Write;
+    clean_stale_tmp(file);
     let mut name = file.as_os_str().to_owned();
-    name.push(".loadout.tmp");
+    name.push(format!(".loadout.{}.tmp", std::process::id()));
     let tmp = PathBuf::from(name);
     let res = (|| {
         let mut f = std::fs::File::create(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
         drop(f);
+        #[cfg(test)]
+        BEFORE_SWAP.with(|h| {
+            if let Some(hook) = h.borrow().as_ref() {
+                hook(file);
+            }
+        });
+        if std::fs::read(file).ok().as_deref() != Some(expect) {
+            return Err(std::io::Error::other(crate::tr!(
+                "файл изменился перед заменой: его переписал другой процесс, запись отменена, повторите",
+                "the file changed just before the swap: another process rewrote it; nothing was written, try again"
+            )));
+        }
         // клиент мог на миг открыть файл без права на замену: пробуем несколько раз
         let mut last = Ok(());
         for _ in 0..5 {
@@ -1203,7 +1248,7 @@ fn commit(
             return fail(e);
         }
     }
-    if let Err(e) = atomic_write(&p.file, &p.new) {
+    if let Err(e) = atomic_write(&p.file, &p.new, &p.old) {
         // вынос не состоялся: корзина возвращается к прежнему виду (новой копии нет, устаревшая на месте)
         if let Some(t) = p.trash.as_ref().filter(|t| t.after.is_some()) {
             match &t.before {
@@ -1303,6 +1348,7 @@ pub fn apply(
     base_sha: &str,
     max_level: &str,
 ) -> Result<Applied, String> {
+    retention::before_write(store, &[]);
     apply_one(home, store, i, Some(base_sha), None, max_level)
 }
 
@@ -1384,6 +1430,8 @@ pub fn apply_batch(
         ));
     }
     need_level(&bp.level, max_level)?;
+    // один раз на пакет, а не по записям: пакет не должен срезать собственное начало
+    retention::before_write(store, &[]);
     let batch = format!("{:013}", now_ms());
     let mut done = Vec::new();
     for (n, i) in items.iter().enumerate() {
@@ -1426,8 +1474,18 @@ fn read_manifest(store: &Path, id: &str) -> Result<Manifest, String> {
             "invalid operation number"
         ));
     }
-    let text = std::fs::read_to_string(store.join(id).join("manifest.json"))
-        .map_err(|_| crate::tr!("операция не найдена", "operation not found"))?;
+    let text = std::fs::read_to_string(store.join(id).join("manifest.json")).map_err(|_| {
+        if retention::was_pruned(store, id) {
+            crate::tr!(
+                "копия этой операции уже удалена очисткой (хранятся последние {} операций не старше {} дней): откатить её нельзя",
+                "the copy of this operation was already removed by the cleanup (the last {} operations, not older than {} days, are kept): it cannot be rolled back",
+                retention::KEEP_OPS,
+                retention::KEEP_DAYS
+            )
+        } else {
+            crate::tr!("операция не найдена", "operation not found")
+        }
+    })?;
     serde_json::from_str(&text)
         .map_err(|_| crate::tr!("манифест повреждён", "the manifest is corrupted"))
 }
@@ -1436,17 +1494,20 @@ fn file_sha(path: &Path) -> Option<String> {
     std::fs::read(path).ok().map(|b| sha(&b))
 }
 
-fn manifests(store: &Path) -> Vec<Manifest> {
-    let Ok(rd) = std::fs::read_dir(store) else {
-        return Vec::new();
-    };
-    let mut ids: Vec<String> = rd
-        .flatten()
-        .filter(|e| e.path().is_dir() && e.file_name() != "trash")
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    ids.sort_unstable_by(|a, b| b.cmp(a));
-    ids.iter()
+/// Последние `limit` операций, новые первыми. Разбираются только они: по остальным читаются лишь имена каталогов.
+fn manifests_recent(store: &Path, limit: usize) -> Vec<Manifest> {
+    retention::op_ids(store)
+        .iter()
+        .filter_map(|id| read_manifest(store, id).ok())
+        .take(limit)
+        .collect()
+}
+
+/// Операции с id не старше `min_id`, новые первыми: откат операции всегда новее неё, остальные читать незачем.
+fn manifests_since(store: &Path, min_id: &str) -> Vec<Manifest> {
+    retention::op_ids(store)
+        .iter()
+        .take_while(|id| id.as_str() >= min_id)
         .filter_map(|id| read_manifest(store, id).ok())
         .collect()
 }
@@ -1509,17 +1570,16 @@ fn relang(s: &str) -> String {
 
 /// Журнал наших операций, новые первыми. Изменения клиентов извне в него не попадают.
 pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
-    let all = manifests(store);
+    // откат всегда новее своей операции, поэтому «откатана» видно по тем же последним строкам; остальные не разбираются
+    let all = manifests_recent(store, retention::JOURNAL_MAX);
     let undone: std::collections::HashSet<&str> =
         all.iter().filter_map(|m| m.of.as_deref()).collect();
     // состояние записей нужно только для откатов вынесенных в корзину: один скан на весь журнал
     let scan: Option<ScanResult> = all
         .iter()
-        .take(200)
         .any(|m| m.inverse_enable.is_some())
         .then(|| crate::scan_with(home, Some(store)));
     all.iter()
-        .take(200)
         .map(|m| {
             let rolled_back = undone.contains(m.id.as_str());
             let can_rollback = m.op != "rollback"
@@ -1561,6 +1621,11 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
 /// Вынос в корзину и возврат откатываются обратной операцией над текущим файлом: `~/.claude.json` клиент переписывает
 /// постоянно, и сверка хеша там почти всегда отказывала бы.
 pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<Applied, String> {
+    retention::before_write(store, &[op.to_owned()]);
+    rollback_one(home, store, op, max_level)
+}
+
+fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<Applied, String> {
     let m = read_manifest(store, op)?;
     need_level(&m.level, max_level)?;
     if m.op == "rollback" {
@@ -1569,7 +1634,10 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
             "only the operation itself can be rolled back, not a rollback"
         ));
     }
-    if manifests(store).iter().any(|x| x.of.as_deref() == Some(op)) {
+    if manifests_since(store, op)
+        .iter()
+        .any(|x| x.of.as_deref() == Some(op))
+    {
         return Err(crate::tr!(
             "операция уже откатана",
             "the operation has already been rolled back"
@@ -1642,7 +1710,7 @@ pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     if let Err(e) = write_manifest(&dir, &r) {
         return fail(e);
     }
-    if let Err(e) = atomic_write(&file, &before) {
+    if let Err(e) = atomic_write(&file, &before, &current) {
         return fail(e);
     }
     // как и после записи: чужую свежую запись не затираем, запись об откате остаётся
@@ -1667,7 +1735,8 @@ pub fn rollback_batch(
     batch: &str,
     max_level: &str,
 ) -> Result<Vec<Applied>, String> {
-    let all = manifests(store);
+    // операции пакета не старше его номера (мс начала пакета): остальные не читаются
+    let all = manifests_since(store, batch);
     let members: Vec<&Manifest> = all
         .iter()
         .filter(|m| m.batch.as_deref() == Some(batch) && m.op != "rollback")
@@ -1676,13 +1745,16 @@ pub fn rollback_batch(
     for m in &members {
         need_level(&m.level, max_level)?;
     }
-    let ops: Vec<String> = members.iter().map(|m| m.id.clone()).collect(); // новые первыми: нужный порядок отката
+    // новые первыми: нужный порядок отката
+    let ops: Vec<String> = members.iter().map(|m| m.id.clone()).collect();
+    // операции пакета не должны уйти под очистку посреди отката
+    retention::before_write(store, &ops);
     let mut done = Vec::new();
     for id in ops {
         if all.iter().any(|x| x.of.as_deref() == Some(id.as_str())) {
             continue;
         }
-        done.push(rollback(home, store, &id, max_level)?);
+        done.push(rollback_one(home, store, &id, max_level)?);
     }
     if done.is_empty() {
         return Err(crate::tr!(

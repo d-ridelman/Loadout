@@ -1169,7 +1169,7 @@ fn profile_applies_as_one_batch_and_rolls_back_together() {
         }
     }
     loadout_core::profiles::save(&e.store, prof).unwrap();
-    assert_eq!(loadout_core::profiles::list(&e.store).len(), 1);
+    assert_eq!(loadout_core::profiles::list(&e.store).unwrap().len(), 1);
     assert!(loadout_core::profiles::save(
         &e.store,
         loadout_core::profiles::Profile {
@@ -1213,7 +1213,55 @@ fn profile_applies_as_one_batch_and_rolls_back_together() {
 
     // профиль живёт дальше; удалённой записи он пропускает, а не падает
     loadout_core::profiles::delete(&e.store, "рабочий").unwrap();
-    assert!(loadout_core::profiles::list(&e.store).is_empty());
+    assert!(loadout_core::profiles::list(&e.store).unwrap().is_empty());
+}
+
+fn profile(name: &str) -> loadout_core::profiles::Profile {
+    loadout_core::profiles::Profile {
+        name: name.into(),
+        items: vec![],
+    }
+}
+
+/// Битый `profiles.json` не превращается в «профилей нет»: чтение, сохранение и удаление отказывают и ничего не пишут;
+/// файл откладывается только явным `quarantine`, после чего профили снова работают.
+#[test]
+fn broken_profiles_file_is_refused_not_overwritten_and_set_aside_only_explicitly() {
+    let e = env();
+    use loadout_core::profiles as pr;
+    // нет файла — просто «профилей нет»
+    assert!(pr::list(&e.store).unwrap().is_empty());
+    assert!(
+        pr::quarantine(&e.store).is_err(),
+        "нет файла: откладывать нечего"
+    );
+    pr::save(&e.store, profile("рабочий")).unwrap();
+    assert!(
+        pr::quarantine(&e.store).is_err(),
+        "читающийся файл не откладывается"
+    );
+
+    let file = e.store.join("profiles.json");
+    for junk in ["{ не json", "", r#"{"profiles": 5}"#] {
+        fs::write(&file, junk).unwrap();
+        let err = pr::list(&e.store).unwrap_err();
+        assert!(err.contains("profiles.json"), "{err}");
+        assert!(pr::save(&e.store, profile("новый")).is_err());
+        assert!(pr::delete(&e.store, "рабочий").is_err());
+        assert!(pr::intents(&e.home, &e.store, "рабочий").is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), junk, "файл не тронут");
+    }
+
+    let name = pr::quarantine(&e.store).unwrap();
+    assert!(name.starts_with("profiles.json.broken-"), "{name}");
+    assert_eq!(
+        fs::read_to_string(e.store.join(&name)).unwrap(),
+        r#"{"profiles": 5}"#
+    );
+    assert!(!file.exists());
+    assert!(pr::list(&e.store).unwrap().is_empty());
+    pr::save(&e.store, profile("новый")).unwrap();
+    assert_eq!(pr::list(&e.store).unwrap().len(), 1);
 }
 
 /// Сухой прогон на настоящих конфигах (`cargo test -- --ignored`): только `plan`, ничего не пишется.
@@ -1255,12 +1303,15 @@ fn real_machine_plans_are_dry_and_succeed() {
         assert_eq!(before[i], after[i], "plan не должен менять {f:?}");
     }
     for f in &files {
-        let mut tmp = f.clone().into_os_string();
-        tmp.push(".loadout.tmp");
-        assert!(
-            !Path::new(&tmp).exists(),
-            "после plan остался временный файл записи"
+        let (dir, base) = (
+            f.parent().unwrap(),
+            f.file_name().unwrap().to_string_lossy(),
         );
+        let left = fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with(&format!("{base}.loadout.")) && n.ends_with(".tmp")
+        });
+        assert!(!left, "после plan остался временный файл записи");
     }
 }
 

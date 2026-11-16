@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { JournalEntry, WriteLevel } from '../../shared/model'
+import { BACKUP_DIR_HINT, backupNotice } from '../../shared/backups'
 import { getLang, t } from '../../shared/i18n'
 import { levelOk } from './Inspector'
 
@@ -60,9 +61,29 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
     }
   }
 
+  const prune = async () => {
+    setBusy('prune')
+    try {
+      const r = await window.loadout.pruneBackups()
+      onNotice(r.ok ? t(`Старые копии удалены: операций ${r.data.removed}, осталось ${r.data.kept}`, `Old copies removed: ${r.data.removed} operations, ${r.data.kept} kept`) : r.error)
+    } catch (e) {
+      onNotice(e instanceof Error ? e.message : t('очистка не удалась', 'cleanup failed'))
+    } finally {
+      setBusy(null)
+      void load()
+    }
+  }
+
   return (
     <>
       <h2>{t('Журнал', 'Journal')}</h2>
+      <details className="small">
+        <summary>{t('Где хранятся копии и что в них', 'Where the copies are kept and what is in them')}</summary>
+        <p className="mute small">{backupNotice(BACKUP_DIR_HINT)}</p>
+        <div className="actions">
+          <button disabled={busy !== null} onClick={() => void prune()}>{t('Очистить старые копии…', 'Clean up old copies…')}</button>
+        </div>
+      </details>
       {state.status === 'loading' ? (
         <p className="mute" role="status">{t('Читаю журнал…', 'Reading the journal…')}</p>
       ) : state.status === 'error' ? (

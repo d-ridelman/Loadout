@@ -7,6 +7,7 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { _electron as electron } from 'playwright-core'
+import { ownCoreProcesses } from './procs.mjs'
 
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = resolve(appDir, '..')
@@ -111,15 +112,21 @@ async function layout(page, label) {
   must(m.misaligned === 0, `${label}: колонки шапки и ячеек смещены`)
 }
 
-/** Процессы ядра (`loadout*.exe`) любого вида: после проверок их остаться не должно. */
+/**
+ * Процессы ядра этого прогона: после проверок их остаться не должно. Считаются только `loadout*.exe` с каталогом
+ * проверочного профиля в командной строке (`--backups <профиль>\backups`, см. `ownCoreProcesses`): установленный
+ * у владельца Loadout, проверка упакованной сборки и e2e соседней копии репозитория счёту не мешают.
+ */
 function coreLeftovers() {
   try {
     const out = execFileSync(
       'powershell',
-      ['-NoProfile', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'loadout*.exe' } | Select-Object -ExpandProperty ProcessId`],
+      ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "Name LIKE 'loadout%.exe'" | Select-Object ProcessId, Name, CommandLine | ConvertTo-Json -Compress`],
       { encoding: 'utf8' },
-    )
-    return out.split(/\s+/).filter(Boolean)
+    ).trim()
+    if (!out) return []
+    const v = JSON.parse(out)
+    return ownCoreProcesses(Array.isArray(v) ? v : [v], profile).map((p) => String(p.ProcessId))
   } catch {
     return []
   }
@@ -319,11 +326,15 @@ try {
   await page.keyboard.press('Enter')
   must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'палитра не закрылась')
   must((await page.locator('aside').innerText()).includes('tool-b'), 'палитра не выбрала tool-b')
+  // Палитра возвращает фокус на таблицу в следующем кадре. Если открыть её снова раньше, второй раз она запомнит
+  // прежнее поле (поиск), вернёт фокус туда, и цифра `2` уйдёт в поиск: радар не откроется («на радаре должно быть 5 клиентов»).
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'после палитры фокус вернулся на таблицу')
   await page.keyboard.press('Control+k')
   await page.getByRole('combobox', { name: 'Команда' }).waitFor() // Esc обрабатывает поле ввода: ждём, пока оно получит фокус
   await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Команда')
   await page.keyboard.press('Escape')
   must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'Esc не закрыл палитру')
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'после Esc фокус вернулся на таблицу, а не в поле ввода')
 
   // разделы по цифрам
   await page.keyboard.press('2')
@@ -536,6 +547,10 @@ try {
     await dialog.getByRole('button', { name: label }).waitFor({ timeout: 8000 })
     await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
     await dialog.getByRole('button', { name: label }).click()
+    // Окно закрывается, когда ответ о записи дошёл до страницы, а файл меняется раньше. Пока диалог открыт, одиночные
+    // клавиши (`5` — журнал) отключены, и шаг, нажавший их сразу после появления файла, терял нажатие: так «добавление»
+    // не находилось в журнале. Ждём закрытия здесь, а не в каждом шаге.
+    await dialog.waitFor({ state: 'detached', timeout: 8000 })
   }
   const openPlan = async () => {
     await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
@@ -1074,7 +1089,7 @@ try {
 } finally {
   for (const h of homes) rmSync(h, { recursive: true, force: true })
   const core = coreLeftovers()
-  log('оставшихся процессов ядра (loadout*.exe):', core.length)
+  log('оставшихся процессов ядра этого прогона (loadout*.exe с профилем проверок):', core.length)
   for (const id of core) {
     try {
       execFileSync('taskkill', ['/PID', id, '/F'], { stdio: 'ignore' })

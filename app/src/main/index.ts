@@ -5,13 +5,16 @@ import { randomBytes } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { backupNotice } from '../shared/backups'
 import { getLang, isLang, langFromLocale, setLang, t } from '../shared/i18n'
 import type { Lang } from '../shared/i18n'
-import { CLIENTS, LEVEL_RANK } from '../shared/model'
-import type { ChangedEvent, ClientId, Intent, Result, ScanResponse, WriteLevel } from '../shared/model'
+import { LEVEL_RANK } from '../shared/model'
+import type { ChangedEvent, ClientId, Result, ScanResponse, WriteLevel } from '../shared/model'
 import * as ctxkit from './ctxkit'
-import { checkTreeSize, cloneArgs, findSkills, localMarketplaceOk, parseMarketplaceSource, parseSkillSource, readCatalog, skillNameOk } from './install'
+import { assertTrusted, grantedOf, parseBatch, parseLevel, parseOp, parseSha, trustedSender, validateIntent, validateName } from './gate'
+import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, localMarketplaceOk, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, remoteUrl } from './install'
 import { Sidecar } from './sidecar'
+import { tidyHome } from './tidy'
 import {
   validateApplied,
   validateBatchApplied,
@@ -20,6 +23,7 @@ import {
   validateJournal,
   validatePlan,
   validateProfiles,
+  validatePruned,
   validateScan,
 } from './validate'
 
@@ -32,8 +36,7 @@ const envOf = (name: string): string | undefined => (envAllowed ? process.env[na
 
 /** Путь с домашним каталогом в тексте ошибки показываем как `~`. */
 function tidy(text: string): string {
-  const home = app.getPath('home')
-  return text.split(home).join('~').split(home.replaceAll('\\', '/')).join('~')
+  return tidyHome(text, app.getPath('home'))
 }
 
 /**
@@ -47,6 +50,15 @@ if (qa && !process.env.LOADOUT_USER_DATA) {
 }
 const userData = envOf('LOADOUT_USER_DATA')
 if (userData) app.setPath('userData', resolve(userData))
+
+/**
+ * Один экземпляр на каталог данных: два окна с одним профилем писали бы в одни копии и конфиги. Блокировка Electron
+ * привязана к `userData` (проверено на Electron этого проекта: два процесса с разными `userData`, через `setPath` и через
+ * `--user-data-dir`, оба получают замок; с одним — второй получает `false`). Поэтому проверочные прогоны (`LOADOUT_USER_DATA`,
+ * `--user-data-dir` у pack-check) со своим профилем не мешают друг другу и установленной копии. Вызывать после `setPath`.
+ */
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) app.quit()
 
 // Окно простое (таблицы, текст, лёгкие эффекты): GPU-процесс с ускорением съедает ~120 МБ ради нескольких градиентов.
 // Программная отрисовка держит приватную память ниже (CONCEPT.md §7, цель 150 МБ).
@@ -68,6 +80,9 @@ function iconPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'icon.png') : resolve(app.getAppPath(), 'build', 'icon.png')
 }
 
+/** Каталог копий операций и корзины Loadout: внутри профиля приложения. */
+const backupsDir = (): string => join(app.getPath('userData'), 'backups')
+
 let sidecar: Sidecar | undefined
 let lastWindow: BrowserWindow | undefined
 /** Скан не удался: окно показывает ошибку, и первый же `ready` перезапущенного ядра должен её сменить данными. */
@@ -81,7 +96,7 @@ function ensureSidecar(): Sidecar | string {
     return tidy(t(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`, `core not found: ${bin}. Build it with "cargo build --release" in the project root.`))
   }
   // Каталог бэкапов передаём всегда, а право писать проверяет main (уровень R1) перед каждым `apply` и `rollback`.
-  const args = ['serve', '--backups', join(app.getPath('userData'), 'backups'), '--lang', getLang()]
+  const args = ['serve', '--backups', backupsDir(), '--lang', getLang()]
   const homeOverride = envOf('LOADOUT_HOME')
   if (homeOverride) args.push('--home', homeOverride)
   let readySeen = false
@@ -201,10 +216,6 @@ async function guarded<T>(fn: () => Promise<T>): Promise<Result<T>> {
   }
 }
 
-const ENTITY_RE = /^[0-9a-f]{16}(-\d{1,4})?$/
-const SHA_RE = /^[0-9a-f]{64}$/
-const OP_RE = /^[0-9]{13}-[0-9]{2}$/
-
 function writeCore(): Sidecar {
   const s = ensureSidecar()
   if (typeof s === 'string') throw new Error(s)
@@ -247,77 +258,10 @@ async function core(method: string, params?: Record<string, unknown>): Promise<u
  * (`maxLevel`), и ядро отказывает, если операции нужен выше: схема «спросили план, проверили, потом применили»
  * поддавалась гонке (между вызовами можно вклинить `profileSave`).
  */
-function grantedLevel(): 'R1' | 'R2' {
-  const have = readWriteLevel()
-  if (have === 'R0') throw new Error(t('запись выключена (R0): включите уровень записи в шапке окна', 'writing is off (R0): enable a write level in the window header'))
-  return have
-}
+const grantedLevel = (): 'R1' | 'R2' => grantedOf(readWriteLevel())
 
-const CLIENT_IDS: readonly string[] = CLIENTS.map((c) => c.id)
-const BATCH_RE = /^[0-9]{13}$/
-const NAME_RE = /^[\p{L}\p{N} _.-]{1,40}$/u
-const isShort = (v: unknown): v is string => typeof v === 'string' && v.length <= 500 && !/\p{Cc}/u.test(v)
-
-/** Новый MCP: поля пересобираются, окончательные правила имени, адреса и env проверяет ядро. */
-function validateAdd(r: Record<string, unknown>): Intent {
-  const { to, name, command, args, url, env } = r
-  if (typeof to !== 'string' || !CLIENT_IDS.includes(to) || !isShort(name) || !isShort(command) || !isShort(url)) {
-    throw new Error(t('неверные параметры', 'invalid parameters'))
-  }
-  if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error(t('неверные аргументы', 'invalid arguments'))
-  if (!Array.isArray(env) || env.length > 30) throw new Error(t('неверные переменные окружения', 'invalid environment variables'))
-  const pairs = env.map((p: unknown) => {
-    const k = (p as Record<string, unknown> | null)?.['key']
-    const v = (p as Record<string, unknown> | null)?.['value']
-    if (!isShort(k) || !isShort(v) || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(k)) throw new Error(t('неверные переменные окружения', 'invalid environment variables'))
-    return { key: k, value: v }
-  })
-  return { op: 'add', to: to as ClientId, name, command, args: args as string[], url, env: pairs }
-}
-
-/** Разбор намерения от страницы: только id записи и то, что с ней сделать. Всё остальное отбрасывается. */
-function validateIntent(raw: unknown): Intent {
-  if (typeof raw !== 'object' || raw === null) throw new Error(t('неверные параметры', 'invalid parameters'))
-  const r = raw as Record<string, unknown>
-  if (r['op'] === 'add') return validateAdd(r)
-  if (r['op'] === 'installSkill') {
-    // каталог подготовки ядро находит само по номеру; путь внутри и имя оно проверяет ещё раз
-    const { stage, sub, name } = r
-    if (typeof stage !== 'string' || !/^[0-9a-f]{32}$/.test(stage) || typeof sub !== 'string' || !/^([A-Za-z0-9._-]{1,100}(\/[A-Za-z0-9._-]{1,100})*)?$/.test(sub) || typeof name !== 'string' || !skillNameOk(name)) {
-      throw new Error(t('неверные параметры', 'invalid parameters'))
-    }
-    return { op: 'installSkill', stage, sub, name }
-  }
-  const entity = r['entity']
-  if (typeof entity !== 'string' || !ENTITY_RE.test(entity)) throw new Error(t('неверные параметры', 'invalid parameters'))
-  if (r['op'] === 'toggle' && typeof r['enable'] === 'boolean') return { op: 'toggle', entity, enable: r['enable'] }
-  if (r['op'] === 'edit' && isShort(r['command']) && r['command'].trim() !== '') {
-    const args = r['args']
-    if (!Array.isArray(args) || args.length > 64 || !args.every(isShort)) throw new Error(t('неверные аргументы', 'invalid arguments'))
-    return { op: 'edit', entity, command: r['command'], args: args as string[] }
-  }
-  if (r['op'] === 'copy' && typeof r['to'] === 'string' && CLIENT_IDS.includes(r['to'])) {
-    return { op: 'copy', entity, to: r['to'] as ClientId }
-  }
-  throw new Error(t('неверные параметры', 'invalid parameters'))
-}
-
-function validateName(v: unknown): string {
-  if (typeof v !== 'string' || !NAME_RE.test(v) || v.trim() !== v) throw new Error(t('имя профиля: 1–40 знаков (буквы, цифры, пробел, _ - .)', 'profile name: 1-40 characters (letters, digits, space, _ - .)'))
-  return v
-}
-
-/** Принимаем вызовы только от нашей страницы: файл из сборки или адрес dev-сервера. */
-function trusted(e: IpcMainInvokeEvent): boolean {
-  const url = e.senderFrame?.url ?? ''
-  if (url.split('#')[0] === INDEX_URL) return true
-  // dev-сервер: тот же источник целиком, а не префикс строки (`http://localhost:5173.evil.test` не подходит)
-  try {
-    return DEV_URL !== undefined && new URL(url).origin === new URL(DEV_URL).origin
-  } catch {
-    return false
-  }
-}
+/** Принимаем вызовы только от нашей страницы (см. gate.ts). */
+const trusted = (e: IpcMainInvokeEvent): boolean => trustedSender(e, INDEX_URL, DEV_URL)
 
 /** Окно проверок не мешает владельцу: за экраном, без кнопки на панели задач (`LOADOUT_QA_VISIBLE=1` возвращает на экран). */
 const qaHidden = qa && process.env.LOADOUT_QA_VISIBLE !== '1'
@@ -357,7 +301,18 @@ function createWindow(): void {
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
+// Второй запуск с тем же профилем: первое окно выходит вперёд, второй процесс уже завершается (см. `gotLock`).
+app.on('second-instance', () => {
+  const win = lastWindow
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+})
+
 void app.whenReady().then(() => {
+  // второй экземпляр ничего не трогает: ни каталог подготовки, ни ядро, ни окно
+  if (!gotLock) return
   setLang(initialLang())
   Menu.setApplicationMenu(null)
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
@@ -367,9 +322,7 @@ void app.whenReady().then(() => {
     clipboard.writeText(text.slice(0, 10_000))
   })
   // Каналы записи: страница передаёт только id записи, желаемое состояние, хеш из предпросмотра и номер операции.
-  const guard = (e: IpcMainInvokeEvent): void => {
-    if (!trusted(e)) throw new Error('untrusted sender')
-  }
+  const guard = (e: IpcMainInvokeEvent): void => assertTrusted(e, INDEX_URL, DEV_URL)
   ipcMain.handle('lang:get', (e) => (guard(e), getLang()))
   ipcMain.handle('lang:set', (e, lang: unknown) => {
     guard(e)
@@ -390,9 +343,9 @@ void app.whenReady().then(() => {
     return lang
   })
   ipcMain.handle('writeLevel:get', (e) => (guard(e), readWriteLevel()))
-  ipcMain.handle('writeLevel:set', async (e, level: unknown) => {
+  ipcMain.handle('writeLevel:set', async (e, raw: unknown) => {
     guard(e)
-    if (level !== 'R0' && level !== 'R1' && level !== 'R2') throw new Error(t('неизвестный уровень', 'unknown level'))
+    const level = parseLevel(raw)
     // Повышение уровня подтверждает человек в окне самой ОС, которое страница не может нажать за него:
     // иначе скомпрометированная страница включила бы запись и тут же вызвала `apply`. Понижение подтверждения не требует.
     // Проверки окна подменяют `dialog.showMessageBox` в main-процессе, и согласие, и отказ.
@@ -404,7 +357,10 @@ void app.whenReady().then(() => {
         message: r2
           ? t('Разрешить Loadout выносить записи в корзину, править команды MCP, копировать записи между клиентами и применять профили?', 'Allow Loadout to move entries to the trash, edit MCP commands, copy entries between clients and apply profiles?')
           : t('Разрешить Loadout включать и выключать записи в конфигах клиентов?', 'Allow Loadout to turn entries on and off in client configs?'),
-        detail: t('Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.', 'A preview is shown and a backup is made before every change, and every change can be rolled back from the journal. Close Claude Code and Codex if they are running: they may overwrite the file.'),
+        detail:
+          t('Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.', 'A preview is shown and a backup is made before every change, and every change can be rolled back from the journal. Close Claude Code and Codex if they are running: they may overwrite the file.') +
+          '\n\n' +
+          backupNotice(tidy(backupsDir())),
         buttons: [t('Отмена', 'Cancel'), r2 ? t('Включить R2', 'Enable R2') : t('Включить запись', 'Enable writing')],
         defaultId: 0,
         cancelId: 0,
@@ -429,27 +385,43 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => {
       const intent = validateIntent(raw)
-      if (typeof baseSha !== 'string' || !SHA_RE.test(baseSha)) throw new Error(t('неверные параметры', 'invalid parameters'))
+      const sha = parseSha(baseSha)
       // нужный операции уровень (флаг — R1, корзина, правка, копирование — R2) знает и проверяет ядро
-      return validateApplied(await core('apply', { ...intent, baseSha, maxLevel: grantedLevel() }))
+      return validateApplied(await core('apply', { ...intent, baseSha: sha, maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('journal', (e) => {
     guard(e)
     return guarded(async () => validateJournal(await core('journal')))
   })
+  // Очистка старых копий: необратима, поэтому подтверждает человек в окне ОС (страница его нажать не может), как и повышение уровня.
+  ipcMain.handle('backups:prune', async (e) => {
+    guard(e)
+    const opts = {
+      type: 'warning' as const,
+      title: t('Loadout: очистить старые копии?', 'Loadout: clean up old copies?'),
+      message: t('Удалить копии старых операций? Откатить их после этого будет нельзя.', 'Delete the copies of old operations? They cannot be rolled back afterwards.'),
+      detail: backupNotice(tidy(backupsDir())),
+      buttons: [t('Отмена', 'Cancel'), t('Очистить', 'Clean up')],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    }
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+    if (r.response !== 1) return { ok: false, error: t('очистка отменена', 'cleanup cancelled') }
+    return guarded(async () => validatePruned(await core('pruneBackups')))
+  })
   ipcMain.handle('rollback', (e, op: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof op !== 'string' || !OP_RE.test(op)) throw new Error(t('неверный номер операции', 'invalid operation number'))
-      return validateApplied(await core('rollback', { op, maxLevel: grantedLevel() }))
+      return validateApplied(await core('rollback', { op: parseOp(op), maxLevel: grantedLevel() }))
     })
   })
   ipcMain.handle('rollbackBatch', (e, batch: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof batch !== 'string' || !BATCH_RE.test(batch)) throw new Error(t('неверный номер пакета', 'invalid batch number'))
-      const done: unknown = await core('rollbackBatch', { batch, maxLevel: grantedLevel() })
+      const done: unknown = await core('rollbackBatch', { batch: parseBatch(batch), maxLevel: grantedLevel() })
       if (!Array.isArray(done)) throw new Error(t('ядро вернуло ответ неожиданной формы', 'the core returned a response of an unexpected shape'))
       return done.map(validateApplied)
     })
@@ -474,6 +446,14 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => validateProfiles(await core('profileDelete', { name: validateName(name) })))
   })
+  ipcMain.handle('profilesQuarantine', (e) => {
+    guard(e)
+    return guarded(async () => {
+      const name: unknown = await core('profilesQuarantine')
+      if (typeof name !== 'string' || !/^profiles\.json\.broken-\d{1,20}$/.test(name)) throw new Error(t('ядро вернуло ответ неожиданной формы', 'the core returned a response of an unexpected shape'))
+      return name
+    })
+  })
   ipcMain.handle('planProfile', (e, name: unknown) => {
     guard(e)
     return guarded(async () => {
@@ -486,9 +466,9 @@ void app.whenReady().then(() => {
   ipcMain.handle('applyProfile', (e, name: unknown, batchSha: unknown) => {
     guard(e)
     return guarded(async () => {
-      if (typeof batchSha !== 'string' || !SHA_RE.test(batchSha)) throw new Error(t('неверные параметры', 'invalid parameters'))
+      const sha = parseSha(batchSha)
       const n = validateName(name)
-      return validateBatchApplied(await core('applyProfile', { name: n, batchSha, maxLevel: grantedLevel() }))
+      return validateBatchApplied(await core('applyProfile', { name: n, batchSha: sha, maxLevel: grantedLevel() }))
     })
   })
   // ---- встроенный ctxkit (CONCEPT.md §13): бинарь лежит в составе приложения, путь зашит ----
@@ -616,9 +596,16 @@ void app.whenReady().then(() => {
       const src = parseSkillSource(raw)
       const ghBase = envOf('LOADOUT_GITHUB_BASE') ?? 'https://github.com/'
       const shownDest = tidy(join(stagingRoot(), '…'))
+      const gitLine = (args: string[]): string => `git ${args.map(quoteArg).join(' ')}`
       const command =
         src.kind === 'github'
-          ? `git ${cloneArgs(src, ghBase, shownDest).map(quoteArg).join(' ')}`
+          ? [
+              gitLine(cloneArgs(src, ghBase, shownDest)),
+              // хеш коммита: `--branch` его не принимает, поэтому второй шаг
+              ...(isCommitRef(src.ref) ? [gitLine(checkoutArgs(src.ref!, shownDest))] : []),
+              // ветка из адреса tree/… может содержать `/`: её находят по списку веток, этого шага в предпросмотре ещё нет
+              ...(src.treePath ? [t(`(перед этим: git ls-remote, чтобы отделить ветку ${src.treePath.join('/')} от пути внутри репозитория)`, `(first: git ls-remote, to tell the branch in ${src.treePath.join('/')} from the path inside the repository)`)] : isCommitRef(src.ref) ? [t('(перед этим: git ls-remote, чтобы убедиться, что это не ветка или тег с таким именем)', '(first: git ls-remote, to make sure this is not a branch or a tag with that name)')] : []),
+            ].join('\n')
           : t(`копия ${tidy(src.path)} → ${shownDest}`, `copy ${tidy(src.path)} → ${shownDest}`)
       const key = JSON.stringify(src)
       if (dryRun) {
@@ -637,18 +624,36 @@ void app.whenReady().then(() => {
       const dest = join(stagingRoot(), stage)
       mkdirSync(stagingRoot(), { recursive: true })
       try {
+        let subDir = ''
         if (src.kind === 'github') {
+          let found = src
           // без окна входа и вопросов в консоли: на закрытом или несуществующем репозитории git сразу выходит с ошибкой
           // LFS-смазка не идёт: она обратилась бы к хосту из `.lfsconfig` репозитория
-          const r = await ctxkit.run('git', cloneArgs(src, ghBase, dest), 120_000, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_LFS_SKIP_SMUDGE: '1' })
-          if (r.code !== 0) throw new Error(t(`git clone не удался: ${tidy(r.stderr).slice(-400)}`, `git clone failed: ${tidy(r.stderr).slice(-400)}`))
+          const gitEnv = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_LFS_SKIP_SMUDGE: '1' }
+          if (src.treePath || isCommitRef(src.ref)) {
+            // ветка со `/` в адресе tree/… и ветка, похожая на хеш: сверяем с настоящим списком веток и тегов; не вышло —
+            // остаётся «первый сегмент — ветка», а похожее на хеш считается хешем
+            const ls = await ctxkit.run('git', ['-c', 'protocol.ext.allow=never', 'ls-remote', '--heads', '--tags', '--', remoteUrl(src, ghBase)], 60_000, gitEnv)
+            const pick = ls.code === 0 ? pickTreeRef(src.treePath ?? [src.ref!], parseRefs(ls.stdout)) : undefined
+            if (pick) found = { ...src, ref: pick.ref, sub: src.treePath ? pick.sub : src.sub, commit: pick.commit }
+          }
+          subDir = found.sub
+          const r = await ctxkit.run('git', cloneArgs(found, ghBase, dest), 120_000, gitEnv)
+          if (r.code !== 0) {
+            const hint = src.treePath && found === src ? t(' Если ветка в адресе содержит «/», а репозиторий не отвечает на список веток, укажите адрес без tree/… (owner/repo/путь).', ' If the branch in the address contains “/” and the repository does not answer the branch list, use an address without tree/… (owner/repo/path).') : ''
+            throw new Error(t(`git clone не удался: ${tidy(r.stderr).slice(-400)}${hint}`, `git clone failed: ${tidy(r.stderr).slice(-400)}${hint}`))
+          }
+          if (found.commit ?? isCommitRef(found.ref)) {
+            const co = await ctxkit.run('git', checkoutArgs(found.ref!, dest), 120_000, gitEnv)
+            if (co.code !== 0) throw new Error(t(`коммит ${found.ref} не найден или не выгружен: ${tidy(co.stderr).slice(-400)}`, `commit ${found.ref} was not found or not checked out: ${tidy(co.stderr).slice(-400)}`))
+          }
         } else {
           if (!statSync(src.path, { throwIfNoEntry: false })?.isDirectory()) throw new Error(t('папка не найдена', 'folder not found'))
           checkTreeSize(src.path)
           // ссылки не разыменовываются: ядро откажет на дереве со ссылками
           cpSync(src.path, dest, { recursive: true, dereference: false, verbatimSymlinks: true, filter: (s) => !/[\\/](\.git|node_modules)$/.test(s) })
         }
-        const skills = src.kind === 'github' ? findSkills(dest, src.sub, src.repo) : findSkills(dest, '', basename(src.path))
+        const skills = src.kind === 'github' ? findSkills(dest, subDir, src.repo) : findSkills(dest, '', basename(src.path))
         if (skills.length === 0) throw new Error(t('в источнике нет каталога со SKILL.md', 'the source has no directory with SKILL.md'))
         return { dryRun, command: '', stage, skills }
       } catch (err) {
