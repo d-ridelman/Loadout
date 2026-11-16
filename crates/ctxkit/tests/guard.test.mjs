@@ -1182,7 +1182,7 @@ const cases = [
   [true, () => {
     const CYR = /[А-Яа-яЁё]/;
     // the English words of the old setup output; what a Russian line may keep is cut out by `strip` first
-    const EN = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass)\b/;
+    const EN = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|policies(?=:)|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass)\b/;
     const strip = (s) => s
       .replace(/\[(dry-run|warn|note|ok|info)\]/g, '')
       .replace(/^ERR:/gm, '')

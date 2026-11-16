@@ -210,8 +210,8 @@ export function Ctxkit({ level, onNotice }: Props) {
               </select>
               <span id="ctx-policy-hint" className="mute small">
                 {t(
-                  'Хуки сами ничего из этого не включают: политики живут в ctxkit.json профиля. «Включить выбранные» оставляет включёнными ровно отмеченные ниже, остальные выключает; ключи файла, написанные вами, сохраняются. Предпросмотр покажет строки «политика …: выкл -> вкл».',
-                  'Hooks turn none of this on by themselves: the policies live in the profile ctxkit.json. “Turn on the selected” leaves exactly the ticked ones below on and turns the rest off; keys of the file you wrote yourself are kept. The preview shows “policy …: off -> on” lines.',
+                  'Хуки сами ничего из этого не включают: политики живут в ctxkit.json профиля. «Включить выбранные» оставляет включёнными ровно отмеченные ниже, остальные выключает; ключи файла, написанные вами, сохраняются. Предпросмотр покажет по строке на каждую политику (выкл -> вкл) на языке, выбранном ниже.',
+                  'Hooks turn none of this on by themselves: the policies live in the profile ctxkit.json. “Turn on the selected” leaves exactly the ticked ones below on and turns the rest off; keys of the file you wrote yourself are kept. The preview shows one line per policy (off -> on) in the language chosen below.',
                 )}
                 {(() => {
                   const now = doctor.status === 'ready' ? policiesNow(doctor.data) : null
@@ -241,7 +241,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             </div>
           </fieldset>
           <div className="field">
-            <label htmlFor="ctx-lang">{t('Язык подсказок и хуков', 'Language of prompts and hooks')}</label>
+            <label htmlFor="ctx-lang">{t('Язык подсказок, хуков и вывода ctxkit', 'Language of prompts, hooks and ctxkit output')}</label>
             <select id="ctx-lang" value={opts.lang} onChange={(e) => change({ lang: e.target.value as SetupOptions['lang'] })}>
               <option value="ru">{t('русский', 'Russian')}</option>
               <option value="en">{t('английский', 'English')}</option>

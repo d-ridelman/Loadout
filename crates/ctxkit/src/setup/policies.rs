@@ -52,7 +52,11 @@ pub(super) fn run(
         println!(
             "{}",
             kept_line(
-                "policies",
+                if is_ru() {
+                    "политики"
+                } else {
+                    "policies"
+                },
                 Some(&cfg.describe()),
                 "--policy commit-hygiene,confirm-irreversible,stray-files,build-slots=2"
             )
@@ -117,7 +121,7 @@ pub(super) fn run(
     if !existed && after == Config::default() {
         say!(
             "  policies: none, so no ctxkit.json is created",
-            "  policies: нет, поэтому ctxkit.json не создаётся"
+            "  политики: нет, поэтому ctxkit.json не создаётся"
         );
         return Ok(after);
     }

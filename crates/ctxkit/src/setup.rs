@@ -93,11 +93,11 @@ impl Default for SetupOpts {
 pub fn run_setup(args: &[String]) -> i32 {
     let mut opts = SetupOpts::default();
     // The language first, so that an error in an option read before `--lang` is already in it (no env fallback: the default is English).
-    if let Some(l) = args
-        .iter()
-        .position(|a| a == "--lang")
-        .and_then(|p| args.get(p + 1))
-        .and_then(|v| parse_lang(v))
+    // The last valid one wins, as in the option loop below.
+    if let Some(l) = (0..args.len())
+        .rev()
+        .filter(|&p| args[p] == "--lang")
+        .find_map(|p| args.get(p + 1).and_then(|v| parse_lang(v)))
     {
         set_lang(l);
     }

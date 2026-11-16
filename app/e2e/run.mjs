@@ -28,7 +28,7 @@ const APPLY = /^(Включить|Выключить|Вынести в корз�
  * --флагов, путей и имён): пусто — вывод русский. Тот же список и те же вырезки, что в `crates/ctxkit/tests/guard.test.mjs`.
  */
 const englishLeft = (text) => {
-  const en = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass)\b/
+  const en = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|policies(?=:)|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass)\b/
   const strip = (s) => s
     .replace(/\[(dry-run|warn|note|ok|info)\]/g, '')
     .replace(/^ERR:/gm, '')
@@ -812,14 +812,14 @@ try {
   must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
   must(preview.includes('advisorModel: (не задано) (оставлено'), `предпросмотр с формой по умолчанию должен оставлять advisorModel: ${preview.slice(0, 400)}`)
   // форма по умолчанию «Политики: не менять»: ctxkit.json не создаётся и не упоминается как изменение
-  must(preview.includes('policies: нет (оставлено') && !existsSync(ctxkitJson), `«Политики: не менять» должно оставлять ctxkit.json: ${preview.slice(0, 600)}`)
+  must(preview.includes('политики: нет (оставлено') && !existsSync(ctxkitJson), `«Политики: не менять» должно оставлять ctxkit.json: ${preview.slice(0, 600)}`)
   // русский интерфейс: в предпросмотре нет английских служебных фраз старого вывода
   must(englishLeft(preview).length === 0, `английские фразы в русском предпросмотре ctxkit: ${englishLeft(preview).slice(0, 5).join(' // ')}`)
   must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
   await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')
-  await page.getByLabel('Язык подсказок и хуков').selectOption('en')
+  await page.getByLabel('Язык подсказок, хуков и вывода ctxkit').selectOption('en')
   must(await applyBtn.isDisabled(), 'после смены настроек старый предпросмотр не должен разрешать применение')
-  await page.getByLabel('Язык подсказок и хуков').selectOption('ru')
+  await page.getByLabel('Язык подсказок, хуков и вывода ctxkit').selectOption('ru')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await waitFor(() => applyBtn.isEnabled(), 'предпросмотр повторён')
   await shot(page, 'm5-ctxkit-1280')
