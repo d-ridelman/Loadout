@@ -13,6 +13,8 @@ version = "0.0.1"
 edition = "2021"
 license = "MIT"
 publish = false
+authors = ["Loadout contributors"]
+repository = "https://github.com/d-ridelman/Loadout"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.89" # File::try_lock (slots.rs)
 description = "Surgical context and token toolkit for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness"
 license = "MIT"
+authors = ["Context Toolkit contributors"]
 repository = "https://github.com/d-ridelman/Loadout"
 readme = "README.md"
 keywords = ["claude-code", "antigravity", "tokens", "context", "cli"]

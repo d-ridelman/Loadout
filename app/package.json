@@ -2,7 +2,10 @@
   "name": "loadout-app",
   "version": "0.0.7",
   "private": true,
-  "description": "Loadout: что загружено в ваших агентов",
+  "description": "Plugins, MCP servers, skills and hooks of five AI coding clients in one matrix, with safe config edits",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/d-ridelman/Loadout" },
+  "homepage": "https://github.com/d-ridelman/Loadout",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -17,7 +20,7 @@
     "pack:check": "node e2e/pack-check.mjs",
     "dist": "npm run core && node scripts/bundle-context-toolkit.mjs && electron-vite build && electron-builder --win"
   },
-  "author": "Loadout",
+  "author": "Loadout contributors",
   "build": {
     "appId": "local.loadout.app",
     "productName": "Loadout",
