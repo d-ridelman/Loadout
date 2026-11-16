@@ -26,14 +26,14 @@ const isStr = (v: unknown): v is string => typeof v === 'string'
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 
-/** Всё, что приходит от ядра, проходит эту проверку до того, как попадёт в окно: и ответ на запрос, и push. */
+/** Everything that comes from the core passes this check before it reaches the window: both request replies and pushes. */
 export function validateScan(raw: unknown): ScanResult {
   if (!isObj(raw) || !Array.isArray(raw['entities']) || !Array.isArray(raw['warnings']) || !isObj(raw['facts'])) {
     throw new Error(t('ядро вернуло данные неожиданной формы', 'the core returned data of an unexpected shape'))
   }
   const { entities, warnings, facts } = raw
   if (entities.length > 100_000) throw new Error(t('ядро вернуло слишком много записей', 'the core returned too many entries'))
-  // В окно уходят заново собранные объекты: лишние поля ядра (и чужие) до страницы не доходят.
+  // The window gets freshly rebuilt objects: extra fields from the core (or anyone else) never reach the page.
   const clean: Entity[] = (entities as unknown[]).map((e) => {
     const ok =
       isObj(e) &&
@@ -61,7 +61,7 @@ export function validateScan(raw: unknown): ScanResult {
       ...(isStr(e['version']) ? { version: e['version'] } : {}),
       origin: { file: o['file'] as string, pointer: o['pointer'] as string },
       ...(isStr(e['note']) ? { note: e['note'] } : {}),
-      detail: e['detail'] as Record<string, unknown>, // значения уже замаскированы ядром
+      detail: e['detail'] as Record<string, unknown>, // values are already masked by the core
       canToggle: e['canToggle'] as boolean,
       canEdit: e['canEdit'] as boolean,
       ...(isStr(e['toggleWhy']) ? { toggleWhy: e['toggleWhy'] } : {}),
@@ -99,7 +99,7 @@ function ids(v: unknown): string[] {
   return v
 }
 
-/** Разбор `params` уведомления `changed`: только id и признаки. */
+/** Parses the `params` of the `changed` notification: only ids and flags. */
 export function validateDiff(raw: unknown): ScanDiff {
   if (!isObj(raw)) throw new Error(t('событие ядра неожиданной формы', 'the core event has an unexpected shape'))
   return {
@@ -121,7 +121,7 @@ function bad(ru: string, en: string): never {
 const levelOf = (v: unknown): v is Level => v === 'R1' || v === 'R2'
 const opOf = (v: unknown): v is OpKind => v === 'toggle' || v === 'edit' || v === 'copy' || v === 'add' || v === 'installSkill'
 
-/** Ответ `plan`: только поля плана, собранные заново. */
+/** The `plan` reply: only the plan fields, rebuilt. */
 export function validatePlan(raw: unknown): Plan {
   if (!isObj(raw)) bad('план', 'plan')
   const { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects, notes, baseSha, trash } = raw

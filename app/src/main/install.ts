@@ -1,10 +1,10 @@
-// Установка из маркетплейсов и скилов: проверка ввода на границе main и чтение каталогов. Без electron, чтобы тестировалось vitest.
+// Installing from marketplaces and skills: input validation at the main boundary and reading catalogs. No electron, so vitest can test it.
 import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { isAbsolute, join, win32 } from 'node:path'
 import { t } from '../shared/i18n'
 import type { CatalogPlugin, Marketplace, SkillCandidate } from '../shared/model'
 
-/** Часть id плагина (`имя@маркетплейс`) по документации Claude Code: буквы, цифры, `.`, `_`, `-`, с буквы или цифры. */
+/** Part of a plugin id (`name@marketplace`) per the Claude Code docs: letters, digits, `.`, `_`, `-`, starting with a letter or digit. */
 export const ID_PART = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const GH_OWNER = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/
 const GH_REPO = /^[A-Za-z0-9._-]{1,100}$/
@@ -31,15 +31,15 @@ const failMarketplace = (): never => {
   )
 }
 
-/** Хеш коммита git: 7–40 шестнадцатеричных знаков. */
+/** A git commit hash: 7-40 hex characters. */
 export const isCommitRef = (r: string | undefined): boolean => r !== undefined && /^[0-9a-fA-F]{7,40}$/.test(r)
 
-/** Имя ветки или тега: безопасные знаки, без `..`, `//`, `.lock` и слэша на краях (правила `git check-ref-format` в нужной нам части). */
+/** Branch or tag name: safe characters, no `..`, `//`, `.lock` or slash at the edges (the `git check-ref-format` rules, the part we need). */
 const refOk = (r: string): boolean => REF.test(r) && !r.includes('..') && !r.includes('//') && !r.endsWith('/') && !r.endsWith('.') && !r.endsWith('.lock')
 
 const repoOk = (owner: string, repo: string): boolean => GH_OWNER.test(owner) && GH_REPO.test(repo) && repo !== '.' && repo !== '..' && !repo.endsWith('.')
 
-/** Общая проверка строки до разбора: ввод никогда не станет флагом или второй командой. */
+/** Common string check before parsing: the input can never become a flag or a second command. */
 function base(raw: unknown): string {
   if (typeof raw !== 'string') return fail()
   const s = raw.trim()
@@ -47,13 +47,13 @@ function base(raw: unknown): string {
   return s
 }
 
-/** Локальный путь: только полный путь с буквой диска, без сетевых `\\сервер\…` и без `..`. Пробелы допустимы (`execFile` без оболочки). */
+/** Local path: only a full path with a drive letter, no network `\\server\…` and no `..`. Spaces are allowed (`execFile` without a shell). */
 function localPath(s: string): string | undefined {
   if (!/^[A-Za-z]:[\\/]/.test(s) || !win32.isAbsolute(s) || s.split(/[\\/]/).includes('..')) return undefined
   return win32.normalize(s)
 }
 
-/** https-адрес без логина и пароля в нём. Другие схемы (`ext::`, `file://`, `ssh`) git выполнил бы по-своему. */
+/** An https URL without a login or password in it. Other schemes (`ext::`, `file://`, `ssh`) git would handle in its own way. */
 function httpsUrl(s: string): URL | undefined {
   if (!s.startsWith('https://') || /\s/.test(s)) return undefined
   try {
@@ -68,13 +68,13 @@ export type MarketplaceSource = { kind: 'github' | 'url' | 'ssh' | 'path'; value
 
 const SSH_USER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const HOST = /^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/
-/** Путь репозитория на SSH-хосте: сегменты из безопасных знаков без начального и конечного `/`, `.` и `..`. */
+/** Repository path on an SSH host: segments of safe characters, no leading or trailing `/`, no `.` or `..`. */
 const gitPathOk = (p: string): boolean => p.length <= 200 && p.split('/').length <= 6 && p.split('/').every((x) => SUB_PART.test(x) && x !== '.' && x !== '..' && !x.startsWith('-'))
 
 /**
- * SSH-адрес в форме `user@host:path` или `ssh://[user@]host[:порт]/path`. Строгая проверка каждой части: ни пробелов,
- * кавычек и управляющих знаков, ни `-` в начале имени, хоста и пути (иначе адрес стал бы флагом `ssh`/`git`).
- * Возвращает адрес в нормальной форме либо `undefined`.
+ * An SSH address in the form `user@host:path` or `ssh://[user@]host[:port]/path`. Every part is checked strictly: no spaces,
+ * quotes or control characters, and no `-` at the start of the user, host or path (otherwise the address would become an `ssh`/`git` flag).
+ * Returns the address in normal form or `undefined`.
  */
 function sshUrl(s: string): string | undefined {
   const scp = /^([^@:/\s]+)@([^:/\s]+):([^\s]+)$/.exec(s)
@@ -82,7 +82,7 @@ function sshUrl(s: string): string | undefined {
     const [, user, host, path] = scp
     return SSH_USER.test(user!) && HOST.test(host!) && gitPathOk(path!) ? `${user}@${host}:${path}` : undefined
   }
-  // разбор вручную, а не `new URL`: он молча сворачивает `a/../b` и `%2e%2e`, а проверять надо то, что ввёл человек
+  // parsed by hand, not with `new URL`: it silently collapses `a/../b` and `%2e%2e`, but what the person typed is what must be checked
   const m = /^ssh:\/\/(?:([^@:/\s]+)@)?([^@:/\s]+)(?::(\d{1,5}))?\/([^\s]+)$/.exec(s)
   if (!m) return undefined
   const [, user, host, port, path] = m
@@ -91,10 +91,10 @@ function sshUrl(s: string): string | undefined {
 }
 
 /**
- * Источник для `claude plugin marketplace add`. Формы по документации Claude Code (install → «Add a marketplace»):
- * `owner/repo`, полный адрес клона (`https://…`, `git@host:path`), путь к папке или файлу; после адреса репозитория
- * `#ветка` или `#тег`. Хеш коммита документация как ссылку не называет («pin a branch or tag»), поэтому он отклоняется.
- * Существование локального пути проверяет вызывающий.
+ * Source for `claude plugin marketplace add`. Forms per the Claude Code docs (install → "Add a marketplace"):
+ * `owner/repo`, a full clone URL (`https://…`, `git@host:path`), a path to a folder or file; after the repository address
+ * `#branch` or `#tag`. The docs do not name a commit hash as a ref ("pin a branch or tag"), so it is rejected.
+ * The caller checks that a local path exists.
  */
 export function parseMarketplaceSource(raw: unknown): MarketplaceSource {
   const s = base(raw)
@@ -119,7 +119,7 @@ export function parseMarketplaceSource(raw: unknown): MarketplaceSource {
   return failMarketplace()
 }
 
-/** Локальный маркетплейс: каталог с `.claude-plugin/marketplace.json` или сам этот файл. */
+/** Local marketplace: a directory with `.claude-plugin/marketplace.json` or that file itself. */
 export function localMarketplaceOk(p: string): boolean {
   try {
     if (statSync(p).isDirectory()) return existsSync(join(p, '.claude-plugin', 'marketplace.json'))
@@ -136,16 +136,16 @@ export type SkillSource =
       repo: string
       ref: string | undefined
       sub: string
-      /** Только адрес `tree/…` или `blob/…`: все сегменты после него. `ref` и `sub` — прикидка «первый сегмент — ветка»; ветка со `/` уточняется по списку веток (`pickTreeRef`). */
+      /** Only for a `tree/…` or `blob/…` address: all segments after it. `ref` and `sub` are a guess "the first segment is the branch"; a branch containing `/` is refined from the branch list (`pickTreeRef`). */
       treePath?: string[]
-      /** Ссылка — хеш коммита (`true`) или имя ветки или тега (`false`), когда это установлено по списку веток; без него решает форма строки. */
+      /** Whether the ref is a commit hash (`true`) or a branch or tag name (`false`), once established from the branch list; without it the shape of the string decides. */
       commit?: boolean
     }
   | { kind: 'path'; path: string }
 
 /**
- * Источник скила: `owner/repo[/путь]`, `https://github.com/owner/repo[.git][/tree/<ветка или хеш коммита>/<путь>]` или папка.
- * В адресе `tree/…` ветка может содержать `/`: перед загрузкой main сверяет сегменты со списком веток и тегов репозитория.
+ * Skill source: `owner/repo[/path]`, `https://github.com/owner/repo[.git][/tree/<branch or commit hash>/<path>]` or a folder.
+ * In a `tree/…` address the branch may contain `/`: before downloading, main checks the segments against the repository's branch and tag list.
  */
 export function parseSkillSource(raw: unknown): SkillSource {
   const s = base(raw)
@@ -172,16 +172,16 @@ export function parseSkillSource(raw: unknown): SkillSource {
   }
   const [owner, repo, ...sub] = rest
   if (owner === undefined || repo === undefined || !repoOk(owner, repo)) return fail()
-  // ссылка на сам SKILL.md — это его каталог
+  // a link to SKILL.md itself means its directory
   if (sub.at(-1) === 'SKILL.md') sub.pop()
   if (!sub.every((x) => SUB_PART.test(x) && x !== '.' && x !== '..' && x !== '.git')) return fail()
   return { kind: 'github', owner, repo, ref, sub: sub.join('/'), ...(treePath ? { treePath } : {}) }
 }
 
-/** Адрес репозитория для `git ls-remote`: собирается так же, как в `cloneArgs`. */
+/** Repository address for `git ls-remote`: built the same way as in `cloneArgs`. */
 export const remoteUrl = (src: { owner: string; repo: string }, base: string): string => `${base}${src.owner}/${src.repo}.git`
 
-/** Имена веток и тегов из вывода `git ls-remote --heads --tags` (строки `<sha>\trefs/heads/<имя>`, у аннотированных тегов ещё `^{}`). */
+/** Branch and tag names from the output of `git ls-remote --heads --tags` (lines `<sha>\trefs/heads/<name>`, annotated tags also have `^{}`). */
 export function parseRefs(out: string): Set<string> {
   const names = new Set<string>()
   for (const line of out.split(/\r?\n/)) {
@@ -192,9 +192,9 @@ export function parseRefs(out: string): Set<string> {
 }
 
 /**
- * Ветка со `/` в адресе `tree/…`: сегменты после `tree` — это ветка, а затем путь. Берётся самое длинное начало, которое
- * есть среди веток и тегов (ветки `a` и `a/b` в git сосуществовать не могут, так что совпадение одно). Если ни одно не
- * подошло, а первый сегмент — хеш коммита, это он; иначе `undefined` (вызывающий оставляет «первый сегмент — ветка»).
+ * A branch containing `/` in a `tree/…` address: the segments after `tree` are the branch, then the path. The longest prefix
+ * that is among the branches and tags is taken (branches `a` and `a/b` cannot coexist in git, so there is one match). If none
+ * fits and the first segment is a commit hash, that is it; otherwise `undefined` (the caller keeps "the first segment is the branch").
  */
 export function pickTreeRef(segments: string[], refs: Set<string>): { ref: string; sub: string; commit: boolean } | undefined {
   const sub = (from: number): string | undefined => {
@@ -202,7 +202,7 @@ export function pickTreeRef(segments: string[], refs: Set<string>): { ref: strin
     if (rest.at(-1) === 'SKILL.md') rest.pop()
     return rest.every((x) => SUB_PART.test(x) && x !== '.' && x !== '..' && x !== '.git') ? rest.join('/') : undefined
   }
-  // начало, равное всем сегментам, — адрес на саму ветку без пути (`tree/feature/x`)
+  // a prefix equal to all the segments is an address of the branch itself with no path (`tree/feature/x`)
   for (let k = segments.length; k >= 1; k--) {
     const ref = segments.slice(0, k).join('/')
     const rest = sub(k)
@@ -217,8 +217,8 @@ export function pickTreeRef(segments: string[], refs: Set<string>): { ref: strin
 const GIT_SAFE = ['-c', 'protocol.ext.allow=never', '-c', 'core.symlinks=false']
 
 /**
- * Аргументы `git clone`: адрес собирается из проверенных частей, перед ним `--`, флаги фиксированы. Для хеша коммита
- * `--branch` не принимается: клон без выгрузки и без истории блобов, коммит выбирает `checkoutArgs`.
+ * Arguments of `git clone`: the address is built from validated parts, preceded by `--`, the flags are fixed. For a commit hash
+ * `--branch` is not accepted: a clone without checkout and without blob history, and `checkoutArgs` selects the commit.
  */
 export function cloneArgs(src: { owner: string; repo: string; ref: string | undefined; commit?: boolean }, base: string, dest: string): string[] {
   if (src.commit ?? isCommitRef(src.ref)) return [...GIT_SAFE, 'clone', '--no-checkout', '--filter=blob:none', '--no-recurse-submodules', '--', remoteUrl(src, base), dest]
@@ -230,15 +230,15 @@ export function cloneArgs(src: { owner: string; repo: string; ref: string | unde
   ]
 }
 
-/** Второй шаг для хеша коммита: выгрузка этого коммита в клон, сделанный `cloneArgs`. */
+/** Second step for a commit hash: check that commit out in the clone made by `cloneArgs`. */
 export function checkoutArgs(ref: string, dest: string): string[] {
   return [...GIT_SAFE, '-C', dest, 'checkout', '--detach', ref, '--']
 }
 
 /**
- * Удаляет каталог подготовки. Клон git кладёт пакеты `.git/objects/pack/*` с признаком «только чтение», и `rmSync` в Node
- * Electron на Windows отказывает на них с EPERM (проверено на `anthropics/skills`): без снятия признака подготовка после
- * отказа от установки не удалялась, следующая загрузка падала, а запуск приложения — вместе с ней. Ссылки не обходим.
+ * Removes the staging directory. A git clone puts `.git/objects/pack/*` files with the read-only attribute, and `rmSync` in Node
+ * of Electron on Windows fails on them with EPERM (checked on `anthropics/skills`): without clearing the attribute the staging
+ * was not removed after an install was declined, the next download failed, and so did the app start. Links are not followed.
  */
 export function rmTree(dir: string): void {
   try {
@@ -261,14 +261,14 @@ export function rmTree(dir: string): void {
   }
 }
 
-/** Имя каталога скила, как его проверяет ядро. */
+/** Skill directory name, as the core validates it. */
 export function skillNameOk(n: string): boolean {
   return ID_PART.test(n) && !n.includes('..') && n.toLowerCase() !== 'synced' && !n.toLowerCase().startsWith('anthropic-skills')
 }
 
 const clean = (v: unknown, max: number): string => (typeof v === 'string' ? v.replace(CONTROL, ' ').trim().slice(0, max) : '')
 
-/** `name` и `description` из головы SKILL.md (плоские `ключ: значение`). */
+/** `name` and `description` from the head of SKILL.md (flat `key: value`). */
 function frontmatter(file: string): Record<string, string> {
   const head = readFileSync(file, 'utf8').slice(0, 4096)
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(head)
@@ -278,7 +278,7 @@ function frontmatter(file: string): Record<string, string> {
     const kv = /^([a-z_-]+):\s*(.*)$/.exec(lines[i]!)
     if (!kv) continue
     let v = kv[2]!
-    // блочный скаляр YAML (`description: >` или `|-`, как у скилов anthropics/skills): значение — строки с отступом ниже
+    // YAML block scalar (`description: >` or `|-`, as in the anthropics/skills skills): the value is the indented lines below
     if (/^[>|][+-]?$/.test(v)) {
       const body: string[] = []
       while (i + 1 < lines.length && /^(\s|$)/.test(lines[i + 1]!)) body.push(lines[++i]!.trim())
@@ -290,8 +290,8 @@ function frontmatter(file: string): Record<string, string> {
 }
 
 /**
- * Сколько файлов и байт в папке (без ссылок, `.git` и `node_modules`); на превышении лимита ядра — отказ сразу,
- * до копирования: иначе ввод `C:\` скопировал бы весь диск в каталог подготовки.
+ * How many files and bytes are in a folder (without links, `.git` and `node_modules`); over the core's limit it refuses at once,
+ * before copying: otherwise the input `C:\` would copy the whole disk into the staging directory.
  */
 export function checkTreeSize(dir: string, maxFiles = 1000, maxBytes = 50 << 20): void {
   let files = 0
@@ -313,14 +313,14 @@ export function checkTreeSize(dir: string, maxFiles = 1000, maxBytes = 50 << 20)
   walk(dir)
 }
 
-/** Скилы в подготовленном источнике: корень или каталоги со `SKILL.md` до трёх уровней вглубь. Ссылки не обходим. */
+/** Skills in a staged source: the root or directories with `SKILL.md` up to three levels deep. Links are not followed. */
 export function findSkills(root: string, only = '', rootName = ''): SkillCandidate[] {
   const out: SkillCandidate[] = []
   const visit = (sub: string, depth: number) => {
     const dir = sub ? join(root, ...sub.split('/')) : root
     if (existsSync(join(dir, 'SKILL.md'))) {
       const fm = frontmatter(join(dir, 'SKILL.md'))
-      // у скила в корне источника имя каталога — имя репозитория или папки
+      // for a skill at the source root, the directory name is the repository or folder name
       const leaf = sub.split('/').at(-1) || rootName
       const name = [fm['name'], leaf].find((n): n is string => n !== undefined && skillNameOk(n)) ?? ''
       out.push({ sub, name, description: clean(fm['description'], 300) })
@@ -340,7 +340,7 @@ export function findSkills(root: string, only = '', rootName = ''): SkillCandida
 const readJson = (file: string): unknown => JSON.parse(readFileSync(file, 'utf8'))
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-/** Откуда добавлен маркетплейс, для показа. */
+/** Where the marketplace was added from, for display. */
 function sourceText(src: unknown, tidy: (s: string) => string): string {
   if (!isObj(src)) return ''
   const v = src['repo'] ?? src['url'] ?? src['path'] ?? src['package'] ?? ''
@@ -348,8 +348,8 @@ function sourceText(src: unknown, tidy: (s: string) => string): string {
 }
 
 /**
- * Добавленные маркетплейсы Claude Code и их каталоги: `known_marketplaces.json` → `installLocation` → `marketplace.json`.
- * Только чтение. Имена, которые Claude Code не установит, пропускаются; тексты очищаются и обрезаются.
+ * Added Claude Code marketplaces and their catalogs: `known_marketplaces.json` → `installLocation` → `marketplace.json`.
+ * Read-only. Names that Claude Code would not install are skipped; texts are cleaned and truncated.
  */
 export function readCatalog(home: string, tidy: (s: string) => string = (s) => s): Marketplace[] {
   const plugins = join(home, '.claude', 'plugins')
@@ -365,7 +365,7 @@ export function readCatalog(home: string, tidy: (s: string) => string = (s) => s
     const ip = readJson(join(plugins, 'installed_plugins.json'))
     if (isObj(ip) && isObj(ip['plugins'])) installed = new Set(Object.keys(ip['plugins']))
   } catch {
-    // нет файла — ничего не установлено
+    // no file means nothing is installed
   }
   const out: Marketplace[] = []
   for (const [name, entry] of Object.entries(known).slice(0, 200)) {

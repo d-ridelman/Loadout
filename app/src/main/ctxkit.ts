@@ -6,7 +6,7 @@ import { t } from '../shared/i18n'
 import { MAX_BUILD_SLOTS } from '../shared/model'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, DayStats, DoctorFinding, FindingSeverity, SetupOptions, UninstallOptions } from '../shared/model'
 
-/** Разбор настроек `setup` от страницы: только булевы флаги и перечисления, всё остальное — отказ. */
+/** Parses the `setup` options from the page: only boolean flags and enums, anything else is rejected. */
 export function parseSetupOptions(raw: unknown): SetupOptions {
   const invalid = (): Error => new Error(t('неверные параметры Инструментов контекста', 'invalid Context Toolkit parameters'))
   if (typeof raw !== 'object' || raw === null) throw invalid()
@@ -46,15 +46,15 @@ export function parseSetupOptions(raw: unknown): SetupOptions {
   }
 }
 
-/** Значение `--policy`: перечисление имён из закрытого списка и целое число, никакого текста от пользователя; `undefined` — флаг не передаётся. */
+/** Value of `--policy`: names from a closed list plus an integer, no free text from the user; `undefined` means the flag is not passed. */
 export function policyArg(o: SetupOptions): string | undefined {
   if (o.policyMode === 'keep') return undefined
   if (o.policyMode === 'off') return 'none'
   const list = [o.commitHygiene && 'commit-hygiene', o.confirmIrreversible && 'confirm-irreversible', o.strayFiles && 'stray-files', o.buildSlots && `build-slots=${o.buildSlotsN}`].filter(Boolean)
-  return list.length ? list.join(',') : 'none' // «включить выбранные» без выбранного — то же, что «выключить все»
+  return list.length ? list.join(',') : 'none' // "enable the selected" with nothing selected is the same as "disable all"
 }
 
-/** Разбор настроек отката от страницы: два булевых флага, остальное — отказ. */
+/** Parses the rollback options from the page: two boolean flags, anything else is rejected. */
 export function parseUninstallOptions(raw: unknown): UninstallOptions {
   const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
   if (typeof r['antigravity'] !== 'boolean' || typeof r['dsh'] !== 'boolean') throw new Error(t('неверные параметры Инструментов контекста', 'invalid Context Toolkit parameters'))
@@ -62,8 +62,8 @@ export function parseUninstallOptions(raw: unknown): UninstallOptions {
 }
 
 /**
- * Аргументы `context-toolkit setup`. `home` задан только в разработке и проверках (`LOADOUT_HOME`): тогда всё, что пишут
- * Инструменты контекста, уходит в этот каталог, а не в настоящий профиль (при `--profile` они не копируют себя в `~/.local/bin`).
+ * Arguments for `context-toolkit setup`. `home` is set only in development and checks (`LOADOUT_HOME`): then everything
+ * Context Toolkit writes goes to this directory instead of the real profile (with `--profile` it does not copy itself to `~/.local/bin`).
  */
 export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): string[] {
   const a = ['setup']
@@ -79,17 +79,17 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
   if (o.effort !== 'keep') a.push('--effort', o.effort)
   const policy = policyArg(o)
   if (policy) a.push('--policy', policy)
-  // версию claude setup проверяет в самом конце, уже после записи, и зависший `claude` оставил бы окно с ошибкой при
-  // изменённых файлах; предпросмотр проверку оставляет (она нужна диагностике)
+  // setup checks the claude version at the very end, after writing, and a hung `claude` would leave the window with an error
+  // while the files are already changed; the preview keeps the check (diagnostics need it)
   if (!dryRun) a.push('--skip-version-check')
   if (home) a.push(...homeArgs(home))
   return a
 }
 
 /**
- * Аргументы `context-toolkit setup --uninstall`: только проверенные флаги, ни одного флага самого `setup` (откат их отвергает).
- * Интеграции Antigravity и DSH откат включает по самим флагам путей (`--agy-file`, `--dsh-home`), поэтому в разработке и проверках
- * пути передаются только вместе с галочкой, как в настоящем профиле. Пресеты Claude Desktop откат не трогает: флаг `--desktop` не нужен.
+ * Arguments for `context-toolkit setup --uninstall`: only validated flags, none of the `setup` flags themselves (the rollback rejects them).
+ * The rollback enables the Antigravity and DSH integrations by the path flags themselves (`--agy-file`, `--dsh-home`), so in development and checks
+ * the paths are passed only together with the checkbox, as in a real profile. The rollback does not touch Claude Desktop presets: no `--desktop` flag is needed.
  */
 export function uninstallArgs(o: UninstallOptions, dryRun: boolean, lang: 'en' | 'ru', home?: string): string[] {
   const a = ['setup', '--uninstall', '--lang', lang]
@@ -104,14 +104,14 @@ export function uninstallArgs(o: UninstallOptions, dryRun: boolean, lang: 'en' |
   return a
 }
 
-/** Пути, которые Инструменты контекста иначе берут из настоящего профиля пользователя. */
+/** Paths that Context Toolkit would otherwise take from the user's real profile. */
 function homeArgs(home: string): string[] {
   return [
     '--profile', join(home, '.claude'),
     '--desktop-file', join(home, 'AppData', 'Roaming', 'Claude', 'ccd-session-presets.json'),
     '--agy-file', join(home, '.gemini', 'config', 'hooks.json'),
     '--dsh-home', join(home, '.dsh'),
-    // для диагностики setup читает `~/.claude.json` (число глобальных MCP): без этого он читал бы настоящий файл
+    // for diagnostics setup reads `~/.claude.json` (the number of global MCPs): without this it would read the real file
     '--claude-json', join(home, '.claude.json'),
   ]
 }
@@ -124,7 +124,7 @@ export interface RunResult {
   stderr: string
 }
 
-/** Запуск встроенных Инструментов контекста: без оболочки, с таймаутом, окно не показывается. Ненулевой код — не исключение (`doctor` так сообщает об ошибках). */
+/** Runs the bundled Context Toolkit: no shell, with a timeout, no window shown. A non-zero exit code is not an exception (`doctor` reports errors that way). */
 export function run(bin: string, args: string[], timeoutMs: number, env?: Record<string, string>): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const opts = { windowsHide: true, timeout: timeoutMs, maxBuffer: 8 << 20, encoding: 'utf8' as const, ...(env ? { env: { ...process.env, ...env } } : {}) }
@@ -143,7 +143,7 @@ export function run(bin: string, args: string[], timeoutMs: number, env?: Record
 
 const sha = (p: string): string | undefined => (existsSync(p) ? createHash('sha256').update(readFileSync(p)).digest('hex') : undefined)
 
-/** Копия бинаря по пути: совпадает с встроенной побайтово, отличается или нет. Чужие копии не запускаются, только сравниваются. */
+/** A binary copy at a path: byte-identical to the bundled one, different, or missing. Foreign copies are never run, only compared. */
 export function compareCopy(bundled: string, copy: string): 'same' | 'different' | 'missing' {
   const c = sha(copy)
   if (c === undefined) return 'missing'
@@ -151,10 +151,10 @@ export function compareCopy(bundled: string, copy: string): 'same' | 'different'
 }
 
 export const BIN = 'context-toolkit.exe'
-/** Имя бинаря до переименования: его копия в `hooks/` — признак прежней установки, которую «Применить» переводит на новое имя. */
+/** Binary name before the rename: its copy in `hooks/` marks an earlier install, which "Apply" migrates to the new name. */
 export const OLD_BIN = 'ctxkit.exe'
 
-/** Состояние установки: копии в `hooksDir` (её вызывают хуки) и `binDir` (PATH) и копия прежнего имени в `hooksDir`. */
+/** Install state: copies in `hooksDir` (called by the hooks) and `binDir` (PATH), and a copy under the old name in `hooksDir`. */
 export async function status(bundled: string, hooksDir: string, binDir: string): Promise<CtxkitStatus> {
   const legacy = existsSync(join(hooksDir, OLD_BIN))
   if (!existsSync(bundled)) return { available: false, version: null, hook: 'missing', bin: 'missing', legacy }
@@ -174,14 +174,14 @@ function parseJson(text: string, what: string): Record<string, unknown> {
   } catch {
     throw new Error(t(`Инструменты контекста вернули не JSON (${what})`, `Context Toolkit returned non-JSON output (${what})`))
   }
-  // контракт: `schema: 1`, `tool` — имя бинаря (до переименования было `ctxkit`); другую версию не разбираем, а честно сообщаем
+  // contract: `schema: 1`, `tool` is the binary name (it was `ctxkit` before the rename); another version is not parsed, we report it honestly
   if (!isObj(v) || (v['tool'] !== 'context-toolkit' && v['tool'] !== 'ctxkit') || v['schema'] !== 1) {
     throw new Error(t(`context-toolkit ${what}: неподдерживаемая версия контракта (нужна schema 1)`, `context-toolkit ${what}: unsupported contract version (schema 1 required)`))
   }
   return v
 }
 
-/** `context-toolkit doctor --json`: находки пересобираются по полям, лишнее отбрасывается. */
+/** `context-toolkit doctor --json`: findings are rebuilt field by field, anything extra is dropped. */
 export function parseDoctor(text: string): CtxkitDoctor {
   const v = parseJson(text, 'doctor')
   const list = v['findings']
@@ -196,7 +196,7 @@ export function parseDoctor(text: string): CtxkitDoctor {
   return { findings, version: typeof v['version'] === 'string' ? v['version'].slice(0, 30) : '' }
 }
 
-/** `context-toolkit report --json`: счётчики по дням. Ключи агентов, написанные моделью, режутся по длине и виду. */
+/** `context-toolkit report --json`: per-day counters. Agent keys written by the model are limited by length and shape. */
 export function parseReport(text: string): CtxkitReport {
   const v = parseJson(text, 'report')
   const days = v['days']

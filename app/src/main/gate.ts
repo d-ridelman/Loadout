@@ -1,4 +1,4 @@
-// IPC-ворота main-процесса: кому отвечаем и что принимаем от страницы. Без electron, чтобы тестировалось vitest (gate.test.ts).
+// IPC gate of the main process: whom we answer and what we accept from the page. No electron, so it can be tested with vitest (gate.test.ts).
 import { t } from '../shared/i18n'
 import { CLIENTS } from '../shared/model'
 import type { ClientId, Intent, WriteLevel } from '../shared/model'
@@ -16,7 +16,7 @@ const CLIENT_IDS: readonly string[] = CLIENTS.map((c) => c.id)
 const invalid = (): Error => new Error(t('неверные параметры', 'invalid parameters'))
 export const isShort = (v: unknown): v is string => typeof v === 'string' && v.length <= 500 && !/\p{Cc}/u.test(v)
 
-/** Новый MCP: поля пересобираются, окончательные правила имени, адреса и env проверяет ядро. */
+/** New MCP: fields are rebuilt; the core enforces the final rules for name, address and env. */
 function validateAdd(r: Record<string, unknown>): Intent {
   const { to, name, command, args, url, env } = r
   if (typeof to !== 'string' || !CLIENT_IDS.includes(to) || !isShort(name) || !isShort(command) || !isShort(url)) {
@@ -33,13 +33,13 @@ function validateAdd(r: Record<string, unknown>): Intent {
   return { op: 'add', to: to as ClientId, name, command, args: args as string[], url, env: pairs }
 }
 
-/** Разбор намерения от страницы: только id записи и то, что с ней сделать. Всё остальное отбрасывается. */
+/** Parses an intent from the page: only the entry id and what to do with it. Everything else is dropped. */
 export function validateIntent(raw: unknown): Intent {
   if (typeof raw !== 'object' || raw === null) throw invalid()
   const r = raw as Record<string, unknown>
   if (r['op'] === 'add') return validateAdd(r)
   if (r['op'] === 'installSkill') {
-    // каталог подготовки ядро находит само по номеру; путь внутри и имя оно проверяет ещё раз
+    // the core finds the staging directory by its number itself; it re-checks the inner path and the name
     const { stage, sub, name } = r
     if (typeof stage !== 'string' || !STAGE_RE.test(stage) || typeof sub !== 'string' || !SUB_RE.test(sub) || typeof name !== 'string' || !skillNameOk(name)) {
       throw invalid()
@@ -80,19 +80,19 @@ export function parseBatch(v: unknown): string {
   return v
 }
 
-/** Уровень, который страница просит установить. */
+/** The level the page asks to set. */
 export function parseLevel(v: unknown): WriteLevel {
   if (v !== 'R0' && v !== 'R1' && v !== 'R2') throw new Error(t('неизвестный уровень', 'unknown level'))
   return v
 }
 
-/** Уровень, который main разрешает записи при текущей настройке: R0 — запись выключена. */
+/** The level main grants to a write under the current setting: R0 means writing is off. */
 export function grantedOf(have: WriteLevel): 'R1' | 'R2' {
   if (have === 'R0') throw new Error(t('запись выключена (R0): включите уровень записи в шапке окна', 'writing is off (R0): enable a write level in the window header'))
   return have
 }
 
-/** Адрес отправителя: файл страницы из сборки или тот же источник dev-сервера (не префикс строки: `http://localhost:5173.evil.test` не подходит). */
+/** Sender address: the built page file or the same origin as the dev server (not a string prefix: `http://localhost:5173.evil.test` does not pass). */
 export function isTrustedUrl(url: string, indexUrl: string, devUrl: string | undefined): boolean {
   if (url.split('#')[0] === indexUrl) return true
   try {
@@ -102,14 +102,14 @@ export function isTrustedUrl(url: string, indexUrl: string, devUrl: string | und
   }
 }
 
-/** Всё, что нужно от события IPC: кадр отправителя. */
+/** All we need from an IPC event: the sender frame. */
 export interface SenderEvent {
   senderFrame?: { url: string } | null
 }
 
 export const trustedSender = (e: SenderEvent, indexUrl: string, devUrl: string | undefined): boolean => isTrustedUrl(e.senderFrame?.url ?? '', indexUrl, devUrl)
 
-/** Каналы записи отвечают только нашей странице: чужой отправитель — исключение до любой работы. */
+/** Write channels answer only our page: a foreign sender throws before any work is done. */
 export function assertTrusted(e: SenderEvent, indexUrl: string, devUrl: string | undefined): void {
   if (!trustedSender(e, indexUrl, devUrl)) throw new Error('untrusted sender')
 }

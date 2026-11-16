@@ -14,7 +14,7 @@ import {
   validateScan,
 } from './validate'
 
-/** Подставное «ядро»: JSON-RPC по stdio, с командами для падения, шума и записи следов в файл. */
+/** A stand-in "core": JSON-RPC over stdio, with commands for crashing, noise and writing traces to a file. */
 const FAKE = `
 const fs = require('node:fs')
 const log = process.env.FAKE_LOG
@@ -64,13 +64,13 @@ function setup(extra: Partial<ConstructorParameters<typeof Sidecar>[0]> = {}, sc
 const until = async (cond: () => boolean, ms = 4000) => {
   const end = Date.now() + ms
   while (!cond()) {
-    if (Date.now() > end) throw new Error('условие не наступило')
+    if (Date.now() > end) throw new Error('condition was not met')
     await new Promise((r) => setTimeout(r, 25))
   }
 }
 
 describe('Sidecar', () => {
-  it('отвечает на запросы и доставляет уведомления; мусор в stdout игнорируется', async () => {
+  it('answers requests and delivers notifications; garbage on stdout is ignored', async () => {
     const { s, notes } = setup()
     s.start()
     expect(await s.request('snapshot')).toEqual({ echo: 'snapshot' })
@@ -79,7 +79,7 @@ describe('Sidecar', () => {
     expect(notes.some((n) => n.method === 'ready')).toBe(true)
   })
 
-  it('после падения процесса ждущий запрос получает «ядро не ответило», а следующий работает на новом процессе', async () => {
+  it('after the process crashes a pending request gets "the core did not respond", and the next one runs on a new process', async () => {
     const { s, starts } = setup()
     s.start()
     await s.request('snapshot')
@@ -88,18 +88,18 @@ describe('Sidecar', () => {
     expect(starts()).toBe(2)
   })
 
-  it('пределы перезапусков: после исчерпания запрос падает сразу, повторный запрос начинает заново', async () => {
+  it('restart limits: once exhausted a request fails immediately, a repeated request starts over', async () => {
     const { s, starts } = setup({ maxRestarts: 2 }, `require('node:fs').appendFileSync(process.env.FAKE_LOG, 'start\\n'); process.exit(1)`)
     s.start()
     await expect(s.request('scan')).rejects.toThrow('ядро не ответило')
-    await until(() => starts() >= 3) // первый запуск и две попытки
+    await until(() => starts() >= 3) // the first start and two retries
     await new Promise((r) => setTimeout(r, 200))
     expect(starts()).toBe(3)
     await expect(s.request('scan')).rejects.toThrow('ядро не ответило')
-    await until(() => starts() > 3) // «Повторить» начинает заново
+    await until(() => starts() > 3) // "Retry" starts over
   })
 
-  it('stop закрывает stdin: ядро выходит по EOF, перезапуска нет', async () => {
+  it('stop closes stdin: the core exits on EOF, no restart', async () => {
     const { s, lines, starts } = setup()
     s.start()
     await s.request('snapshot')
@@ -109,7 +109,7 @@ describe('Sidecar', () => {
     expect(starts()).toBe(1)
   })
 
-  it('после stop запрос не поднимает ядро заново', async () => {
+  it('after stop a request does not start the core again', async () => {
     const { s, starts } = setup()
     s.start()
     await s.request('snapshot')
@@ -119,33 +119,33 @@ describe('Sidecar', () => {
     expect(starts()).toBe(1)
   })
 
-  it('запрос без ответа падает по таймауту', async () => {
+  it('a request without a reply fails on timeout', async () => {
     const { s } = setup({ requestTimeoutMs: 200 })
     s.start()
     await s.request('snapshot')
     await expect(s.request('silent')).rejects.toThrow('нет ответа')
   })
 
-  it('запрос, привязанный к поколению, не уходит перезапущенному процессу (сверка версии ядра не обходится)', async () => {
+  it('a request bound to a generation is not sent to a restarted process (the core version check cannot be bypassed)', async () => {
     const { s } = setup({ baseDelayMs: 300 })
     s.start()
     await s.request('snapshot')
     const verified = s.generation
     await expect(s.request('crash')).rejects.toThrow('ядро не ответило')
-    // процесс упал, новый ещё не поднят: запись, сверенная на старом поколении, встаёт в очередь
+    // the process crashed and a new one is not up yet: a write verified on the old generation is queued
     const queued = s.request('apply', { x: 1 }, verified)
     await expect(queued).rejects.toThrow('перезапустилось')
     expect(s.generation).toBeGreaterThan(verified)
-    // обычный запрос без привязки работает на новом процессе, а старое поколение отвергается сразу
+    // an ordinary unbound request runs on the new process, while the old generation is rejected at once
     expect(await s.request('snapshot')).toEqual({ echo: 'snapshot' })
     await expect(s.request('apply', undefined, verified)).rejects.toThrow('перезапустилось')
     expect(await s.request('apply', undefined, s.generation)).toEqual({ echo: 'apply' })
   })
 
-  it('запросы, отправленные до запуска процесса, не теряются', async () => {
+  it('requests sent before the process starts are not lost', async () => {
     const { s } = setup()
     s.start()
-    const first = s.request('snapshot') // процесс ещё поднимается
+    const first = s.request('snapshot') // the process is still starting
     expect(await first).toEqual({ echo: 'snapshot' })
   })
 })
@@ -162,7 +162,7 @@ describe('validate', () => {
     facts: { backups: [], brokenLinks: [] },
   }
 
-  it('принимает корректный скан и отвергает неожиданные формы', () => {
+  it('accepts a valid scan and rejects unexpected shapes', () => {
     expect(validateScan(ok).entities).toHaveLength(1)
     expect(() => validateScan({ ...ok, entities: [{ ...ok.entities[0], client: 'evil' }] })).toThrow('неожиданной формы')
     expect(() => validateScan({ ...ok, entities: [{ ...ok.entities[0], state: 7 }] })).toThrow()
@@ -172,7 +172,7 @@ describe('validate', () => {
     expect(() => validateScan({ ...ok, facts: { backups: [{ client: 'evil', dir: 'd', count: 1 }], brokenLinks: [] } })).toThrow('факты')
   })
 
-  it('в окно уходят пересобранные объекты без лишних полей', () => {
+  it('rebuilt objects without extra fields are sent to the window', () => {
     const dirty = {
       ...ok,
       extra: 'x',
@@ -185,7 +185,7 @@ describe('validate', () => {
     expect(out.entities[0]).toMatchObject({ version: '1.0', note: 'n' })
   })
 
-  it('событие `changed` — только id и признаки', () => {
+  it('the `changed` event carries only ids and flags', () => {
     expect(validateDiff({ added: ['a'], removed: [], changed: [], warningsChanged: true, factsChanged: false })).toEqual({
       added: ['a'], removed: [], changed: [], warningsChanged: true, factsChanged: false,
     })
@@ -193,7 +193,7 @@ describe('validate', () => {
     expect(() => validateDiff('x')).toThrow()
   })
 
-  it('canToggle обязателен, toggleWhy необязателен', () => {
+  it('canToggle is required, toggleWhy is optional', () => {
     expect(() => validateScan({ ...ok, entities: [{ ...ok.entities[0], canToggle: undefined }] })).toThrow()
     const out = validateScan({ ...ok, entities: [{ ...ok.entities[0], canToggle: false, toggleWhy: 'нет флага' }] })
     expect(out.entities[0]).toMatchObject({ canToggle: false, toggleWhy: 'нет флага' })
@@ -205,7 +205,7 @@ describe('validate', () => {
     from: 'true', to: 'false', noop: false, affects: [], baseSha: 'a'.repeat(64),
   }
 
-  it('план, результат записи и журнал: лишние поля отбрасываются, кривые формы отвергаются', () => {
+  it('plan, write result and journal: extra fields are dropped, malformed shapes are rejected', () => {
     expect(validatePlan({ ...plan, content: 'FAKE-SECRET' })).toEqual(plan)
     expect(() => validatePlan({ ...plan, baseSha: 'zz' })).toThrow('план')
     expect(() => validatePlan({ ...plan, client: 'evil' })).toThrow()
@@ -225,7 +225,7 @@ describe('validate', () => {
     expect(() => validateJournal([{ ...row, level: 'R9' }])).toThrow()
   })
 
-  it('профили и план пакета: лишние поля отбрасываются, кривые формы отвергаются', () => {
+  it('profiles and batch plan: extra fields are dropped, malformed shapes are rejected', () => {
     const prof = [{ name: 'рабочий', items: [{ client: 'codex', kind: 'plugin', scope: 'user', name: 'p1', enable: true, junk: 1 }], x: 1 }]
     expect(validateProfiles(prof)).toEqual([{ name: 'рабочий', items: [{ client: 'codex', kind: 'plugin', scope: 'user', name: 'p1', enable: true }] }])
     expect(() => validateProfiles([{ name: 'x', items: [{ client: 'evil', kind: 'plugin', scope: 'u', name: 'n', enable: true }] }])).toThrow()
