@@ -35,12 +35,14 @@ async function waitFor(fn, what, ms = 15000) {
 function materialize(lang) {
   const home = join(tmpdir(), `loadout-docs-${lang}`)
   rmSync(home, { recursive: true, force: true })
+  // фикстура держит хуки прежнего имени (ctxkit) для проверок перехода; на снимках для README — нынешнее имя
+  const now = (s) => s.replaceAll('ctxkit', 'context-toolkit')
   const walk = (from, to) => {
     mkdirSync(to, { recursive: true })
     for (const name of readdirSync(from)) {
-      const [s, d] = [join(from, name), join(to, name)]
+      const [s, d] = [join(from, name), join(to, now(name))]
       if (statSync(s).isDirectory()) walk(s, d)
-      else writeFileSync(d, readFileSync(s, 'utf8').replaceAll('{HOME_UPPER}', home.toUpperCase().replaceAll('\\', '/')).replaceAll('{HOME}', home.replaceAll('\\', '/')))
+      else writeFileSync(d, now(readFileSync(s, 'utf8')).replaceAll('{HOME_UPPER}', home.toUpperCase().replaceAll('\\', '/')).replaceAll('{HOME}', home.replaceAll('\\', '/')))
     }
   }
   walk(join(repo, 'fixtures', 'home'), home)
@@ -85,6 +87,7 @@ async function shot(page, lang, name) {
   const hit = banned.filter((b) => text.includes(b))
   must(hit.length === 0, `${lang}-${name}: в окне личные данные (${hit.length} совпадений)`)
   must(!text.includes('fake-secret'), `${lang}-${name}: в окне секрет фикстуры`)
+  must(!text.includes('ctxkit'), `${lang}-${name}: в окне прежнее имя ctxkit`)
   await page.screenshot({ path: join(outDir, `${lang}-${name}.png`) })
   console.log(`  ${lang}-${name}.png`)
 }
