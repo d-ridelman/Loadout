@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
 import { getLang, t } from '../../shared/i18n'
 import { chars, daysDesc, pct, segments, stopGateOff, summarize } from '../ctxkit-stats'
@@ -88,6 +88,13 @@ export function Ctxkit({ level, onNotice }: Props) {
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [result, setResult] = useState<(SetupResult & { kind: 'setup' | 'uninstall' }) | null>(null)
   const [busy, setBusy] = useState<Busy | null>(null)
+  const undoPreviewRef = useRef<HTMLButtonElement>(null)
+  const [refocus, setRefocus] = useState(false)
+  useEffect(() => {
+    if (!refocus || busy) return
+    undoPreviewRef.current?.focus() // красная кнопка исчезла вместе с фокусом
+    setRefocus(false)
+  }, [refocus, busy])
   const [error, setError] = useState<string | null>(null)
 
   // Галочка шлюза Stop берёт начальное значение из профиля (шлюз выключен — «Применить» не должен молча включить его),
@@ -111,22 +118,27 @@ export function Ctxkit({ level, onNotice }: Props) {
     async (kind: 'setup' | 'uninstall', dryRun: boolean) => {
       setBusy(kind === 'setup' ? (dryRun ? 'preview' : 'apply') : dryRun ? 'undoPreview' : 'undo')
       setError(null)
+      setPreviewKey(null) // и предпросмотр, и действие расходуют прежний предпросмотр (main делает так же)
       const call = kind === 'setup' ? window.loadout.ctxkitSetup(opts, dryRun) : window.loadout.ctxkitUninstall({ antigravity: opts.antigravity, dsh: opts.dsh }, dryRun)
       const r = await call.catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('не удалось', 'failed') }))
       setBusy(null)
       if (!r.ok) return setError(r.error)
       setResult({ ...r.data, kind })
+      // настоящий запуск мог записать часть файлов и при ненулевом коде: статус и диагностику перечитываем в любом случае
+      if (!dryRun) {
+        reloadStatus()
+        reloadDoctor()
+      }
       if (r.data.code !== 0) return setError(t(`ctxkit вышел с кодом ${r.data.code}: подробности в выводе ниже`, `ctxkit exited with code ${r.data.code}: see the output below`))
       if (dryRun) setPreviewKey(kind === 'setup' ? key : undoKey)
       else {
-        setPreviewKey(null)
         onNotice(
           kind === 'setup'
             ? t('ctxkit применён: хуки и настройки записаны, бэкапы ctxkit лежат в ~/.claude/backups', 'ctxkit applied: hooks and settings written, ctxkit backups are in ~/.claude/backups')
-            : t('ctxkit откачен: хуки, блок правил и бинарь убраны; модель, советник, effort, пресеты и агенты оставлены (список и бэкап в выводе)', 'ctxkit rolled back: hooks, rules block and binary removed; model, advisor, effort, presets and agents left as is (list and backup in the output)'),
+            : t('Откат ctxkit выполнен: хуки и блок правил убраны, бинарь смотрите в блоке «Установка»; модель, советник, effort, пресеты и агенты оставлены (список и бэкап в выводе)', 'ctxkit rollback done: hooks and rules block removed, see “Installation” for the binary; model, advisor, effort, presets and agents left as is (list and backup in the output)'),
         )
-        reloadStatus()
-        reloadDoctor()
+        // красная кнопка исчезает вместе с фокусом: возвращаем его на кнопку предпросмотра отката
+        if (kind === 'uninstall') setRefocus(true)
       }
     },
     [opts, key, undoKey, onNotice, reloadStatus, reloadDoctor],
@@ -197,7 +209,7 @@ export function Ctxkit({ level, onNotice }: Props) {
               <option value="opus">Opus</option>
               <option value="haiku">Haiku</option>
             </select>
-            <span id="ctx-main-hint" className="mute small">{t('Пишет `model` в settings.json профиля Claude Code; прежнее значение ctxkit покажет в предпросмотре строкой «было -> стало».', 'Writes `model` into the Claude Code profile settings.json; ctxkit shows the previous value in the preview as a “was -> became” line.')}</span>
+            <span id="ctx-main-hint" className="mute small">{t('Пишет model в settings.json профиля Claude Code; прежнее значение ctxkit покажет в предпросмотре строкой «было -> стало».', 'Writes model into the Claude Code profile settings.json; ctxkit shows the previous value in the preview as a “was -> became” line.')}</span>
           </div>
           <div className="field">
             <label htmlFor="ctx-effort">Effort</label>
@@ -208,7 +220,7 @@ export function Ctxkit({ level, onNotice }: Props) {
               <option value="high">high</option>
               <option value="xhigh">xhigh</option>
             </select>
-            <span id="ctx-effort-hint" className="mute small">{t('Effort пишется для основной модели: `modelSettings.<модель>.effortLevel` (модель берётся из выбора выше или из уже стоящей `model`; нужен Claude Code 2.1.251 или новее) и верхний `effortLevel`. Без известной модели ctxkit пишет только верхний `effortLevel`.', 'Effort is written for the main model: `modelSettings.<model>.effortLevel` (the model comes from the choice above or from the `model` already set; needs Claude Code 2.1.251 or newer) and the top-level `effortLevel`. Without a known model ctxkit writes only the top-level `effortLevel`.')}</span>
+            <span id="ctx-effort-hint" className="mute small">{t('Effort пишется для основной модели: modelSettings.<модель>.effortLevel (модель берётся из выбора выше или из уже стоящей model; нужен Claude Code 2.1.251 или новее) и верхний effortLevel. Без известной модели ctxkit пишет только верхний effortLevel. С галочкой Claude Desktop effort пишется и в его пресеты.', 'Effort is written for the main model: modelSettings.<model>.effortLevel (the model comes from the choice above or from the model already set; needs Claude Code 2.1.251 or newer) and the top-level effortLevel. Without a known model ctxkit writes only the top-level effortLevel. With the Claude Desktop checkbox effort is written into its presets too.')}</span>
           </div>
           <div className="field">
             <label htmlFor="ctx-advisor">{t('Модель-советник', 'Advisor model')}</label>
@@ -218,7 +230,7 @@ export function Ctxkit({ level, onNotice }: Props) {
               <option value="opus">Opus</option>
               <option value="none">{t('без советника', 'no advisor')}</option>
             </select>
-            <span id="ctx-advisor-hint" className="mute small">{t('`advisorModel` ставится только если выбрать модель здесь; «без советника» убирает его.', '`advisorModel` is set only if you pick a model here; “no advisor” removes it.')}</span>
+            <span id="ctx-advisor-hint" className="mute small">{t('advisorModel ставится только если выбрать модель здесь; «без советника» убирает его.', 'advisorModel is set only if you pick a model here; “no advisor” removes it.')}</span>
           </div>
           <div className="actions col">
             <button type="submit" disabled={!!busy} aria-busy={busy === 'preview'}>
@@ -233,7 +245,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             >
               {spin('apply', t('Применяю…', 'Applying…')) ?? t('Применить: установить или обновить', 'Apply: install or update')}
             </button>
-            <button type="button" disabled={!!busy} aria-busy={busy === 'undoPreview'} onClick={() => void run('uninstall', true)}>
+            <button type="button" ref={undoPreviewRef} disabled={!!busy} aria-busy={busy === 'undoPreview'} title={t('Показать, что уберёт откат (ничего не пишет)', 'Show what the rollback would remove (writes nothing)')} onClick={() => void run('uninstall', true)}>
               {spin('undoPreview', t('Считаю…', 'Working…')) ?? t('Откатить ctxkit', 'Roll back ctxkit')}
             </button>
             {previewKey === undoKey || busy === 'undo' ? (
