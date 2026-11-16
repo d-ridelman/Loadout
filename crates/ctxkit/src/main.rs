@@ -5,6 +5,7 @@ mod doctor;
 mod fsx;
 mod gate;
 mod guard;
+mod irreversible;
 mod policy;
 mod report;
 mod setup;

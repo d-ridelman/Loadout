@@ -85,7 +85,6 @@ pub fn load_from(profile: &Path) -> Config {
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
     Deny(String),
-    #[allow(dead_code)] // first built by confirm_irreversible
     Ask(String),
 }
 
@@ -105,6 +104,13 @@ pub fn shell(
         {
             return Some(Verdict::Deny(r));
         }
+    }
+    if cfg.confirm_irreversible {
+        let home = crate::irreversible::home_norm();
+        return dialects
+            .iter()
+            .find_map(|d| crate::irreversible::reason(cmd, *d, lang, home.as_deref()))
+            .map(Verdict::Ask);
     }
     None
 }
@@ -264,6 +270,30 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_policies_deny_beats_ask_and_off_means_silent() {
+        let both = Config {
+            commit_hygiene: true,
+            confirm_irreversible: true,
+            ..Config::default()
+        };
+        let run = |c: &Config, cmd: &str| shell(c, cmd, &[Dialect::Posix], Lang::En, None);
+        let mixed = "git commit -m 'Co-Authored-By: x' && git push";
+        assert!(matches!(run(&both, mixed), Some(Verdict::Deny(_))));
+        assert!(matches!(run(&both, "git push"), Some(Verdict::Ask(_))));
+        assert_eq!(run(&both, "git status"), None);
+        assert_eq!(run(&Config::default(), mixed), None);
+        let only_ask = Config {
+            confirm_irreversible: true,
+            ..Config::default()
+        };
+        assert!(matches!(run(&only_ask, mixed), Some(Verdict::Ask(_))));
+        // both dialects tried (Antigravity does not say which shell it runs)
+        let any =
+            |cmd: &str| shell(&both, cmd, &[Dialect::Posix, Dialect::Ps], Lang::En, None).is_some();
+        assert!(any("rm -rf x") && any("Remove-Item x -Recurse -Force") && !any("ls"));
+    }
 
     #[test]
     fn a_missing_or_broken_file_means_every_policy_is_off() {

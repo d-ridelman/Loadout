@@ -164,6 +164,33 @@ const cases = [
     return agyOff.decision === 'ask' && agyOff.reason === undefined;
   }],
 
+  // Policy confirm_irreversible: "ask" for every client, a deny from commit_hygiene wins, one JSON on stdout
+  [true, () => {
+    const on = P('irrev', { confirm_irreversible: true });
+    const ask = (tool, command, o = {}) => pol(on, tool, { command }, o);
+    for (const c of ['git push', 'git push --force origin main', 'git reset --hard', 'git clean -fd', 'git branch -D x', 'git checkout -- .', 'git restore .', 'rm -rf build', 'rm -r -f build', 'cd a && git push']) {
+      if (ask('Bash', c) !== 'ask') return `bash ask: ${c}`;
+    }
+    for (const c of ['Remove-Item C:\\x -Recurse -Force', 'Remove-Item C:\\', 'git push -f']) {
+      if (ask('PowerShell', c) !== 'ask') return `ps ask: ${c}`;
+    }
+    for (const c of ['git status', 'git push --dry-run', 'git stash push', 'git restore --staged .', 'rm -r dir', 'echo "git push"', 'git commit -m "git push --force"']) {
+      if (ask('Bash', c) !== '') return `bash quiet: ${c}`;
+    }
+    const raw = JSON.parse(runHook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push --force' } }, [], { CLAUDE_CONFIG_DIR: on }));
+    if (raw.hookSpecificOutput.hookEventName !== 'PreToolUse' || raw.hookSpecificOutput.permissionDecision !== 'ask' || !raw.hookSpecificOutput.permissionDecisionReason.includes('git push --force')) return 'ask format';
+    if (!polReason(on, 'Bash', { command: 'git reset --hard' }, { env: { CTXKIT_LANG: 'ru' } }).includes('Подтверди запуск')) return 'ru';
+    if (ask('bash', 'git push', { args: ['--dsh'] }) !== 'ask' || ask('pwsh', 'Remove-Item x -Recurse -Force', { args: ['--dsh'] }) !== 'ask') return 'dsh';
+    const agy = (CommandLine) => JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on }));
+    const a = agy('git push');
+    if (a.decision !== 'ask' || !a.reason?.includes('git push') || agy('Remove-Item x -Recurse -Force').decision !== 'ask' || agy('ls').reason !== undefined) return 'agy';
+    // deny (commit hygiene) beats ask, and only one answer is printed
+    const both = P('both', { confirm_irreversible: true, commit_hygiene: true });
+    if (pol(both, 'Bash', { command: 'git commit -m "Co-Authored-By: x" && git push' }) !== 'deny') return 'deny beats ask';
+    // off by default; broken file; the emergency switch
+    return pol(isoProfile, 'Bash', { command: 'git push' }) === '' && pol(polProfile('irrev-broken', '{'), 'Bash', { command: 'git push' }) === '' && pol(on, 'Bash', { command: 'git push' }, { env: { CTXKIT_GUARD: 'off' } }) === '';
+  }],
+
   // Second review pass: redirect detection must survive escapes and odd quotes
   [true, () => sh(`echo "C:${B}${B}dir${B}${B}" > f.txt`)],
   [true, () => sh(`printf 'it'${B}''s a${B}n' > f.txt`)],
