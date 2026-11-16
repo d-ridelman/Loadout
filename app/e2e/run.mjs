@@ -763,7 +763,7 @@ try {
   const claudeDir = join(home, '.claude')
   const hookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
-  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep' } // форма по умолчанию: советник «не менять»
+  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep' } // форма по умолчанию: советник, основная модель и effort «не менять»
   // Настоящий профиль владельца ctxkit трогать не должен: хеши файлов, которые `setup` пишет, до и после всего шага.
   // `~/.claude.json` не сравниваем: его переписывает работающий Claude Code, ctxkit его только читает (в проверках с --claude-json на копию).
   const realHome = homedir()
@@ -814,7 +814,7 @@ try {
   const eff = await page.locator('main').innerText()
   must(eff.includes('на Sonnet и Haiku') && eff.includes('checker ×'), `нет сводки эффективности: ${eff.slice(-600)}`)
   // период и «Пересчитать» в одной строке; во время подсчёта кнопка занята и это видно; после — время подсчёта
-  const recalc = page.getByRole('button', { name: /^(Пересчитать|Считаю…)$/ })
+  const recalc = page.locator('section[aria-label="Эффективность"]').getByRole('button', { name: /^(Пересчитать|Считаю…)$/ })
   await waitFor(async () => (await page.locator('section[aria-label="Эффективность"] [role=status]').innerText()).includes('Посчитано в'), 'после первого подсчёта видно время')
   const effRow = await page.evaluate(() => {
     const s = document.querySelector('select[aria-label="Период отчёта"]').getBoundingClientRect()
@@ -871,6 +871,34 @@ try {
   const sPre = JSON.parse(settingsBefore)
   must(sNow.model === sPre.model && sNow.effortLevel === sPre.effortLevel && JSON.stringify(sNow.modelSettings) === JSON.stringify(sPre.modelSettings), 'окно изменило model, effortLevel или modelSettings')
   must(sNow.advisorModel === 'fable', `advisorModel из формы не записан: ${sNow.advisorModel}`)
+  // селекты «Основная модель» и «Effort»: по умолчанию «Не менять», явный выбор Sonnet + high виден в предпросмотре и пишется после применения
+  const mainSel = page.getByLabel('Основная модель', { exact: true })
+  const effortSel = page.getByLabel('Effort', { exact: true })
+  must((await mainSel.inputValue()) === 'keep' && (await effortSel.inputValue()) === 'keep', 'селекты основной модели и effort по умолчанию должны быть «Не менять»')
+  must((await mainSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Sonnet|Opus|Haiku', 'варианты основной модели')
+  must((await effortSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|low|medium|high|xhigh', 'варианты effort')
+  must((await page.locator('#ctx-effort-hint').innerText()).includes('2.1.251'), 'под селектом effort нет подсказки про версию Claude Code')
+  await mainSel.selectOption('sonnet')
+  await effortSel.selectOption('high')
+  must(await applyBtn.isDisabled(), 'после выбора модели и effort старый предпросмотр не должен разрешать применение')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с Sonnet и high')
+  const modelPreview = await page.locator('pre.out').innerText()
+  for (const line of ['model: (unset) -> sonnet', 'effortLevel: (unset) -> high', 'effort modelSettings.claude-sonnet-5-5: (unset) -> high']) must(modelPreview.includes(line), `предпросмотр с Sonnet и high без строки «${line}»: ${modelPreview.slice(0, 500)}`)
+  must(!('model' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'предпросмотр с Sonnet записал model')
+  await mainSel.selectOption('keep')
+  await effortSel.selectOption('keep')
+  must(await applyBtn.isDisabled(), 'после возврата к «Не менять» старый предпросмотр не должен разрешать применение')
+  await mainSel.selectOption('sonnet')
+  await effortSel.selectOption('high')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с Sonnet и high повторён')
+  await applyBtn.click()
+  await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).model === 'sonnet', 'выбор Sonnet записал model')
+  const sModel = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  must(sModel.modelSettings?.['claude-sonnet-5-5']?.effortLevel === 'high' && sModel.effortLevel === 'high', `effort high не записан: ${JSON.stringify({ ms: sModel.modelSettings, e: sModel.effortLevel })}`)
+  const foreignStart = (s) => s.hooks.SessionStart.flatMap((g) => g.hooks ?? []).map((h) => h.command).filter((c) => !/ctxkit/i.test(c))
+  must(sModel.advisorModel === 'fable' && JSON.stringify(foreignStart(sModel)) === JSON.stringify(foreignStart(sPre)), `запись модели и effort затронула советника или чужие хуки: ${sModel.advisorModel} ${JSON.stringify(sModel.hooks.SessionStart)} / ${JSON.stringify(sPre.hooks.SessionStart)}`)
   // уход из раздела и возврат: галочка берётся из профиля (шлюза нет), а не сбрасывается на «шлюз включён»
   await page.keyboard.press('1')
   await page.keyboard.press('7')
@@ -880,9 +908,109 @@ try {
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await waitFor(async () => (await page.locator('pre.out').innerText()).includes('Stop gate: off'), 'предпросмотр после возврата должен говорить «Stop gate: off»')
   must(ourStop() === 0, 'предпросмотр после возврата вернул шлюз')
+  // ---- откат ctxkit на копии фикстуры: предпросмотр, R2, чужие хуки на месте, повтор безопасен ----
+  const undoOpts = { antigravity: false, dsh: false }
+  const undoRefusal = (o, dry) => page.evaluate(async ([x, d]) => (await window.loadout.ctxkitUninstall(x, d)).error ?? 'ok', [o, dry])
+  const undoPreviewBtn = page.getByRole('button', { name: 'Откатить ctxkit', exact: true })
+  const undoGoBtn = page.getByRole('button', { name: 'Откатить: убрать хуки, блок правил и бинарь' })
+  const foreignCmds = (s) => Object.values(s.hooks ?? {}).flat().flatMap((g) => g.hooks ?? []).map((h) => h.command ?? '').filter((c) => !/(^|[\\/"])ctxkit(\.exe)?("|\s|$)/i.test(c)).sort()
+  const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v)
+  const claudeMd = join(claudeDir, 'CLAUDE.md')
+  const settingsHooked = readFileSync(settingsFile, 'utf8')
+  must(foreignCmds(JSON.parse(settingsBefore)).length === 3 && JSON.stringify(foreignCmds(JSON.parse(settingsHooked))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'до отката чужие хуки фикстуры должны быть на месте')
+  must(existsSync(claudeMd) && readFileSync(claudeMd, 'utf8').toLowerCase().includes('ctxkit'), 'до отката в CLAUDE.md нет блока правил ctxkit')
+  must((await undoGoBtn.count()) === 0, 'кнопка отката видна без предпросмотра отката')
+  must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'откат без предпросмотра отката (есть только предпросмотр setup) не отвергнут в main')
+  must((await undoRefusal({ antigravity: 'yes', dsh: false }, true)).includes('параметры'), 'неверные параметры отката не отвергнуты')
+  must((await undoRefusal(undoOpts, 'x')).includes('параметры'), 'неверный dryRun отката не отвергнут')
+  // занятость: сразу после нажатия кнопка показывает «Считаю…» со спиннером, строка состояния говорит, что идёт, все кнопки заблокированы
+  const busyNow = await page.evaluate(() => {
+    const sec = document.querySelector('section[aria-label="Применение"]')
+    const b = [...sec.querySelectorAll('button')].find((x) => x.textContent === 'Откатить ctxkit')
+    // состояние снимается в первый же момент, когда DOM показал занятость (MutationObserver, а не пауза: ответ ctxkit быстрый)
+    return new Promise((resolve) => {
+      const snap = () => ({ label: b.textContent, spin: !!b.querySelector('.spin'), status: sec.querySelector('[role=status]').textContent, allDisabled: [...sec.querySelectorAll('button')].every((x) => x.disabled) })
+      const mo = new MutationObserver(() => {
+        if (b.textContent !== 'Считаю…') return
+        mo.disconnect()
+        resolve(snap())
+      })
+      mo.observe(sec, { childList: true, subtree: true, characterData: true })
+      setTimeout(() => { mo.disconnect(); resolve(snap()) }, 3000)
+      b.click()
+    })
+  })
+  must(busyNow.label === 'Считаю…' && busyNow.spin && busyNow.status.includes('Считаю предпросмотр отката') && busyNow.allDisabled, `занятость кнопки отката: ${JSON.stringify(busyNow)}`)
+  await undoGoBtn.waitFor({ timeout: 30000 })
+  await waitFor(() => undoGoBtn.isDisabled().then((d) => !d), 'после предпросмотра отката кнопка отката доступна')
+  const undoPreview = await page.locator('pre.out').innerText()
+  must(undoPreview.includes('[dry-run]') && undoPreview.includes('Не тронуто') && undoPreview.includes('sonnet') && undoPreview.includes('fable'), `предпросмотр отката без списка «не тронуто» с model и advisorModel: ${undoPreview.slice(0, 600)}`)
+  must(![realHome, realHome.replaceAll('\\', '/')].some((h) => undoPreview.toLowerCase().includes(h.toLowerCase())), 'предпросмотр отката показал путь настоящего профиля')
+  must((await page.locator('main').innerText()).includes('Предпросмотр отката: файлы не менялись.'), 'нет подписи предпросмотра отката')
+  must(readFileSync(settingsFile, 'utf8') === settingsHooked && existsSync(hookExe), 'предпросмотр отката изменил файлы')
+  // предпросмотр отката не разрешает «Применить», а смена формы гасит предпросмотр отката
+  must(await applyBtn.isDisabled(), 'после предпросмотра отката «Применить» не должно быть доступно')
+  must((await refusal(opts)).includes('предпросмотр'), 'применение после предпросмотра отката не отвергнуто в main')
+  await page.getByRole('checkbox', { name: 'Antigravity' }).check()
+  must((await undoGoBtn.count()) === 0, 'после смены формы кнопка отката должна пропасть')
+  await page.getByRole('checkbox', { name: 'Antigravity' }).uncheck()
+  await undoPreviewBtn.click()
+  await waitFor(() => undoGoBtn.isEnabled(), 'предпросмотр отката повторён')
+  // выравнивание новых строк формы замером: подписи и селекты по одной левой границе, кнопки одной ширины, подсказки в карточке, ничего не обрезано
+  const formLayout = () => page.evaluate(() => {
+    const sec = document.querySelector('section[aria-label="Применение"]')
+    const r = (e) => e.getBoundingClientRect()
+    const ids = ['ctx-lang', 'ctx-main', 'ctx-effort', 'ctx-advisor']
+    const sels = ids.map((id) => r(document.getElementById(id)))
+    const lbls = ids.map((id) => r(document.querySelector(`label[for=${id}]`)))
+    const btns = [...sec.querySelectorAll('.actions button')]
+    const br = btns.map(r)
+    const hints = [...sec.querySelectorAll('.field > .small')].map(r)
+    const spread = (xs) => Math.max(...xs) - Math.min(...xs)
+    return {
+      selDx: spread(sels.map((x) => x.left)), lblDx: spread(lbls.map((x) => x.left)), lblSelDx: Math.abs(lbls[0].left - sels[0].left),
+      btnCount: btns.length, btnLeftDx: spread(br.map((x) => x.left)), btnWidthDx: spread(br.map((x) => x.width)),
+      btnClipped: btns.some((b) => b.scrollWidth > b.clientWidth + 1),
+      btnsOrdered: br.every((x, i) => i === 0 || x.top >= br[i - 1].bottom - 1),
+      hintsOut: hints.some((x) => x.right > r(sec).right + 0.5 || x.left < r(sec).left - 0.5),
+      statusBelow: r(sec.querySelector('[role=status]')).top >= br[br.length - 1].bottom - 1,
+      hScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth, mScroll: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth,
+    }
+  })
+  for (const w of [1100, 1280, 1920]) {
+    await resize(app, w, 800)
+    await page.waitForTimeout(250)
+    const f = await formLayout()
+    must(f.selDx <= 1 && f.lblDx <= 1 && f.lblSelDx <= 1 && f.btnCount === 4 && f.btnLeftDx <= 1 && f.btnWidthDx <= 1 && !f.btnClipped && f.btnsOrdered && !f.hintsOut && f.statusBelow && f.hScroll <= 0 && f.mScroll <= 1, `выравнивание формы ctxkit на ${w}: ${JSON.stringify(f)}`)
+    if (w !== 1100) await shot(page, `m5-ctxkit-undo-${w}`)
+  }
+  await resize(app, 1280, 800)
+  await page.waitForTimeout(250)
+  await undoGoBtn.click()
+  await waitFor(() => !existsSync(hookExe), 'откат убрал бинарь хуков')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'после отката нет подписи «Откат выполнен.»')
+  await waitFor(async () => (await page.locator('#notice').innerText().catch(() => '')).includes('ctxkit откачен'), 'после отката нет уведомления')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/ctxkit.exe: ✕ нет'), 'статус после отката: копии хуков нет')
+  const undone = JSON.parse(readFileSync(settingsFile, 'utf8'))
+  must(!/ctxkit/i.test(JSON.stringify(undone)), `после отката в settings.json остались записи ctxkit: ${JSON.stringify(undone).slice(0, 400)}`)
+  must(JSON.stringify(foreignCmds(undone)) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'откат тронул чужие хуки')
+  must(undone.model === 'sonnet' && undone.advisorModel === 'fable' && undone.modelSettings?.['claude-sonnet-5-5']?.effortLevel === 'high', 'откат тронул модель, советника или effort: их он оставляет')
+  const { model: _m, advisorModel: _a, effortLevel: _e, modelSettings: _s, ...rest } = undone
+  must(JSON.stringify(canon(rest)) === JSON.stringify(canon(JSON.parse(settingsBefore))), `после отката settings.json без модели, советника и effort не равен исходному: ${JSON.stringify(canon(rest)).slice(0, 400)}`)
+  must(!existsSync(claudeMd) || !readFileSync(claudeMd, 'utf8').toLowerCase().includes('ctxkit'), 'откат оставил блок правил в CLAUDE.md')
+  must(existsSync(join(claudeDir, 'agents', 'checker.md')) && existsSync(join(claudeDir, 'agents', 'Explore.md')), 'откат удалил агентов: он их оставляет')
+  must((await page.locator('pre.out').innerText()).includes('backups'), 'в выводе отката нет пути к бэкапу settings.json')
+  // повтор безопасен: второй откат ничего не меняет и не падает
+  const settingsUndone = readFileSync(settingsFile, 'utf8')
+  await undoPreviewBtn.click()
+  await waitFor(() => undoGoBtn.isEnabled(), 'предпросмотр повторного отката')
+  await undoGoBtn.click()
+  await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'повторный откат завершился')
+  must(readFileSync(settingsFile, 'utf8') === settingsUndone && !existsSync(hookExe) && !(await page.locator('section[aria-label="Применение"] [role=alert]').count()), 'повторный откат изменил файлы или показал ошибку')
   await page.keyboard.press('1')
   await levelSel.selectOption('R0') // понижение подтверждения не требует
   must((await refusal(opts)).includes('R2'), 'при R0 применение ctxkit не отвергнуто в main')
+  must((await undoRefusal(undoOpts, false)).includes('R2'), 'при R0 откат ctxkit не отвергнут в main')
   must(JSON.stringify(realState()) === JSON.stringify(realBefore), 'ctxkit изменил файл настоящего профиля владельца')
   must(realBackups() === realBackupsBefore, 'ctxkit создал бэкап в настоящем профиле владельца')
   await waitFor(() => levelIs('R0'), 'уровень вернулся в R0')

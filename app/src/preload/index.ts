@@ -25,6 +25,7 @@ const api: LoadoutApi = {
   ctxkitDoctor: () => ipcRenderer.invoke('ctxkit:doctor'),
   ctxkitReport: (days) => ipcRenderer.invoke('ctxkit:report', days),
   ctxkitSetup: (options, dryRun) => ipcRenderer.invoke('ctxkit:setup', options, dryRun),
+  ctxkitUninstall: (options, dryRun) => ipcRenderer.invoke('ctxkit:uninstall', options, dryRun),
   pluginInstall: (spec, dryRun) => ipcRenderer.invoke('plugin:install', spec, dryRun),
   marketplaceAdd: (source, dryRun) => ipcRenderer.invoke('marketplace:add', source, dryRun),
   marketplaces: () => ipcRenderer.invoke('marketplace:catalog'),

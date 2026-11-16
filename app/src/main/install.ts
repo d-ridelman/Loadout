@@ -1,5 +1,5 @@
 // Установка из маркетплейсов и скилов: проверка ввода на границе main и чтение каталогов. Без electron, чтобы тестировалось vitest.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { isAbsolute, join, win32 } from 'node:path'
 import { t } from '../shared/i18n'
 import type { CatalogPlugin, Marketplace, SkillCandidate } from '../shared/model'
@@ -235,6 +235,32 @@ export function checkoutArgs(ref: string, dest: string): string[] {
   return [...GIT_SAFE, '-C', dest, 'checkout', '--detach', ref, '--']
 }
 
+/**
+ * Удаляет каталог подготовки. Клон git кладёт пакеты `.git/objects/pack/*` с признаком «только чтение», и `rmSync` в Node
+ * Electron на Windows отказывает на них с EPERM (проверено на `anthropics/skills`): без снятия признака подготовка после
+ * отказа от установки не удалялась, следующая загрузка падала, а запуск приложения — вместе с ней. Ссылки не обходим.
+ */
+export function rmTree(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true })
+  } catch (first) {
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = join(d, e.name)
+        if (e.isSymbolicLink()) continue
+        if (e.isDirectory()) walk(p)
+        else chmodSync(p, 0o666)
+      }
+    }
+    try {
+      walk(dir)
+    } catch {
+      throw first
+    }
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 /** Имя каталога скила, как его проверяет ядро. */
 export function skillNameOk(n: string): boolean {
   return ID_PART.test(n) && !n.includes('..') && n.toLowerCase() !== 'synced' && !n.toLowerCase().startsWith('anthropic-skills')
@@ -247,9 +273,18 @@ function frontmatter(file: string): Record<string, string> {
   const head = readFileSync(file, 'utf8').slice(0, 4096)
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(head)
   const out: Record<string, string> = {}
-  for (const line of (m?.[1] ?? '').split(/\r?\n/)) {
-    const kv = /^([a-z_-]+):\s*(.*)$/.exec(line)
-    if (kv) out[kv[1]!] = kv[2]!.replace(/^["']|["']$/g, '')
+  const lines = (m?.[1] ?? '').split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const kv = /^([a-z_-]+):\s*(.*)$/.exec(lines[i]!)
+    if (!kv) continue
+    let v = kv[2]!
+    // блочный скаляр YAML (`description: >` или `|-`, как у скилов anthropics/skills): значение — строки с отступом ниже
+    if (/^[>|][+-]?$/.test(v)) {
+      const body: string[] = []
+      while (i + 1 < lines.length && /^(\s|$)/.test(lines[i + 1]!)) body.push(lines[++i]!.trim())
+      v = body.filter(Boolean).join(' ')
+    }
+    out[kv[1]!] = v.replace(/^["']|["']$/g, '')
   }
   return out
 }

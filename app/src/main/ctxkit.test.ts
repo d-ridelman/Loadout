@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CtxkitReport } from '../shared/model'
 import { summarize, segments, pct, chars } from '../renderer/ctxkit-stats'
-import { parseDoctor, parseReport, parseSetupOptions, setupArgs } from './ctxkit'
+import { parseDoctor, parseReport, parseSetupOptions, parseUninstallOptions, setupArgs, uninstallArgs } from './ctxkit'
 
 const doctor = {
   tool: 'ctxkit',
@@ -29,7 +29,7 @@ const day = {
 }
 
 describe('ctxkit: параметры setup', () => {
-  const ok = { withRules: true, desktop: false, antigravity: true, dsh: false, noStopGate: false, lang: 'ru', advisor: 'fable' }
+  const ok = { withRules: true, desktop: false, antigravity: true, dsh: false, noStopGate: false, lang: 'ru', advisor: 'fable', mainModel: 'keep', effort: 'keep' }
 
   it('принимает только булевы флаги и перечисления', () => {
     expect(parseSetupOptions(ok)).toEqual(ok)
@@ -41,6 +41,19 @@ describe('ctxkit: параметры setup', () => {
     expect(() => parseSetupOptions({ ...ok, advisor: 'KEEP' })).toThrow()
     expect(() => parseSetupOptions({ ...ok, desktop: 'yes' })).toThrow()
     expect(() => parseSetupOptions(null)).toThrow()
+    expect(() => parseSetupOptions({ ...ok, mainModel: undefined })).toThrow()
+    for (const m of ['sonnet', 'opus', 'haiku']) expect(parseSetupOptions({ ...ok, mainModel: m }).mainModel).toBe(m)
+    for (const m of ['fable', 'Sonnet', '--main-model x', '', 'none']) expect(() => parseSetupOptions({ ...ok, mainModel: m })).toThrow()
+    for (const x of ['low', 'medium', 'high', 'xhigh']) expect(parseSetupOptions({ ...ok, effort: x }).effort).toBe(x)
+    for (const x of ['max', 'HIGH', '--effort', '', undefined]) expect(() => parseSetupOptions({ ...ok, effort: x })).toThrow()
+  })
+
+  it('основная модель и effort: флаги только по явному выбору, «не менять» ничего не передаёт', () => {
+    const a = setupArgs(parseSetupOptions({ ...ok, advisor: 'keep', mainModel: 'sonnet', effort: 'high' }), true)
+    expect(a).toEqual(['setup', '--dry-run', '--with-rules', '--antigravity', '--lang', 'ru', '--main-model', 'sonnet', '--effort', 'high'])
+    const keep = setupArgs(parseSetupOptions({ ...ok, advisor: 'keep' }), false)
+    expect(keep.some((x) => ['--main-model', '--effort', '--advisor'].includes(x))).toBe(false)
+    expect(setupArgs(parseSetupOptions({ ...ok, effort: 'xhigh' }), true)).toContain('xhigh')
   })
 
   it('аргументы: предпросмотр с --dry-run, без путей страницы; в разработке пути уходят в LOADOUT_HOME', () => {
@@ -56,6 +69,26 @@ describe('ctxkit: параметры setup', () => {
     expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(5) // профиль, пресеты Desktop, hooks.json Antigravity, каталог DSH, .claude.json
     // ни одного значения из страницы не попадает в аргументы как есть, кроме перечислений
     expect(a.every((x) => x.startsWith('--') || ['setup', 'ru', 'fable'].includes(x))).toBe(true)
+  })
+})
+
+describe('ctxkit: откат (setup --uninstall)', () => {
+  it('принимает только два булевых флага', () => {
+    expect(parseUninstallOptions({ antigravity: true, dsh: false })).toEqual({ antigravity: true, dsh: false })
+    expect(parseUninstallOptions({ antigravity: false, dsh: false, withRules: true })).toEqual({ antigravity: false, dsh: false })
+    for (const bad of [null, 'x', {}, { antigravity: 'yes', dsh: false }, { antigravity: true }, { antigravity: true, dsh: 1 }]) expect(() => parseUninstallOptions(bad)).toThrow()
+  })
+
+  it('аргументы: ни одного флага setup, интеграции и пути только вместе с галочкой', () => {
+    expect(uninstallArgs({ antigravity: false, dsh: false }, true, 'ru')).toEqual(['setup', '--uninstall', '--lang', 'ru', '--dry-run'])
+    expect(uninstallArgs({ antigravity: true, dsh: true }, false, 'en')).toEqual(['setup', '--uninstall', '--lang', 'en', '--antigravity', '--dsh'])
+    const dev = uninstallArgs({ antigravity: true, dsh: false }, true, 'ru', 'C:/tmp/h')
+    expect(dev).toContain('--agy-file')
+    expect(dev).not.toContain('--dsh-home')
+    expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(3) // профиль, .claude.json, hooks.json Antigravity
+    // с --uninstall ctxkit отвергает флаги setup
+    const all = uninstallArgs({ antigravity: true, dsh: true }, false, 'ru', 'C:/tmp/h')
+    for (const bad of ['--with-rules', '--desktop', '--no-stop-gate', '--advisor', '--main-model', '--effort', '--skip-version-check']) expect(all).not.toContain(bad)
   })
 })
 

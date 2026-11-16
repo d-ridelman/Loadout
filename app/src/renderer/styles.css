@@ -209,6 +209,9 @@ button.level[aria-pressed='true'] { border-color: var(--orange); background: rgb
 .actions.col button { text-align: left; }
 .form { display: flex; flex-direction: column; gap: 10px; }
 .form label { display: flex; flex-direction: column; gap: 4px; color: var(--mute); }
+.form .field { display: flex; flex-direction: column; gap: 4px; }
+.form .field select { align-self: flex-start; min-width: 220px; }
+.form .status-line { margin: 0; min-height: 1.4em; }
 .form input, .form textarea, select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; color: var(--fg); font: 13px var(--mono); }
 .form textarea { resize: vertical; min-height: 80px; }
 .choices { border: 0; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }

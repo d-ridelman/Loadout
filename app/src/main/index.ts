@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session } from 'e
 import type { IpcMainInvokeEvent } from 'electron'
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { backupNotice } from '../shared/backups'
@@ -12,7 +12,7 @@ import { LEVEL_RANK } from '../shared/model'
 import type { ChangedEvent, ClientId, Result, ScanResponse, WriteLevel } from '../shared/model'
 import * as ctxkit from './ctxkit'
 import { assertTrusted, grantedOf, parseBatch, parseLevel, parseOp, parseSha, trustedSender, validateIntent, validateName } from './gate'
-import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, localMarketplaceOk, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, remoteUrl } from './install'
+import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, localMarketplaceOk, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, remoteUrl, rmTree } from './install'
 import { Sidecar } from './sidecar'
 import { tidyHome } from './tidy'
 import {
@@ -505,28 +505,40 @@ void app.whenReady().then(() => {
       return ctxkit.parseReport(r.stdout)
     })
   })
-  ipcMain.handle('ctxkit:setup', (e, raw: unknown, dryRun: unknown) => {
-    guard(e)
-    return guarded(async () => {
+  /** Предпросмотр → R2 → запуск для `setup` и `setup --uninstall`: один ключ предпросмотра (с видом действия в ключе) и один замок. */
+  const ctxkitStep = (dryRun: unknown, what: string, plan: () => { key: string; args: string[] }) =>
+    guarded(async () => {
       if (typeof dryRun !== 'boolean') throw new Error(t('неверные параметры', 'invalid parameters'))
-      const options = ctxkit.parseSetupOptions(raw)
-      const key = JSON.stringify(options)
+      const { key, args } = plan()
       if (setupBusy) throw new Error(t('ctxkit уже работает: дождитесь окончания', 'ctxkit is already running: wait for it to finish'))
       if (!dryRun) {
-        // применение пишет в конфиги клиентов: нужен R2 и предпросмотр с точно такими же настройками
-        if (readWriteLevel() !== 'R2') throw new Error(t('для применения ctxkit нужен уровень R2: включите его в шапке окна', 'applying ctxkit requires level R2: enable it in the window header'))
+        // запись в конфиги клиентов: нужен R2 и предпросмотр с точно такими же настройками
+        if (readWriteLevel() !== 'R2') throw new Error(t(`для этого действия (${what}) нужен уровень R2: включите его в шапке окна`, `this action (${what}) requires level R2: enable it in the window header`))
         if (lastSetupPreview !== key) throw new Error(t('сначала выполните предпросмотр с теми же настройками', 'run a preview with the same settings first'))
-        // предпросмотр расходуется до запуска: один предпросмотр — одно применение, даже если запуск закончится ошибкой
+        // предпросмотр расходуется до запуска: один предпросмотр — одно действие, даже если запуск закончится ошибкой
         lastSetupPreview = undefined
       }
       setupBusy = true
       try {
-        const r = await ctxkit.run(ctxBin(), ctxkit.setupArgs(options, dryRun, ctxHome()), 120_000)
+        const r = await ctxkit.run(ctxBin(), args, 120_000)
         if (dryRun && r.code === 0) lastSetupPreview = key
         return { dryRun, code: r.code, output: tidy(`${r.stdout}${r.stderr}`).slice(0, 20_000) }
       } finally {
         setupBusy = false
       }
+    })
+  ipcMain.handle('ctxkit:setup', (e, raw: unknown, dryRun: unknown) => {
+    guard(e)
+    return ctxkitStep(dryRun, t('применение ctxkit', 'applying ctxkit'), () => {
+      const options = ctxkit.parseSetupOptions(raw)
+      return { key: `setup:${JSON.stringify(options)}`, args: ctxkit.setupArgs(options, dryRun as boolean, ctxHome()) }
+    })
+  })
+  ipcMain.handle('ctxkit:uninstall', (e, raw: unknown, dryRun: unknown) => {
+    guard(e)
+    return ctxkitStep(dryRun, t('откат ctxkit', 'rolling back ctxkit'), () => {
+      const options = ctxkit.parseUninstallOptions(raw)
+      return { key: `uninstall:${JSON.stringify(options)}`, args: ctxkit.uninstallArgs(options, dryRun as boolean, getLang(), ctxHome()) }
     })
   })
   // ---- установка плагина Claude Code его собственным CLI: это сеть и чужой код, поэтому R2, предпросмотр и без `-y` ----
@@ -588,7 +600,11 @@ void app.whenReady().then(() => {
   let lastFetchPreview: string | undefined
   let fetchBusy = false
   // прошлые подготовки после перезапуска не нужны: начинаем с пустого каталога
-  rmSync(stagingRoot(), { recursive: true, force: true })
+  try {
+    rmTree(stagingRoot())
+  } catch {
+    // остаток уберёт загрузка скила; запуск приложения из-за него не падает
+  }
   ipcMain.handle('skill:fetch', (e, raw: unknown, dryRun: unknown) => {
     guard(e)
     return guarded(async () => {
@@ -619,7 +635,7 @@ void app.whenReady().then(() => {
       lastFetchPreview = undefined
       fetchBusy = true
       // одна подготовка за раз: прежняя убирается
-      rmSync(stagingRoot(), { recursive: true, force: true })
+      rmTree(stagingRoot())
       const stage = randomBytes(16).toString('hex')
       const dest = join(stagingRoot(), stage)
       mkdirSync(stagingRoot(), { recursive: true })
@@ -659,7 +675,7 @@ void app.whenReady().then(() => {
       } catch (err) {
         // уборка не должна заслонять настоящую ошибку (каталог может держать ещё не вышедший дочерний процесс git)
         try {
-          rmSync(dest, { recursive: true, force: true })
+          rmTree(dest)
         } catch {
           // остаток уберёт следующая подготовка или запуск
         }

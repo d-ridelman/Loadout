@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from '../shared/i18n'
-import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, DayStats, DoctorFinding, FindingSeverity, SetupOptions } from '../shared/model'
+import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, DayStats, DoctorFinding, FindingSeverity, SetupOptions, UninstallOptions } from '../shared/model'
 
 /** Разбор настроек `setup` от страницы: только булевы флаги и перечисления, всё остальное — отказ. */
 export function parseSetupOptions(raw: unknown): SetupOptions {
@@ -18,7 +18,18 @@ export function parseSetupOptions(raw: unknown): SetupOptions {
   const advisor = r['advisor']
   if (lang !== 'en' && lang !== 'ru') throw new Error(t('неверный язык ctxkit', 'invalid ctxkit language'))
   if (advisor !== 'keep' && advisor !== 'fable' && advisor !== 'opus' && advisor !== 'none') throw new Error(t('неверный советник ctxkit', 'invalid ctxkit advisor'))
-  return { withRules: flag('withRules'), desktop: flag('desktop'), antigravity: flag('antigravity'), dsh: flag('dsh'), noStopGate: flag('noStopGate'), lang, advisor }
+  const mainModel = r['mainModel']
+  const effort = r['effort']
+  if (mainModel !== 'keep' && mainModel !== 'sonnet' && mainModel !== 'opus' && mainModel !== 'haiku') throw new Error(t('неверная основная модель ctxkit', 'invalid ctxkit main model'))
+  if (effort !== 'keep' && effort !== 'low' && effort !== 'medium' && effort !== 'high' && effort !== 'xhigh') throw new Error(t('неверный effort ctxkit', 'invalid ctxkit effort'))
+  return { withRules: flag('withRules'), desktop: flag('desktop'), antigravity: flag('antigravity'), dsh: flag('dsh'), noStopGate: flag('noStopGate'), lang, advisor, mainModel, effort }
+}
+
+/** Разбор настроек отката от страницы: два булевых флага, остальное — отказ. */
+export function parseUninstallOptions(raw: unknown): UninstallOptions {
+  const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
+  if (typeof r['antigravity'] !== 'boolean' || typeof r['dsh'] !== 'boolean') throw new Error(t('неверные параметры ctxkit', 'invalid ctxkit parameters'))
+  return { antigravity: r['antigravity'], dsh: r['dsh'] }
 }
 
 /**
@@ -35,10 +46,30 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
   if (o.noStopGate) a.push('--no-stop-gate')
   a.push('--lang', o.lang)
   if (o.advisor !== 'keep') a.push('--advisor', o.advisor)
+  if (o.mainModel !== 'keep') a.push('--main-model', o.mainModel)
+  if (o.effort !== 'keep') a.push('--effort', o.effort)
   // версию claude ctxkit проверяет в самом конце, уже после записи, и зависший `claude` оставил бы окно с ошибкой при
   // изменённых файлах; предпросмотр проверку оставляет (она нужна диагностике)
   if (!dryRun) a.push('--skip-version-check')
   if (home) a.push(...homeArgs(home))
+  return a
+}
+
+/**
+ * Аргументы `ctxkit setup --uninstall`: только проверенные флаги, ни одного флага самого `setup` (ctxkit их отвергает).
+ * Интеграции Antigravity и DSH ctxkit включает по самим флагам путей (`--agy-file`, `--dsh-home`), поэтому в разработке и проверках
+ * пути передаются только вместе с галочкой, как в настоящем профиле. Пресеты Claude Desktop откат не трогает: флаг `--desktop` не нужен.
+ */
+export function uninstallArgs(o: UninstallOptions, dryRun: boolean, lang: 'en' | 'ru', home?: string): string[] {
+  const a = ['setup', '--uninstall', '--lang', lang]
+  if (dryRun) a.push('--dry-run')
+  if (o.antigravity) a.push('--antigravity')
+  if (o.dsh) a.push('--dsh')
+  if (home) {
+    a.push('--profile', join(home, '.claude'), '--claude-json', join(home, '.claude.json'))
+    if (o.antigravity) a.push('--agy-file', join(home, '.gemini', 'config', 'hooks.json'))
+    if (o.dsh) a.push('--dsh-home', join(home, '.dsh'))
+  }
   return a
 }
 

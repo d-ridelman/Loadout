@@ -204,7 +204,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
           )
         ) : null}
         {error ? <p className="s-broken" role="alert">{error}</p> : null}
-        {output ? <pre className="wrap mono small">{output}</pre> : null}
+        {output ? <pre className="out" aria-label={t('Вывод claude', 'claude output')} tabIndex={0}>{output}</pre> : null}
         <div className="actions">
           {command?.kind === 'install' ? (
             <button type="button" disabled={busy} onClick={() => void run('install', false, spec)}>{busy ? t('Устанавливаю…', 'Installing…') : t('Установить', 'Install')}</button>

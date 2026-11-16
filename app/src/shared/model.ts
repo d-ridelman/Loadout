@@ -218,6 +218,16 @@ export interface SetupOptions {
   lang: 'en' | 'ru'
   /** 'keep' — `--advisor` не передаётся: advisorModel остаётся как есть (значение по умолчанию не выбор пользователя) */
   advisor: 'keep' | 'fable' | 'opus' | 'none'
+  /** 'keep' — `--main-model` не передаётся: `model` остаётся как есть */
+  mainModel: 'keep' | 'sonnet' | 'opus' | 'haiku'
+  /** 'keep' — `--effort` не передаётся: effort остаётся как есть */
+  effort: 'keep' | 'low' | 'medium' | 'high' | 'xhigh'
+}
+
+/** Что окно просит убрать вместе с настройками Claude Code: интеграции, которые `setup` поставил по галочкам. */
+export interface UninstallOptions {
+  antigravity: boolean
+  dsh: boolean
 }
 
 export interface SetupResult {
@@ -299,6 +309,8 @@ export interface LoadoutApi {
   ctxkitReport: (days: 7 | 14 | 30) => Promise<Result<CtxkitReport>>
   /** `dryRun` — предпросмотр (любой уровень); применение требует R2 и совпадающего предпросмотра. */
   ctxkitSetup: (options: SetupOptions, dryRun: boolean) => Promise<Result<SetupResult>>
+  /** Откат `ctxkit setup --uninstall`: `dryRun` — предпросмотр; откат требует R2 и такого же предпросмотра. */
+  ctxkitUninstall: (options: UninstallOptions, dryRun: boolean) => Promise<Result<SetupResult>>
   /** Установка плагина Claude Code через его CLI (`имя@маркетплейс`). `dryRun` — показать команду; установка требует R2 и такого же предпросмотра. */
   pluginInstall: (spec: string, dryRun: boolean) => Promise<Result<SetupResult>>
   /** Добавление маркетплейса Claude Code (`owner/repo`, https-адрес, локальный путь): тот же порядок, что у установки. */

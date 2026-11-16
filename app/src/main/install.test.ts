@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, skillNameOk } from './install'
+import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, rmTree, skillNameOk } from './install'
 
 const dirs: string[] = []
 const tmp = (): string => {
@@ -175,6 +175,13 @@ it('findSkills: корень, вложенные каталоги и имя из
   expect(findSkills(single, '', 'my-skill')).toEqual([{ sub: '', name: 'my-skill', description: '' }])
 })
 
+it('findSkills: описание блочным скаляром YAML (`>`, `|-`) читается, а не показывается как «>»', () => {
+  const root = tmp()
+  put(join(root, 'a', 'SKILL.md'), '---\nname: a\ndescription: >\n  Первая строка\n  вторая строка\nlicense: MIT\n---\n')
+  put(join(root, 'b', 'SKILL.md'), '---\r\nname: b\r\ndescription: |-\r\n  Один\r\n\r\n  Два\r\n---\r\n')
+  expect(findSkills(root).map((s) => s.description)).toEqual(['Первая строка вторая строка', 'Один Два'])
+})
+
 it('checkTreeSize: отказ до копирования большой папки', () => {
   const root = tmp()
   for (let i = 0; i < 4; i++) put(join(root, 'd', `f${i}.md`), 'x')
@@ -208,4 +215,19 @@ it('readCatalog: каталог маркетплейса, установленн
   expect(local!.plugins[1]!.why).toBeTruthy()
   expect(gone!.error).toBeTruthy()
   expect(readCatalog(tmp())).toEqual([])
+})
+
+describe('rmTree', () => {
+  it('убирает клон git с пакетами «только чтение» (Electron на Windows отказывал на них с EPERM)', () => {
+    const d = tmp()
+    const pack = join(d, '.git', 'objects', 'pack', 'pack-1.pack')
+    put(pack, 'x')
+    put(join(d, 'skills', 'a', 'SKILL.md'), '---\nname: a\n---\n')
+    chmodSync(pack, 0o444)
+    rmTree(d)
+    expect(existsSync(d)).toBe(false)
+  })
+  it('несуществующий каталог не ошибка', () => {
+    expect(() => rmTree(join(tmp(), 'нет'))).not.toThrow()
+  })
 })
