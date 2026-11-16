@@ -28,19 +28,19 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 
 - **Matrix** of every entry across the five clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). The inspector on the right shows the file, the key and the contents without secrets.
 - **Radar, hooks, doctor.** A per-client overview, the hook pipeline by lifecycle event, and findings: broken entries, version mismatches, the same entry in several scopes, empty marketplaces, broken links to a cleaned cache, piles of third-party backups, MCP configs with secret keys.
-- **Toggle** an entry (write level R1). **Move an MCP server to the Loadout trash, edit its command, copy it to another client** (R2); JSON, TOML and YAML are translated for you.
+- **Toggle** an entry that has an on/off flag: plugins, connectors, Codex entries (write level R1). Most MCP servers have no such flag: disabling one **moves it to the Loadout trash**, and enabling puts it back in the same place (R2). **Edit an MCP command, copy it to another client** (R2); JSON, TOML and YAML are translated for you.
 - **Add an MCP server** from the window. The `env` values you type go to the core and are not shown in the preview, the journal or the inspector.
 - **Install a Claude Code plugin from a marketplace.** Add a marketplace by GitHub `owner/repo`, an `https://` or SSH address, or a local folder, then pick a plugin from its catalog. Before anything runs, the window shows the exact `claude plugin …` command.
 - **Install a skill** into `~/.claude/skills` from a GitHub repository or a local folder. The window first says what will be downloaded and where, then shows a plan with the files and a warning when the skill contains code. The installation goes into the journal and can be rolled back.
 - **Profiles**: capture the set of enabled plugins and MCP servers, apply it as one batch, roll the whole batch back.
-- **Journal** of every write with one-click rollback. Before any write the file is copied to a backup.
+- **Journal** of the writes above: toggles, the trash, MCP edits, copies and additions, profile batches and skill installs. Each one rolls back from the journal after the same preview (file, key, before → after). Before any write the file is copied to a backup. Plugin and marketplace installs run through `claude` itself and are not in the journal (remove a plugin with `claude plugin uninstall`); Context Toolkit has its own rollback.
 - **Context Toolkit** built in: preview, apply, roll back, optional policies, and an "Efficiency" report (see below).
 - **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; core messages follow the choice too.
 - **Client files are read-only by default** (R0). Raising the write level needs an OS confirmation dialog. Only one window runs at a time; a second launch brings the first one forward.
 
 ### Safe write pipeline
 
-plan → preview → hash lock (`base_sha`) → backup + manifest → temp file + rename → re-read and verify → journal / rollback. If a file changed after the preview, the write is refused. JSON is edited in place, TOML through `toml_edit`, YAML line by line: comments, key order and line endings stay. Details: [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §5.
+plan → preview → hash lock (`base_sha`) → backup + manifest → temp file + rename → re-read and verify → journal / rollback. If a file changed after the preview, the write is refused. JSON is edited in place, TOML through `toml_edit`, YAML line by line: comments, key order and line endings stay (an MCP server back from the trash goes in front of the key that followed it). Details: [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §5.
 
 ### Copies and secrets
 

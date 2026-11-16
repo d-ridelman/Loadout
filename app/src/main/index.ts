@@ -355,10 +355,17 @@ void app.whenReady().then(() => {
         type: 'warning' as const,
         title: t(`Loadout: включить уровень ${level}?`, `Loadout: enable level ${level}?`),
         message: r2
-          ? t('Разрешить Loadout выносить записи в корзину, править команды MCP, копировать записи между клиентами и применять профили?', 'Allow Loadout to move entries to the trash, edit MCP commands, copy entries between clients and apply profiles?')
-          : t('Разрешить Loadout включать и выключать записи в конфигах клиентов?', 'Allow Loadout to turn entries on and off in client configs?'),
+          ? t('Разрешить Loadout выносить записи в корзину (так выключаются MCP без флага), править команды MCP, копировать и добавлять MCP, применять профили, ставить скилы, плагины и Инструменты контекста?', 'Allow Loadout to move entries to the trash (that is how an MCP server without a flag is disabled), edit MCP commands, copy and add MCP servers, apply profiles, and install skills, plugins and Context Toolkit?')
+          : t('Разрешить Loadout включать и выключать записи по флагу в конфигах клиентов (плагины, коннекторы, записи Codex)?', 'Allow Loadout to turn entries on and off by their flag in client configs (plugins, connectors, Codex entries)?'),
         detail:
-          t('Перед каждым изменением показывается предпросмотр и делается бэкап, каждое изменение можно откатить из журнала. Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.', 'A preview is shown and a backup is made before every change, and every change can be rolled back from the journal. Close Claude Code and Codex if they are running: they may overwrite the file.') +
+          (r2
+            ? t(
+                'Перед каждым изменением показывается предпросмотр. Переключения, корзина, правка, копирование и добавление MCP, профили и скилы пишутся в журнал с бэкапом и откатываются оттуда. Плагины и маркетплейсы ставит сам claude, в журнал они не попадают: плагин выключается в матрице, удаляется командой claude plugin uninstall. У Инструментов контекста свой откат в их разделе.',
+                'A preview is shown before every change. Toggles, the trash, MCP edits, copies and additions, profiles and skills go into the journal with a backup and roll back from there. Plugins and marketplaces are installed by claude itself and are not in the journal: disable a plugin in the matrix, remove it with claude plugin uninstall. Context Toolkit has its own rollback in its section.',
+              )
+            : t('Перед каждым изменением показывается предпросмотр и делается бэкап; переключение откатывается из журнала.', 'A preview is shown and a backup is made before every change; a toggle rolls back from the journal.')) +
+          ' ' +
+          t('Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.', 'Close Claude Code and Codex if they are running: they may overwrite the file.') +
           '\n\n' +
           backupNotice(tidy(backupsDir())),
         buttons: [t('Отмена', 'Cancel'), r2 ? t('Включить R2', 'Enable R2') : t('Включить запись', 'Enable writing')],

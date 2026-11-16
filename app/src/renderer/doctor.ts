@@ -1,6 +1,7 @@
 import { plural, t } from '../shared/i18n'
 import type { ClientId, Entity, Facts } from '../shared/model'
 import { CLIENTS } from '../shared/model'
+import { BACKUP_DIR_HINT } from '../shared/backups'
 
 export type Severity = 'error' | 'warn' | 'info'
 
@@ -35,8 +36,8 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
         `${clientName(b.client)}: ${b.count} ${plural(b.count, ['резервная копия', 'резервные копии', 'резервных копий'], ['backup', 'backups'])} in ${b.dir}`,
       ),
       detail: t(
-        'Их оставляют установщики сторонних инструментов при правке конфигов. Loadout копий не создаёт и не трогает; свои бэкапы будет хранить отдельно (M3).',
-        'Third-party installers leave these when they edit configs. Loadout neither creates nor touches them; it will keep its own backups separately (M3).',
+        `Их оставляют установщики сторонних инструментов при правке конфигов. Loadout рядом с конфигами копий не создаёт и эти не трогает: свои бэкапы он хранит отдельно, в ${BACKUP_DIR_HINT}.`,
+        `Third-party installers leave these when they edit configs. Loadout makes no copies next to the configs and leaves these alone: it keeps its own backups separately, in ${BACKUP_DIR_HINT}.`,
       ),
     })
   }
