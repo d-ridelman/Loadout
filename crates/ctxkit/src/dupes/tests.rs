@@ -77,7 +77,8 @@ const NEG_EN: &[&str] = &[
 
 /// Written by another model that saw only the block lines, not this code (12 paraphrases, 15 lines with
 /// another meaning). The first run gave 11 of 12 and 3 false pairs; after that the boilerplate clause, the
-/// polarity check and the synonyms `откат`/`destruct`/`поруч` were added, so it is not blind any more.
+/// polarity check and the synonyms `откат`/`destruct`/`поруч` were added (12 of 12, 0), then the sign of
+/// negated words for the review's exceptions (11 of 12, 0), so it is not blind any more.
 const BLIND_POS_RU: &[Pos] = &[
     pos("Прежде чем утверждать план или лезть сразу в несколько файлов, советуйся с **advisor (fable)**; если одна и та же ошибка выскочила дважды подряд, тоже иди к нему. Основная сессия — **sonnet**.", &[0], &[]),
     pos("Поиск по коду, греп и чтение документации поручай `Explore` (haiku); правку одного файла без изменения логики делай сам.", &[1], &[2]),
@@ -112,6 +113,21 @@ const BLIND_NEG_EN: &[&str] = &[
     "Use `Read` and `Edit` instead of shell `cat` and `sed` when touching files.",
     "When the owner asks for a `report.md`, write it in the project root and name the path in chat.",
     "Switch to sonnet for one-file fixes and keep haiku for bulk search only; never let haiku edit code.",
+];
+
+/// Exceptions to a block rule and its opposite, found by the review (`checker`) as false pairs of the first
+/// version: they name the same commands but say "without confirmation" / "without `ctxkit check`".
+const REVIEW_NEG_RU: &[&str] = &[
+    "`git push` в свой форк делай без подтверждения владельца.",
+    "`git reset --hard` в локальной ветке-черновике делай без подтверждения.",
+    "`rm -rf node_modules` и `git clean -fdx` в песочнице — без подтверждения.",
+    "`git push --force` в `main` запрещён даже с подтверждением владельца.",
+    "Сборки на CI запускай без `ctxkit check`, там нужен полный лог.",
+];
+const REVIEW_NEG_EN: &[&str] = &[
+    "Never ask the owner for confirmation before `git push` to my own fork.",
+    "`rm -rf node_modules` in a scratch checkout needs no owner confirmation.",
+    "Builds on CI run without `ctxkit check`, the full log is needed there.",
 ];
 
 struct Score {
@@ -214,6 +230,38 @@ fn the_corpus_finds_the_paraphrases_and_no_false_pair() {
         let s = score(Lang::Ru, &POS_RU[k..=k], &[]);
         assert_eq!(s.found, p.want.len(), "{}", p.text);
     }
+}
+
+#[test]
+fn exceptions_and_the_opposite_of_a_block_rule_are_not_repeats() {
+    let (_, _, false_pairs) = report(
+        "review exceptions",
+        &[
+            (Lang::Ru, POS_RU, REVIEW_NEG_RU),
+            (Lang::En, POS_EN, REVIEW_NEG_EN),
+        ],
+    );
+    assert!(false_pairs.is_empty(), "{false_pairs:#?}");
+    // the sign of a word: one negation marks the next two words that count, two or more mark nothing
+    let u = unit_of("`git push` в форк делай без подтверждения владельца");
+    assert!(u.neg_concepts.contains("ASK"), "{:?}", u.neg_concepts);
+    let v = unit_of("Не фиксируй подход, не вызвав **advisor (fable)**");
+    assert!(v.neg_anchors.is_empty() && v.neg_concepts.is_empty());
+    let w = unit_of("Сборки запускай без `ctxkit check`");
+    assert!(w.neg_anchors.contains("ctxkit") && w.neg_anchors.contains("check"));
+    // a block line's "X, not Y" is split in two
+    assert_eq!(
+        units(
+            "Отчёты отдавай в чат, не файлом `report.md`: хук спросит",
+            true
+        ),
+        [
+            "Отчёты отдавай в чат, не файлом `report.md`",
+            "Отчёты отдавай в чат",
+            "не файлом `report.md`",
+            "хук спросит"
+        ]
+    );
 }
 
 #[test]
@@ -400,10 +448,16 @@ fn prefix_filtering_keeps_every_pair_the_full_comparison_finds() {
 
 #[test]
 fn the_pieces_of_the_paraphrase_test() {
-    // sentences of an owner's line, clauses of a block line; a dot inside `code` does not end one
+    // an owner's line: its sentences, then their clauses; a block line: its clauses; never split in `code`
     assert_eq!(
         units("Пиши `report.md` сам. Потом: проверь; всё", false),
-        ["Пиши `report.md` сам", "Потом: проверь; всё"]
+        [
+            "Пиши `report.md` сам",
+            "Потом: проверь; всё",
+            "Потом",
+            "проверь",
+            "всё"
+        ]
     );
     assert_eq!(
         units("Пиши `a; b` сам. Потом: проверь; всё", true),

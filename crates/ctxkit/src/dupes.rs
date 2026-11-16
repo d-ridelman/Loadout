@@ -8,8 +8,9 @@
 //!   least 0.8 of their distinct words.
 //! * **Paraphrase**, an owner's line against a line of the ctxkit block only (the block's rules are known and
 //!   few; two of the owner's own neighbouring points on one topic are the common false alarm, so they get the
-//!   strict test alone). An owner's sentence is compared with each clause of the block line (split also at `;`
-//!   and `: `; a clause that two block lines share, "the ctxkit hook asks", is boilerplate and skipped). Each
+//!   strict test alone). An owner's sentences and their clauses (split also at `;` and `: `) are compared
+//!   with each clause of the block line (a clause "X, not Y" also as `X` and `not Y`; a clause that two block
+//!   lines share, "the ctxkit hook asks", is boilerplate and skipped). Each
 //!   side gives *anchors* (the words of `code` and **bold** spans and the names `sonnet`, `opus`, `haiku`,
 //!   `fable`, `advisor`, `checker`, `explore`, `lsp`, `grep`, case-folded) and *concepts* (the other words
 //!   without stop words: a small Russian/English synonym group such as "ask: спрашивай / подтверждение /
@@ -18,10 +19,14 @@
 //!   the block clause has anchors and they share one or more and: 3+ anchors and 1 concept; or 2 anchors, 2
 //!   concepts and an action; or 1 anchor, 2 concepts, an action and half of the clause's concepts; or 3
 //!   concepts covering 60% of the clause with the same polarity (both or neither negated). A clause without
-//!   anchors needs 3 shared concepts with an action covering half of it.
+//!   anchors needs 3 shared concepts with an action covering half of it. An exception or the opposite of the
+//!   rule is no repeat: when a piece has exactly one negation (`не`, `без`, `never`, `without`, `запрещён`...),
+//!   the next two words that count are negated (unless they stood before it), and a shared anchor or action
+//!   negated on one side only cancels the pair ("`git push` to my fork without confirmation"). Two or more
+//!   negations ("do not lock a plan without calling the advisor") mark nothing: such a rule is positive.
 //!
-//! Measured on the corpus of the tests (the real block of `setup --with-rules`, 18 paraphrases, 34 lines on
-//! the same topics with another meaning) and on a set of 12 + 15 written blind by another model; see README.
+//! Measured on the corpus of the tests (the real block of `setup --with-rules`, 18 paraphrases, 34 + 8 lines
+//! on the same topics with another meaning) and on a set of 12 + 15 written blind by another model; see README.
 use crate::{t, Lang};
 use std::collections::{HashMap, HashSet};
 
@@ -133,6 +138,7 @@ const STOP: &[&str] = &[
     "into", "as", "is", "are", "be", "it", "its", "this", "that", "these", "those", "your", "you", "when",
     "then", "than", "so", "if", "any", "each", "every", "via", "per", "before", "after", "first", "again",
     "once", "such", "do", "get", "go", "have", "has", "let", "make", "keep", "put", "use", "t", "s",
+    "должно", "должен", "должна", "должны", "быть", "нужно", "надо", "must", "should", "be", "been",
 ];
 /// Negation words: their presence is the polarity of a sentence, they are never concepts.
 #[rustfmt::skip]
@@ -232,8 +238,8 @@ fn is_action(c: &str) -> bool {
     GROUPS.iter().any(|(name, act, _)| *act && *name == c)
 }
 
-/// Sentences of an owner's line, or clauses of a block line (also at `;` and `: `); never inside `code`.
-fn units(text: &str, block: bool) -> Vec<&str> {
+/// Sentences of `text` (at `.` `!` `?`), and with `clauses` also at `;` and `: `; never inside `code`.
+fn pieces(text: &str, clauses: bool) -> Vec<String> {
     let mut out = Vec::new();
     let (mut start, mut code) = (0, false);
     let mut it = text.char_indices().peekable();
@@ -245,7 +251,7 @@ fn units(text: &str, block: bool) -> Vec<&str> {
         let next_blank = it.peek().is_none_or(|(_, n)| n.is_whitespace());
         let end = !code
             && next_blank
-            && (matches!(c, '.' | '!' | '?') || (block && matches!(c, ';' | ':')));
+            && (matches!(c, '.' | '!' | '?') || (clauses && matches!(c, ';' | ':')));
         if end {
             out.push(&text[start..i]);
             start = i + c.len_utf8();
@@ -253,79 +259,168 @@ fn units(text: &str, block: bool) -> Vec<&str> {
     }
     out.push(&text[start..]);
     out.into_iter()
-        .map(|u| u.trim().trim_end_matches(['.', ';', ':']).trim())
+        .map(|u| {
+            u.trim()
+                .trim_end_matches(['.', ';', ':'])
+                .trim()
+                .to_string()
+        })
         .filter(|u| !u.is_empty())
         .collect()
+}
+
+/// What is compared: of an owner's line its sentences and their clauses; of a block line its clauses, and a
+/// clause "X, not Y" also as `X` and `not Y` (the place and the place it is not are two rules).
+fn units(text: &str, block: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut keep = |u: String| {
+        if !out.contains(&u) {
+            out.push(u);
+        }
+    };
+    if block {
+        for c in pieces(text, true) {
+            let mut parts = vec![c.clone()];
+            for sep in [", не ", ", not "] {
+                parts = parts
+                    .iter()
+                    .flat_map(|p| match p.split_once(sep) {
+                        Some((head, tail)) => vec![
+                            head.to_string(),
+                            format!("{}{tail}", sep.trim_start_matches(", ")),
+                        ],
+                        None => vec![p.clone()],
+                    })
+                    .collect();
+            }
+            keep(c);
+            parts.into_iter().for_each(&mut keep);
+        }
+    } else {
+        pieces(text, false)
+            .into_iter()
+            .chain(pieces(text, true))
+            .for_each(keep);
+    }
+    out
 }
 
 struct Unit {
     anchors: HashSet<String>,
     concepts: HashSet<String>,
     negated: bool,
+    /// The anchors and concepts a single negation stands before ("без `ctxkit check`", "needs no confirmation").
+    neg_anchors: HashSet<String>,
+    neg_concepts: HashSet<String>,
 }
 
-fn tokens(s: &str) -> impl Iterator<Item = String> + '_ {
-    s.split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
+fn is_negation(w: &str) -> bool {
+    NEG.contains(&w)
+        || ["запрещ", "forbid", "prohibit"]
+            .iter()
+            .any(|p| w.starts_with(p))
+        || w == "нельзя"
 }
 
 fn unit_of(text: &str) -> Unit {
-    // `code` and **bold** spans give the anchors; the rest of the text gives the concepts
-    let (mut plain, mut marked) = (String::new(), String::new());
+    // the words in order, with whether they stand in `code` or **bold** (an anchor) or in the text (a concept)
+    let mut words: Vec<(String, bool)> = Vec::new();
+    let mut push = |s: &str, marked: bool| {
+        words.extend(
+            s.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|w| !w.is_empty())
+                .map(|w| (w.to_lowercase(), marked)),
+        );
+    };
     for (k, part) in text.split('`').enumerate() {
         if k % 2 == 1 {
-            marked.push(' ');
-            marked.push_str(part);
+            push(part, true);
         } else {
             for (b, piece) in part.split("**").enumerate() {
-                if b % 2 == 1 {
-                    marked.push(' ');
-                    marked.push_str(piece);
-                }
-                plain.push(' ');
-                plain.push_str(piece);
+                push(piece, b % 2 == 1);
             }
         }
     }
-    let mut anchors: HashSet<String> = tokens(&marked)
-        .filter(|w| w.chars().count() >= 2 && !STOP.contains(&w.as_str()))
+    let is_anchor = |(w, marked): &(String, bool)| {
+        (*marked && w.chars().count() >= 2 && !STOP.contains(&w.as_str()))
+            || KNOWN.contains(&w.as_str())
+    };
+    let anchors: HashSet<String> = words
+        .iter()
+        .filter(|x| is_anchor(x))
+        .map(|(w, _)| w.clone())
         .collect();
-    let words: Vec<String> = tokens(&plain).collect();
-    anchors.extend(
-        words
-            .iter()
-            .filter(|w| KNOWN.contains(&w.as_str()))
-            .cloned(),
-    );
-    let negated = words.iter().any(|w| NEG.contains(&w.as_str()));
+    let is_concept = |w: &str| {
+        !STOP.contains(&w)
+            && !is_negation(w)
+            && !anchors.contains(w)
+            && (w.chars().count() >= 2 || w.chars().all(|c| c.is_ascii_digit()))
+    };
     let concepts = words
         .iter()
-        .filter(|w| {
-            !STOP.contains(&w.as_str())
-                && !NEG.contains(&w.as_str())
-                && !anchors.contains(*w)
-                && (w.chars().count() >= 2 || w.chars().all(|c| c.is_ascii_digit()))
-        })
-        .map(|w| concept(w))
+        .filter(|(w, _)| is_concept(w))
+        .map(|(w, _)| concept(w))
         .collect();
+    // One negation turns the next two words that count; two or more ("do not lock a plan without calling the
+    // advisor") make a rule of the positive kind ("call the advisor first"), so nothing is marked.
+    let negations: Vec<usize> = (0..words.len())
+        .filter(|&k| is_negation(&words[k].0))
+        .collect();
+    let (mut neg_anchors, mut neg_concepts) = (HashSet::new(), HashSet::new());
+    if let [k] = negations[..] {
+        let counted: Vec<usize> = (k + 1..words.len())
+            .filter(|&j| is_anchor(&words[j]) || is_concept(&words[j].0))
+            .take(2)
+            .collect();
+        // a word that already stood before the negation ("a fix with no logic change") keeps its sign
+        let outside = |key: &dyn Fn(usize) -> Option<String>, s: &str| {
+            (0..k).any(|j| key(j).as_deref() == Some(s))
+        };
+        let anchor_at = |j: usize| is_anchor(&words[j]).then(|| words[j].0.clone());
+        let concept_at = |j: usize| {
+            (!is_anchor(&words[j]) && is_concept(&words[j].0)).then(|| concept(&words[j].0))
+        };
+        for &j in &counted {
+            if let Some(a) = anchor_at(j).filter(|a| !outside(&anchor_at, a)) {
+                neg_anchors.insert(a);
+            } else if let Some(c) = concept_at(j).filter(|c| !outside(&concept_at, c)) {
+                neg_concepts.insert(c);
+            }
+        }
+    }
     Unit {
         anchors,
         concepts,
-        negated,
+        negated: !negations.is_empty(),
+        neg_anchors,
+        neg_concepts,
     }
 }
 
 /// Does the owner's sentence `u` say what the block clause `v` says.
 fn paraphrase(u: &Unit, v: &Unit) -> bool {
     let common: Vec<&String> = u.concepts.intersection(&v.concepts).collect();
+    let shared_anchors: Vec<&String> = u.anchors.intersection(&v.anchors).collect();
+    // an exception or the opposite of the rule ("`git push` to my fork without confirmation") is no repeat;
+    // the sign is read on the verbs of the rule and on the anchors only (a negated "log" is too often the
+    // grammar of the sentence, "logs aren't needed")
+    let flipped = common
+        .iter()
+        .filter(|c| is_action(c))
+        .any(|c| u.neg_concepts.contains(*c) != v.neg_concepts.contains(*c))
+        || shared_anchors
+            .iter()
+            .any(|a| u.neg_anchors.contains(*a) != v.neg_anchors.contains(*a));
+    if flipped {
+        return false;
+    }
     let n = common.len();
     let action = common.iter().any(|c| is_action(c));
     let cover = n as f64 / v.concepts.len().max(1) as f64;
     if v.anchors.is_empty() {
         return n >= 3 && action && cover >= 0.5;
     }
-    let na = u.anchors.intersection(&v.anchors).count();
+    let na = shared_anchors.len();
     na >= 1
         && ((na >= 3 && n >= 1)
             || (na == 2 && n >= 2 && action)
@@ -401,12 +496,12 @@ pub fn find(md: &str) -> Vec<Pair> {
     }
 
     // paraphrases of the block's rules
-    let block_units: Vec<Vec<&str>> = lines
+    let block_units: Vec<Vec<String>> = lines
         .iter()
         .filter(|l| l.in_block)
         .map(|l| units(l.text, true))
         .collect();
-    let all: Vec<&str> = block_units.iter().flatten().copied().collect();
+    let all: Vec<&String> = block_units.iter().flatten().collect();
     let block_lines: Vec<(&Line, Vec<(&str, Unit)>)> = lines
         .iter()
         .filter(|l| l.in_block)
@@ -414,23 +509,26 @@ pub fn find(md: &str) -> Vec<Pair> {
         .map(|(l, us)| {
             let kept = us
                 .iter()
-                .filter(|u| all.iter().filter(|x| *x == *u).count() < 2)
-                .map(|u| (*u, unit_of(u)))
+                .filter(|u| all.iter().filter(|x| **x == *u).count() < 2)
+                .map(|u| (u.as_str(), unit_of(u)))
                 .collect();
             (l, kept)
         })
         .collect();
     for l in lines.iter().filter(|l| !l.in_block) {
-        let mine: Vec<(&str, Unit)> = units(l.text, false)
+        let mine: Vec<(String, Unit)> = units(l.text, false)
             .into_iter()
-            .map(|u| (u, unit_of(u)))
+            .map(|u| {
+                let unit = unit_of(&u);
+                (u, unit)
+            })
             .collect();
         for (b, theirs) in &block_lines {
             let hit = mine.iter().find_map(|(ut, u)| {
                 theirs
                     .iter()
                     .find(|(_, v)| paraphrase(u, v))
-                    .map(|(vt, _)| (*ut, *vt))
+                    .map(|(vt, _)| (ut.as_str(), *vt))
             });
             if let Some((ut, vt)) = hit {
                 add((l.no, false, ut), (b.no, true, vt));
