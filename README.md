@@ -94,7 +94,7 @@ The window starts only the `context-toolkit.exe` shipped with it, never one from
 ## Install
 
 1. Download `Loadout.Setup.<version>.exe` from [Releases](https://github.com/d-ridelman/Loadout/releases/latest) and run it. By default it installs for the current user into `%LOCALAPPDATA%\Programs\Loadout`; the installer also offers an install for all users and another folder (the paths below assume the default).
-2. **The installer is not signed.** Windows SmartScreen may show "Windows protected your PC": click "More info", then "Run anyway". The SHA-256 of the installer is in the release notes.
+2. **The installer is not signed.** Windows SmartScreen may warn about an unrecognized app; open the details in its dialog and choose to run the installer anyway. The SHA-256 of the installer is in the release notes.
 3. Silent install: `Loadout.Setup.<version>.exe /S`.
 
 Installing plugins needs the `claude` CLI (Claude Code); installing skills from GitHub needs `git` in `PATH`.
@@ -137,13 +137,15 @@ npm run dist                   # NSIS installer in app/dist (unsigned)
 
 Version 0.0.7, Windows only. Milestones M0–M5 and the built-in Context Toolkit are done (see [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §10).
 
-Not done:
+Known limitations:
 
 - code signing and auto-update (they need a code-signing certificate and a publishing address);
 - macOS and Linux;
 - project-level settings (`.claude/settings.json` in a project, `.mcp.json`): plugins enabled only there show as "unknown";
 - the MCP check that starts a server and asks for its tools;
 - a Claude Code profile other than `~/.claude` (`CLAUDE_CONFIG_DIR`) is not read.
+
+Open work is in [TODO.md](TODO.md): one dated item, comparing advisor and `checker` calls by day after 22.11.2026.
 
 ## Security
 

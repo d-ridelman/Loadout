@@ -88,7 +88,7 @@ cd Loadout/crates/context-toolkit
 
 ## Флаги `setup`
 
-`setup` сам не меняет твой выбор моделей: `model`, `advisorModel` и effort пишутся, только когда передан флаг, иначе остаются как есть (отсутствующий ключ остаётся отсутствующим), а в выводе стоит строка вида `model: opus (kept; pass --main-model sonnet to set)` (с `--lang ru`: `model: opus (оставлено; чтобы задать, передайте --main-model sonnet)`). Для схемы, под которую настроены Инструменты контекста (советник `fable` и основная `claude-sonnet-5-5`), запусти `context-toolkit setup --main-model sonnet --advisor fable --effort high`. Окно Loadout передаёт `--advisor`, только если советник выбран в форме (по умолчанию «не менять»), и никогда не передаёт `--main-model` и `--effort`.
+`setup` сам не меняет твой выбор моделей: `model`, `advisorModel` и effort пишутся, только когда передан флаг, иначе остаются как есть (отсутствующий ключ остаётся отсутствующим), а в выводе стоит строка вида `model: opus (kept; pass --main-model sonnet to set)` (с `--lang ru`: `model: opus (оставлено; чтобы задать, передайте --main-model sonnet)`). Для схемы, под которую настроены Инструменты контекста (советник `fable` и основная `claude-sonnet-5-5`), запусти `context-toolkit setup --main-model sonnet --advisor fable --effort high`. Окно Loadout передаёт `--main-model`, `--effort` и `--advisor`, только если значение выбрано в форме (у каждого по умолчанию «Не менять»).
 
 | Флаг | Назначение |
 |---|---|

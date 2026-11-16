@@ -89,7 +89,7 @@ Before it copies the binary or writes anything, `setup` reads every file it is g
 
 ## Setup Flags
 
-`setup` does not change your model choices on its own: `model`, `advisorModel` and the effort are written only when you pass the flag, otherwise they stay as they are (a key that is absent stays absent) and the output says `model: opus (kept; pass --main-model sonnet to set)`. For the workflow Context Toolkit was tuned for (`fable` advisor + `claude-sonnet-5-5` main model) run `context-toolkit setup --main-model sonnet --advisor fable --effort high`. The Loadout window passes `--advisor` only when an advisor is picked in its form (the default is "keep as is") and never passes `--main-model` or `--effort`.
+`setup` does not change your model choices on its own: `model`, `advisorModel` and the effort are written only when you pass the flag, otherwise they stay as they are (a key that is absent stays absent) and the output says `model: opus (kept; pass --main-model sonnet to set)`. For the workflow Context Toolkit was tuned for (`fable` advisor + `claude-sonnet-5-5` main model) run `context-toolkit setup --main-model sonnet --advisor fable --effort high`. The Loadout window passes `--main-model`, `--effort` and `--advisor` only when a value is picked in its form (the default of each is "Keep as is").
 
 | Flag | Purpose |
 |---|---|
