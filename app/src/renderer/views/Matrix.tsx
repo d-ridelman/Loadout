@@ -9,7 +9,7 @@ import { Glyph, KindBadge } from '../ui'
 export interface Sel {
   rowKey: string
   client: ClientId
-  /** Выбранная запись в ячейке по id (а не по номеру: при обновлении данных номера сдвигаются); `null` — главная. */
+  /** Selected entry in the cell by id (not by index: indexes shift when data is refreshed); `null` means the main one. */
   id: string | null
 }
 
@@ -21,7 +21,7 @@ export interface Filters {
   client: ClientId | null
 }
 
-/** Клавиша независимо от раскладки: `j/k/h/l` работают и на русской (по физической клавише). */
+/** Key regardless of keyboard layout: `j/k/h/l` work on the Russian layout too (by physical key). */
 export function keyOf(e: { key: string; code: string }): string {
   return e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : e.key
 }
@@ -36,12 +36,12 @@ interface Props {
   sel: Sel | null
   onSelect: (s: Sel) => void
   searchRef: RefObject<HTMLInputElement | null>
-  /** Записи, изменившиеся при последнем обновлении с диска: отмечаются значком Δ (не только цветом). */
+  /** Entries that changed in the last refresh from disk: marked with a Δ badge (not by color alone). */
   fresh: ReadonlySet<string>
 }
 
 export function Matrix({ rows, total, filters, setFilters, sel, onSelect, searchRef, fresh }: Props) {
-  // Выбранная строка могла исчезнуть (обновление с диска, фильтр): тогда выбранной ячейки нет, а движение идёт с первой строки.
+  // The selected row may have disappeared (refresh from disk, filter): then there is no selected cell and movement starts from the first row.
   const foundRow = sel ? rows.findIndex((r) => r.key === sel.rowKey) : -1
   const curRow = Math.max(0, foundRow)
   const curCol = Math.max(0, sel ? CLIENTS.findIndex((c) => c.id === sel.client) : 0)

@@ -10,7 +10,7 @@ interface Props {
   onClose: () => void
 }
 
-/** DeepSeek хранит записи в YAML с тегами: копировать в него нельзя (CONCEPT.md §11). */
+/** DeepSeek stores entries in tagged YAML: copying into it is not allowed (CONCEPT.md §11). */
 const TARGETS = CLIENTS.filter((c) => c.id !== 'deepseek')
 
 export function CopyDialog({ entity, onSubmit, onClose }: Props) {

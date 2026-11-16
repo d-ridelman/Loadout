@@ -14,7 +14,7 @@ const container = document.getElementById('root')
 if (!container) throw new Error('#root container not found')
 const root = createRoot(container)
 
-/** Язык меняется целиком: `key` пересоздаёт дерево, и все строки берутся заново на новом языке. */
+/** The language changes as a whole: `key` recreates the tree, so every string is taken again in the new language. */
 function Root({ initial }: { initial: Lang }) {
   const [lang, setCurrent] = useState<Lang>(initial)
   const change = async (next: Lang): Promise<void> => {
@@ -24,7 +24,7 @@ function Root({ initial }: { initial: Lang }) {
       document.documentElement.lang = applied
       setCurrent(applied)
     } catch (e) {
-      // отказ main (идёт запись): язык остаётся прежним, причина — в сообщении
+      // main refused (a write is in progress): the language stays the same, the reason is in the message
       window.alert(e instanceof Error ? e.message : String(e))
     }
   }
@@ -35,7 +35,7 @@ function Root({ initial }: { initial: Lang }) {
   )
 }
 
-// язык задаёт main (сохранённый выбор или локаль системы): сначала он, потом первая отрисовка
+// main sets the language (saved choice or system locale): it comes first, then the first render
 const start = (lang: Lang): void => {
   setLang(lang)
   document.documentElement.lang = lang
@@ -45,5 +45,5 @@ const start = (lang: Lang): void => {
     </StrictMode>,
   )
 }
-// при сбое IPC окно всё равно открывается, на русском
+// if IPC fails the window still opens, in Russian
 void window.loadout.getLang().then(start, () => start('ru'))

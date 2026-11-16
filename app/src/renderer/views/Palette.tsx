@@ -7,7 +7,7 @@ export interface PaletteItem {
   run: () => void
 }
 
-/** Палитра команд (Ctrl+K). Фокус возвращается туда, откуда её открыли. */
+/** Command palette (Ctrl+K). Focus returns to where it was opened from. */
 export function Palette({ items, onClose }: { items: PaletteItem[]; onClose: () => void }) {
   const [q, setQ] = useState('')
   const [n, setN] = useState(0)
@@ -35,8 +35,8 @@ export function Palette({ items, onClose }: { items: PaletteItem[]; onClose: () 
     close()
     if (!i) return
     i.run()
-    // выбранное в палитре сразу доступно с клавиатуры: фокус на таблицу, если она есть на новом экране
-    // кадр может прийти поздно (окно не на переднем плане): если за это время открылся диалог или палитра снова, фокус у них забирать нельзя
+    // whatever was picked in the palette is immediately usable from the keyboard: focus the table if the new screen has one
+    // the frame may arrive late (window not in the foreground): if a dialog or the palette opened again meanwhile, do not take focus from them
     requestAnimationFrame(() => {
       if (!document.querySelector('[role=dialog]')) document.getElementById('grid')?.focus()
     })
@@ -68,7 +68,7 @@ export function Palette({ items, onClose }: { items: PaletteItem[]; onClose: () 
             } else if (e.key === 'Enter') run(shown[n])
             else if (e.key === 'Escape') close()
             else if (e.key === 'Tab') {
-              e.preventDefault() // ловушка фокуса: в диалоге только поле ввода
+              e.preventDefault() // focus trap: the dialog has only the input field
             }
           }}
         />

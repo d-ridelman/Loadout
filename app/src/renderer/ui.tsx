@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import type { EntityState, Kind } from '../shared/model'
 import { GLYPH } from './aggregate'
 
-/** Состояние глифом и цветом: цвет один не несёт смысла (доступность, CONCEPT.md §8). */
+/** State as a glyph plus color: color alone carries no meaning (accessibility, CONCEPT.md §8). */
 export function Glyph({ state, pulse }: { state: EntityState | 'none'; pulse?: boolean }) {
   const g = GLYPH[state]
   return (
@@ -25,7 +25,7 @@ export function Panel({ title, children, className = '' }: { title?: string; chi
   )
 }
 
-/** Путь с местами переноса после `/` и `\`: длинный путь делится по сегментам, а не посреди имени файла. */
+/** Path with wrap points after `/` and `\`: a long path breaks between segments, not in the middle of a file name. */
 export function Path({ p }: { p: string }) {
   return (
     <>

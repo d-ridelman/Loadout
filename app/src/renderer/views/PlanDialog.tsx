@@ -11,11 +11,11 @@ type PlanState =
   | { status: 'ready'; plan: Plan & { running: string[] } }
 
 interface Props {
-  /** `null` у добавления нового сервера: записи ещё нет. */
+  /** `null` when adding a new server: there is no entry yet. */
   entity: Entity | null
   intent: Intent
   onClose: () => void
-  /** Запись выполнена: окно получит новые данные от сторожа, здесь — только сообщение. */
+  /** The write is done: the window gets fresh data from the watcher, so only a message is needed here. */
   onDone: (message: string) => void
 }
 
@@ -28,7 +28,7 @@ function title(p: Plan | undefined, intent: Intent): string {
   return intent.op === 'toggle' && intent.enable ? t('Включить', 'Enable') : t('Выключить', 'Disable')
 }
 
-/** Название главной кнопки по операции, а не общее «Применить»: видно, что именно произойдёт. */
+/** Primary button label per operation instead of a generic "Apply": shows what exactly will happen. */
 function applyLabel(p: Plan | undefined, intent: Intent): string {
   if (intent.op === 'add') return t('Добавить', 'Add')
   if (intent.op === 'edit') return t('Записать команду', 'Write command')
@@ -39,7 +39,7 @@ function applyLabel(p: Plan | undefined, intent: Intent): string {
   return intent.enable ? t('Включить', 'Enable') : t('Выключить', 'Disable')
 }
 
-/** Предпросмотр любой записи (CONCEPT.md §5, шаги 1–2): что именно поменяется, и только после подтверждения запись. */
+/** Preview of any write (CONCEPT.md §5, steps 1-2): what exactly will change, and the write happens only after confirmation. */
 export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
   const [state, setState] = useState<PlanState>({ status: 'loading' })
   const shown = entity?.name ?? (intent.op === 'add' || intent.op === 'installSkill' ? intent.name : '')
@@ -62,7 +62,7 @@ export function PlanDialog({ entity, intent, onClose, onDone }: Props) {
   useEffect(() => {
     void build()
   }, [build])
-  // фокус в диалоге с самого начала (на «Отмена»), когда план готов и запись возможна — на «Применить»
+  // focus is in the dialog from the start (on "Cancel"); once the plan is ready and the write is possible, it moves to "Apply"
   useEffect(() => {
     cancelRef.current?.focus()
   }, [])

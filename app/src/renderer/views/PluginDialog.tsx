@@ -5,15 +5,16 @@ import { Modal } from './Modal'
 
 interface Props {
   onClose: () => void
-  /** Установка закончилась успешно: окно получит новые данные от сторожа, здесь — только сообщение. */
+  /** The installation finished successfully: the window gets fresh data from the watcher, so only a message is needed here. */
   onDone: (message: string) => void
 }
 
 /**
- * Установка плагина Claude Code его собственным CLI (R2): маркетплейс → каталог → плагин. Добавление маркетплейса и
- * установка — сеть и чужой код, поэтому сначала показывается точная команда, потом отдельное подтверждение; плагины,
- * которые ставятся запуском команды маркетплейса, отсюда не ставятся. В журнал Loadout это не пишется (файлы правит
- * сам Claude Code): снять плагин можно выключением или `claude plugin uninstall`, маркетплейс — `claude plugin marketplace remove`.
+ * Installing a Claude Code plugin with its own CLI (R2): marketplace -> catalog -> plugin. Adding a marketplace and
+ * installing both involve the network and third-party code, so the exact command is shown first, then a separate confirmation;
+ * plugins that are installed by running a marketplace command are not installed from here. This is not written to the Loadout
+ * journal (Claude Code edits the files itself): a plugin can be removed by disabling it or with `claude plugin uninstall`,
+ * a marketplace with `claude plugin marketplace remove`.
  */
 export function PluginDialog({ onClose, onDone }: Props) {
   const [markets, setMarkets] = useState<Marketplace[] | null>(null)
@@ -22,7 +23,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
   const [source, setSource] = useState('')
   const [filter, setFilter] = useState('')
   const [spec, setSpec] = useState('')
-  // команда из предпросмотра и что она делает: установка плагина или добавление маркетплейса
+  // the command from the preview and what it does: installing a plugin or adding a marketplace
   const [command, setCommand] = useState<{ text: string; kind: 'install' | 'add' } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -59,7 +60,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
       }
       setCommand(null)
       if (kind === 'install') return onDone(t(`Плагин установлен: ${value}. Выключить — в матрице, удалить — claude plugin uninstall`, `Plugin installed: ${value}. Disable it in the matrix, remove it with claude plugin uninstall`))
-      // новый маркетплейс — тот, которого не было в списке до добавления
+      // the new marketplace is the one that was not in the list before adding
       const before = new Set(markets?.map((m) => m.name))
       setAdding(false)
       setSource('')

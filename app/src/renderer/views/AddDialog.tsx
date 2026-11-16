@@ -9,14 +9,14 @@ interface Props {
   onClose: () => void
 }
 
-/** DeepSeek хранит записи в YAML с тегами: добавлять в него нельзя (CONCEPT.md §11). */
+/** DeepSeek stores entries in tagged YAML: adding to it is not allowed (CONCEPT.md §11). */
 const TARGETS = CLIENTS.filter((c) => c.id !== 'deepseek')
 const NAME_OK = /^[A-Za-z0-9._-]{1,64}$/
 const KEY_OK = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
 
 /**
- * Добавление MCP-сервера клиенту (R2). Значения env уходят только в ядро и в предпросмотре не показываются.
- * Установки самих пакетов здесь нет: окно записывает строку запуска, а `npx`/`uvx` скачает пакет при первом запуске клиента.
+ * Add an MCP server to a client (R2). env values go only to the core and are not shown in the preview.
+ * Packages are not installed here: the window writes a launch line, and `npx`/`uvx` downloads the package on the client's first launch.
  */
 export function AddDialog({ onSubmit, onClose }: Props) {
   const [to, setTo] = useState<ClientId>(TARGETS[0]?.id ?? 'claude-code')
@@ -26,7 +26,7 @@ export function AddDialog({ onSubmit, onClose }: Props) {
   const [args, setArgs] = useState('')
   const [url, setUrl] = useState('')
   const [env, setEnv] = useState('')
-  // форма удалённого сервера сверена только для Claude Code и Codex
+  // the remote-server form has been checked only for Claude Code and Codex
   const remoteOk = to === 'claude-code' || to === 'codex'
   const remote = wantRemote && remoteOk
   const lines = args.split('\n').filter((l) => l !== '')

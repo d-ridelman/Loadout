@@ -22,7 +22,7 @@ const ent = (over: Partial<Entity>): Entity => ({
 })
 
 describe('aggregate', () => {
-  it('плагины и MCP разведены по разным строкам и группам, а один тип с одним именем в разных клиентах сводится в строку', () => {
+  it('plugins and MCPs go to separate rows and groups, while one type with one name in different clients merges into a row', () => {
     const rows = buildRows([
       ent({ kind: 'plugin', logicalKey: 'glidehand', name: 'glidehand@glidehand' }),
       ent({ kind: 'plugin', logicalKey: 'glidehand', name: 'glidehand@glidehand', client: 'codex' }),
@@ -38,7 +38,7 @@ describe('aggregate', () => {
     expect(Object.keys(mcp?.cells ?? {})).toEqual(['codex'])
   })
 
-  it('ячейку определяет user-запись, а не десятки project-записей', () => {
+  it('the cell is determined by the user entry, not by dozens of project entries', () => {
     const rows = buildRows([
       ent({ logicalKey: 'p', scope: 'project:~/a', state: 'unknown' }),
       ent({ logicalKey: 'p', scope: 'project:~/b', state: 'unknown' }),
@@ -50,7 +50,7 @@ describe('aggregate', () => {
     expect(cell?.instances[0]?.scope).toBe('user')
   })
 
-  it('девять хуков Codex под одним ключом дают одну строку с девятью экземплярами', () => {
+  it('nine Codex hooks under one key give one row with nine instances', () => {
     const rows = buildRows(
       Array.from({ length: 9 }, (_, i) =>
         ent({ kind: 'hook', client: 'codex', logicalKey: 'orca-agent-hooks', name: `E${i}: codex-hook` }),
@@ -60,7 +60,7 @@ describe('aggregate', () => {
     expect(rows[0]?.cells.codex?.instances).toHaveLength(9)
   })
 
-  it('имя областного пакета не теряет ведущую @, суффикс маркетплейса отбрасывается', () => {
+  it('a scoped package name keeps its leading @, the marketplace suffix is dropped', () => {
     const rows = buildRows([
       ent({ logicalKey: '@deepseek-ai/dsh-x', name: '@deepseek-ai/dsh-x', client: 'deepseek' }),
       ent({ logicalKey: 'harnio', name: 'harnio@harnio' }),
@@ -68,34 +68,34 @@ describe('aggregate', () => {
     expect(rows.map((r) => r.name).sort()).toEqual(['@deepseek-ai/dsh-x', 'harnio'])
   })
 
-  it('строка только из «не определено» помечается', () => {
+  it('a row made only of "undetermined" is flagged', () => {
     const rows = buildRows([ent({ logicalKey: 'a', state: 'unknown', scope: 'project:~/x' })])
     expect(onlyUnknown(rows[0]!)).toBe(true)
     expect(scopeRank('user')).toBeLessThan(scopeRank('project:~/x'))
   })
 })
 
-describe('галочка шлюза Stop', () => {
+describe('Stop gate checkbox', () => {
   const doc = (...f: [string, FindingSeverity][]): CtxkitDoctor => ({
     version: '1',
     findings: f.map(([id, severity]) => ({ id, severity, message: id, detail: null, fix: null })),
   })
-  it('берётся из находки stop_gate, но только когда ctxkit установлен', () => {
+  it('taken from the stop_gate finding, but only when ctxkit is installed', () => {
     expect(stopGateOff(doc(['hooks', 'ok'], ['stop_gate', 'info']))).toBe(true)
     expect(stopGateOff(doc(['hooks', 'ok'], ['stop_gate', 'ok']))).toBe(false)
     expect(stopGateOff(doc(['hooks', 'error'], ['stop_gate', 'info']))).toBe(true)
-    // чистый профиль: хука нет, «нет шлюза» — не выбор пользователя, остаётся шлюз по умолчанию
+    // clean profile: no hook, "no gate" is not a user choice, the default gate stays
     expect(stopGateOff(doc(['hooks', 'warn'], ['stop_gate', 'info']))).toBeNull()
     expect(stopGateOff(doc())).toBeNull()
   })
 })
 
-describe('подпись «сейчас включены» в блоке «Защиты»', () => {
+describe('"currently enabled" label in the "Protections" block', () => {
   const doc = (...f: [string, FindingSeverity, string | null][]): CtxkitDoctor => ({
     version: '1',
     findings: f.map(([id, severity, detail]) => ({ id, severity, message: `m-${id}`, detail, fix: null })),
   })
-  it('есть ctxkit.json — подпись из находки policies; нет файла — null', () => {
+  it('with ctxkit.json the label comes from the policies finding; without the file it is null', () => {
     expect(policiesNow(doc())).toBeNull()
     expect(policiesNow(doc(['policies', 'info', 'commit_hygiene, build_slots=2']))).toEqual({ text: 'commit_hygiene, build_slots=2', broken: false })
     expect(policiesNow(doc(['policies', 'warn', 'x']))).toEqual({ text: 'm-policies', broken: true })
@@ -103,7 +103,7 @@ describe('подпись «сейчас включены» в блоке «За�
 })
 
 describe('doctor', () => {
-  it('сломанное и расходящееся идут первыми, предупреждения сканера сохраняются', () => {
+  it('broken and diverged come first, scanner warnings are kept', () => {
     const f = diagnose(
       [
         ent({ name: 'a', state: 'stale', note: 'версии' }),
@@ -115,7 +115,7 @@ describe('doctor', () => {
     expect(f[0]?.title).toContain('b')
   })
 
-  it('две записи одного плагина с расхождением дают одну находку; склонение числа', () => {
+  it('two entries of one plugin with a divergence give one finding; number declension', () => {
     const f = diagnose([ent({ name: 'dup@mp', state: 'stale' }), ent({ name: 'dup@mp', state: 'stale' })], [])
     expect(f).toHaveLength(1)
     expect([1, 2, 5, 11, 21, 22].map((n) => plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins']))).toEqual([
@@ -123,7 +123,7 @@ describe('doctor', () => {
     ])
   })
 
-  it('факты ядра превращаются в находки: копии, битые ссылки, маркетплейс без плагинов', () => {
+  it('core facts turn into findings: backups, broken links, a marketplace without plugins', () => {
     const f = diagnose(
       [
         ent({ kind: 'marketplace', name: 'lonely', logicalKey: 'lonely' }),
@@ -146,7 +146,7 @@ describe('doctor', () => {
     expect(f.find((x) => x.id.startsWith('orphan'))?.title).toContain('lonely')
   })
 
-  it('скил в двух областях одного клиента — находка, в разных клиентах — нет', () => {
+  it('a skill in two scopes of one client is a finding, in different clients it is not', () => {
     const dup = diagnose(
       [
         ent({ kind: 'skill', logicalKey: 's', scope: 'user' }),
@@ -165,7 +165,7 @@ describe('doctor', () => {
     expect(apart.some((x) => x.id.startsWith('dup:'))).toBe(false)
   })
 
-  it('ключи секретов MCP упомянуты только по имени', () => {
+  it('MCP secret keys are mentioned by name only', () => {
     const f = diagnose([ent({ kind: 'mcp', name: 'srv', detail: { envKeys: ['API_KEY', 'LANG'] } })], [])
     expect(f).toHaveLength(1)
     expect(f[0]?.detail).toContain('API_KEY')

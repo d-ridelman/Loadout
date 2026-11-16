@@ -2,12 +2,12 @@ import { getLang, t } from '../shared/i18n'
 import type { ClientId, Entity, EntityState, Kind } from '../shared/model'
 
 /**
- * Группы строк матрицы. Плагины и MCP-серверы разведены по разным строкам и фильтрам (так удобнее: у них разные
- * действия и разная природа); запись одного типа с тем же именем в разных клиентах по-прежнему сводится в одну строку.
+ * Matrix row groups. Plugins and MCP servers are split into separate rows and filters (more convenient: they have different
+ * actions and a different nature); entries of one type with the same name in different clients are still merged into one row.
  */
 export type Group = 'plugin' | 'mcp' | 'connector' | 'skill' | 'agent' | 'command' | 'hook' | 'marketplace'
 
-/** Подписи — геттеры: `t()` вычисляется при обращении (во время рендера), а не при импорте модуля. */
+/** Labels are getters: `t()` is evaluated on access (during render), not when the module is imported. */
 export const GROUPS: readonly { id: Group; label: string }[] = [
   { id: 'plugin', get label() { return t('плагины', 'plugins') } },
   { id: 'mcp', label: 'MCP' },
@@ -24,8 +24,8 @@ export function groupOf(kind: Kind): Group {
 }
 
 /**
- * Какая запись говорит за ячейку, когда экземпляров несколько: пользовательская область раньше проектной,
- * проектная раньше «встроенной» и облачной. Десятки project-записей плагина не перекрывают user-запись.
+ * Which entry speaks for the cell when there are several instances: user scope before project scope,
+ * project before "built-in" and cloud. Dozens of project entries of a plugin do not override the user entry.
  */
 export function scopeRank(scope: string): number {
   if (scope === 'user') return 0
@@ -41,7 +41,7 @@ export function scopeRank(scope: string): number {
 
 export interface Cell {
   client: ClientId
-  /** Все экземпляры, главный первым. */
+  /** All instances, the main one first. */
   instances: Entity[]
   state: EntityState
 }
@@ -49,7 +49,7 @@ export interface Cell {
 export interface Row {
   key: string
   group: Group
-  /** Имя для показа без суффикса `@маркетплейс`. */
+  /** Display name without the `@marketplace` suffix. */
   name: string
   kinds: Kind[]
   cells: Partial<Record<ClientId, Cell>>
@@ -64,7 +64,7 @@ export function buildRows(entities: readonly Entity[]): Row[] {
     const key = `${group}:${e.logicalKey}`
     let row = rows.get(key)
     if (!row) {
-      // суффикс `@маркетплейс` убираем, ведущую `@` областного пакета (`@scope/name`) оставляем
+      // strip the `@marketplace` suffix, keep the leading `@` of a scoped package (`@scope/name`)
       const at = e.name.lastIndexOf('@')
       const name = DISPLAY_NAME_KINDS.has(e.kind) ? (at > 0 ? e.name.slice(0, at) : e.name) : e.logicalKey
       row = { key, group, name, kinds: [], cells: {} }
@@ -78,7 +78,7 @@ export function buildRows(entities: readonly Entity[]): Row[] {
   const order = GROUPS.map((g) => g.id)
   for (const row of rows.values()) {
     for (const cell of Object.values(row.cells)) {
-      // sort стабилен: при равных областях сохраняется порядок файла
+      // sort is stable: with equal scopes the file order is kept
       cell.instances.sort((a, b) => scopeRank(a.scope) - scopeRank(b.scope))
       cell.state = cell.instances[0]?.state ?? 'unknown'
     }
@@ -88,13 +88,13 @@ export function buildRows(entities: readonly Entity[]): Row[] {
   )
 }
 
-/** Строка из одних неопределённых ячеек (флаг включения лежит в настройках проекта, которых M1 не читает). */
+/** A row made only of undetermined cells (the enable flag lives in project settings, which M1 does not read). */
 export function onlyUnknown(row: Row): boolean {
   const cells = Object.values(row.cells)
   return cells.length > 0 && cells.every((c) => c.state === 'unknown')
 }
 
-/** Подписи — геттеры по той же причине, что и у `GROUPS`. */
+/** Labels are getters for the same reason as in `GROUPS`. */
 export const GLYPH: Record<EntityState | 'none', { ch: string; label: string }> = {
   on: { ch: '●', get label() { return t('включено', 'enabled') } },
   off: { ch: '○', get label() { return t('выключено', 'disabled') } },

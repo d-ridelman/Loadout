@@ -5,14 +5,14 @@ import { Modal } from './Modal'
 
 interface Props {
   onClose: () => void
-  /** Источник подготовлен и скил выбран: дальше общий предпросмотр записи (план ядра, R2, журнал, откат). */
+  /** The source is prepared and a skill is chosen: the shared write preview follows (core plan, R2, journal, rollback). */
   onSubmit: (intent: Intent) => void
 }
 
 /**
- * Установка скила Claude Code в `~/.claude/skills/<имя>`. Шаг 1 — показать, что и куда будет скачано (сети ещё нет);
- * шаг 2 — по отдельной кнопке скачать (git clone) или скопировать в каталог подготовки Loadout; шаг 3 — выбрать скил,
- * дальше план ядра с файлами и подтверждение. До подтверждения в `~/.claude` ничего не пишется.
+ * Install a Claude Code skill into `~/.claude/skills/<name>`. Step 1: show what will be downloaded and where (no network yet);
+ * step 2: on a separate button, download (git clone) or copy into the Loadout staging directory; step 3: pick a skill,
+ * then the core plan with files and a confirmation. Nothing is written to `~/.claude` before confirmation.
  */
 export function SkillDialog({ onClose, onSubmit }: Props) {
   const [source, setSource] = useState('')

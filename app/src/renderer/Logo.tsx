@@ -1,6 +1,6 @@
 /**
- * Знак Loadout: панель с угловыми скобками HUD; слева «загружено» (●, как в матрице), справа «выключено» (○),
- * между ними розовый слэш из названия LOAD/OUT. Исходник — `build/icon.svg` (из него же делается значок exe).
+ * Loadout mark: a panel with HUD corner brackets; "loaded" (●, as in the matrix) on the left, "off" (○) on the right,
+ * with the pink slash from the LOAD/OUT name between them. Source: `build/icon.svg` (the exe icon is made from it too).
  */
 export function Logo({ size = 28 }: { size?: number }) {
   return (

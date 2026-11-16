@@ -9,7 +9,7 @@ export interface Finding {
   severity: Severity
   title: string
   detail: string
-  /** Сущность, к которой ведёт «Показать». */
+  /** The entity that "Show" leads to. */
   entity?: Entity
 }
 
@@ -19,13 +19,13 @@ const SECRETISH = /token|secret|passw|credential|cookie|auth|key$|^pat$|_pat$|pw
 const NO_FACTS: Facts = { backups: [], brokenLinks: [] }
 
 /**
- * Автоматические находки Доктора. Единственное место, где факты скана превращаются в выводы: ядро отдаёт
- * записи и счётчики, окно решает, что из этого проблема. Чистая функция: проверяется без окна.
+ * Automatic Doctor findings. The only place where scan facts become conclusions: the core hands over
+ * entries and counters, the window decides what is a problem. A pure function: testable without the window.
  */
 export function diagnose(entities: readonly Entity[], warnings: readonly string[], facts: Facts = NO_FACTS): Finding[] {
   const out: Finding[] = []
 
-  // Резервные копии, которые копят сторонние установщики: только число, имён файлов ядро не отдаёт.
+  // Backups piled up by third-party installers: only the count, the core does not return file names.
   for (const b of facts.backups) {
     out.push({
       id: `backups:${b.client}:${b.dir}`,
@@ -41,7 +41,7 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     })
   }
 
-  // Ссылки (junction) на кеш, который почистили: пакет в списке есть, а запустить его нечем.
+  // Links (junctions) into a cache that was cleaned: the package is listed but there is nothing to launch.
   for (const l of facts.brokenLinks) {
     if (l.broken === 0) continue
     out.push({
@@ -58,7 +58,7 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     })
   }
 
-  // Маркетплейс без единого плагина: остался от удалённых плагинов или добавлен впрок.
+  // A marketplace with no plugins: left over from removed plugins or added in advance.
   const used = new Set<string>()
   for (const e of entities) {
     if (e.kind === 'plugin') used.add(`${e.client}|${e.name.slice(e.name.lastIndexOf('@') + 1)}`)
@@ -77,8 +77,8 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     })
   }
 
-  // Несколько записей с одним именем в одном клиенте и одном состоянии (две версии плагина, десять хуков) дают
-  // одну находку: подробности и остальные записи видны в инспекторе.
+  // Several entries with one name in one client and one state (two plugin versions, ten hooks) produce
+  // one finding: details and the remaining entries are visible in the inspector.
   const seen = new Set<string>()
   for (const e of entities) {
     if (e.state !== 'broken' && e.state !== 'stale') continue
@@ -102,7 +102,7 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     })
   }
 
-  // Один и тот же скил или MCP в нескольких областях одного клиента: какая из записей действует, зависит от клиента.
+  // The same skill or MCP in several scopes of one client: which entry takes effect depends on the client.
   const byKey = new Map<string, Entity[]>()
   for (const e of entities) {
     if (e.kind !== 'skill' && e.kind !== 'mcp') continue
@@ -129,7 +129,7 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     }
   }
 
-  // Плагины project/local: флаг включения лежит в настройках проекта, ядро их не читает.
+  // project/local plugins: the enable flag lives in project settings, which the core does not read.
   const unknownByClient = new Map<ClientId, number>()
   for (const e of entities) {
     if (e.kind === 'plugin' && e.state === 'unknown') unknownByClient.set(e.client, (unknownByClient.get(e.client) ?? 0) + 1)
@@ -149,7 +149,7 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     })
   }
 
-  // MCP, у которых в конфиге есть ключи секретов: значения там лежат как есть, Loadout их не показывает.
+  // MCPs whose config has secret keys: the values sit there as they are, Loadout does not show them.
   for (const e of entities) {
     if (e.kind !== 'mcp') continue
     const keys = [...asStrings(e.detail['envKeys']), ...asStrings(e.detail['headerKeys'])].filter((k) => SECRETISH.test(k))
