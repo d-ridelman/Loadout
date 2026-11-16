@@ -11,6 +11,7 @@ mod report;
 mod setup;
 mod shell;
 mod slots;
+mod stray;
 
 use serde_json::{json, Value};
 use shell::Dialect;
@@ -266,6 +267,12 @@ fn handle_antigravity(call: &Value, forced_post: bool, lang: Lang) {
             lang,
             cwd.as_deref(),
         ),
+        (None, "write_file") => policy::write(
+            &policy::load(),
+            args["Path"].as_str().unwrap_or(""),
+            cwd.as_deref(),
+            lang,
+        ),
         _ => None,
     };
     let answer = |decision: &str, reason: String| {
@@ -416,7 +423,7 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
         return;
     }
 
-    if tool == "Bash" || tool == "PowerShell" {
+    let verdict = if tool == "Bash" || tool == "PowerShell" {
         if let Some(reason) =
             guard::shell_read_guard(tool, command, client, lang, eff_cwd.as_deref())
         {
@@ -428,18 +435,22 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
         } else {
             Dialect::Posix
         };
-        if let Some(v) = policy::shell(
+        policy::shell(
             &policy::load(),
             command,
             &[dialect],
             lang,
             eff_cwd.as_deref(),
-        ) {
-            match v {
-                policy::Verdict::Deny(r) => deny_claude(r),
-                policy::Verdict::Ask(r) => ask_claude(r),
-            }
-        }
+        )
+    } else if tool == "Write" {
+        policy::write(&policy::load(), path, eff_cwd.as_deref(), lang)
+    } else {
+        None
+    };
+    match verdict {
+        Some(policy::Verdict::Deny(r)) => deny_claude(r),
+        Some(policy::Verdict::Ask(r)) => ask_claude(r),
+        None => {}
     }
 }
 

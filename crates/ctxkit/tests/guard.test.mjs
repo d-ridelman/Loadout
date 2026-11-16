@@ -128,7 +128,7 @@ const decisionOf = (out) => {
 const pol = (profile, tool_name, tool_input, { args = [], env = {}, cwd } = {}) =>
   decisionOf(runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input, ...(cwd ? { cwd } : {}) }, args, { CLAUDE_CONFIG_DIR: profile, ...env }));
 const polReason = (profile, tool_name, tool_input, extra = {}) => {
-  const out = runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input }, extra.args ?? [], { CLAUDE_CONFIG_DIR: profile, ...(extra.env ?? {}) });
+  const out = runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input, ...(extra.cwd ? { cwd: extra.cwd } : {}) }, extra.args ?? [], { CLAUDE_CONFIG_DIR: profile, ...(extra.env ?? {}) });
   const j = JSON.parse(out);
   return j.hookSpecificOutput?.permissionDecisionReason ?? j.reason;
 };
@@ -247,6 +247,29 @@ const cases = [
     const kr = JSON.parse(k.stdout);
     if (kr.code !== 0 || kr.ms > 5000) return `killed holder kept the slot: ${k.stdout}`;
     return true;
+  }],
+
+  // Policy stray_files: report-like files at the project root or the profile root are asked about
+  [true, () => {
+    const proj = join(dir, 'stray-proj');
+    mkdirSync(join(proj, 'docs'), { recursive: true });
+    const on = P('stray', { stray_files: true }, { stray_patterns: ['draft*.md'] });
+    const w = (file_path, o = {}) => pol(on, o.tool ?? 'Write', { file_path, content: 'x' }, { cwd: proj, ...o });
+    for (const f of ['report.md', 'Report-final.md', 'perf-analysis.md', 'summary.md', 'notes-1.md', 'x.tmp', 'cfg.bak', 'draft-1.md']) {
+      if (w(join(proj, f)) !== 'ask') return `ask: ${f}`;
+    }
+    if (w('notes.md') !== 'ask') return 'relative path against cwd';
+    if (w(join(on, 'summary.md')) !== 'ask') return 'profile root';
+    for (const f of [join('docs', 'report.md'), 'README.md', 'src.rs', join('docs', '..', 'docs', 'notes.md')]) {
+      if (w(join(proj, f)) !== '') return `quiet: ${f}`;
+    }
+    if (pol(on, 'Edit', { file_path: join(proj, 'report.md'), new_string: 'x' }, { cwd: proj }) !== '') return 'only Write';
+    if (!polReason(on, 'Write', { file_path: join(proj, 'report.md'), content: 'x' }, { cwd: proj, env: { CTXKIT_LANG: 'ru' } }).includes('отчёты в чат')) return 'ru';
+    if (w(join(proj, 'report.md'), { tool: 'write', args: ['--dsh'] }) !== 'ask') return 'dsh';
+    const agy = JSON.parse(runHook({ cwd: proj, toolCall: { name: 'write_file', args: { Path: join(proj, 'report.md'), Content: 'x' } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on }));
+    if (agy.decision !== 'ask' || !agy.reason?.includes('reports in the chat')) return 'agy';
+    // off by default and for a broken file
+    return pol(isoProfile, 'Write', { file_path: join(proj, 'report.md'), content: 'x' }, { cwd: proj }) === '' && pol(polProfile('stray-broken', '{"policies":[]}'), 'Write', { file_path: join(proj, 'report.md'), content: 'x' }, { cwd: proj }) === '';
   }],
 
   // Second review pass: redirect detection must survive escapes and odd quotes

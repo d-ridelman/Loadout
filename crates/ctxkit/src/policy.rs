@@ -115,6 +115,11 @@ pub fn shell(
     None
 }
 
+/// The policies for a `Write` of `file_path`.
+pub fn write(cfg: &Config, file_path: &str, cwd: Option<&Path>, lang: Lang) -> Option<Verdict> {
+    crate::stray::reason(cfg, file_path, cwd, profile_dir().as_deref(), lang).map(Verdict::Ask)
+}
+
 fn strings(root: &Map<String, Value>, key: &str, rules: bool) -> Result<Vec<String>, String> {
     let Some(v) = root.get(key) else {
         return Ok(Vec::new());
