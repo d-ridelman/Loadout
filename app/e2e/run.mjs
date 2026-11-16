@@ -23,6 +23,25 @@ const SIZES = [
 /** Главная кнопка диалога называется по операции (или «Применить» у пакета профиля). */
 const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Добавить|Применить|Установить$)/
 
+/**
+ * Английские слова старого вывода ctxkit в строках русского окна (кроме разметки `[dry-run]`/`[warn]`/`ERR:`, `кода`, "значений",
+ * --флагов, путей и имён): пусто — вывод русский. Тот же список и те же вырезки, что в `crates/ctxkit/tests/guard.test.mjs`.
+ */
+const englishLeft = (text) => {
+  const en = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass)\b/
+  const strip = (s) => s
+    .replace(/\[(dry-run|warn|note|ok|info)\]/g, '')
+    .replace(/^ERR:/gm, '')
+    .replace(/`[^`]*`/g, '')
+    .replace(/"[^"]*"/g, '')
+    .replace(/\S*[\\/]\S*/g, '')
+    .replace(/\S+\.(json|md|yml|exe|bak)\S*/g, '')
+    .replace(/--[\w-]+/g, '')
+    .replace(/\b\w+(-\w+)+\b/g, '')
+    .replace(/\b\w+(\.\w+)+\b/g, '')
+  return text.split('\n').filter((l) => en.test(strip(l)))
+}
+
 const log = (...a) => console.log(...a)
 /** Путь так, как его показывает окно: домашний каталог свёрнут в `~`. */
 const tilde = (p) => p.split(homedir()).join('~')
@@ -763,7 +782,8 @@ try {
   const claudeDir = join(home, '.claude')
   const hookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
-  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep' } // форма по умолчанию: советник, основная модель и effort «не менять»
+  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 } // форма по умолчанию: советник, основная модель, effort и политики «не менять»
+  const ctxkitJson = join(claudeDir, 'ctxkit.json')
   // Настоящий профиль владельца ctxkit трогать не должен: хеши файлов, которые `setup` пишет, до и после всего шага.
   // `~/.claude.json` не сравниваем: его переписывает работающий Claude Code, ctxkit его только читает (в проверках с --claude-json на копию).
   const realHome = homedir()
@@ -788,9 +808,13 @@ try {
   const preview = await page.locator('pre.out').innerText()
   // путь настоящего домашнего каталога (с именем пользователя) в выводе недопустим ни с прямыми, ни с обратными слэшами
   const leaks = [realHome, realHome.replaceAll('\\', '/')].some((h) => preview.toLowerCase().includes(h.toLowerCase()))
-  must(preview.includes('Stop gate: on'), `в предпросмотре нет строки про шлюз Stop: ${preview.slice(0, 300)}`)
+  must(preview.includes('Шлюз Stop: включён'), `в предпросмотре нет строки про шлюз Stop: ${preview.slice(0, 300)}`)
   must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр ctxkit: ${preview.slice(0, 300)}`)
-  must(preview.includes('advisorModel: (unset) (kept'), `предпросмотр с формой по умолчанию должен оставлять advisorModel: ${preview.slice(0, 400)}`)
+  must(preview.includes('advisorModel: (не задано) (оставлено'), `предпросмотр с формой по умолчанию должен оставлять advisorModel: ${preview.slice(0, 400)}`)
+  // форма по умолчанию «Политики: не менять»: ctxkit.json не создаётся и не упоминается как изменение
+  must(preview.includes('policies: нет (оставлено') && !existsSync(ctxkitJson), `«Политики: не менять» должно оставлять ctxkit.json: ${preview.slice(0, 600)}`)
+  // русский интерфейс: в предпросмотре нет английских служебных фраз старого вывода
+  must(englishLeft(preview).length === 0, `английские фразы в русском предпросмотре ctxkit: ${englishLeft(preview).slice(0, 5).join(' // ')}`)
   must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
   await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')
   await page.getByLabel('Язык подсказок и хуков').selectOption('en')
@@ -846,7 +870,7 @@ try {
   must(await applyBtn.isDisabled(), 'после выбора советника старый предпросмотр не должен разрешать применение')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с советником Fable')
-  must((await page.locator('pre.out').innerText()).includes('advisorModel: (unset) -> fable'), 'предпросмотр с Fable не показал запись advisorModel')
+  must((await page.locator('pre.out').innerText()).includes('advisorModel: (не задано) -> fable'), 'предпросмотр с Fable не показал запись advisorModel')
   must(!('advisorModel' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'предпросмотр с Fable записал advisorModel')
   await applyBtn.click()
   await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).advisorModel === 'fable', 'явный выбор Fable записал advisorModel')
@@ -884,7 +908,8 @@ try {
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с Sonnet и high')
   const modelPreview = await page.locator('pre.out').innerText()
-  for (const line of ['model: (unset) -> sonnet', 'effortLevel: (unset) -> high', 'effort modelSettings.claude-sonnet-5-5: (unset) -> high']) must(modelPreview.includes(line), `предпросмотр с Sonnet и high без строки «${line}»: ${modelPreview.slice(0, 500)}`)
+  for (const line of ['model: (не задано) -> sonnet', 'effortLevel: (не задано) -> high', 'effort modelSettings.claude-sonnet-5-5: (не задано) -> high']) must(modelPreview.includes(line), `предпросмотр с Sonnet и high без строки «${line}»: ${modelPreview.slice(0, 500)}`)
+  must(englishLeft(modelPreview).length === 0, `английские фразы в русском предпросмотре с моделью: ${englishLeft(modelPreview).slice(0, 5).join(' // ')}`)
   must(!('model' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'предпросмотр с Sonnet записал model')
   await mainSel.selectOption('keep')
   await effortSel.selectOption('keep')
@@ -906,8 +931,38 @@ try {
   await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор после возврата в раздел')
   await waitFor(async () => !(await page.getByRole('checkbox', { name: /Шлюз Stop/ }).isChecked()), 'галочка «Шлюз Stop» после возврата в раздел должна остаться снятой')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
-  await waitFor(async () => (await page.locator('pre.out').innerText()).includes('Stop gate: off'), 'предпросмотр после возврата должен говорить «Stop gate: off»')
+  await waitFor(async () => (await page.locator('pre.out').innerText()).includes('Шлюз Stop: выключен'), 'предпросмотр после возврата должен говорить «Шлюз Stop: выключен»')
   must(ourStop() === 0, 'предпросмотр после возврата вернул шлюз')
+  // ---- политики «Защиты» из окна: «не менять» не создаёт ctxkit.json; «включить выбранные» с двумя политиками создаёт его, предпросмотр показывает строки ----
+  must(!existsSync(ctxkitJson), 'до выбора политик ctxkit.json не должно быть: «не менять» его не создаёт')
+  const polSel = page.getByLabel('Политики', { exact: true })
+  const hygiene = page.getByRole('checkbox', { name: /Гигиена коммитов/ })
+  const slotsBox = page.getByRole('checkbox', { name: /Лимит параллельных сборок/ })
+  const slotsNum = page.getByLabel('Лимит параллельных сборок, от 1 до 8')
+  must((await polSel.inputValue()) === 'keep' && (await polSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Включить выбранные|Выключить все', 'селект политик: по умолчанию «Не менять»')
+  must((await page.locator('#ctx-policy-hint').innerText()).includes('ctxkit.json нет'), 'подпись под политиками без ctxkit.json должна говорить, что файла нет')
+  must(await hygiene.isDisabled() && await slotsBox.isDisabled() && await page.getByRole('checkbox', { name: /Неожиданные файлы-отчёты/ }).isDisabled() && await page.getByRole('checkbox', { name: /Подтверждение необратимого/ }).isDisabled(), 'при «Не менять» чекбоксы политик должны быть недоступны')
+  // отмеченное при «Не менять» не уходит в ctxkit: окно держит настройки, а main — аргументы (без --policy)
+  await polSel.selectOption('on')
+  await hygiene.check()
+  await slotsBox.check()
+  await slotsNum.fill('3')
+  must(await applyBtn.isDisabled(), 'после выбора политик старый предпросмотр не должен разрешать применение')
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с политиками')
+  const polPreview = await page.locator('pre.out').innerText()
+  for (const line of ['политика commit_hygiene: выкл -> вкл', 'политика build_slots: выкл -> 3', 'политика stray_files: выкл (без изменений)']) must(polPreview.includes(line), `предпросмотр политик без строки «${line}»: ${polPreview.slice(0, 700)}`)
+  must(englishLeft(polPreview).length === 0, `английские фразы в русском предпросмотре политик: ${englishLeft(polPreview).slice(0, 5).join(' // ')}`)
+  must(!existsSync(ctxkitJson), 'предпросмотр политик создал ctxkit.json')
+  await page.locator('fieldset.choices', { has: page.locator('#ctx-policy') }).screenshot({ path: join(stateDir, 'm5-ctxkit-policies-1280.png') })
+  await applyBtn.click()
+  await waitFor(() => existsSync(ctxkitJson), 'применение создало ctxkit.json')
+  const polCfg = JSON.parse(readFileSync(ctxkitJson, 'utf8'))
+  must(polCfg.policies?.commit_hygiene === true && polCfg.policies?.build_slots === 3 && !polCfg.policies?.stray_files && polCfg.created_by === 'ctxkit setup', `ctxkit.json после применения: ${JSON.stringify(polCfg)}`)
+  // подпись «сейчас включены» берётся из находки policies, а форму не меняет
+  await waitFor(async () => (await page.locator('#ctx-policy-hint').innerText()).includes('Сейчас включены: commit_hygiene, build_slots=3'), 'подпись «Сейчас включены» из диагностики')
+  must((await polSel.inputValue()) === 'on', 'подпись из диагностики изменила форму')
+  await polSel.selectOption('keep')
   // ---- откат ctxkit на копии фикстуры: предпросмотр, R2, чужие хуки на месте, повтор безопасен ----
   const undoOpts = { antigravity: false, dsh: false }
   const undoRefusal = (o, dry) => page.evaluate(async ([x, d]) => (await window.loadout.ctxkitUninstall(x, d)).error ?? 'ok', [o, dry])
@@ -946,6 +1001,8 @@ try {
   const undoPreview = await page.locator('pre.out').innerText()
   must(undoPreview.includes('[dry-run]') && undoPreview.includes('Не тронуто') && undoPreview.includes('sonnet') && undoPreview.includes('fable'), `предпросмотр отката без списка «не тронуто» с model и advisorModel: ${undoPreview.slice(0, 600)}`)
   must(![realHome, realHome.replaceAll('\\', '/')].some((h) => undoPreview.toLowerCase().includes(h.toLowerCase())), 'предпросмотр отката показал путь настоящего профиля')
+  must(englishLeft(undoPreview).length === 0, `английские фразы в русском предпросмотре отката: ${englishLeft(undoPreview).slice(0, 5).join(' // ')}`)
+  must(undoPreview.includes('ctxkit.json удалён (его создал setup)') && existsSync(ctxkitJson), `предпросмотр отката не обещает убрать ctxkit.json, созданный setup (и не должен трогать его): ${undoPreview.slice(0, 500)}`)
   must((await page.locator('main').innerText()).includes('Предпросмотр отката: файлы не менялись.'), 'нет подписи предпросмотра отката')
   must(readFileSync(settingsFile, 'utf8') === settingsHooked && existsSync(hookExe), 'предпросмотр отката изменил файлы')
   // предпросмотр отката не разрешает «Применить», а смена формы гасит предпросмотр отката
@@ -1002,6 +1059,7 @@ try {
   const { model: _m, advisorModel: _a, effortLevel: _e, modelSettings: _s, ...rest } = undone
   must(JSON.stringify(canon(rest)) === JSON.stringify(canon(JSON.parse(settingsBefore))), `после отката settings.json без модели, советника и effort не равен исходному: ${JSON.stringify(canon(rest)).slice(0, 400)}`)
   must(!existsSync(claudeMd) || !readFileSync(claudeMd, 'utf8').toLowerCase().includes('ctxkit'), 'откат оставил блок правил в CLAUDE.md')
+  must(!existsSync(ctxkitJson), 'откат из окна не убрал ctxkit.json, который создал setup')
   must(existsSync(join(claudeDir, 'agents', 'checker.md')) && existsSync(join(claudeDir, 'agents', 'Explore.md')), 'откат удалил агентов: он их оставляет')
   must((await page.locator('pre.out').innerText()).includes('backups'), 'в выводе отката нет пути к бэкапу settings.json')
   // повтор безопасен: второй откат ничего не меняет и не падает
@@ -1014,6 +1072,7 @@ try {
   // галочки интеграций доходят до ctxkit: предпросмотр отката с Antigravity и DeepSeek Harness говорит про них (на копии, ничего не пишет)
   const integ = await page.evaluate(async () => (await window.loadout.ctxkitUninstall({ antigravity: true, dsh: true }, true)).data?.output ?? '')
   must(/antigravity/i.test(integ) && /DeepSeek/i.test(integ) && integ.includes('[dry-run]'), `предпросмотр отката с интеграциями без строк про Antigravity и DeepSeek: ${integ.slice(0, 400)}`)
+  must(englishLeft(integ).length === 0, `английские фразы в русском предпросмотре отката с интеграциями: ${englishLeft(integ).slice(0, 5).join(' // ')}`)
   must(![realHome, realHome.replaceAll('\\', '/')].some((h) => integ.toLowerCase().includes(h.toLowerCase())), 'предпросмотр отката с интеграциями показал путь настоящего профиля')
   await page.keyboard.press('1')
   await levelSel.selectOption('R0') // понижение подтверждения не требует
@@ -1113,6 +1172,45 @@ try {
       await enOk(name)
       await shot(en, `en-${name}-1280`)
     }
+    // ctxkit на английском: форма с политиками, предпросмотр и применение, предпросмотр и откат; вывод ядра (`pre.out`) тоже без кириллицы
+    {
+      const ctxJson = join(enHome, '.claude', 'ctxkit.json')
+      const ctxHook = join(enHome, '.claude', 'hooks', 'ctxkit.exe')
+      const enApply = en.getByRole('button', { name: /^Apply: install/ })
+      const enPreview = en.getByRole('button', { name: /^Preview/ })
+      await en.getByText('ctxkit 0.', { exact: false }).first().waitFor({ timeout: 15000 })
+      await enPreview.click()
+      await en.locator('pre.out').waitFor({ timeout: 30000 })
+      await enOk('ctxkit: preview')
+      const pv = await en.locator('pre.out').innerText()
+      must(pv.includes('[dry-run] profile:') && pv.includes('Stop gate: on') && pv.includes('policies: none (kept; pass --policy'), `preview of ctxkit in English: ${pv.slice(0, 500)}`)
+      await en.getByLabel('Policies', { exact: true }).selectOption('on')
+      await en.getByRole('checkbox', { name: /^Commit hygiene/ }).check()
+      await en.getByRole('checkbox', { name: /^Stray report files/ }).check()
+      must(await enApply.isDisabled(), 'ctxkit (EN): the old preview must not allow Apply after the form changed')
+      await enPreview.click()
+      await waitFor(() => enApply.isEnabled(), 'ctxkit (EN): preview with policies')
+      await enOk('ctxkit: preview with policies')
+      const pv2 = await en.locator('pre.out').innerText()
+      must(pv2.includes('policy commit_hygiene: off -> on') && pv2.includes('policy stray_files: off -> on') && !existsSync(ctxJson), `policy lines of the preview in English: ${pv2.slice(0, 700)}`)
+      await en.locator('fieldset.choices', { has: en.locator('#ctx-policy') }).screenshot({ path: join(stateDir, 'en-ctxkit-policies-1280.png') })
+      await enApply.click()
+      await waitFor(() => existsSync(ctxHook) && existsSync(ctxJson), 'ctxkit (EN): apply wrote the hook binary and ctxkit.json')
+      await waitFor(async () => (await en.locator('main').innerText()).includes('Applied.'), 'ctxkit (EN): no “Applied.” caption')
+      await enOk('ctxkit: applied')
+      await waitFor(async () => (await en.locator('#ctx-policy-hint').innerText()).includes('Currently on: commit_hygiene, stray_files'), 'ctxkit (EN): the “Currently on” caption from the doctor')
+      await enOk('ctxkit: policies caption')
+      await en.getByRole('button', { name: 'Roll back ctxkit', exact: true }).click()
+      const enUndo = en.getByRole('button', { name: 'Roll back: remove hooks, rules block and binary' })
+      await waitFor(() => enUndo.isEnabled(), 'ctxkit (EN): rollback preview')
+      await enOk('ctxkit: rollback preview')
+      must((await en.locator('pre.out').innerText()).includes('[dry-run]') && existsSync(ctxJson), 'ctxkit (EN): the rollback preview must write nothing')
+      await shot(en, 'en-ctxkit-undo-1280')
+      await enUndo.click()
+      await waitFor(async () => (await en.locator('main').innerText()).includes('Rolled back.'), 'ctxkit (EN): no “Rolled back.” caption')
+      await waitFor(() => !existsSync(ctxJson) && !existsSync(ctxHook), 'ctxkit (EN): rollback removed ctxkit.json and the binary')
+      await enOk('ctxkit: rolled back')
+    }
     await en.keyboard.press('1')
     // палитра
     await en.keyboard.press('Control+k')
@@ -1151,7 +1249,12 @@ try {
     await enDialog.getByText('claude plugin install hello-plugin@e2e-market --scope user').waitFor({ timeout: 8000 })
     await enOk('plugin dialog')
     await shot(en, 'en-plugin-1280')
-    await enDialog.getByRole('button', { name: 'Close' }).click()
+    // установка настоящим запуском (подставной claude): команды те же, окно закрывается, в окне ни слова по-русски
+    await enDialog.getByRole('button', { name: 'Install', exact: true }).click()
+    const enCalls = () => (existsSync(join(enHome, 'claude-calls.txt')) ? readFileSync(join(enHome, 'claude-calls.txt'), 'utf8').trim().split('\n') : [])
+    await waitFor(() => enCalls().join('|') === `plugin marketplace add --scope user ${enMarket}|plugin install hello-plugin@e2e-market --scope user`, 'claude (EN) called with the exact add and install commands')
+    await enDialog.waitFor({ state: 'detached', timeout: 8000 })
+    await enOk('plugin installed')
     // скил: показ «что будет скачано», загрузка, выбор и план ядра
     await en.getByRole('button', { name: 'Install skill', exact: true }).click()
     await enDialog.getByLabel('Skill source').fill('acme/skills')
@@ -1165,7 +1268,21 @@ try {
     await enDialog.getByText('~/.claude/skills/web-search/').waitFor({ timeout: 8000 })
     await enOk('skill plan')
     await shot(en, 'en-skill-plan-1280')
-    await enDialog.getByRole('button', { name: 'Cancel' }).click()
+    // установка скила и откат из журнала: запись журнала и всё, что окно показывает при этом, по-английски
+    const enSkill = join(enHome, '.claude', 'skills', 'web-search')
+    await enDialog.getByRole('button', { name: 'Install', exact: true }).click()
+    await enDialog.waitFor({ state: 'detached', timeout: 8000 })
+    await waitFor(() => existsSync(join(enSkill, 'SKILL.md')), 'skill (EN) installed')
+    await en.keyboard.press('5')
+    const skillRowEn = en.getByRole('row').filter({ hasText: /web-search/ }).first()
+    await skillRowEn.waitFor({ timeout: 8000 })
+    await enOk('journal after the skill install')
+    await shot(en, 'en-journal-skill-1280')
+    await skillRowEn.getByRole('button', { name: 'Roll back', exact: true }).click()
+    await waitFor(() => !existsSync(enSkill), 'skill (EN) rolled back from the journal')
+    await enOk('journal after the skill rollback')
+    await en.keyboard.press('1')
+    await en.waitForSelector('#grid', { timeout: 15000 })
     // запись из матрицы: корзина, правка и копирование (диалоги и планы ядра)
     const enCell = (row, idx) =>
       en.locator('tbody tr', { has: en.locator('td.name b', { hasText: new RegExp(`^${row}$`) }) }).locator('td').nth(idx + 1).click()

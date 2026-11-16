@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t } from '../shared/i18n'
+import { MAX_BUILD_SLOTS } from '../shared/model'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, DayStats, DoctorFinding, FindingSeverity, SetupOptions, UninstallOptions } from '../shared/model'
 
 /** Разбор настроек `setup` от страницы: только булевы флаги и перечисления, всё остальное — отказ. */
@@ -22,7 +23,35 @@ export function parseSetupOptions(raw: unknown): SetupOptions {
   const effort = r['effort']
   if (mainModel !== 'keep' && mainModel !== 'sonnet' && mainModel !== 'opus' && mainModel !== 'haiku') throw new Error(t('неверная основная модель ctxkit', 'invalid ctxkit main model'))
   if (effort !== 'keep' && effort !== 'low' && effort !== 'medium' && effort !== 'high' && effort !== 'xhigh') throw new Error(t('неверный effort ctxkit', 'invalid ctxkit effort'))
-  return { withRules: flag('withRules'), desktop: flag('desktop'), antigravity: flag('antigravity'), dsh: flag('dsh'), noStopGate: flag('noStopGate'), lang, advisor, mainModel, effort }
+  const policyMode = r['policyMode']
+  if (policyMode !== 'keep' && policyMode !== 'on' && policyMode !== 'off') throw new Error(t('неверный режим политик ctxkit', 'invalid ctxkit policy mode'))
+  const slots = r['buildSlotsN']
+  if (typeof slots !== 'number' || !Number.isInteger(slots) || slots < 1 || slots > MAX_BUILD_SLOTS) throw new Error(t('неверный лимит сборок ctxkit (1–8)', 'invalid ctxkit build limit (1–8)'))
+  return {
+    withRules: flag('withRules'),
+    desktop: flag('desktop'),
+    antigravity: flag('antigravity'),
+    dsh: flag('dsh'),
+    noStopGate: flag('noStopGate'),
+    lang,
+    advisor,
+    mainModel,
+    effort,
+    policyMode,
+    commitHygiene: flag('commitHygiene'),
+    confirmIrreversible: flag('confirmIrreversible'),
+    strayFiles: flag('strayFiles'),
+    buildSlots: flag('buildSlots'),
+    buildSlotsN: slots,
+  }
+}
+
+/** Значение `--policy`: перечисление имён из закрытого списка и целое число, никакого текста от пользователя; `undefined` — флаг не передаётся. */
+export function policyArg(o: SetupOptions): string | undefined {
+  if (o.policyMode === 'keep') return undefined
+  if (o.policyMode === 'off') return 'none'
+  const list = [o.commitHygiene && 'commit-hygiene', o.confirmIrreversible && 'confirm-irreversible', o.strayFiles && 'stray-files', o.buildSlots && `build-slots=${o.buildSlotsN}`].filter(Boolean)
+  return list.length ? list.join(',') : 'none' // «включить выбранные» без выбранного — то же, что «выключить все»
 }
 
 /** Разбор настроек отката от страницы: два булевых флага, остальное — отказ. */
@@ -48,6 +77,8 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
   if (o.advisor !== 'keep') a.push('--advisor', o.advisor)
   if (o.mainModel !== 'keep') a.push('--main-model', o.mainModel)
   if (o.effort !== 'keep') a.push('--effort', o.effort)
+  const policy = policyArg(o)
+  if (policy) a.push('--policy', policy)
   // версию claude ctxkit проверяет в самом конце, уже после записи, и зависший `claude` оставил бы окно с ошибкой при
   // изменённых файлах; предпросмотр проверку оставляет (она нужна диагностике)
   if (!dryRun) a.push('--skip-version-check')
