@@ -144,6 +144,12 @@ impl Lx {
                         self.bodies.push((id, body));
                     }
                 }
+                // in cmd.exe `;` separates arguments, not commands
+                ';' if self.cmd() => {
+                    word.push(';');
+                    in_word = true;
+                    self.i += 1;
+                }
                 ';' | '|' => {
                     end_cmd!();
                     self.i += 1;
@@ -612,8 +618,25 @@ fn nested_script(c: &Cmd) -> Option<(String, Dialect)> {
                     "/c" | "//c" | "/k" | "//k" | "/r"
                 )
             })?;
-            let rest = &args[k + 1..];
-            (!rest.is_empty()).then(|| (rest.join(" "), Dialect::Cmd))
+            // One argument is the script with its outer quotes stripped (as cmd does); several are rebuilt the
+            // way the Windows command line carries them: an argument with a space or `&|<>^` is quoted, so
+            // `cmd /c echo "a & b"` stays one echo.
+            let script = match &args[k + 1..] {
+                [] => return None,
+                [one] => one.clone(),
+                rest => rest
+                    .iter()
+                    .map(|a| {
+                        if a.contains(|c: char| c.is_whitespace() || "&|<>^".contains(c)) {
+                            format!("\"{a}\"")
+                        } else {
+                            a.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            };
+            Some((script, Dialect::Cmd))
         }
         _ => None,
     }

@@ -76,6 +76,10 @@ fn git_check(args: &[String]) -> Option<What> {
     let (sub, rest) = shell::git_sub(args)?;
     let f = Flags::of(rest);
     let first = f.pos.first().map(String::as_str);
+    // `-h` / `--help` only prints the usage
+    if f.has_long(&["--help"]) || f.has_short('h') {
+        return None;
+    }
     match sub.as_str() {
         "push" if f.dry_run() => None,
         "push"
@@ -143,6 +147,7 @@ fn git_check(args: &[String]) -> Option<What> {
             "git stash drop / clear (удаляет отложенные правки)",
         )),
         // the default expiry (90 days) is housekeeping; `now` / `all` throws away the safety net of the reflog
+        "reflog" if f.dry_run() => None,
         "reflog"
             if first == Some("delete")
                 || (first == Some("expire")
@@ -365,8 +370,31 @@ fn ps_remove_check(args: &[String], home: Option<&str>) -> Option<What> {
         .then_some(ROOT)
 }
 
+/// The command of a cmd.exe `if` (`if [/i] [not] exist|defined X cmd`, `if errorlevel N cmd`, `if a==b cmd`).
+fn cmd_if_body(words: &[String]) -> Option<&[String]> {
+    let low = |k: usize| words.get(k).map(|w| w.to_lowercase());
+    if low(0).as_deref() != Some("if") {
+        return None;
+    }
+    let mut k = 1;
+    while matches!(low(k).as_deref(), Some("/i" | "not")) {
+        k += 1;
+    }
+    k += match low(k).as_deref() {
+        Some("exist" | "defined" | "errorlevel" | "cmdextversion") => 2,
+        _ if low(k + 1).as_deref() == Some("==") => 3,
+        _ => 1,
+    };
+    words.get(k..).filter(|r| !r.is_empty())
+}
+
 /// What is irreversible about one simple command (its words), if anything.
 fn check(words: &[String], d: Dialect, home: Option<&str>) -> Option<What> {
+    if d == Dialect::Cmd {
+        if let Some(body) = cmd_if_body(words) {
+            return check(body, d, home);
+        }
+    }
     let (name, args) = shell::command_of(words)?;
     // `@rd /s /q x` in cmd: the `@` only hides the echo
     let name = if d == Dialect::Cmd {
@@ -666,6 +694,9 @@ mod tests {
             "cmd /s /c \"@rd /s /q build\"",
             "cmd /c \"git push origin main\"",
             "cmd /k git reset --hard",
+            "cmd /c \"if exist build rd /s /q build\"",
+            "cmd /c \"if /i not exist keep rd /s /q build\"",
+            "cmd /c \"if errorlevel 1 git push\"",
             // git
             "git stash drop",
             "git stash drop stash@{1}",
@@ -797,6 +828,23 @@ mod tests {
             "cmd /c type notes.txt",
             "cmd /c \"echo it's fine & dir\"",
             "cmd",
+            // `;` is not a separator in cmd; quotes an outer shell took off still hold for cmd
+            "cmd /c \"echo a;rd /s /q x\"",
+            "cmd /c \"echo step 1; del /s /q later\"",
+            "cmd /c echo \"a & rd /s /q x\"",
+            "cmd /c git commit -m \"a & git stash clear\"",
+            "cmd /c \"if exist build echo rd /s /q build\"",
+            // dry runs and help
+            "git reflog expire --expire=now --dry-run --all",
+            "git reflog expire -n --expire=now --all",
+            "git reflog delete --dry-run HEAD@{1}",
+            "git prune -h",
+            "git prune --help",
+            "git stash drop -h",
+            "git gc --prune=now --help",
+            "git worktree remove -h --force",
+            "git push --help",
+            "git reset --hard -h",
             "bash -lc 'echo git push'",
             "pwsh -c \"Write-Output 'Remove-Item x -Recurse -Force'\"",
             "powershell -Command Get-ChildItem -Recurse -Force",
