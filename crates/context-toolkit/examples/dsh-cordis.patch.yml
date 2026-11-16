@@ -1,7 +1,7 @@
-# Append to ~/.dsh/profiles/desktop/cordis.patch.yml (ctxkit setup --dsh does this for you).
+# Append to ~/.dsh/profiles/desktop/cordis.patch.yml (context-toolkit setup --dsh does this for you).
 # Requires @deepseek-ai/dsh-hooks-claude-code in the profile's node_modules, same version as the app.
 - insert:
-    - id: ctxkit-hooks
+    - id: context-toolkit-hooks
       name: '@deepseek-ai/dsh-hooks-claude-code'
       config:
-        configPath: '/path/to/.dsh/ctxkit-hooks.json'
+        configPath: '/path/to/.dsh/context-toolkit-hooks.json'
