@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import type { KeyboardEvent, ReactNode } from 'react'
 
-/** Диалог поверх окна: фокус не уходит на страницу под ним (Tab ходит по кнопкам и полям диалога). Esc закрывает App. */
+/** A dialog over the window: focus does not leave for the page below (Tab cycles through the dialog's buttons and fields). Esc is handled by App. */
 export function Modal({ label, children, onEscape }: { label: string; children: ReactNode; onEscape: () => void }) {
   const box = useRef<HTMLDivElement>(null)
   const trap = (e: KeyboardEvent) => {

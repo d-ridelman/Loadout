@@ -1,10 +1,10 @@
 :root {
-  color-scheme: dark; /* системные полосы прокрутки и поля в тёмной теме */
+  color-scheme: dark; /* system scrollbars and fields in the dark theme */
   --bg: #282a36;
   --panel: #21222c;
   --line: #44475a;
   --fg: #f8f8f2;
-  --mute: #9aa5ce; /* текст: 5,86:1 на --bg; #6272a4 даёт 3,03:1 и годится только для декора */
+  --mute: #9aa5ce; /* text: 5.86:1 on --bg; #6272a4 gives 3.03:1 and is fit only for decoration */
   --deco: #6272a4;
   --cyan: #8be9fd;
   --green: #50fa7b;
@@ -29,30 +29,30 @@ input[type='search'] { min-width: 150px; width: 170px; padding: 4px 8px; }
 .mono { font-family: var(--mono); }
 .mute { color: var(--mute); }
 .small { font-size: 12px; }
-::placeholder { color: var(--mute); opacity: 1; } /* системный серый даёт 3,1:1; здесь 5,86:1 */
+::placeholder { color: var(--mute); opacity: 1; } /* the system gray gives 3.1:1; here it is 5.86:1 */
 .big { font-size: 28px; color: var(--cyan); }
 .sp { flex: 1; }
 h2 { margin: 0 0 10px; font: 600 11px var(--mono); letter-spacing: 0.2em; text-transform: uppercase; color: var(--purple); }
 kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 0 5px; background: var(--bg); }
 
-/* каркас окна */
+/* window frame */
 #app { display: grid; height: 100vh; min-width: 1100px; min-height: 640px; grid-template: 48px 1fr 26px / 172px 1fr 348px; }
-/* Верхняя строка — заголовок окна (системной рамки нет): перетаскивается, элементы управления не перетаскиваются.
-   Справа место под системные кнопки окна: `env(titlebar-area-*)` отдаёт их границы, запас 150 px — на случай без наложения. */
+/* The top row is the window title bar (there is no system frame): it is draggable, the controls are not.
+   On the right there is room for the system window buttons: `env(titlebar-area-*)` gives their bounds, the 150 px reserve is for the case without the overlay. */
 header { grid-column: 1 / 4; display: flex; align-items: center; gap: 10px; padding: 0 max(14px, calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 150px)))) 0 14px; background: var(--panel); border-bottom: 1px solid var(--line); -webkit-app-region: drag; user-select: none; }
 header button, header select, header label, header input { -webkit-app-region: no-drag; }
-/* шапка в одну строку и по центру: подписи не переносятся (раньше «FX» и «Запись» прижимались кверху, кнопки шли в две строки), элементы не сжимаются */
+/* header on one line and centered: labels do not wrap (previously "FX" and the write level stuck to the top and buttons took two lines), items do not shrink */
 header { white-space: nowrap; }
 header > * { flex: none; }
 header label { display: inline-flex; align-items: center; gap: 6px; }
-/* узкое окно (минимум 1100): время скана пропадает (оно не нужно для работы; на 1280 и шире видно), промежутки и кнопки плотнее; «скан…» и «скан не удался» остаются и сжимаются с многоточием */
+/* narrow window (minimum 1100): the scan time disappears (not needed for work; visible at 1280 and wider), gaps and buttons get tighter; "scan..." and "scan failed" stay and shrink with an ellipsis */
 header > #scanInfo { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 1279px) {
   header { gap: 8px; }
   header button { padding: 4px 8px; }
   header > #scanInfo[data-ready] { display: none; }
 }
-/* подложка диалога и палитры перекрывает верхние 48 px: клик по ней закрывает диалог, а не тянет окно */
+/* the dialog and palette backdrop covers the top 48 px: a click on it closes the dialog instead of dragging the window */
 .modal, .palette { -webkit-app-region: no-drag; }
 .brand { display: inline-flex; align-items: center; gap: 10px; }
 .mark { display: block; }
@@ -63,17 +63,17 @@ nav small { color: var(--mute); }
 main { overflow: auto; padding: 14px 16px; position: relative; outline: none; }
 aside { background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 14px; }
 footer { grid-column: 1 / 4; display: flex; gap: 18px; align-items: center; padding: 0 14px; background: var(--panel); border-top: 1px solid var(--line); font: 11px var(--mono); color: var(--mute); }
-/* подвал в одну строку: длинное сообщение или подсказка усекаются, а не переносят строку и не режут соседей */
+/* footer on one line: a long message or hint is truncated instead of wrapping and does not squeeze its neighbors */
 footer > span { white-space: nowrap; flex: none; }
 footer > span.sp { flex: 1; min-width: 0; }
 footer > #notice { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 footer > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 td.nw { white-space: nowrap; }
 td.vcell { max-width: 260px; text-align: left; word-break: normal; overflow-wrap: break-word; }
-/* таблицы с текстом (журнал, дни Инструментов контекста): и заголовки, и ячейки по левому краю, чтобы колонки читались */
+/* text tables (journal, Context Toolkit days): both headers and cells are left-aligned so the columns read well */
 table.left th, table.left td { text-align: left; }
 table.left td.name { word-break: normal; overflow-wrap: break-word; }
-/* без инспектора (разделы кроме матрицы): страница на всю ширину, строки текста не растягиваются */
+/* without the inspector (sections other than the matrix): the page takes the full width, text lines are not stretched */
 #app.noaside { grid-template-columns: 172px 1fr; }
 #app.noaside header, #app.noaside footer { grid-column: 1 / 3; }
 aside[hidden] { display: none; }
@@ -84,7 +84,7 @@ button.danger:hover:not(:disabled) { background: rgba(255, 85, 85, 0.12); border
 .logo { font: 700 15px var(--mono); letter-spacing: 0.28em; color: var(--cyan); text-shadow: 0 0 10px rgba(139, 233, 253, 0.55); }
 .logo i { color: var(--pink); font-style: normal; }
 
-/* панель с угловыми скобками */
+/* panel with corner brackets */
 .hud {
   position: relative; border: 1px solid var(--line); background-color: var(--panel); border-radius: 2px;
   background-image:
@@ -100,7 +100,7 @@ button.danger:hover:not(:disabled) { background: rgba(255, 85, 85, 0.12); border
 .card.note { border-color: var(--orange); }
 .card p { margin: 4px 0 0; }
 
-/* эффекты по уровням */
+/* effects per level */
 html[data-fx='off'] .logo { text-shadow: none; }
 @keyframes pulse { 50% { opacity: 0.7; } }
 @keyframes sweep { to { transform: rotate(360deg); } }
@@ -110,19 +110,19 @@ html[data-fx='full'] .cur { box-shadow: 0 0 12px rgba(139, 233, 253, 0.45); }
 body.paused * { animation-play-state: paused !important; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
-/* состояния: цвет всегда вместе с формой глифа */
+/* states: color always comes with the glyph shape */
 .s-on { color: var(--green); } .s-off { color: var(--mute); } .s-broken { color: var(--red-text); }
 .s-stale { color: var(--orange); } .s-cloud { color: var(--cyan); } .s-unknown { color: var(--mute); } .s-none { color: var(--deco); }
 .g { font: 15px var(--mono); }
 
-/* матрица */
+/* matrix */
 .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
-/* один акцент «выбрано» во всём окне: фиолетовый, как у раздела в сайдбаре */
+/* one "selected" accent across the whole window: purple, like the section in the sidebar */
 .bar .chip[aria-pressed='true'] { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
 .check { display: inline-flex; gap: 6px; align-items: center; color: var(--mute); }
-/* `clip`, а не `auto`: у `auto` прокручиваемым предком становилась обёртка и шапка таблицы (sticky) не залипала при прокрутке страницы */
+/* `clip`, not `auto`: with `auto` the wrapper became the scrolling ancestor and the table header (sticky) did not stick when the page scrolled */
 .tablewrap { padding: 2px 8px 8px; overflow-x: clip; }
-/* конвейер хуков: у него нет залипающей шапки, поэтому прокрутка допустима (в матрице нужна `clip`, иначе шапка не залипает) */
+/* hook pipeline: it has no sticky header, so scrolling is fine (the matrix needs `clip`, otherwise the header does not stick) */
 .tablewrap.scrollx { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; }
 th { font: 600 11px var(--mono); text-align: center; color: var(--mute); padding: 8px 6px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
@@ -133,7 +133,7 @@ td.name b { word-break: break-word; }
 tr:hover td { background: rgba(68, 71, 90, 0.25); }
 td.c { cursor: pointer; white-space: nowrap; }
 .cur { outline: 2px solid var(--cyan); outline-offset: -2px; background: rgba(139, 233, 253, 0.08); }
-/* изменено при последнем обновлении с диска: значок Δ и рамка, не только цвет; анимация только при FX */
+/* changed in the last refresh from disk: a Δ badge and a border, not only color; animation only with FX */
 .delta { margin-left: 4px; font: 700 12px var(--mono); color: var(--cyan); }
 td.fresh { box-shadow: inset 0 0 0 1px var(--cyan); }
 html[data-fx='low'] td.fresh, html[data-fx='full'] td.fresh { animation: pulse 1.4s ease-in-out 5; }
@@ -145,7 +145,7 @@ html[data-fx='low'] td.fresh, html[data-fx='full'] td.fresh { animation: pulse 1
 .k-agent, .k-command, .k-connector, .k-marketplace { border-color: var(--orange); color: var(--orange); }
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font: 12px var(--mono); color: var(--mute); margin-top: 10px; }
 
-/* радар */
+/* radar */
 .radar { display: grid; grid-template-columns: minmax(360px, 520px) 1fr; gap: 16px; }
 .rwrap { position: relative; aspect-ratio: 1; max-width: 520px; width: 100%; margin: auto; }
 .rcirc { position: absolute; inset: 14%; border-radius: 50%; border: 1px solid var(--deco);
@@ -159,11 +159,11 @@ html[data-fx='off'] .beam { display: none; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
 .finding-line { margin: 4px 0; }
 
-/* списки ключ-значение */
+/* key-value lists */
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 6px 0 0; font: 12px var(--mono); }
 .kv dt { color: var(--mute); } .kv dd { margin: 0; }
 .kv .kvrow { display: contents; }
-/* пути переносятся по сегментам (`<Path>` ставит `<wbr>` после «/»), посреди слова режется только то, что не помещается (раньше `break-all` рвал «mcp_config.j / son») */
+/* paths wrap by segment (`<Path>` puts `<wbr>` after "/"), only what does not fit is broken mid-word (previously `break-all` split "mcp_config.j / son") */
 .wrap { overflow-wrap: anywhere; }
 .strip { display: flex; gap: 8px; margin: 6px 0; }
 .instances { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -171,7 +171,7 @@ html[data-fx='off'] .beam { display: none; }
 .instances button[aria-pressed='true'] { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 
-/* хуки */
+/* hooks */
 .pipe { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); min-width: max-content; width: 100%; }
 .pipe > div { background: var(--panel); padding: 6px 8px; min-height: 44px; }
 .pipe .h { font: 600 11px var(--mono); color: var(--cyan); text-align: center; }
@@ -179,17 +179,17 @@ html[data-fx='off'] .beam { display: none; }
 .hk { display: block; font: 12px var(--mono); margin: 2px 0; padding: 1px 6px; border: 0; border-left: 2px solid var(--pink); border-radius: 0; background: rgba(255, 121, 198, 0.08); text-align: left; width: 100%; }
 .hk small { color: var(--mute); }
 
-/* Доктор */
+/* Doctor */
 .find { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; padding: 10px 12px; margin-bottom: 8px; align-items: start; }
 .sev { font: 15px var(--mono); }
 .find p { margin: 2px 0 0; color: var(--mute); }
 
-/* состояния окна */
+/* window states */
 .state { padding: 40px; text-align: center; color: var(--mute); font: 13px var(--mono); }
 .state.error { max-width: 640px; margin: 40px auto; text-align: left; border-color: var(--red); color: var(--fg); padding: 20px; }
 .state.error h2 { color: var(--red-text); }
 
-/* палитра и справка */
+/* palette and help */
 .palette { position: fixed; inset: 0; background: rgba(33, 34, 44, 0.72); display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; z-index: 90; }
 .palette .box { width: 560px; max-width: 92vw; }
 .palette input { width: 100%; background: var(--bg); border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 12px; font-size: 15px; }
@@ -204,7 +204,7 @@ button.level { border-color: transparent; }
 button.level[aria-pressed='true'] { border-color: var(--orange); background: rgba(255, 184, 108, 0.12); }
 .lvl { font: 11px var(--mono); border: 1px solid var(--orange); color: var(--orange); border-radius: 3px; padding: 0 5px; margin-left: 6px; letter-spacing: 0; }
 .notes { margin: 6px 0; padding-left: 18px; }
-/* столбец вместо длинной строки кнопок: инспектор узкий, а действий несколько */
+/* a column instead of a long row of buttons: the inspector is narrow and there are several actions */
 .actions.col { flex-direction: column; align-items: stretch; max-width: 340px; }
 .actions.col button { text-align: left; }
 .form { display: flex; flex-direction: column; gap: 10px; }
@@ -227,9 +227,9 @@ pre.out { margin: 6px 0; padding: 10px 12px; max-height: 260px; overflow: auto; 
 .pitem { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(68, 71, 90, 0.55); }
 .pitem .sub { grid-column: 1; }
 .plist { list-style: none; margin: 6px 0 0; padding: 0; max-height: 240px; overflow: auto; }
-/* короткий список целиком: внутренняя прокрутка обрезала последнюю находку на полстроки */
+/* a short list in full: inner scrolling cut the last finding in half a line */
 .plist.all { max-height: none; overflow: visible; }
-/* строка управления: подпись, выбор и кнопка на одной линии, статус рядом */
+/* control row: label, selector and button on one line, status beside them */
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin: 8px 0 10px; }
 .bar label { display: flex; align-items: center; gap: 8px; }
 .bar select { max-width: 200px; }
@@ -237,7 +237,7 @@ pre.out { margin: 6px 0; padding: 10px 12px; max-height: 260px; overflow: auto; 
 .spin { display: inline-block; width: 0.85em; height: 0.85em; margin-right: 6px; vertical-align: -0.1em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: sweep 0.8s linear infinite; }
 html[data-fx='off'] .spin { animation: none; border-right-color: currentColor; opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
-/* каталог маркетплейса и выбор скила: строка-кнопка с именем, версией и описанием под ними */
+/* marketplace catalog and skill picker: a button row with the name, version and a description below them */
 .row-inline { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
 .row-inline label { flex: 1; min-width: 0; }
 .row-inline select { max-width: none; width: 100%; }

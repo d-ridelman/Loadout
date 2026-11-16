@@ -1,18 +1,18 @@
 import { t } from './i18n'
 
 /**
- * Сколько копий операций хранит ядро: последние N и не старше D дней (`crates/loadout-core/src/write/retention.rs`,
- * `KEEP_OPS` и `KEEP_DAYS`). Числа здесь только для текста окна; тест ядра сверяет их с Rust.
+ * How many operation backups the core keeps: the last N and not older than D days (`crates/loadout-core/src/write/retention.rs`,
+ * `KEEP_OPS` and `KEEP_DAYS`). The numbers here are only for the window text; a core test checks them against Rust.
  */
 export const BACKUP_KEEP_OPS = 100
 export const BACKUP_KEEP_DAYS = 90
 
-/** Где лежат копии по умолчанию: `userData` Electron называется по `name` из package.json (`loadout-app`). Для текста; в диалоге main подставляет настоящий путь. */
+/** Default backup location: Electron's `userData` is named after `name` in package.json (`loadout-app`). For text only; main substitutes the real path in the dialog. */
 export const BACKUP_DIR_HINT = '%APPDATA%\\loadout-app\\backups'
 
 /**
- * Прямым текстом о том, что лежит в копиях и где. Показывается в диалоге включения записи (R1/R2) и в журнале.
- * `dir` — каталог копий, как его покажет окно.
+ * Plain statement of what the backups contain and where they are. Shown in the write-enable dialog (R1/R2) and in the journal.
+ * `dir` is the backup directory as the window will display it.
  */
 export function backupNotice(dir: string): string {
   return t(

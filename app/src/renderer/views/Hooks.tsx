@@ -2,7 +2,7 @@ import { t } from '../../shared/i18n'
 import { CLIENTS } from '../../shared/model'
 import type { Entity } from '../../shared/model'
 
-/** Порядок событий жизненного цикла: известные идут в таком порядке, остальные в конце по алфавиту. */
+/** Lifecycle event order: known events go in this order, the rest follow alphabetically. */
 const ORDER = [
   'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse',
   'SubagentStart', 'SubagentStop', 'Stop', 'Interrupt',
@@ -18,7 +18,7 @@ export function Hooks({ hooks, onShow }: { hooks: Entity[]; onShow: (e: Entity) 
   return (
     <>
       <h2>{t('Конвейер хуков · события слева направо в порядке жизненного цикла', 'Hook pipeline · events left to right in lifecycle order')}</h2>
-      {/* событий может быть больше, чем помещается в окно: сетка прокручивается по горизонтали, а не обрезается */}
+      {/* there may be more events than fit in the window: the grid scrolls horizontally instead of being cut off */}
       <div className="hud tablewrap scrollx" tabIndex={0} role="region" aria-label={t('Хуки по событиям и клиентам: прокрутка', 'Hooks by event and client: scrollable')}>
         <div className="pipe" role="group" aria-label={t('Хуки по событиям и клиентам', 'Hooks by event and client')} style={{ gridTemplateColumns: `130px repeat(${events.length}, minmax(150px, 1fr))` }}>
           <div />

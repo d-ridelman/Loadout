@@ -2,7 +2,7 @@ import { Component } from 'react'
 import type { ReactNode } from 'react'
 import { t } from '../shared/i18n'
 
-/** Ошибка отрисовки не должна оставлять пустое окно: показываем сообщение и кнопку перезагрузки страницы. */
+/** A render error must not leave an empty window: show a message and a page reload button. */
 export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
 

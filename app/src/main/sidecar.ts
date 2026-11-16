@@ -6,11 +6,11 @@ import { t } from '../shared/i18n'
 export interface SidecarOptions {
   bin: string
   args: string[]
-  /** Уведомление ядра (`ready`, `changed`). Тело уже разобрано как JSON, но не проверено. */
+  /** Core notification (`ready`, `changed`). The body is already parsed as JSON but not validated. */
   onNotification: (method: string, params: unknown) => void
   maxRestarts?: number
   baseDelayMs?: number
-  /** Сколько процесс должен проработать, чтобы счётчик перезапусков сбросился. */
+  /** How long the process must run for the restart counter to reset. */
   stableMs?: number
   requestTimeoutMs?: number
 }
@@ -22,9 +22,9 @@ interface Pending {
 }
 
 /**
- * Один постоянный процесс `loadout serve` и JSON-RPC по его stdio. При падении перезапускается с растущей паузой и
- * пределом попыток; запросы во время перезапуска ждут, но не дольше таймаута. Привязки к Electron нет: проверяется
- * в vitest на подставном процессе.
+ * One long-lived `loadout serve` process and JSON-RPC over its stdio. On a crash it restarts with a growing delay and
+ * an attempt limit; requests made during a restart wait, but no longer than the timeout. It has no Electron dependency:
+ * it is tested in vitest against a stand-in process.
  */
 export class Sidecar {
   private child: ChildProcess | undefined
@@ -37,7 +37,7 @@ export class Sidecar {
   private restartTimer: NodeJS.Timeout | undefined
   private stopping = false
   private dead = false
-  /** После `stop()` запрос не поднимает ядро заново: приложение закрывается. Снимает только явный `start()`. */
+  /** After `stop()` a request does not bring the core back up: the app is closing. Only an explicit `start()` clears this. */
   private closed = false
 
   constructor(private readonly o: SidecarOptions) {}
@@ -49,14 +49,14 @@ export class Sidecar {
     this.spawnChild()
   }
 
-  /** Параметры собирает main-процесс из проверенных значений (id, флаг, хеш): у страницы нет способа передать ядру путь. */
+  /** The main process builds the params from validated values (id, flag, hash): the page has no way to pass a path to the core. */
   request(method: string, params?: Record<string, unknown>, onlyGeneration?: number): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error(t('ядро остановлено', 'the core was stopped')))
     if (onlyGeneration !== undefined && onlyGeneration !== this.gen) {
       return Promise.reject(new Error(t('ядро перезапустилось: повторите операцию', 'the core restarted: repeat the operation')))
     }
     if (this.dead || (!this.child && !this.restartTimer)) {
-      // исчерпанные или не начатые попытки: повторный запрос (кнопка «Повторить») начинает заново
+      // attempts exhausted or never started: a repeated request (the "Retry" button) starts over
       this.attempts = 0
       this.start()
       if (onlyGeneration !== undefined) return Promise.reject(new Error(t('ядро перезапустилось: повторите операцию', 'the core restarted: repeat the operation')))
@@ -73,12 +73,12 @@ export class Sidecar {
     })
   }
 
-  /** Номер запущенного процесса ядра: растёт при каждом (пере)запуске. */
+  /** Number of the running core process: grows on every (re)start. */
   get generation(): number {
     return this.gen
   }
 
-  /** Закрывает stdin (по EOF ядро выходит само) и добивает процесс, если он завис. */
+  /** Closes stdin (the core exits by itself on EOF) and kills the process if it hangs. */
   stop(): void {
     this.stopping = true
     this.closed = true
@@ -93,13 +93,13 @@ export class Sidecar {
   }
 
   /**
-   * `onlyGeneration`: запрос годится только процессу этого поколения (запись, чей протокол уже сверен). Если процесс
-   * перезапустился, пока запрос ждал в очереди, новому процессу он не уходит: тот мог оказаться другой версии.
+   * `onlyGeneration`: the request is valid only for the process of this generation (a write whose protocol is already checked). If the
+   * process restarted while the request waited in the queue, it is not sent to the new process: that one may be a different version.
    */
   private write(line: string, id?: number, onlyGeneration?: number): void {
     const stdin = this.child?.stdin
     if (stdin && !stdin.destroyed && stdin.writable) stdin.write(`${line}\n`)
-    else this.queue.push({ line, id, gen: onlyGeneration }) // процесс ещё поднимается или перезапускается
+    else this.queue.push({ line, id, gen: onlyGeneration }) // the process is still starting or restarting
   }
 
   private spawnChild(): void {
@@ -114,8 +114,8 @@ export class Sidecar {
     this.child = child
     this.gen++
     createInterface({ input: child.stdout! }).on('line', (line) => this.onLine(line))
-    child.stdin?.on('error', () => undefined) // запись в закрытый канал: процесс уже выходит, разберёт `exit`
-    // `error` и `exit` могут прийти оба: учитываем только того процесса, который ещё текущий
+    child.stdin?.on('error', () => undefined) // write to a closed pipe: the process is already exiting, `exit` will handle it
+    // `error` and `exit` may both arrive: only count them for the process that is still current
     child.once('error', (e) => this.onGone(e.message, child))
     child.once('exit', (code, signal) => this.onGone(t(`процесс завершился (${code ?? signal})`, `the process exited (${code ?? signal})`), child))
     for (const q of this.queue.splice(0)) {
@@ -137,7 +137,7 @@ export class Sidecar {
     try {
       msg = JSON.parse(line)
     } catch {
-      return // в stdout обязан быть только JSON; всё прочее игнорируем
+      return // stdout must carry JSON only; ignore everything else
     }
     if (typeof msg.id === 'number') {
       const p = this.pending.get(msg.id)
@@ -152,7 +152,7 @@ export class Sidecar {
   }
 
   private onGone(reason: string, who?: ChildProcess): void {
-    if (who && this.child !== who) return // этот процесс уже обработан или заменён
+    if (who && this.child !== who) return // this process was already handled or replaced
     const ranFor = Date.now() - this.startedAt
     this.child = undefined
     this.failAll(t(`ядро не ответило: ${reason}`, `the core did not respond: ${reason}`))

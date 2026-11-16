@@ -6,8 +6,8 @@ const DEV = 'http://localhost:5173/'
 const ENTITY = '0123456789abcdef'
 const SHA = 'a'.repeat(64)
 
-describe('isTrustedUrl / отправитель', () => {
-  it('принимает страницу из сборки (в том числе с #) и источник dev-сервера', () => {
+describe('isTrustedUrl / sender', () => {
+  it('accepts the built page (including with #) and the dev server origin', () => {
     expect(isTrustedUrl(INDEX, INDEX, undefined)).toBe(true)
     expect(isTrustedUrl(`${INDEX}#/journal`, INDEX, undefined)).toBe(true)
     expect(isTrustedUrl('http://localhost:5173/index.html', INDEX, DEV)).toBe(true)
@@ -17,19 +17,19 @@ describe('isTrustedUrl / отправитель', () => {
     '',
     'about:blank',
     'https://evil.test/',
-    `${INDEX}?x=1`, // другой адрес файла: запрос в строке не даёт доверия
+    `${INDEX}?x=1`, // another file address: a query string does not earn trust
     'file:///C:/evil/index.html',
     'http://localhost:5173.evil.test/',
     'http://localhost:5174/',
     'https://localhost:5173/',
     'not a url',
-  ])('отказывает %j', (url) => {
+  ])('rejects %j', (url) => {
     expect(isTrustedUrl(url, INDEX, DEV)).toBe(false)
   })
-  it('в собранном приложении dev-сервера нет: его адрес не принимается', () => {
+  it('a packaged app has no dev server: its address is not accepted', () => {
     expect(isTrustedUrl('http://localhost:5173/', INDEX, undefined)).toBe(false)
   })
-  it('событие без кадра отправителя (чужое окно, удалённый кадр) не проходит', () => {
+  it('an event without a sender frame (foreign window, destroyed frame) does not pass', () => {
     expect(trustedSender({}, INDEX, DEV)).toBe(false)
     expect(trustedSender({ senderFrame: null }, INDEX, DEV)).toBe(false)
     expect(trustedSender({ senderFrame: { url: INDEX } }, INDEX, DEV)).toBe(true)
@@ -39,7 +39,7 @@ describe('isTrustedUrl / отправитель', () => {
 })
 
 describe('validateIntent', () => {
-  it('toggle, edit, copy: остаются только известные поля', () => {
+  it('toggle, edit, copy: only known fields remain', () => {
     expect(validateIntent({ op: 'toggle', entity: ENTITY, enable: false, path: 'C:\\x', lvl: 'R2' })).toEqual({ op: 'toggle', entity: ENTITY, enable: false })
     expect(validateIntent({ op: 'edit', entity: `${ENTITY}-2`, command: 'npx', args: ['-y', 'p'], file: 'C:\\x' })).toEqual({ op: 'edit', entity: `${ENTITY}-2`, command: 'npx', args: ['-y', 'p'] })
     expect(validateIntent({ op: 'copy', entity: ENTITY, to: 'codex', extra: 1 })).toEqual({ op: 'copy', entity: ENTITY, to: 'codex' })
@@ -49,9 +49,9 @@ describe('validateIntent', () => {
     ['toggle'],
     [42],
     [{}],
-    [{ op: 'toggle', entity: ENTITY }], // нет enable
+    [{ op: 'toggle', entity: ENTITY }], // no enable
     [{ op: 'toggle', entity: ENTITY, enable: 'true' }],
-    [{ op: 'toggle', entity: 'C:\\Users\\x\\.claude.json', enable: true }], // путь вместо id записи
+    [{ op: 'toggle', entity: 'C:\\Users\\x\\.claude.json', enable: true }], // a path instead of an entry id
     [{ op: 'toggle', entity: '../' + ENTITY, enable: true }],
     [{ op: 'toggle', entity: ENTITY.toUpperCase(), enable: true }],
     [{ op: 'toggle', entity: `${ENTITY}-12345`, enable: true }],
@@ -64,11 +64,11 @@ describe('validateIntent', () => {
     [{ op: 'edit', entity: ENTITY, command: 'npx', args: Array(65).fill('a') }],
     [{ op: 'copy', entity: ENTITY, to: 'chrome' }],
     [{ op: 'copy', entity: ENTITY }],
-  ])('отказывает %j', (raw) => {
+  ])('rejects %j', (raw) => {
     expect(() => validateIntent(raw)).toThrow()
   })
 
-  it('add: пересобирает поля и проверяет имена env', () => {
+  it('add: rebuilds the fields and validates env names', () => {
     const ok = { op: 'add', to: 'claude-code', name: 'srv', command: 'npx', args: ['-y', 'p'], url: '', env: [{ key: 'API_KEY', value: 'v', junk: 1 }], path: 'C:\\x' }
     expect(validateIntent(ok)).toEqual({ op: 'add', to: 'claude-code', name: 'srv', command: 'npx', args: ['-y', 'p'], url: '', env: [{ key: 'API_KEY', value: 'v' }] })
     for (const bad of [
@@ -85,15 +85,15 @@ describe('validateIntent', () => {
     }
   })
 
-  it('installSkill: пути внутри клона только из безопасных сегментов, имя как у ядра', () => {
+  it('installSkill: paths inside the clone consist of safe segments only, the name matches the core rules', () => {
     const stage = 'f'.repeat(32)
     expect(validateIntent({ op: 'installSkill', stage, sub: '', name: 'demo', extra: 1 })).toEqual({ op: 'installSkill', stage, sub: '', name: 'demo' })
     expect(validateIntent({ op: 'installSkill', stage, sub: 'skills/demo-1', name: 'demo' })).toEqual({ op: 'installSkill', stage, sub: 'skills/demo-1', name: 'demo' })
     for (const sub of ['/abs', 'C:\\x', 'a\\b', 'a//b', 'a/', 'a b', 'a:b', 'a/b c', 'x'.repeat(101)]) {
       expect(() => validateIntent({ op: 'installSkill', stage, sub, name: 'demo' })).toThrow()
     }
-    // сегменты из одних точек регулярка окна пропускает (поведение не менялось): их отвергает ядро, `valid_sub`
-    // (тест `names_and_paths_are_checked` в crates/loadout-core/src/write/skill.rs)
+    // dot-only segments pass the window's regex (behavior unchanged): the core rejects them in `valid_sub`
+    // (test `names_and_paths_are_checked` in crates/loadout-core/src/write/skill.rs)
     expect(validateIntent({ op: 'installSkill', stage, sub: '../x', name: 'demo' })).toMatchObject({ sub: '../x' })
     for (const name of ['', '../x', 'a/b', 'synced', 'anthropic-skills-x', '-x']) {
       expect(() => validateIntent({ op: 'installSkill', stage, sub: '', name })).toThrow()
@@ -104,8 +104,8 @@ describe('validateIntent', () => {
   })
 })
 
-describe('идентификаторы, имя профиля и уровень', () => {
-  it('parseSha, parseOp, parseBatch принимают только свою форму', () => {
+describe('identifiers, profile name and level', () => {
+  it('parseSha, parseOp, parseBatch accept only their own shape', () => {
     expect(parseSha(SHA)).toBe(SHA)
     expect(parseOp('1731700000000-00')).toBe('1731700000000-00')
     expect(parseBatch('1731700000000')).toBe('1731700000000')
@@ -113,11 +113,11 @@ describe('идентификаторы, имя профиля и уровень'
     for (const v of ['1731700000000', '1731700000000-0', '..\\1731700000000-00', '1731700000000-00/..', 7]) expect(() => parseOp(v)).toThrow()
     for (const v of ['1731700000000-00', '173170000000', 'x1731700000000', 7, null]) expect(() => parseBatch(v)).toThrow()
   })
-  it('validateName: 1-40 знаков, буквы, цифры, пробел, _ - .', () => {
+  it('validateName: 1-40 characters, letters, digits, space, _ - .', () => {
     expect(validateName('рабочий-1.2 b_c')).toBe('рабочий-1.2 b_c')
     for (const v of ['', ' a', 'a ', '../x', 'a/b', 'a\\b', 'x'.repeat(41), 'a\nb', 5, null]) expect(() => validateName(v)).toThrow()
   })
-  it('parseLevel: только R0, R1, R2; запись разрешена не ниже R1', () => {
+  it('parseLevel: only R0, R1, R2; writing is allowed at R1 or higher', () => {
     for (const l of ['R0', 'R1', 'R2'] as const) expect(parseLevel(l)).toBe(l)
     for (const v of ['r2', 'R3', 'R2 ', '', 2, null, undefined, { toString: () => 'R2' }]) expect(() => parseLevel(v)).toThrow()
     expect(grantedOf('R1')).toBe('R1')

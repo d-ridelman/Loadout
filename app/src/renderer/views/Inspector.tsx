@@ -6,10 +6,10 @@ import type { Row } from '../aggregate'
 import { Glyph, KindBadge, Panel, Path } from '../ui'
 import type { Sel } from './Matrix'
 
-/** Хватает ли текущего уровня записи для операции. */
+/** Whether the current write level is enough for the operation. */
 export const levelOk = (have: WriteLevel, need: Level): boolean => LEVEL_RANK[have] >= LEVEL_RANK[need]
 
-/** Поле `detail` как строка. Только текст: значения секретов в ядре замаскированы, а здесь нет HTML-вставок. */
+/** The `detail` field as a string. Text only: secret values are masked in the core, and there are no HTML insertions here. */
 function show(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null
   if (Array.isArray(v)) return v.length === 0 ? null : v.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')
@@ -17,7 +17,7 @@ function show(v: unknown): string | null {
   return String(v)
 }
 
-// t() только во время рендера, не при импорте модуля
+// t() only during render, not when the module is imported
 const detailLabel = (k: string): string =>
   (
     ({
@@ -82,7 +82,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
       </>
     )
   }
-  // запись по id: при обновлении данных с диска номера в списке сдвигаются, а выбор должен остаться на той же записи
+  // entry by id: when data is refreshed from disk the list indexes shift, but the selection must stay on the same entry
   const e: Entity = cell.instances.find((x) => x.id === sel.id) ?? cell.instances[0]!
   const details = Object.entries(e.detail)
     .map(([k, v]) => [k, show(v)] as const)

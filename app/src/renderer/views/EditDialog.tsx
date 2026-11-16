@@ -10,8 +10,8 @@ interface Props {
 }
 
 /**
- * Правка команды MCP (R2). Текущие значения окно не получает (в списке они замаскированы), поэтому новая команда
- * вводится целиком: ядро заменит `command` и `args`, остальное (env, заголовки) не тронет.
+ * Edit an MCP command (R2). The window does not receive the current values (they are masked in the list), so the new command
+ * is entered in full: the core replaces `command` and `args` and leaves the rest (env, headers) alone.
  */
 export function EditDialog({ entity, onSubmit, onClose }: Props) {
   const [command, setCommand] = useState('')

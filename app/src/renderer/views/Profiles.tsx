@@ -18,7 +18,7 @@ type BatchState =
   | { status: 'error'; error: string }
   | { status: 'ready'; plan: BatchPlan & { running: string[] } }
 
-/** Предпросмотр пакета: одним окном все записи профиля, которые отличаются от текущего состояния. */
+/** Batch preview: all profile entries that differ from the current state in one window. */
 function BatchDialog({ name, onClose, onDone }: BatchProps) {
   const [state, setState] = useState<BatchState>({ status: 'loading' })
   const [busy, setBusy] = useState(false)
@@ -106,11 +106,11 @@ function BatchDialog({ name, onClose, onDone }: BatchProps) {
 interface Props {
   level: WriteLevel
   onNotice: (message: string) => void
-  /** Меняется, когда данные обновились: профиль, записи которого исчезли, перепроверяется при применении. */
+  /** Changes when the data is refreshed: a profile whose entries have disappeared is re-checked on apply. */
   refreshKey: number
 }
 
-/** Профили: именованные наборы «что включено». Применение — пакет через тот же конвейер записи (R2). */
+/** Profiles: named sets of "what is enabled". Applying one is a batch through the same write pipeline (R2). */
 export function Profiles({ level, onNotice, refreshKey }: Props) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -171,7 +171,7 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
                 .quarantineProfiles()
                 .catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('операция не удалась', 'operation failed') }))
                 .then((r) => {
-                  // при отказе причина остаётся на экране: повторное чтение затёрло бы её прежней ошибкой
+                  // on refusal the reason stays on screen: a re-read would overwrite it with the previous error
                   if (!r.ok) return setError(r.error)
                   onNotice(t(`Повреждённый файл отложен: ${r.data}`, `The damaged file was set aside: ${r.data}`))
                   return load()

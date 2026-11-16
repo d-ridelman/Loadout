@@ -30,7 +30,7 @@ const api: LoadoutApi = {
   marketplaceAdd: (source, dryRun) => ipcRenderer.invoke('marketplace:add', source, dryRun),
   marketplaces: () => ipcRenderer.invoke('marketplace:catalog'),
   skillFetch: (source, dryRun) => ipcRenderer.invoke('skill:fetch', source, dryRun),
-  // страница получает только данные события, без объекта IpcRendererEvent и самого ipcRenderer
+  // the page gets only the event data, without the IpcRendererEvent object or ipcRenderer itself
   onChanged: (cb) => {
     const handler = (_e: IpcRendererEvent, payload: ChangedEvent) => cb(payload)
     ipcRenderer.on('changed', handler)

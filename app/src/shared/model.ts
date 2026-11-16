@@ -1,4 +1,4 @@
-/** Форма вывода `loadout scan --json` (crates/loadout-core/src/model.rs). Менять только вместе с ядром. */
+/** Shape of the `loadout scan --json` output (crates/loadout-core/src/model.rs). Change only together with the core. */
 import type { Lang } from './i18n'
 
 export type ClientId = 'claude-code' | 'claude-desktop' | 'codex' | 'antigravity' | 'deepseek'
@@ -27,47 +27,47 @@ export interface Entity {
   origin: { file: string; pointer: string }
   note?: string
   detail: Record<string, unknown>
-  /** Запись переключается (флагом или через корзину); иначе `toggleWhy` объясняет почему нет. */
+  /** The entry can be toggled (by a flag or via the trash); otherwise `toggleWhy` explains why not. */
   canToggle: boolean
   toggleWhy?: string
-  /** Какой уровень нужен для переключения: флаг — R1, корзина — R2. */
+  /** Level needed to toggle: flag is R1, trash is R2. */
   toggleLevel?: Level
-  /** MCP в файле клиента: можно править команду и копировать в другой клиент (R2). */
+  /** MCP in a client file: its command can be edited and it can be copied to another client (R2). */
   canEdit: boolean
 }
 
-/** Что сделать с записью. Путей и значений секретов в нём нет: ядро находит цель само. */
+/** What to do with an entry. It carries no paths or secret values: the core finds the target itself. */
 export type Intent =
   | { op: 'toggle'; entity: string; enable: boolean }
   | { op: 'edit'; entity: string; command: string; args: string[] }
   | { op: 'copy'; entity: string; to: ClientId }
-  /** Новый MCP-сервер: локальный (`command`) или удалённый (`url`). Значения env уходят только в ядро. */
+  /** New MCP server: local (`command`) or remote (`url`). The env values go only to the core. */
   | { op: 'add'; to: ClientId; name: string; command: string; args: string[]; url: string; env: { key: string; value: string }[] }
-  /** Скил из каталога подготовки, который заполнил main (`stage` — его номер, `sub` — путь скила внутри). */
+  /** Skill from the staging directory filled by main (`stage` is its number, `sub` is the skill's path inside). */
   | { op: 'installSkill'; stage: string; sub: string; name: string }
 
 export type OpKind = 'toggle' | 'edit' | 'copy' | 'add' | 'installSkill'
 
-/** Плагин из каталога добавленного маркетплейса (`marketplace.json`). */
+/** Plugin from the catalog of an added marketplace (`marketplace.json`). */
 export interface CatalogPlugin {
   name: string
   description: string
   version?: string
   installed: boolean
-  /** Пусто — ставится отсюда; иначе почему нет (например, источник `command`). */
+  /** Empty means it can be installed from here; otherwise why not (for example, a `command` source). */
   why?: string
 }
 
 export interface Marketplace {
   name: string
-  /** Откуда добавлен, для показа (`owner/repo`, адрес, путь с `~`). */
+  /** Where it was added from, for display (`owner/repo`, URL, path with `~`). */
   source: string
   plugins: CatalogPlugin[]
-  /** Каталог не прочитан (ещё не скачан, повреждён): почему. */
+  /** The catalog could not be read (not downloaded yet, corrupted): why. */
   error?: string
 }
 
-/** Скил, найденный в подготовленном источнике. */
+/** Skill found in a staged source. */
 export interface SkillCandidate {
   sub: string
   name: string
@@ -76,16 +76,16 @@ export interface SkillCandidate {
 
 export interface SkillFetch {
   dryRun: boolean
-  /** Для предпросмотра — что будет выполнено; после выполнения — пусто. */
+  /** For a preview, what will be run; empty after it has run. */
   command: string
   stage: string
   skills: SkillCandidate[]
 }
 export type Level = 'R1' | 'R2'
 
-/** Предпросмотр: ключ и старое/новое значение (команды замаскированы), содержимого файла в нём нет. */
+/** Preview: the key and the old/new value (commands are masked); it has no file contents. */
 export interface Plan {
-  /** Корзина Loadout: `out` — вынос в неё, `in` — возврат, пусто — не затрагивается (по нему выбирается название кнопки). */
+  /** Loadout trash: `out` moves the entry into it, `in` restores it, empty means untouched (the button label is chosen by it). */
   trash: '' | 'out' | 'in'
   op: OpKind
   level: Level
@@ -99,14 +99,14 @@ export interface Plan {
   from: string
   to: string
   noop: boolean
-  /** Другие записи, которые меняет тот же ключ. */
+  /** Other entries changed by the same key. */
   affects: string[]
-  /** Что стоит знать до подтверждения (что не переносится, какие ключи env копируются). */
+  /** What to know before confirming (what is not carried over, which env keys are copied). */
   notes: string[]
   baseSha: string
 }
 
-/** План пакета (профиль): один предпросмотр на все записи. */
+/** Batch plan (profile): one preview for all entries. */
 export interface BatchPlan {
   plans: Plan[]
   skipped: string[]
@@ -139,7 +139,7 @@ export interface Applied {
   to: string
 }
 
-/** Итог очистки старых копий операций. */
+/** Result of cleaning up old operation backups. */
 export interface Pruned {
   removed: number
   kept: number
@@ -163,16 +163,16 @@ export interface JournalEntry {
   canRollback: boolean
 }
 
-/** R0 — только чтение, R1 — флаги, R2 — корзина, правка, копирование, профили. Каждый уровень включает прежние. */
-/** Встроенные Инструменты контекста (CONCEPT.md §13): состояние установки, диагностика и счётчики эффективности. */
+/** R0 is read-only, R1 is flags, R2 is trash, edit, copy, profiles. Each level includes the previous ones. */
+/** Built-in Context Toolkit (CONCEPT.md §13): install state, diagnostics and efficiency counters. */
 export interface CtxkitStatus {
-  /** Бинарь context-toolkit есть в составе приложения. */
+  /** The context-toolkit binary is bundled with the app. */
   available: boolean
   version: string | null
-  /** Копия в `~/.claude/hooks` (её вызывают хуки) и в `~/.local/bin` (PATH): совпадает со встроенной, отличается или нет. */
+  /** The copy in `~/.claude/hooks` (called by hooks) and in `~/.local/bin` (PATH): same as the bundled one, different, or missing. */
   hook: 'same' | 'different' | 'missing'
   bin: 'same' | 'different' | 'missing'
-  /** В `~/.claude/hooks` лежит `ctxkit.exe` — бинарь прежнего имени: «Применить» переведёт установку на новое. */
+  /** `~/.claude/hooks` contains `ctxkit.exe`, the binary under the former name: "Apply" moves the install to the new one. */
   legacy: boolean
 }
 
@@ -191,7 +191,7 @@ export interface CtxkitDoctor {
   version: string
 }
 
-/** Счётчики одного дня (UTC) из транскриптов Claude Code: только числа, текста и путей в них нет. */
+/** Counters for one day (UTC) from Claude Code transcripts: numbers only, no text or paths. */
 export interface DayStats {
   mainTurns: { sonnet: number; haiku: number; opusFable: number; other: number }
   subTurns: number
@@ -215,30 +215,30 @@ export interface SetupOptions {
   desktop: boolean
   antigravity: boolean
   dsh: boolean
-  /** true — не ставить хук Stop (шлюз) и убрать наш, если он есть */
+  /** true: do not install the Stop hook (the gate) and remove ours if present */
   noStopGate: boolean
   lang: 'en' | 'ru'
-  /** 'keep' — `--advisor` не передаётся: advisorModel остаётся как есть (значение по умолчанию не выбор пользователя) */
+  /** 'keep': `--advisor` is not passed, advisorModel stays as it is (the default value is not a user choice) */
   advisor: 'keep' | 'fable' | 'opus' | 'none'
-  /** 'keep' — `--main-model` не передаётся: `model` остаётся как есть */
+  /** 'keep': `--main-model` is not passed, `model` stays as it is */
   mainModel: 'keep' | 'sonnet' | 'opus' | 'haiku'
-  /** 'keep' — `--effort` не передаётся: effort остаётся как есть */
+  /** 'keep': `--effort` is not passed, effort stays as it is */
   effort: 'keep' | 'low' | 'medium' | 'high' | 'xhigh'
-  /** 'keep' — `--policy` не передаётся (context-toolkit.json не трогается); 'on' — включены ровно отмеченные политики ниже; 'off' — `--policy none` */
+  /** 'keep': `--policy` is not passed (context-toolkit.json is left alone); 'on': exactly the policies ticked below are enabled; 'off': `--policy none` */
   policyMode: 'keep' | 'on' | 'off'
-  /** Политики «Защиты» (учитываются при policyMode 'on'): гигиена коммитов, подтверждение необратимого, неожиданные файлы-отчёты, лимит сборок */
+  /** "Protection" policies (used when policyMode is 'on'): commit hygiene, confirming irreversible actions, unexpected report files, build limit */
   commitHygiene: boolean
   confirmIrreversible: boolean
   strayFiles: boolean
   buildSlots: boolean
-  /** Лимит параллельных сборок, 1–8 (при buildSlots) */
+  /** Limit of parallel builds, 1-8 (when buildSlots is on) */
   buildSlotsN: number
 }
 
-/** Верхняя граница лимита сборок в окне. Инструменты контекста сами принимают до 64 (`MAX_SLOTS`): окно ограничивает себя, и уже записанное в ctxkit.json значение выше 8 оно только понижает. */
+/** Upper bound of the build limit in the window. Context Toolkit itself accepts up to 64 (`MAX_SLOTS`): the window limits itself, and a value above 8 already written in ctxkit.json it only lowers. */
 export const MAX_BUILD_SLOTS = 8
 
-/** Что окно просит убрать вместе с настройками Claude Code: интеграции, которые `setup` поставил по галочкам. */
+/** What the window asks to remove along with the Claude Code settings: integrations that `setup` installed by checkbox. */
 export interface UninstallOptions {
   antigravity: boolean
   dsh: boolean
@@ -246,22 +246,22 @@ export interface UninstallOptions {
 
 export interface SetupResult {
   dryRun: boolean
-  /** Код выхода context-toolkit: 0 — готово. */
+  /** Exit code of context-toolkit: 0 means done. */
   code: number
-  /** Вывод context-toolkit (stdout и stderr), путь домашнего каталога заменён на `~`. */
+  /** Output of context-toolkit (stdout and stderr), with the home directory path replaced by `~`. */
   output: string
 }
 
-/** R0 — только чтение, R1 — флаги, R2 — корзина, правка, копирование, профили, применение Инструментов контекста. */
+/** R0 is read-only, R1 is flags, R2 is trash, edit, copy, profiles, applying Context Toolkit. */
 export type WriteLevel = 'R0' | 'R1' | 'R2'
 export const LEVEL_RANK: Record<WriteLevel, number> = { R0: 0, R1: 1, R2: 2 }
 
 export type Result<T> = ({ ok: true; data: T } | { ok: false; error: string })
 
-/** Ответ на `plan`: кроме плана — какие процессы клиента сейчас запущены (они могут перезаписать файл). */
+/** Reply to `plan`: besides the plan, which client processes are running now (they may overwrite the file). */
 export type PlanResponse = Result<Plan & { running: string[] }>
 
-/** Счётчики по каталогам клиентов; выводы делает Доктор (doctor.ts). */
+/** Counters per client directory; conclusions are drawn by the Doctor (doctor.ts). */
 export interface Facts {
   backups: { client: ClientId; dir: string; count: number }[]
   brokenLinks: { client: ClientId; dir: string; broken: number; total: number }[]
@@ -273,7 +273,7 @@ export interface ScanResult {
   facts: Facts
 }
 
-/** Что изменилось между сканами: только id записей, пути и значения в событии не передаются. */
+/** What changed between scans: only entry ids; paths and values are not sent in the event. */
 export interface ScanDiff {
   added: string[]
   removed: string[]
@@ -282,23 +282,23 @@ export interface ScanDiff {
   factsChanged: boolean
 }
 
-/** Push из main-процесса: уже проверенные данные и различия с прошлым сканом. */
+/** Push from the main process: already validated data and the differences from the previous scan. */
 export interface ChangedEvent {
   data: ScanResult
   diff: ScanDiff
 }
 
-/** Ответ main-процесса на запрос скана: либо данные, либо понятная ошибка. */
+/** Main process reply to a scan request: either data or a readable error. */
 export type ScanResponse =
   | { ok: true; data: ScanResult; ms: number }
   | { ok: false; error: string }
 
-/** Мост preload → renderer. Больше у окна нет ничего. */
+/** The preload → renderer bridge. The window has nothing else. */
 export interface LoadoutApi {
   scan: () => Promise<ScanResponse>
   copyText: (text: string) => Promise<void>
-  /** Уровень записи хранит main; страница может его только прочитать и попросить сменить. */
-  /** Язык интерфейса (сохранённый или по локали системы) и его смена: ядро перезапускается с новым языком сообщений. */
+  /** The write level is kept by main; the page can only read it and ask to change it. */
+  /** Interface language (saved or from the system locale) and changing it: the core restarts with the new message language. */
   getLang: () => Promise<Lang>
   setLang: (lang: Lang) => Promise<Lang>
   getWriteLevel: () => Promise<WriteLevel>
@@ -306,34 +306,34 @@ export interface LoadoutApi {
   plan: (intent: Intent) => Promise<PlanResponse>
   apply: (intent: Intent, baseSha: string) => Promise<Result<Applied>>
   journal: () => Promise<Result<JournalEntry[]>>
-  /** Удалить старые копии операций (последние 100 и не старше 90 дней остаются); main спрашивает подтверждение системным окном. */
+  /** Delete old operation backups (the last 100 and those not older than 90 days stay); main asks for confirmation in a system window. */
   pruneBackups: () => Promise<Result<Pruned>>
   rollback: (op: string) => Promise<Result<Applied>>
   rollbackBatch: (batch: string) => Promise<Result<Applied[]>>
   profiles: () => Promise<Result<Profile[]>>
-  /** Без `items` профиль снимается с текущего состояния. */
+  /** Without `items` the profile is captured from the current state. */
   saveProfile: (name: string, items?: ProfileItem[]) => Promise<Result<Profile[]>>
   deleteProfile: (name: string) => Promise<Result<Profile[]>>
-  /** Повреждённый `profiles.json` откладывается в `profiles.json.broken-<время>`; возвращает имя файла. Только по явному действию. */
+  /** A corrupted `profiles.json` is set aside as `profiles.json.broken-<time>`; returns the file name. Only on explicit action. */
   quarantineProfiles: () => Promise<Result<string>>
   planProfile: (name: string) => Promise<Result<BatchPlan & { running: string[] }>>
   applyProfile: (name: string, batchSha: string) => Promise<Result<BatchApplied>>
   ctxkitStatus: () => Promise<Result<CtxkitStatus>>
   ctxkitDoctor: () => Promise<Result<CtxkitDoctor>>
   ctxkitReport: (days: 7 | 14 | 30) => Promise<Result<CtxkitReport>>
-  /** `dryRun` — предпросмотр (любой уровень); применение требует R2 и совпадающего предпросмотра. */
+  /** `dryRun` is a preview (any level); applying requires R2 and a matching preview. */
   ctxkitSetup: (options: SetupOptions, dryRun: boolean) => Promise<Result<SetupResult>>
-  /** Откат `context-toolkit setup --uninstall`: `dryRun` — предпросмотр; откат требует R2 и такого же предпросмотра. */
+  /** Rollback via `context-toolkit setup --uninstall`: `dryRun` is a preview; the rollback requires R2 and the same preview. */
   ctxkitUninstall: (options: UninstallOptions, dryRun: boolean) => Promise<Result<SetupResult>>
-  /** Установка плагина Claude Code через его CLI (`имя@маркетплейс`). `dryRun` — показать команду; установка требует R2 и такого же предпросмотра. */
+  /** Install a Claude Code plugin through its CLI (`name@marketplace`). `dryRun` shows the command; the install requires R2 and the same preview. */
   pluginInstall: (spec: string, dryRun: boolean) => Promise<Result<SetupResult>>
-  /** Добавление маркетплейса Claude Code (`owner/repo`, https-адрес, локальный путь): тот же порядок, что у установки. */
+  /** Add a Claude Code marketplace (`owner/repo`, https URL, local path): the same flow as the install. */
   marketplaceAdd: (source: string, dryRun: boolean) => Promise<Result<SetupResult>>
-  /** Добавленные маркетплейсы и их каталоги (только чтение). */
+  /** Added marketplaces and their catalogs (read-only). */
   marketplaces: () => Promise<Result<Marketplace[]>>
-  /** Скачать (GitHub) или скопировать (папка) источник скила в каталог подготовки Loadout. `dryRun` — только показать что и куда. */
+  /** Download (GitHub) or copy (folder) a skill source into the Loadout staging directory. `dryRun` only shows what and where. */
   skillFetch: (source: string, dryRun: boolean) => Promise<Result<SkillFetch>>
-  /** Подписка на изменения конфигов; возвращает отписку. */
+  /** Subscribe to config changes; returns the unsubscribe function. */
   onChanged: (cb: (e: ChangedEvent) => void) => () => void
 }
 

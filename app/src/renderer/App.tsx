@@ -26,7 +26,7 @@ import type { PaletteItem } from './views/Palette'
 import { Radar } from './views/Radar'
 
 type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal' | 'profiles' | 'ctxkit'
-/** Что сейчас открыто поверх окна: форма, а затем предпросмотр записи. */
+/** What is currently open over the window: a form, then the write preview. */
 type Flow =
   | { type: 'plan'; entity: Entity | null; intent: Intent }
   | { type: 'edit'; entity: Entity }
@@ -40,7 +40,7 @@ type ScanState =
   | { status: 'error'; error: string }
   | { status: 'ready'; data: ScanResult; ms: number }
 
-/** Функции, а не константы: подписи зависят от языка, который выбран уже после импорта модуля. */
+/** Functions, not constants: labels depend on the language, which is chosen after the module is imported. */
 const views = (): readonly { id: View; label: string }[] => [
   { id: 'matrix', label: t('Матрица', 'Matrix') },
   { id: 'radar', label: t('Радар', 'Radar') },
@@ -67,7 +67,7 @@ function initialFx(): Fx {
     const saved = localStorage.getItem('loadout.fx')
     if (saved === 'off' || saved === 'low' || saved === 'full') return saved
   } catch {
-    /* localStorage недоступен: берём значение по умолчанию */
+    /* localStorage is unavailable: use the default value */
   }
   return matchMedia('(prefers-reduced-motion: reduce)').matches ? 'off' : 'full'
 }
@@ -94,7 +94,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
   const [fx, setFx] = useState<Fx>(initialFx)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  /** Уровень записи хранит main-процесс; здесь только его отражение. */
+  /** The write level is kept by the main process; this is only its mirror. */
   const [level, setLevel] = useState<WriteLevel>('R0')
   const [flow, setFlow] = useState<Flow | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -118,12 +118,12 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
     },
     [say],
   )
-  /** Закрывает диалог и возвращает фокус на таблицу, как палитра. */
+  /** Closes the dialog and returns focus to the table, like the palette. */
   const closeFlow = useCallback(() => {
     setFlow(null)
     requestAnimationFrame(() => document.getElementById('grid')?.focus())
   }, [])
-  /** Номер обновления данных: разделы «Журнал» и «Профили» перечитываются по нему (`canRollback` зависит от файла). */
+  /** Data refresh counter: the "Journal" and "Profiles" sections re-read on it (`canRollback` depends on the file). */
   const [rev, setRev] = useState(0)
 
   const requestToggle = useCallback(
@@ -165,12 +165,12 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
     setFlow({ type: 'skill' })
   }, [level, say])
 
-  /** Записи, изменившиеся при последнем обновлении с диска (подсвечиваются на несколько секунд). */
+  /** Entries that changed in the last refresh from disk (highlighted for a few seconds). */
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set())
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
   const freshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  /** `silent`: данные меняются на месте, без экрана «загрузка»: он размонтировал бы таблицу и сбросил фокус и выбор. */
+  /** `silent`: data is swapped in place without a "loading" screen: that would unmount the table and reset focus and selection. */
   const load = useCallback(async (silent = false) => {
     if (!silent) setScan({ status: 'loading' })
     try {
@@ -188,7 +188,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
     void load()
   }, [load])
 
-  // Сторож файлов: ядро заметило смысловое изменение, данные приходят уже проверенными.
+  // File watcher: the core noticed a meaningful change, the data arrives already validated.
   useEffect(() => {
     const off = window.loadout.onChanged((e) => {
       setScan((prev) => ({ status: 'ready', data: e.data, ms: prev.status === 'ready' ? prev.ms : 0 }))
@@ -212,7 +212,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
   const findings = useMemo(() => diagnose(entities, warnings, facts), [entities, warnings, facts])
   const hooks = useMemo(() => entities.filter((e) => e.kind === 'hook'), [entities])
   const selRow = sel ? rows.find((r) => r.key === sel.rowKey) : undefined
-  /** Выбранная запись: по id, а если выбрана главная в ячейке, то первая. */
+  /** The selected entry: by id, or the first one if the cell's main entry is selected. */
   const selEntity = useMemo<Entity | undefined>(() => {
     const inst = sel ? selRow?.cells[sel.client]?.instances : undefined
     return inst?.find((x) => x.id === sel?.id) ?? inst?.[0]
@@ -223,11 +223,11 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
     try {
       localStorage.setItem('loadout.fx', fx)
     } catch {
-      /* не критично */
+      /* not critical */
     }
   }, [fx])
 
-  // Анимации на паузу, когда окно скрыто или без фокуса (CONCEPT.md §8).
+  // Pause animations when the window is hidden or unfocused (CONCEPT.md §8).
   useEffect(() => {
     const pause = () => document.body.classList.toggle('paused', document.hidden || !document.hasFocus())
     window.addEventListener('blur', pause)
@@ -265,7 +265,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Пока открыт диалог (форма, предпросмотр записи или пакета), остальные клавиши отключены; Esc закрывает диалог.
+      // While a dialog is open (form, write or batch preview), other keys are disabled; Esc closes the dialog.
       if (flow || document.querySelector('.modal')) {
         if (e.key === 'Escape' && flow) closeFlow()
         return
@@ -283,9 +283,9 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
       const tg = e.target
       if (tg instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(tg.tagName)) return
       if (palette) return
-      // Space на кнопке нажимает кнопку, а не переключает выбранную запись; прочие клавиши от фокуса на кнопке не зависят
+      // Space on a button presses the button instead of toggling the selected entry; other keys do not depend on button focus
       if (e.key === ' ' && view === 'matrix' && selEntity && !(tg instanceof HTMLButtonElement)) {
-        e.preventDefault() // иначе пробел прокрутит страницу
+        e.preventDefault() // otherwise Space would scroll the page
         requestToggle(selEntity, selEntity.state === 'off' || selEntity.state === 'unknown')
       } else if (e.key === '?' || (e.code === 'Slash' && e.shiftKey)) {
         setHelp((h) => !h)
@@ -372,7 +372,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
           </select>
         </label>
         <button onClick={requestAdd} title={t('Записать новый MCP-сервер в конфиг клиента (R2)', 'Write a new MCP server to the client config (R2)')}>{t('Добавить MCP', 'Add MCP')}</button>
-        {/* короткие подписи: шапка на 1100px не помещает три «Установить …»; полное действие — в имени кнопки */}
+        {/* short labels: the header at 1100px cannot fit three "Install ..." buttons; the full action is in the button name */}
         <button onClick={requestPlugin} aria-label={t('Установить плагин', 'Install plugin')} title={t('Установить плагин Claude Code из маркетплейса (R2)', 'Install a Claude Code plugin from a marketplace (R2)')}>{t('+ Плагин', '+ Plugin')}</button>
         <button onClick={requestSkill} aria-label={t('Установить скил', 'Install skill')} title={t('Установить скил Claude Code из GitHub или папки, с журналом и откатом (R2)', 'Install a Claude Code skill from GitHub or a folder, with journal and rollback (R2)')}>{t('+ Скил', '+ Skill')}</button>
         <button onClick={() => void load(scan.status === 'ready')} aria-label={t('Пересканировать (клавиша R)', 'Rescan (key R)')}>{t('Скан', 'Scan')}</button>
@@ -420,7 +420,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         )}
       </main>
 
-      {/* инспектор показывает запись матрицы: в других разделах он не относится к экрану и скрыт */}
+      {/* the inspector shows a matrix entry: in other sections it does not belong to the screen and is hidden */}
       <aside aria-label={t('Инспектор', 'Inspector')} hidden={view !== 'matrix'}>
         <Inspector
           row={selRow}

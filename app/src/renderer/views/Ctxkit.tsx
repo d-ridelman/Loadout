@@ -4,7 +4,7 @@ import { MAX_BUILD_SLOTS } from '../../shared/model'
 import { getLang, t } from '../../shared/i18n'
 import { chars, daysDesc, pct, policiesNow, segments, stopGateOff, summarize } from '../ctxkit-stats'
 
-// t() только во время рендера: язык выбирается до первой отрисовки, а не при импорте модуля
+// t() only during render: the language is chosen before the first render, not when the module is imported
 const sev = (s: FindingSeverity): { ch: string; label: string; cls: string } =>
   ({
     ok: { ch: '●', label: t('в порядке', 'ok'), cls: 's-on' },
@@ -25,14 +25,14 @@ const copyText = (k: CtxkitStatus['hook']): string =>
 
 const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'var(--orange)', other: 'var(--deco)' } as const
 
-/** Язык хуков по умолчанию — язык интерфейса (потом настройка независима); функция, а не константа: язык выбирается после импорта. */
+/** The default hook language is the interface language (the setting is independent afterwards); a function, not a constant: the language is chosen after import. */
 const defaults = (): SetupOptions => ({
   withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: getLang(), advisor: 'keep', mainModel: 'keep', effort: 'keep',
-  // «Защиты»: по умолчанию context-toolkit.json не трогается; отмеченное считается, только если выбрать «Включить выбранные»
+  // "Protections": by default context-toolkit.json is left alone; what is ticked counts only if "Enable selected" is chosen
   policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2,
 })
 
-/** Что сейчас делают Инструменты контекста: определяет, какая кнопка занята. */
+/** What Context Toolkit is doing right now: determines which button is busy. */
 type Busy = 'preview' | 'apply' | 'undoPreview' | 'undo'
 
 const BUSY_TEXT: Record<Busy, () => string> = {
@@ -44,7 +44,7 @@ const BUSY_TEXT: Record<Busy, () => string> = {
 
 type Loaded<T> = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; data: T }
 
-/** Данные, перезапуск и признак «идёт подсчёт»: при повторном запросе прежние данные остаются на экране, но busy виден. */
+/** Data, reload and the "counting in progress" flag: on a repeated request the previous data stays on screen, but busy is visible. */
 function useLoaded<T>(load: () => Promise<{ ok: true; data: T } | { ok: false; error: string }>, deps: unknown[]): [Loaded<T>, () => void, boolean, Date | null] {
   const [s, setS] = useState<Loaded<T>>({ status: 'loading' })
   const [n, setN] = useState(0)
@@ -82,14 +82,14 @@ interface Props {
   onNotice: (message: string) => void
 }
 
-/** Встроенные Инструменты контекста (CONCEPT.md §13): установить и применить, диагностика, эффективность по счётчикам транскриптов. */
+/** Built-in Context Toolkit (CONCEPT.md §13): install and apply, diagnostics, effectiveness from transcript counters. */
 export function Ctxkit({ level, onNotice }: Props) {
   const [status, reloadStatus] = useLoaded<CtxkitStatus>(() => window.loadout.ctxkitStatus(), [])
   const [doctor, reloadDoctor, doctorBusy] = useLoaded<CtxkitDoctor>(() => window.loadout.ctxkitDoctor(), [])
   const [days, setDays] = useState<7 | 14 | 30>(14)
   const [report, reloadReport, reportBusy, reportAt] = useLoaded<CtxkitReport>(() => window.loadout.ctxkitReport(days), [days])
   const [opts, setOpts] = useState<SetupOptions>(defaults)
-  // один актуальный предпросмотр: ключ с видом действия («setup:…» или «uninstall:…»), как в main
+  // one current preview: a key with the action kind ("setup:..." or "uninstall:..."), as in main
   const [previewKey, setPreviewKey] = useState<string | null>(null)
   const [result, setResult] = useState<(SetupResult & { kind: 'setup' | 'uninstall' }) | null>(null)
   const [busy, setBusy] = useState<Busy | null>(null)
@@ -97,13 +97,13 @@ export function Ctxkit({ level, onNotice }: Props) {
   const [refocus, setRefocus] = useState(false)
   useEffect(() => {
     if (!refocus || busy) return
-    undoPreviewRef.current?.focus() // красная кнопка исчезла вместе с фокусом
+    undoPreviewRef.current?.focus() // the red button disappeared along with the focus
     setRefocus(false)
   }, [refocus, busy])
   const [error, setError] = useState<string | null>(null)
 
-  // Галочка шлюза Stop берёт начальное значение из профиля (шлюз выключен — «Применить» не должен молча включить его),
-  // но не затирает выбор, который пользователь уже сделал.
+  // The Stop gate checkbox takes its initial value from the profile (gate off: "Apply" must not silently turn it on),
+  // but does not overwrite a choice the user has already made.
   const [gateTouched, setGateTouched] = useState(false)
   useEffect(() => {
     if (doctor.status !== 'ready' || gateTouched) return
@@ -112,24 +112,24 @@ export function Ctxkit({ level, onNotice }: Props) {
   }, [doctor, gateTouched])
 
   const key = `setup:${JSON.stringify(opts)}`
-  // откат зависит только от интеграций, которые он убирает по галочкам
+  // rollback depends only on the integrations it removes, per checkbox
   const undoKey = `uninstall:${JSON.stringify({ antigravity: opts.antigravity, dsh: opts.dsh })}`
   const change = (patch: Partial<SetupOptions>) => {
     setOpts({ ...opts, ...patch })
-    setPreviewKey(null) // другие настройки — другой предпросмотр
+    setPreviewKey(null) // different settings mean a different preview
   }
 
   const run = useCallback(
     async (kind: 'setup' | 'uninstall', dryRun: boolean) => {
       setBusy(kind === 'setup' ? (dryRun ? 'preview' : 'apply') : dryRun ? 'undoPreview' : 'undo')
       setError(null)
-      setPreviewKey(null) // и предпросмотр, и действие расходуют прежний предпросмотр (main делает так же)
+      setPreviewKey(null) // both the preview and the action consume the previous preview (main does the same)
       const call = kind === 'setup' ? window.loadout.ctxkitSetup(opts, dryRun) : window.loadout.ctxkitUninstall({ antigravity: opts.antigravity, dsh: opts.dsh }, dryRun)
       const r = await call.catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('не удалось', 'failed') }))
       setBusy(null)
       if (!r.ok) return setError(r.error)
       setResult({ ...r.data, kind })
-      // настоящий запуск мог записать часть файлов и при ненулевом коде: статус и диагностику перечитываем в любом случае
+      // a real run may have written some files even with a non-zero exit code: re-read the status and diagnostics in any case
       if (!dryRun) {
         reloadStatus()
         reloadDoctor()
@@ -142,7 +142,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             ? t('Инструменты контекста применены: хуки и настройки записаны, бэкапы лежат в ~/.claude/backups', 'Context Toolkit applied: hooks and settings written, backups are in ~/.claude/backups')
             : t('Откат Инструментов контекста выполнен: хуки и блок правил убраны, бинарь смотрите в блоке «Установка»; модель, советник, effort, пресеты и агенты оставлены (список и бэкап в выводе)', 'Context Toolkit rollback done: hooks and rules block removed, see “Installation” for the binary; model, advisor, effort, presets and agents left as is (list and backup in the output)'),
         )
-        // красная кнопка исчезает вместе с фокусом: возвращаем его на кнопку предпросмотра отката
+        // the red button disappears along with the focus: return it to the rollback preview button
         if (kind === 'uninstall') setRefocus(true)
       }
     },

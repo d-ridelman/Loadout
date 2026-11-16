@@ -2,7 +2,7 @@ import { plural, t } from '../../shared/i18n'
 import type { Entity } from '../../shared/model'
 import type { Finding, Severity } from '../doctor'
 
-/** Подпись — геттер: `t()` вычисляется при обращении, а не при импорте модуля. */
+/** The label is a getter: `t()` is evaluated on access, not when the module is imported. */
 const SEV: Record<Severity, { ch: string; cls: string; label: string }> = {
   error: { ch: '✕', cls: 's-broken', get label() { return t('ошибка', 'error') } },
   warn: { ch: '◐', cls: 's-stale', get label() { return t('предупреждение', 'warning') } },

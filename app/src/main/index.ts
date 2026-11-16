@@ -28,74 +28,74 @@ import {
 } from './validate'
 
 /**
- * Переменные окружения (`LOADOUT_BIN`, `LOADOUT_HOME`, `LOADOUT_USER_DATA`, `ELECTRON_RENDERER_URL`) нужны разработке
- * и проверкам окна. В установленной сборке они игнорируются, иначе чужое окружение подменило бы ядро или страницу.
+ * Environment variables (`LOADOUT_BIN`, `LOADOUT_HOME`, `LOADOUT_USER_DATA`, `ELECTRON_RENDERER_URL`) are for development
+ * and window checks. They are ignored in an installed build, otherwise a foreign environment could swap the core or the page.
  */
 const envAllowed = !app.isPackaged
 const envOf = (name: string): string | undefined => (envAllowed ? process.env[name] : undefined)
 
-/** Путь с домашним каталогом в тексте ошибки показываем как `~`. */
+/** A path containing the home directory is shown as `~` in error text. */
 function tidy(text: string): string {
   return tidyHome(text, app.getPath('home'))
 }
 
 /**
- * Проверочный режим (`APP_QA=1`): данные окна живут только в профиле из `LOADOUT_USER_DATA`.
- * Профиль владельца не трогаем никогда, поэтому без явного каталога в этом режиме приложение не стартует.
+ * QA mode (`APP_QA=1`): window data lives only in the profile from `LOADOUT_USER_DATA`.
+ * The owner's profile is never touched, so without an explicit directory the app does not start in this mode.
  */
 const qa = !app.isPackaged && process.env.APP_QA === '1'
 if (qa && !process.env.LOADOUT_USER_DATA) {
-  console.error('FAILED: APP_QA=1 требует LOADOUT_USER_DATA (каталог проверочного профиля)')
+  console.error('FAILED: APP_QA=1 requires LOADOUT_USER_DATA (the QA profile directory)')
   app.exit(1)
 }
 const userData = envOf('LOADOUT_USER_DATA')
 if (userData) app.setPath('userData', resolve(userData))
 
 /**
- * Один экземпляр на каталог данных: два окна с одним профилем писали бы в одни копии и конфиги. Блокировка Electron
- * привязана к `userData` (проверено на Electron этого проекта: два процесса с разными `userData`, через `setPath` и через
- * `--user-data-dir`, оба получают замок; с одним — второй получает `false`). Поэтому проверочные прогоны (`LOADOUT_USER_DATA`,
- * `--user-data-dir` у pack-check) со своим профилем не мешают друг другу и установленной копии. Вызывать после `setPath`.
+ * One instance per data directory: two windows sharing a profile would write to the same backups and configs. The Electron
+ * lock is tied to `userData` (verified on this project's Electron: two processes with different `userData`, via `setPath` and via
+ * `--user-data-dir`, both get the lock; with the same one the second gets `false`). So QA runs (`LOADOUT_USER_DATA`,
+ * `--user-data-dir` in pack-check) with their own profile do not interfere with each other or with an installed copy. Call after `setPath`.
  */
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) app.quit()
 
-// Окно простое (таблицы, текст, лёгкие эффекты): GPU-процесс с ускорением съедает ~120 МБ ради нескольких градиентов.
-// Программная отрисовка держит приватную память ниже (CONCEPT.md §7, цель 150 МБ).
+// The window is simple (tables, text, light effects): the accelerated GPU process eats ~120 MB for a few gradients.
+// Software rendering keeps private memory lower (CONCEPT.md §7, 150 MB target).
 app.disableHardwareAcceleration()
 
 const DEV_URL = envOf('ELECTRON_RENDERER_URL')
-/** Единственный файл, которому разрешено вызывать IPC в собранном приложении. */
+/** The only file allowed to call IPC in the built app. */
 const INDEX_URL = pathToFileURL(join(__dirname, '../renderer/index.html')).href
 
-/** Путь к ядру фиксированный, не из PATH. `LOADOUT_BIN` нужен тестам и разработке. */
+/** The core path is fixed, not taken from PATH. `LOADOUT_BIN` is for tests and development. */
 function sidecarPath(): string {
-  // установленная сборка: ядро лежит рядом с приложением (extraResources), путь зашит и env не читается
+  // installed build: the core sits next to the app (extraResources), the path is hardcoded and env is not read
   if (app.isPackaged) return join(process.resourcesPath, 'loadout.exe')
   return envOf('LOADOUT_BIN') ?? resolve(app.getAppPath(), '..', 'target', 'release', 'loadout.exe')
 }
 
-/** Значок окна на панели задач (у exe без подписи своего нет): из resources в сборке, из `build/` в разработке. */
+/** Window icon on the taskbar (an unsigned exe has none of its own): from resources in a build, from `build/` in development. */
 function iconPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'icon.png') : resolve(app.getAppPath(), 'build', 'icon.png')
 }
 
-/** Каталог копий операций и корзины Loadout: внутри профиля приложения. */
+/** Loadout's directory for operation backups and the trash: inside the app profile. */
 const backupsDir = (): string => join(app.getPath('userData'), 'backups')
 
 let sidecar: Sidecar | undefined
 let lastWindow: BrowserWindow | undefined
-/** Скан не удался: окно показывает ошибку, и первый же `ready` перезапущенного ядра должен её сменить данными. */
+/** The scan failed: the window shows an error, and the first `ready` from the restarted core must replace it with data. */
 let needCatchUp = false
 
-/** Постоянное ядро: `loadout serve` по JSON-RPC. Падает — поднимается заново (см. sidecar.ts). */
+/** The persistent core: `loadout serve` over JSON-RPC. If it crashes, it is started again (see sidecar.ts). */
 function ensureSidecar(): Sidecar | string {
   if (sidecar) return sidecar
   const bin = sidecarPath()
   if (!existsSync(bin) || !basename(bin).toLowerCase().startsWith('loadout')) {
     return tidy(t(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`, `core not found: ${bin}. Build it with "cargo build --release" in the project root.`))
   }
-  // Каталог бэкапов передаём всегда, а право писать проверяет main (уровень R1) перед каждым `apply` и `rollback`.
+  // The backups directory is always passed; the right to write is checked by main (level R1) before every `apply` and `rollback`.
   const args = ['serve', '--backups', backupsDir(), '--lang', getLang()]
   const homeOverride = envOf('LOADOUT_HOME')
   if (homeOverride) args.push('--home', homeOverride)
@@ -106,8 +106,8 @@ function ensureSidecar(): Sidecar | string {
     onNotification: (method, params) => {
       if (method === 'changed') void pushChanged(params)
       else if (method === 'ready') {
-        // Повторный `ready` значит, что ядро перезапустилось: за время паузы файлы могли измениться, окно догоняем.
-        // То же, если первый запрос не удался (ядро упало до первого `ready`): окно тогда показывает ошибку.
+        // A repeated `ready` means the core restarted: files may have changed during the pause, so the window catches up.
+        // Same if the first request failed (the core crashed before the first `ready`): the window then shows an error.
         if (readySeen || needCatchUp) void pushChanged(undefined)
         readySeen = true
         needCatchUp = false
@@ -118,7 +118,7 @@ function ensureSidecar(): Sidecar | string {
   return sidecar
 }
 
-/** Только для проверок окна: задержка ответа, чтобы снять состояние «загрузка». */
+/** Only for window checks: a response delay, to capture the "loading" state. */
 async function runScan(): Promise<ScanResponse> {
   const delay = qa ? Number(process.env.LOADOUT_QA_DELAY_MS ?? 0) : 0
   if (delay > 0) await new Promise<void>((r) => setTimeout(r, delay))
@@ -133,12 +133,12 @@ async function runScan(): Promise<ScanResponse> {
   }
 }
 
-/** Ядро сообщило об изменении: забираем снимок, проверяем так же, как ответ на запрос, и отдаём окну. */
+/** The core reported a change: fetch the snapshot, validate it like a request response, and hand it to the window. */
 async function pushChanged(params: unknown): Promise<void> {
   const win = lastWindow
   if (!win || win.isDestroyed() || !sidecar) return
   try {
-    // `undefined` — перезапуск ядра: различий не знаем, окну уходят свежие данные без подсветки
+    // `undefined` means a core restart: the differences are unknown, so the window gets fresh data without highlighting
     const diff = params === undefined
       ? { added: [], removed: [], changed: [], warningsChanged: false, factsChanged: false }
       : validateDiff(params)
@@ -146,11 +146,11 @@ async function pushChanged(params: unknown): Promise<void> {
     const event: ChangedEvent = { data, diff }
     win.webContents.send('changed', event)
   } catch {
-    /* битое событие не должно ронять окно: следующий скан или ручное обновление догонит */
+    /* a broken event must not crash the window: the next scan or a manual refresh will catch up */
   }
 }
 
-/** Уровень записи (CONCEPT.md §5) хранится в профиле приложения; по умолчанию R0 — только чтение. */
+/** The write level (CONCEPT.md §5) is stored in the app profile; the default is R0, read-only. */
 const settingsFile = (): string => join(app.getPath('userData'), 'settings.json')
 
 function readSettings(): Record<string, unknown> {
@@ -162,7 +162,7 @@ function readSettings(): Record<string, unknown> {
   }
 }
 
-/** Ключи настроек пишутся по одному: запись одного не стирает остальные. */
+/** Settings keys are written one at a time: writing one does not erase the others. */
 function saveSetting(key: 'writeLevel' | 'lang', value: string): void {
   mkdirSync(app.getPath('userData'), { recursive: true })
   writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), [key]: value }))
@@ -177,7 +177,7 @@ function saveWriteLevel(level: WriteLevel): void {
   saveSetting('writeLevel', level)
 }
 
-/** Язык: сохранённый выбор, иначе по локали системы (русская — русский, остальные — английский). `LOADOUT_LANG` — только для разработки и проверок. */
+/** Language: the saved choice, otherwise by system locale (Russian locale gives Russian, any other gives English). `LOADOUT_LANG` is for development and checks only. */
 function initialLang(): Lang {
   const forced = envOf('LOADOUT_LANG')
   if (isLang(forced)) return forced
@@ -185,12 +185,12 @@ function initialLang(): Lang {
   return isLang(saved) ? saved : langFromLocale(app.getLocale())
 }
 
-/** Процессы клиентов по имени образа; Claude Desktop и Claude Code оба зовутся `claude.exe`, поэтому это предупреждение, а не запрет. */
+/** Client processes by image name; Claude Desktop and Claude Code are both called `claude.exe`, so this is a warning, not a ban. */
 const CLIENT_PROCESSES: Partial<Record<ClientId, string[]>> = {
   'claude-code': ['claude.exe'],
   'claude-desktop': ['claude.exe'],
   codex: ['codex.exe'],
-  // имена сняты с этой машины: окно DeepSeek зовётся «DeepSeek Harness», у Antigravity есть оболочка и CLI `agy`
+  // names taken from a real machine: the DeepSeek window is called "DeepSeek Harness", Antigravity has a shell and the CLI `agy`
   antigravity: ['antigravity.exe', 'agy.exe'],
   deepseek: ['deepseek harness.exe'],
 }
@@ -207,7 +207,7 @@ function runningOf(client: ClientId): Promise<string[]> {
   })
 }
 
-/** Ошибка ядра или проверки превращается в ответ окну: страница не получает исключений с путями. */
+/** A core or validation error becomes a response to the window: the page never receives exceptions with paths. */
 async function guarded<T>(fn: () => Promise<T>): Promise<Result<T>> {
   try {
     return { ok: true, data: await fn() }
@@ -222,18 +222,18 @@ function writeCore(): Sidecar {
   return s
 }
 
-/** Версия протокола ядра, с которой работает это окно (crates/loadoutd: `PROTOCOL`). */
+/** The core protocol version this window works with (crates/loadoutd: `PROTOCOL`). */
 const CORE_PROTOCOL = 1
-/** Поколение процесса ядра, чей протокол уже сверен. */
+/** The generation of the core process whose protocol has already been verified. */
 let verifiedGeneration: number | undefined
 
 /**
- * Запрос к ядру для записи. Версия протокола сверяется для каждого процесса ядра: старое ядро (несобранный
- * `target/release`, подсунутый `LOADOUT_BIN`) не знает `maxLevel` и пропустило бы запись R2 при уровне R1. Сама запись
- * привязана к поколению сверенного процесса: если ядро перезапустилось (в том числе пока запрос стоял в очереди),
- * новому процессу она не уходит.
+ * A request to the core for writing. The protocol version is checked for every core process: an old core (a stale
+ * `target/release`, or a planted `LOADOUT_BIN`) does not know `maxLevel` and would let an R2 write through at level R1. The write
+ * itself is bound to the generation of the verified process: if the core restarted (including while the request sat in the queue),
+ * it is not sent to the new process.
  */
-/** Запросы к ядру, которые идут сейчас: пока они не закончились, язык не меняется (смена останавливает ядро). */
+/** Core requests in flight: until they finish the language does not change (a change stops the core). */
 let coreInFlight = 0
 
 async function core(method: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -254,18 +254,18 @@ async function core(method: string, params?: Record<string, unknown>): Promise<u
 }
 
 /**
- * Уровень, который main разрешает для этой операции. Передаётся ядру в том же запросе, что и сама запись
- * (`maxLevel`), и ядро отказывает, если операции нужен выше: схема «спросили план, проверили, потом применили»
- * поддавалась гонке (между вызовами можно вклинить `profileSave`).
+ * The level main allows for this operation. It is passed to the core in the same request as the write itself
+ * (`maxLevel`), and the core refuses if the operation needs a higher one: the "ask for the plan, check, then apply" scheme
+ * was open to a race (`profileSave` could be slipped in between the calls).
  */
 const grantedLevel = (): 'R1' | 'R2' => grantedOf(readWriteLevel())
 
-/** Принимаем вызовы только от нашей страницы (см. gate.ts). */
+/** Accept calls only from our own page (see gate.ts). */
 const trusted = (e: IpcMainInvokeEvent): boolean => trustedSender(e, INDEX_URL, DEV_URL)
 
-/** Окно проверок не мешает владельцу: за экраном, без кнопки на панели задач (`LOADOUT_QA_VISIBLE=1` возвращает на экран). */
+/** The QA window stays out of the owner's way: off screen, no taskbar button (`LOADOUT_QA_VISIBLE=1` brings it back on screen). */
 const qaHidden = qa && process.env.LOADOUT_QA_VISIBLE !== '1'
-// Без этого Chromium не рисует перекрытое или внеэкранное окно, и снимки зависают.
+// Without this Chromium does not paint an occluded or off-screen window, and screenshots hang.
 if (qa) app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 
 function createWindow(): void {
@@ -280,8 +280,8 @@ function createWindow(): void {
     title: 'Loadout',
     backgroundColor: '#282a36',
     autoHideMenuBar: true,
-    // Без системной рамки и заголовка: верхняя строка окна — наша (логотип, управление), а кнопки свернуть, развернуть и
-    // закрыть остаются системными (с раскладками Snap), но в цветах окна и в нашей строке высотой 48 px.
+    // No system frame or title: the window's top bar is ours (logo, controls), while the minimize, maximize and
+    // close buttons stay system ones (with Snap layouts), but in the window colors and in our 48 px high bar.
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#21222c', symbolColor: '#f8f8f2', height: 48 },
     icon: iconPath(),
@@ -301,7 +301,7 @@ function createWindow(): void {
   else void win.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
-// Второй запуск с тем же профилем: первое окно выходит вперёд, второй процесс уже завершается (см. `gotLock`).
+// A second launch with the same profile: the first window comes to the front, the second process is already exiting (see `gotLock`).
 app.on('second-instance', () => {
   const win = lastWindow
   if (!win || win.isDestroyed()) return
@@ -311,7 +311,7 @@ app.on('second-instance', () => {
 })
 
 void app.whenReady().then(() => {
-  // второй экземпляр ничего не трогает: ни каталог подготовки, ни ядро, ни окно
+  // the second instance touches nothing: not the staging directory, not the core, not the window
   if (!gotLock) return
   setLang(initialLang())
   Menu.setApplicationMenu(null)
@@ -321,21 +321,21 @@ void app.whenReady().then(() => {
     if (!trusted(e) || typeof text !== 'string') return
     clipboard.writeText(text.slice(0, 10_000))
   })
-  // Каналы записи: страница передаёт только id записи, желаемое состояние, хеш из предпросмотра и номер операции.
+  // Write channels: the page passes only the entry id, the desired state, the hash from the preview and the operation number.
   const guard = (e: IpcMainInvokeEvent): void => assertTrusted(e, INDEX_URL, DEV_URL)
   ipcMain.handle('lang:get', (e) => (guard(e), getLang()))
   ipcMain.handle('lang:set', (e, lang: unknown) => {
     guard(e)
     if (!isLang(lang)) throw new Error('invalid language')
     if (lang !== getLang()) {
-      // остановка ядра посреди записи (пакет профиля) оставила бы пакет применённым наполовину
+      // stopping the core in the middle of a write (a profile batch) would leave the batch half applied
       if (coreInFlight > 0 || setupBusy || claudeBusy || fetchBusy) {
         throw new Error(t('идёт запись или установка: дождитесь окончания и повторите', 'a write or an install is in progress: wait for it to finish and try again'))
       }
       setLang(lang)
       saveSetting('lang', lang)
-      // сообщения ядра на языке процесса: ядро перезапускается с новым `--lang`, следующий запрос поднимет его заново;
-      // версия протокола нового процесса сверяется заново (у него счёт поколений начинается с нуля)
+      // core messages are in the process language: the core restarts with a new `--lang`, the next request starts it again;
+      // the new process's protocol version is verified again (its generation count starts from zero)
       sidecar?.stop()
       sidecar = undefined
       verifiedGeneration = undefined
@@ -346,9 +346,9 @@ void app.whenReady().then(() => {
   ipcMain.handle('writeLevel:set', async (e, raw: unknown) => {
     guard(e)
     const level = parseLevel(raw)
-    // Повышение уровня подтверждает человек в окне самой ОС, которое страница не может нажать за него:
-    // иначе скомпрометированная страница включила бы запись и тут же вызвала `apply`. Понижение подтверждения не требует.
-    // Проверки окна подменяют `dialog.showMessageBox` в main-процессе, и согласие, и отказ.
+    // Raising the level is confirmed by a person in an OS window that the page cannot click for them:
+    // otherwise a compromised page would enable writing and call `apply` right away. Lowering needs no confirmation.
+    // Window checks replace `dialog.showMessageBox` in the main process, for both consent and refusal.
     if (LEVEL_RANK[level] > LEVEL_RANK[readWriteLevel()]) {
       const r2 = level === 'R2'
       const opts = {
@@ -377,7 +377,7 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => {
       const plan = validatePlan(await core('plan', validateIntent(raw)))
-      // новый каталог скила клиент своим состоянием не перезапишет: предупреждение о запущенном клиенте ни к чему
+      // a client will not overwrite a new skill directory with its own state: a warning about a running client is pointless
       return { ...plan, running: plan.op === 'installSkill' ? [] : await runningOf(plan.client) }
     })
   })
@@ -386,7 +386,7 @@ void app.whenReady().then(() => {
     return guarded(async () => {
       const intent = validateIntent(raw)
       const sha = parseSha(baseSha)
-      // нужный операции уровень (флаг — R1, корзина, правка, копирование — R2) знает и проверяет ядро
+      // the level an operation needs (a flag is R1; trash, edit and copy are R2) is known and checked by the core
       return validateApplied(await core('apply', { ...intent, baseSha: sha, maxLevel: grantedLevel() }))
     })
   })
@@ -394,7 +394,7 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => validateJournal(await core('journal')))
   })
-  // Очистка старых копий: необратима, поэтому подтверждает человек в окне ОС (страница его нажать не может), как и повышение уровня.
+  // Cleaning up old backups is irreversible, so a person confirms it in an OS window (the page cannot click it), like raising the level.
   ipcMain.handle('backups:prune', async (e) => {
     guard(e)
     const opts = {
@@ -426,7 +426,7 @@ void app.whenReady().then(() => {
       return done.map(validateApplied)
     })
   })
-  // Профили лежат в хранилище Loadout и в конфиги клиентов не пишут: читать и менять их можно на любом уровне.
+  // Profiles live in Loadout's own store and do not write to client configs: they can be read and changed at any level.
   ipcMain.handle('profiles', (e) => {
     guard(e)
     return guarded(async () => validateProfiles(await core('profiles')))
@@ -436,7 +436,7 @@ void app.whenReady().then(() => {
     return guarded(async () => {
       const params: Record<string, unknown> = { name: validateName(name) }
       if (items !== undefined && items !== null) {
-        // проверка формы записей профиля и повторная сборка: лишние поля до ядра не доходят
+        // validate the shape of the profile entries and rebuild them: extra fields never reach the core
         params['items'] = validateProfiles([{ name: 'x', items }])[0]?.items
       }
       return validateProfiles(await core('profileSave', params))
@@ -471,12 +471,12 @@ void app.whenReady().then(() => {
       return validateBatchApplied(await core('applyProfile', { name: n, batchSha: sha, maxLevel: grantedLevel() }))
     })
   })
-  // ---- встроенные Инструменты контекста (CONCEPT.md §13): бинарь лежит в составе приложения, путь зашит ----
+  // ---- built-in Context Toolkit (CONCEPT.md §13): the binary ships with the app, the path is hardcoded ----
   const ctxBin = (): string =>
     app.isPackaged
       ? join(process.resourcesPath, 'context-toolkit.exe')
       : (envOf('LOADOUT_CONTEXT_TOOLKIT') ?? envOf('LOADOUT_CTXKIT') ?? resolve(app.getAppPath(), 'build', 'context-toolkit.exe'))
-  /** В разработке и проверках (`LOADOUT_HOME`) Инструменты контекста работают в этом каталоге, а не в настоящем профиле. */
+  /** In development and checks (`LOADOUT_HOME`) Context Toolkit works in this directory, not in the real profile. */
   const ctxHome = (): string | undefined => envOf('LOADOUT_HOME')
   const userHome = (): string => ctxHome() ?? app.getPath('home')
   let lastSetupPreview: string | undefined
@@ -491,10 +491,10 @@ void app.whenReady().then(() => {
   ipcMain.handle('ctxkit:doctor', (e) => {
     guard(e)
     return guarded(async () => {
-      // `doctor` выходит с кодом 1, когда есть находка уровня error: это нормальный ответ, разбираем stdout
+      // `doctor` exits with code 1 when there is an error-level finding: that is a normal response, so parse stdout
       const r = await ctxkit.run(ctxBin(), ['doctor', '--json', '--lang', getLang(), ...ctxkit.profileArgs(ctxHome())], 20_000)
       const d = ctxkit.parseDoctor(r.stdout)
-      // в находках бывают полные пути (ошибка разбора settings.json, команда хука): путь домашнего каталога заменяем на `~`
+      // findings may contain full paths (a settings.json parse error, a hook command): the home directory path is replaced with `~`
       const tidyOpt = (s: string | null): string | null => (s === null ? null : tidy(s))
       return { ...d, findings: d.findings.map((f) => ({ ...f, message: tidy(f.message), detail: tidyOpt(f.detail), fix: tidyOpt(f.fix) })) }
     })
@@ -507,17 +507,17 @@ void app.whenReady().then(() => {
       return ctxkit.parseReport(r.stdout)
     })
   })
-  /** Предпросмотр → R2 → запуск для `setup` и `setup --uninstall`: один ключ предпросмотра (с видом действия в ключе) и один замок. */
+  /** Preview → R2 → run for `setup` and `setup --uninstall`: one preview key (with the kind of action in the key) and one lock. */
   const ctxkitStep = (dryRun: unknown, what: string, plan: () => { key: string; args: string[] }) =>
     guarded(async () => {
       if (typeof dryRun !== 'boolean') throw new Error(t('неверные параметры', 'invalid parameters'))
       const { key, args } = plan()
       if (setupBusy) throw new Error(t('Инструменты контекста уже работают: дождитесь окончания', 'Context Toolkit is already running: wait for it to finish'))
       if (!dryRun) {
-        // запись в конфиги клиентов: нужен R2 и предпросмотр с точно такими же настройками
+        // writing to client configs needs R2 and a preview with exactly the same settings
         if (readWriteLevel() !== 'R2') throw new Error(t(`для этого действия (${what}) нужен уровень R2: включите его в шапке окна`, `this action (${what}) requires level R2: enable it in the window header`))
         if (lastSetupPreview !== key) throw new Error(t('сначала выполните предпросмотр с теми же настройками', 'run a preview with the same settings first'))
-        // предпросмотр расходуется до запуска: один предпросмотр — одно действие, даже если запуск закончится ошибкой
+        // the preview is consumed before the run: one preview, one action, even if the run ends in an error
         lastSetupPreview = undefined
       }
       setupBusy = true
@@ -543,13 +543,13 @@ void app.whenReady().then(() => {
       return { key: `uninstall:${JSON.stringify(options)}`, args: ctxkit.uninstallArgs(options, dryRun as boolean, getLang(), ctxHome()) }
     })
   })
-  // ---- установка плагина Claude Code его собственным CLI: это сеть и чужой код, поэтому R2, предпросмотр и без `-y` ----
+  // ---- installing a Claude Code plugin with its own CLI: this is network access and foreign code, hence R2, a preview and no `-y` ----
   const SPEC_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
-  // Один предпросмотр — один запуск: ключ — точная команда, расходуется до запуска. Общий для установки и маркетплейсов.
+  // One preview, one run: the key is the exact command, consumed before the run. Shared by installs and marketplaces.
   let lastClaudePreview: string | undefined
   let claudeBusy = false
   const quoteArg = (a: string): string => (/[\s"]/.test(a) ? `"${a}"` : a)
-  /** `claude <args>` по шагам «предпросмотр → R2 → запуск». `args` уже собраны из проверенного ввода, оболочки нет. */
+  /** `claude <args>` in the steps "preview → R2 → run". `args` are already built from validated input, there is no shell. */
   const claudeStep = async (args: string[], dryRun: boolean, what: string) => {
     const shown = `claude ${args.map(quoteArg).join(' ')}`
     if (dryRun) {
@@ -562,7 +562,7 @@ void app.whenReady().then(() => {
     lastClaudePreview = undefined
     claudeBusy = true
     try {
-      // стандартный запуск CLI из PATH; в разработке и проверках `LOADOUT_CLAUDE` (+ `LOADOUT_CLAUDE_ARGS`, JSON) подменяет его
+      // the standard CLI launch from PATH; in development and checks `LOADOUT_CLAUDE` (+ `LOADOUT_CLAUDE_ARGS`, JSON) replaces it
       const extra = envOf('LOADOUT_CLAUDE_ARGS')
       const prefix: string[] = extra ? (JSON.parse(extra) as string[]) : []
       const home = ctxHome()
@@ -581,7 +581,7 @@ void app.whenReady().then(() => {
       return claudeStep(['plugin', 'install', spec, '--scope', 'user'], dryRun, t('установка плагина', 'plugin installation'))
     })
   })
-  // ---- маркетплейсы Claude Code: добавление его CLI (сеть, R2) и чтение каталогов (только чтение) ----
+  // ---- Claude Code marketplaces: adding via its CLI (network, R2) and reading catalogs (read-only) ----
   ipcMain.handle('marketplace:add', (e, raw: unknown, dryRun: unknown) => {
     guard(e)
     return guarded(async () => {
@@ -597,15 +597,15 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => readCatalog(userHome(), tidy))
   })
-  // ---- скил из GitHub или папки: источник кладётся в каталог подготовки ядра, ставит его ядро (план, журнал, откат) ----
+  // ---- a skill from GitHub or a folder: the source goes into the core's staging directory, the core installs it (plan, journal, rollback) ----
   const stagingRoot = (): string => join(app.getPath('userData'), 'backups', 'staging')
   let lastFetchPreview: string | undefined
   let fetchBusy = false
-  // прошлые подготовки после перезапуска не нужны: начинаем с пустого каталога
+  // earlier staging is not needed after a restart: start from an empty directory
   try {
     rmTree(stagingRoot())
   } catch {
-    // остаток уберёт загрузка скила; запуск приложения из-за него не падает
+    // the leftover will be removed by the skill download; app startup does not fail because of it
   }
   ipcMain.handle('skill:fetch', (e, raw: unknown, dryRun: unknown) => {
     guard(e)
@@ -619,9 +619,9 @@ void app.whenReady().then(() => {
         src.kind === 'github'
           ? [
               gitLine(cloneArgs(src, ghBase, shownDest)),
-              // хеш коммита: `--branch` его не принимает, поэтому второй шаг
+              // a commit hash: `--branch` does not accept it, hence a second step
               ...(isCommitRef(src.ref) ? [gitLine(checkoutArgs(src.ref!, shownDest))] : []),
-              // ветка из адреса tree/… может содержать `/`: её находят по списку веток, этого шага в предпросмотре ещё нет
+              // a branch from a tree/… address may contain `/`: it is found from the branch list, this step is not in the preview yet
               ...(src.treePath ? [t(`(перед этим: git ls-remote, чтобы отделить ветку ${src.treePath.join('/')} от пути внутри репозитория)`, `(first: git ls-remote, to tell the branch in ${src.treePath.join('/')} from the path inside the repository)`)] : isCommitRef(src.ref) ? [t('(перед этим: git ls-remote, чтобы убедиться, что это не ветка или тег с таким именем)', '(first: git ls-remote, to make sure this is not a branch or a tag with that name)')] : []),
             ].join('\n')
           : t(`копия ${tidy(src.path)} → ${shownDest}`, `copy ${tidy(src.path)} → ${shownDest}`)
@@ -630,13 +630,13 @@ void app.whenReady().then(() => {
         lastFetchPreview = key
         return { dryRun, command, stage: '', skills: [] }
       }
-      // сеть и чужой код на диске — только на R2, как и у установки плагина
+      // network access and foreign code on disk require R2, as with plugin installation
       if (readWriteLevel() !== 'R2') throw new Error(t('для загрузки скила нужен уровень R2: включите его в шапке окна', 'downloading a skill requires level R2: enable it in the window header'))
       if (lastFetchPreview !== key) throw new Error(t('сначала посмотрите, что будет скачано', 'first review what will be downloaded'))
       if (fetchBusy) throw new Error(t('загрузка уже идёт', 'a download is already in progress'))
       lastFetchPreview = undefined
       fetchBusy = true
-      // одна подготовка за раз: прежняя убирается
+      // one staging at a time: the previous one is removed
       rmTree(stagingRoot())
       const stage = randomBytes(16).toString('hex')
       const dest = join(stagingRoot(), stage)
@@ -645,12 +645,12 @@ void app.whenReady().then(() => {
         let subDir = ''
         if (src.kind === 'github') {
           let found = src
-          // без окна входа и вопросов в консоли: на закрытом или несуществующем репозитории git сразу выходит с ошибкой
-          // LFS-смазка не идёт: она обратилась бы к хосту из `.lfsconfig` репозитория
+          // no login window and no console prompts: on a private or nonexistent repository git exits with an error immediately
+          // no LFS smudge: it would contact the host from the repository's `.lfsconfig`
           const gitEnv = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_LFS_SKIP_SMUDGE: '1' }
           if (src.treePath || isCommitRef(src.ref)) {
-            // ветка со `/` в адресе tree/… и ветка, похожая на хеш: сверяем с настоящим списком веток и тегов; не вышло —
-            // остаётся «первый сегмент — ветка», а похожее на хеш считается хешем
+            // a branch with `/` in a tree/… address and a branch that looks like a hash: check against the real list of branches and tags;
+            // if that fails, "the first segment is the branch" stays, and something hash-like is treated as a hash
             const ls = await ctxkit.run('git', ['-c', 'protocol.ext.allow=never', 'ls-remote', '--heads', '--tags', '--', remoteUrl(src, ghBase)], 60_000, gitEnv)
             const pick = ls.code === 0 ? pickTreeRef(src.treePath ?? [src.ref!], parseRefs(ls.stdout)) : undefined
             if (pick) found = { ...src, ref: pick.ref, sub: src.treePath ? pick.sub : src.sub, commit: pick.commit }
@@ -668,18 +668,18 @@ void app.whenReady().then(() => {
         } else {
           if (!statSync(src.path, { throwIfNoEntry: false })?.isDirectory()) throw new Error(t('папка не найдена', 'folder not found'))
           checkTreeSize(src.path)
-          // ссылки не разыменовываются: ядро откажет на дереве со ссылками
+          // links are not dereferenced: the core will refuse a tree containing links
           cpSync(src.path, dest, { recursive: true, dereference: false, verbatimSymlinks: true, filter: (s) => !/[\\/](\.git|node_modules)$/.test(s) })
         }
         const skills = src.kind === 'github' ? findSkills(dest, subDir, src.repo) : findSkills(dest, '', basename(src.path))
         if (skills.length === 0) throw new Error(t('в источнике нет каталога со SKILL.md', 'the source has no directory with SKILL.md'))
         return { dryRun, command: '', stage, skills }
       } catch (err) {
-        // уборка не должна заслонять настоящую ошибку (каталог может держать ещё не вышедший дочерний процесс git)
+        // cleanup must not mask the real error (the directory may still be held by a git child process that has not exited)
         try {
           rmTree(dest)
         } catch {
-          // остаток уберёт следующая подготовка или запуск
+          // the leftover will be removed by the next staging or by startup
         }
         throw err
       } finally {
@@ -693,6 +693,6 @@ void app.whenReady().then(() => {
   })
 })
 
-// Ядро — дочерний процесс окна: закрываем stdin (по EOF оно выходит само) и добиваем, если завис.
+// The core is a child process of the window: close stdin (it exits on EOF by itself) and kill it if it hangs.
 app.on('before-quit', () => sidecar?.stop())
 app.on('window-all-closed', () => app.quit())

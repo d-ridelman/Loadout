@@ -1,19 +1,19 @@
 import { t } from '../shared/i18n'
 import type { CtxkitDoctor, CtxkitReport, DayStats } from '../shared/model'
 
-/** Итоги по периоду. Только арифметика над счётчиками Инструментов контекста: «сэкономленных токенов» здесь нет, базовой линии «до» у отчёта нет. */
+/** Totals for the period. Arithmetic over Context Toolkit counters only: there are no "saved tokens" here, the report has no "before" baseline. */
 export interface Summary {
   days: number
   mainTurns: number
-  /** Доля ходов основной сессии на Sonnet и Haiku (дешёвые модели), 0..1; `null`, если ходов не было. */
+  /** Share of main-session turns on Sonnet and Haiku (cheap models), 0..1; `null` if there were no turns. */
   cheapShare: number | null
-  /** Доля ходов на Opus и Fable. */
+  /** Share of turns on Opus and Fable. */
   expensiveShare: number | null
   subTurns: number
-  /** Доля ходов субагентов среди всех. */
+  /** Share of subagent turns among all turns. */
   subShare: number | null
   advisorCalls: number
-  /** Вызовы субагентов по имени, частые первыми. */
+  /** Subagent calls by name, most frequent first. */
   agents: [string, number][]
   toolResultChars: number
   readChars: number
@@ -52,19 +52,19 @@ export function summarize(r: CtxkitReport): Summary {
 
 export const pct = (v: number | null): string => (v === null ? '—' : t(`${(v * 100).toFixed(0)} %`, `${(v * 100).toFixed(0)}%`))
 
-/** Объём в знаках человеческим числом: 1 234 567 → «1,2 М». */
+/** Size in characters as a human-readable number: 1 234 567 → "1,2 М". */
 export function chars(n: number): string {
   if (n >= 1_000_000) return t(`${(n / 1_000_000).toFixed(1).replace('.', ',')} М`, `${(n / 1_000_000).toFixed(1)} M`)
   if (n >= 1_000) return t(`${(n / 1_000).toFixed(0)} К`, `${(n / 1_000).toFixed(0)} K`)
   return String(n)
 }
 
-/** Дни от новых к старым. */
+/** Days from newest to oldest. */
 export function daysDesc(r: CtxkitReport): [string, DayStats][] {
   return Object.entries(r.days).sort((a, b) => b[0].localeCompare(a[0]))
 }
 
-/** Сегменты столбика ходов основной сессии по моделям; ширина в долях от суммы дня. */
+/** Segments of the main-session turn bar by model; width as a fraction of the day's total. */
 export function segments(d: DayStats): { key: 'sonnet' | 'haiku' | 'opusFable' | 'other'; label: string; n: number; w: number }[] {
   const m = d.mainTurns
   const total = m.sonnet + m.haiku + m.opusFable + m.other
@@ -78,9 +78,9 @@ export function segments(d: DayStats): { key: 'sonnet' | 'haiku' | 'opusFable' |
 }
 
 /**
- * Стоит ли галочка «без шлюза Stop» по текущему состоянию профиля: `true`, если Инструменты контекста установлены, а шлюза нет
- * (находка `stop_gate` уровня info), `false`, если шлюз есть. `null`, если они не установлены (находка `hooks`
- * уровня warn) или находок нет: тогда остаётся значение по умолчанию (шлюз ставится).
+ * Whether the "no Stop gate" checkbox should be ticked for the current profile state: `true` if Context Toolkit is installed but the gate is not
+ * (an info-level `stop_gate` finding), `false` if the gate is there. `null` if it is not installed (a warn-level `hooks`
+ * finding) or there are no findings: then the default stays (the gate is installed).
  */
 export function stopGateOff(d: CtxkitDoctor): boolean | null {
   const sev = (id: string): string | undefined => d.findings.find((f) => f.id === id)?.severity
@@ -90,8 +90,8 @@ export function stopGateOff(d: CtxkitDoctor): boolean | null {
 }
 
 /**
- * Подпись «сейчас включены: …» для блока «Защиты» по находке `policies` (она есть, только если есть файл политик):
- * `{ text, broken }` или `null`, если файла нет. Только подпись, в форму и в аргументы ничего отсюда не попадает.
+ * The "currently enabled: ..." label for the "Protections" block, from the `policies` finding (present only if the policy file exists):
+ * `{ text, broken }`, or `null` if there is no file. Label only: nothing from here goes into the form or the arguments.
  */
 export function policiesNow(d: CtxkitDoctor): { text: string; broken: boolean } | null {
   const f = d.findings.find((x) => x.id === 'policies')

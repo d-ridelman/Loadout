@@ -5,7 +5,7 @@ import { BACKUP_DIR_HINT, backupNotice } from '../../shared/backups'
 import { getLang, t } from '../../shared/i18n'
 import { levelOk } from './Inspector'
 
-// t() только во время рендера, не при импорте модуля
+// t() only during render, not when the module is imported
 const opLabel = (op: JournalEntry['op']): string =>
   ({ toggle: t('запись', 'write'), edit: t('правка', 'edit'), copy: t('копия', 'copy'), add: t('добавление', 'add'), installSkill: t('установка скила', 'skill install'), rollback: t('откат', 'rollback') })[op]
 
@@ -13,12 +13,12 @@ type State = { status: 'loading' } | { status: 'error'; error: string } | { stat
 
 interface Props {
   level: WriteLevel
-  /** Меняется при каждом обновлении данных: журнал перечитывается, `canRollback` зависит от текущего файла. */
+  /** Changes on every data refresh: the journal is re-read because `canRollback` depends on the current file. */
   refreshKey: number
   onNotice: (message: string) => void
 }
 
-/** Журнал наших операций (CONCEPT.md §5, шаг 8). Изменения клиентов извне сюда не попадают. */
+/** Journal of our operations (CONCEPT.md §5, step 8). Changes made to clients from outside do not appear here. */
 export function Journal({ level, refreshKey, onNotice }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' })
   const [busy, setBusy] = useState<string | null>(null)
@@ -111,7 +111,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
             <tbody>
               {state.rows.map((j, i) => {
                 const ok = levelOk(level, j.level)
-                // кнопка пакета стоит у самой новой записи пакета, пока в нём есть что откатывать
+                // the batch button sits on the newest entry of the batch while it still has something to roll back
                 const batchHead =
                   j.batch !== null && state.rows.findIndex((x) => x.batch === j.batch) === i && state.rows.some((x) => x.batch === j.batch && x.canRollback)
                 return (
