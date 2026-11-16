@@ -1,5 +1,5 @@
-// Детектор дизайна Impeccable по живому окну (CDP). Окно запускается отдельно от Playwright: ему нужен свой порт.
-// Запуск: `node e2e/detect.mjs`. Результат печатается в консоль; ничего не пишется вне state/loadout-qa и временной папки.
+// Impeccable design detector run against the live window (CDP). The window is started separately from Playwright: it needs its own port.
+// Run: `node e2e/detect.mjs`. The result is printed to the console; nothing is written outside state/loadout-qa and a temporary folder.
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -16,7 +16,7 @@ const root = join(homedir(), '.claude', 'plugins', 'cache', 'impeccable', 'impec
 const versions = existsSync(root) ? readdirSync(root).sort() : []
 const detector = versions.length ? join(root, versions.at(-1), 'skills', 'impeccable', 'scripts', 'impeccable.cmd') : ''
 if (!detector || !existsSync(detector)) {
-  console.error('FAILED: детектор Impeccable не найден')
+  console.error('FAILED: Impeccable detector not found')
   process.exit(1)
 }
 
@@ -44,11 +44,11 @@ try {
     try {
       up = (await fetch(`http://127.0.0.1:${port}/json/version`)).ok
     } catch {
-      /* порт ещё закрыт */
+      /* port not open yet */
     }
   }
-  if (!up) throw new Error('окно не поднялось')
-  await new Promise((r) => setTimeout(r, 2500)) // окно успевает показать данные
+  if (!up) throw new Error('the window did not come up')
+  await new Promise((r) => setTimeout(r, 2500)) // give the window time to show its data
   const out = execFileSync(detector, ['detect', '--cdp', String(port)], { encoding: 'utf8', shell: true, timeout: 120000 })
   console.log(out)
 } catch (e) {
@@ -58,7 +58,7 @@ try {
   try {
     execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
   } catch {
-    /* уже закрыт */
+    /* already closed */
   }
   rmSync(home, { recursive: true, force: true })
   rmSync(profile, { recursive: true, force: true })

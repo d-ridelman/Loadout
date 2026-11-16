@@ -1,5 +1,5 @@
-// Проверка окна: Playwright `_electron`, свой профиль, фикстурный домашний каталог. Запуск: `npm run e2e`.
-// Профиль владельца не трогается: APP_QA=1 + LOADOUT_USER_DATA=state/loadout-qa.
+// Window check: Playwright `_electron`, own profile, fixture home directory. Run: `npm run e2e`.
+// The owner's profile is not touched: APP_QA=1 + LOADOUT_USER_DATA=state/loadout-qa.
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -20,13 +20,13 @@ const SIZES = [
   [1280, 800],
 ]
 
-/** Главная кнопка диалога называется по операции (или «Применить» у пакета профиля). */
+/** The main dialog button is named after the operation (or "Apply" for a profile bundle). */
 const APPLY = /^(Включить|Выключить|Вынести в корзину|Вернуть из корзины|Записать команду|Скопировать|Добавить|Применить|Установить$)/
 
 /**
- * Английские слова старого вывода и перехода со старого имени (и английское имя Context Toolkit: по-русски «Инструменты
- * контекста») в строках русского окна (кроме разметки `[dry-run]`/`[warn]`/`ERR:`, `кода`, "значений", --флагов, путей и имён):
- * пусто — вывод русский. Тот же список и те же вырезки, что в `crates/context-toolkit/tests/guard.test.mjs`.
+ * English words of the old output and of the migration from the old name (and the English name Context Toolkit, which the Russian UI renders in Russian)
+ * in the lines of the Russian window (except the markup `[dry-run]`/`[warn]`/`ERR:`, text in backticks or double quotes, --flags, paths and names):
+ * empty means the output is Russian. The same list and the same cut-outs as in `crates/context-toolkit/tests/guard.test.mjs`.
  */
 const englishLeft = (text) => {
   const en = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|policies(?=:)|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass|old name|moved|copied|move|copy|left|still|Context|Toolkit)\b/
@@ -44,15 +44,15 @@ const englishLeft = (text) => {
 }
 
 const log = (...a) => console.log(...a)
-/** Путь так, как его показывает окно: домашний каталог свёрнут в `~`. */
+/** A path as the window shows it: the home directory collapsed to `~`. */
 const tilde = (p) => p.split(homedir()).join('~')
 const must = (cond, msg) => {
   if (!cond) throw new Error(msg)
 }
 
-/** Копия фикстуры с подставленным `{HOME}`: сканер проверяет существование путей из файлов клиентов. */
+/** A copy of the fixture with `{HOME}` substituted: the scanner checks that the paths from the client files exist. */
 function materialize(extra) {
-  // имя без случайных букв и цифр: ядро скрывает токеноподобные сегменты путей, и `mkdtemp` дал бы скрытые пути
+  // a name without random letters and digits: the core hides token-like path segments, and `mkdtemp` would give hidden paths
   const home = join(tmpdir(), `loadout-e2e-${process.pid}`)
   rmSync(home, { recursive: true, force: true })
   mkdirSync(home, { recursive: true })
@@ -77,7 +77,7 @@ async function launch(env) {
   const app = await electron.launch({
     executablePath: electronExe,
     args: [appDir],
-    // язык по умолчанию — русский (сценарии ищут русские подписи); английский проход задаёт LOADOUT_LANG=en сам
+    // the default language is Russian (the scenarios look for Russian labels); the English pass sets LOADOUT_LANG=en itself
     env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', ...env },
   })
   const page = await app.firstWindow()
@@ -93,7 +93,7 @@ async function shot(page, name) {
   await page.screenshot({ path: join(stateDir, `${name}.png`) })
 }
 
-/** Шапка: каждый элемент в одну строку (не выше 36 px) и по центру строки (±2 px); справа не заходят под кнопки окна. */
+/** Header: every element on one line (no taller than 36 px) and centred on the line (±2 px); on the right nothing goes under the window buttons. */
 async function headerLayout(page, label) {
   const m = await page.evaluate(() => {
     const h = document.querySelector('header')
@@ -107,12 +107,12 @@ async function headerLayout(page, label) {
       over: area ? Math.round(Math.max(...kids.map(({ r }) => r.right)) - (area.x + area.width)) : 0,
     }
   })
-  log(`  шапка ${label}:`, JSON.stringify(m))
-  must(m.tall.length === 0 && m.off.length === 0, `${label}: шапка: перенос строк ${JSON.stringify(m.tall)}, не по центру ${JSON.stringify(m.off)}`)
-  must(m.over <= 0, `${label}: шапка заходит под кнопки окна на ${m.over}px`)
+  log(`  header ${label}:`, JSON.stringify(m))
+  must(m.tall.length === 0 && m.off.length === 0, `${label}: header: line wraps ${JSON.stringify(m.tall)}, off-centre ${JSON.stringify(m.off)}`)
+  must(m.over <= 0, `${label}: the header goes under the window buttons by ${m.over}px`)
 }
 
-/** Замер, а не «на глаз»: нет горизонтальной прокрутки страницы, нет обрезанных имён, колонки шапки и ячеек выровнены. */
+/** A measurement, not "by eye": no horizontal page scroll, no clipped names, the header and cell columns are aligned. */
 async function layout(page, label) {
   const m = await page.evaluate(() => {
     const de = document.documentElement
@@ -125,17 +125,17 @@ async function layout(page, label) {
       : 0
     return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length }
   })
-  log(`  замер ${label}:`, JSON.stringify(m))
+  log(`  measurement ${label}:`, JSON.stringify(m))
   await headerLayout(page, label)
-  must(m.hscroll <= 0, `${label}: горизонтальная прокрутка страницы (${m.hscroll}px)`)
-  must(m.clipped === 0, `${label}: обрезанных имён: ${m.clipped}`)
-  must(m.misaligned === 0, `${label}: колонки шапки и ячеек смещены`)
+  must(m.hscroll <= 0, `${label}: horizontal page scroll (${m.hscroll}px)`)
+  must(m.clipped === 0, `${label}: clipped names: ${m.clipped}`)
+  must(m.misaligned === 0, `${label}: header and cell columns are misaligned`)
 }
 
 /**
- * Процессы ядра этого прогона: после проверок их остаться не должно. Считаются только `loadout*.exe` с каталогом
- * проверочного профиля в командной строке (`--backups <профиль>\backups`, см. `ownCoreProcesses`): установленный
- * у владельца Loadout, проверка упакованной сборки и e2e соседней копии репозитория счёту не мешают.
+ * Core processes of this run: none must remain after the checks. Only `loadout*.exe` with the check profile directory
+ * in the command line count (`--backups <profile>\backups`, see `ownCoreProcesses`): the Loadout installed
+ * for the owner, the packaged-build check and e2e of a neighbouring repository copy do not interfere with the count.
  */
 function coreLeftovers() {
   try {
@@ -152,7 +152,7 @@ function coreLeftovers() {
   }
 }
 
-/** PID ядра, запущенного окном на этом домашнем каталоге (по командной строке). */
+/** PID of the core started by the window on this home directory (by command line). */
 function sidecarPids(homeLeaf) {
   const out = execFileSync(
     'powershell',
@@ -162,7 +162,7 @@ function sidecarPids(homeLeaf) {
   return out.split(/\s+/).filter(Boolean)
 }
 
-/** Подпись ячейки матрицы: строка по имени, колонка клиента по номеру (0 — Claude Code). */
+/** Matrix cell label: the row by name, the client column by number (0 is Claude Code). */
 function cellLabel(page, rowName, clientIdx) {
   return page.evaluate(
     ([name, idx]) => {
@@ -178,20 +178,20 @@ async function waitFor(fn, what, ms = 12000) {
   for (;;) {
     const v = await fn()
     if (v) return v
-    if (Date.now() > end) throw new Error(`не дождались: ${what}`)
+    if (Date.now() > end) throw new Error(`timed out waiting for: ${what}`)
     await new Promise((r) => setTimeout(r, 150))
   }
 }
 
 const axeSource = readFileSync(join(appDir, 'node_modules', 'axe-core', 'axe.min.js'), 'utf8')
 
-/** Обход axe-core по правилам WCAG A/AA и ARIA (включая контраст). Шумные для окна приложения правила выключены. */
+/** An axe-core pass with the WCAG A/AA and ARIA rules (including contrast). Rules that are noisy for an app window are turned off. */
 async function axeCheck(page, label) {
-  await page.evaluate(axeSource) // через CDP: CSP страницы (`script-src 'self'`) на это не распространяется
+  await page.evaluate(axeSource) // over CDP: the page CSP (`script-src 'self'`) does not apply to this
   const violations = await page.evaluate(async () => {
     const r = await window.axe.run(document, {
       runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'cat.aria', 'cat.color'] },
-      // `color-contrast-enhanced` — уровень AAA (7:1); цель проекта — AA (4,5:1), его проверяет `color-contrast`
+      // `color-contrast-enhanced` is level AAA (7:1); the project target is AA (4.5:1), which `color-contrast` checks
       rules: { 'color-contrast-enhanced': { enabled: false }, region: { enabled: false }, 'page-has-heading-one': { enabled: false }, 'landmark-one-main': { enabled: false } },
     })
     return r.violations.map((v) => ({ id: v.id, impact: v.impact, count: v.nodes.length, sample: v.nodes[0]?.target?.join(' ') }))
@@ -201,13 +201,13 @@ async function axeCheck(page, label) {
 }
 
 function leftovers() {
-  // только процессы этой копии репозитория: e2e другой рабочей папки (соседний worktree) идёт со своим профилем, его не считаем и не убиваем
+  // only the processes of this repository copy: e2e of another working folder (a neighbouring worktree) runs with its own profile, we neither count nor kill it
   const q = (p) => p.replaceAll("'", "''")
   try {
     const out = execFileSync(
       'powershell',
-      // IndexOf, а не -like: скобки в пути не превращаются в шаблон. Основной процесс — appDir и порт отладки Playwright
-      // (dev-окно `npm run dev` этой же копии под фильтр не попадает), дочерние — по --user-data-dir профиля e2e.
+      // IndexOf, not -like: brackets in the path do not turn into a pattern. The main process is appDir and the Playwright debugging port
+      // (the dev window `npm run dev` of the same copy does not match the filter), the children are matched by the e2e profile's --user-data-dir.
       ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "Name='electron.exe'" | Where-Object { $c = $_.CommandLine; $c -and ($c.IndexOf('${q(profile)}', [StringComparison]::OrdinalIgnoreCase) -ge 0 -or ($c.IndexOf('${q(appDir)}', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $c.Contains('--remote-debugging-port'))) } | Select-Object -ExpandProperty ProcessId`],
       { encoding: 'utf8' },
     )
@@ -222,7 +222,7 @@ async function close({ app, pid }) {
   try {
     execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
   } catch {
-    /* уже закрыт */
+    /* already closed */
   }
 }
 
@@ -230,20 +230,20 @@ const homes = []
 let session
 
 try {
-  must(existsSync(electronExe), `нет ${electronExe}: выполните npm install в app/`)
-  must(existsSync(loadoutBin), `нет ${loadoutBin}: cargo build --release`)
-  must(existsSync(join(appDir, 'build', 'context-toolkit.exe')), 'нет app/build/context-toolkit.exe: npm run bundle:context-toolkit')
+  must(existsSync(electronExe), `${electronExe} not found: run npm install in app/`)
+  must(existsSync(loadoutBin), `${loadoutBin} not found: cargo build --release`)
+  must(existsSync(join(appDir, 'build', 'context-toolkit.exe')), 'app/build/context-toolkit.exe not found: npm run bundle:context-toolkit')
   mkdirSync(stateDir, { recursive: true })
-  // чистый проверочный профиль каждый раз: настройки окна (FX) не должны переходить между прогонами
+  // a clean check profile every time: the window settings (FX) must not carry over between runs
   rmSync(profile, { recursive: true, force: true })
   mkdirSync(profile, { recursive: true })
 
-  // длинное имя скила для проверки переноса текста
+  // a long skill name to check text wrapping
   const home = materialize((h) => {
     const dir = join(h, '.claude', 'skills', 'very-long-skill-name-that-should-wrap-inside-the-name-column-without-clipping-anything')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'SKILL.md'), '---\ndescription: Длинное имя для проверки переноса\n---\n')
-    // транскрипты Claude Code для отчёта ctxkit: ходы на двух моделях, вызов субагента и результат инструмента
+    // Claude Code transcripts for the ctxkit report: turns on two models, a subagent call and a tool result
     const ts = new Date().toISOString()
     const row = (i, model, tool) =>
       JSON.stringify({ type: 'assistant', uuid: `a${i}`, timestamp: ts, message: { id: `m${i}`, model, content: [{ type: 'tool_use', id: `t${i}`, name: tool.name, input: tool.input }] } }) +
@@ -256,11 +256,11 @@ try {
     writeFileSync(join(h, '.claude', 'projects', 'p', 'a.jsonl'), rows.join('\n') + '\n')
   })
   homes.push(home)
-  // подставной `claude`: ничего не скачивает, записывает свои аргументы и регистрирует локальный маркетплейс
+  // stand-in `claude`: downloads nothing, records its arguments and registers a local marketplace
   const fakeClaude = join(appDir, 'e2e', 'fake-claude.mjs')
   const claudeCalls = join(home, 'claude-calls.txt')
-  // источники без сети: локальный маркетплейс и git-репозиторий скила, который клонируется вместо GitHub
-  // каждый проход получает свои копии: `materialize` пересоздаёт тот же каталог
+  // sources without a network: a local marketplace and a git repository of the skill that is cloned instead of GitHub
+  // every pass gets its own copies: `materialize` recreates the same directory
   const sources = (h) => {
     cpSync(join(repo, 'fixtures', 'marketplace'), join(h, 'src', 'market'), { recursive: true })
     const skillRepo = join(h, 'gh', 'acme', 'skills.git')
@@ -280,16 +280,16 @@ try {
     LOADOUT_GITHUB_BASE: pathToFileURL(join(h, 'gh')).href + '/',
   })
 
-  // ---- основной сценарий ----
+  // ---- main scenario ----
   session = await launch(fakeEnv(home, claudeCalls))
   let { app, page } = session
   const pageErrors = []
   page.on('pageerror', (e) => pageErrors.push(`pageerror: ${e.message.slice(0, 200)}`))
   page.on('console', (m) => m.type() === 'error' && pageErrors.push(`console.error: ${m.text().slice(0, 200)}`))
   await page.waitForSelector('#grid', { timeout: 20000 })
-  must((await page.title()) === 'Loadout', 'заголовок окна не Loadout')
+  must((await page.title()) === 'Loadout', 'the window title is not Loadout')
 
-  // верхняя строка — своя (системной рамки нет): знак, перетаскивание, элементы управления не заходят под кнопки окна
+  // the top line is custom (no system frame): the mark, dragging; the controls do not go under the window buttons
   const bar = await page.evaluate(() => {
     const h = document.querySelector('header')
     const wco = navigator.windowControlsOverlay
@@ -305,68 +305,68 @@ try {
       areaRight: area ? Math.round(area.x + area.width) : null,
     }
   })
-  log('  верхняя строка:', JSON.stringify(bar))
-  must(bar.overlay, 'системная рамка не убрана: нет наложения кнопок окна')
-  must(bar.drag === 'drag' && bar.selectDrag === 'no-drag', 'строка заголовка должна перетаскиваться, а элементы управления нет')
-  must(bar.mark, 'в шапке нет знака')
-  must(bar.height === 48, `высота строки заголовка ${bar.height}, нужно 48 (как у наложения)`)
-  must(bar.areaRight !== null && bar.right <= bar.areaRight, `элементы шапки заходят под кнопки окна: ${bar.right} > ${bar.areaRight}`)
+  log('  top line:', JSON.stringify(bar))
+  must(bar.overlay, 'the system frame is not removed: no window-buttons overlay')
+  must(bar.drag === 'drag' && bar.selectDrag === 'no-drag', 'the title line must be draggable and the controls must not be')
+  must(bar.mark, 'no mark in the header')
+  must(bar.height === 48, `title line height ${bar.height}, must be 48 (as for the overlay)`)
+  must(bar.areaRight !== null && bar.right <= bar.areaRight, `header elements go under the window buttons: ${bar.right} > ${bar.areaRight}`)
   const rowCount = await page.locator('tbody tr').count()
-  log('строк в матрице:', rowCount)
-  must(rowCount > 10, 'в матрице слишком мало строк')
-  must((await page.locator('thead th').count()) === 6, 'в шапке должно быть 6 колонок (сущность + 5 клиентов)')
+  log('rows in the matrix:', rowCount)
+  must(rowCount > 10, 'too few rows in the matrix')
+  must((await page.locator('thead th').count()) === 6, 'the header must have 6 columns (entity + 5 clients)')
 
-  // клавиатура: j, l → выбранная ячейка и инспектор
+  // keyboard: j, l → the selected cell and the inspector
   await page.locator('#grid').focus()
   await page.keyboard.press('j')
   await page.keyboard.press('l')
-  must((await page.locator('td[aria-selected="true"]').count()) === 1, 'выбранная ячейка одна')
-  // заголовки в CSS набраны капсом, поэтому innerText приходит заглавными
-  must((await page.locator('aside').innerText()).toLowerCase().includes('инспектор'), 'инспектор не показан')
-  // русская раскладка: физическая клавиша J при key = «о»
+  must((await page.locator('td[aria-selected="true"]').count()) === 1, 'there is exactly one selected cell')
+  // headings are set in capitals by CSS, so innerText comes in upper case
+  must((await page.locator('aside').innerText()).toLowerCase().includes('инспектор'), 'the inspector is not shown')
+  // Russian layout: the physical J key, where key is the Russian letter on that key
   const before = await page.locator('td[aria-selected="true"]').getAttribute('id')
   await page.evaluate(() => document.getElementById('grid').dispatchEvent(new KeyboardEvent('keydown', { key: 'о', code: 'KeyJ', bubbles: true })))
-  must((await page.locator('td[aria-selected="true"]').getAttribute('id')) !== before, 'j на русской раскладке не двигает выбор')
+  must((await page.locator('td[aria-selected="true"]').getAttribute('id')) !== before, 'j on the Russian layout does not move the selection')
 
-  // состояния и фильтры
+  // states and filters
   await page.getByRole('button', { name: 'скилы' }).click()
-  must((await page.locator('tbody tr').count()) < rowCount, 'фильтр «скилы» не сузил список')
+  must((await page.locator('tbody tr').count()) < rowCount, 'the "skills" filter did not narrow the list')
   await page.getByRole('button', { name: 'все типы' }).click()
   await page.getByLabel('Поиск').fill('tool-b')
-  must((await page.locator('tbody tr').count()) >= 1, 'поиск tool-b ничего не нашёл')
+  must((await page.locator('tbody tr').count()) >= 1, 'search for tool-b found nothing')
   await page.getByLabel('Поиск').fill('')
 
-  // секреты фикстуры не должны появиться нигде в окне
+  // fixture secrets must not appear anywhere in the window
   const everything = await page.evaluate(() => document.body.innerText)
-  must(!everything.includes('FAKE-SECRET'), 'в окне найден FAKE-SECRET')
+  must(!everything.includes('FAKE-SECRET'), 'FAKE-SECRET found in the window')
 
-  // палитра: открыть, найти, перейти; фокус возвращается
+  // palette: open, find, go; focus returns
   await page.keyboard.press('Control+k')
   await page.getByRole('combobox', { name: 'Команда' }).fill('tool-b')
   await page.keyboard.press('Enter')
-  must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'палитра не закрылась')
-  must((await page.locator('aside').innerText()).includes('tool-b'), 'палитра не выбрала tool-b')
-  // Палитра возвращает фокус на таблицу в следующем кадре. Если открыть её снова раньше, второй раз она запомнит
-  // прежнее поле (поиск), вернёт фокус туда, и цифра `2` уйдёт в поиск: радар не откроется («на радаре должно быть 5 клиентов»).
-  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'после палитры фокус вернулся на таблицу')
+  must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'the palette did not close')
+  must((await page.locator('aside').innerText()).includes('tool-b'), 'the palette did not select tool-b')
+  // The palette returns focus to the table on the next frame. If it is opened again sooner, the second time it remembers
+  // the previous field (search), returns focus there, and the digit `2` goes into the search: the radar does not open ("the radar must have 5 clients").
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after the palette focus returned to the table')
   await page.keyboard.press('Control+k')
-  await page.getByRole('combobox', { name: 'Команда' }).waitFor() // Esc обрабатывает поле ввода: ждём, пока оно получит фокус
+  await page.getByRole('combobox', { name: 'Команда' }).waitFor() // Esc is handled by the input field: wait until it gets focus
   await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Команда')
   await page.keyboard.press('Escape')
-  must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'Esc не закрыл палитру')
-  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'после Esc фокус вернулся на таблицу, а не в поле ввода')
+  must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'Esc did not close the palette')
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after Esc focus returned to the table, not to the input field')
 
-  // разделы по цифрам
+  // sections by digits
   await page.keyboard.press('2')
-  // раздел рисуется не мгновенно: считаем с ожиданием, а не сразу после нажатия клавиши
-  await waitFor(async () => (await page.locator('.node').count()) === 5, 'на радаре должно быть 5 клиентов')
+  // a section is not drawn instantly: count with a wait, not right after the key press
+  await waitFor(async () => (await page.locator('.node').count()) === 5, 'the radar must have 5 clients')
   await page.keyboard.press('3')
-  await waitFor(async () => (await page.locator('.pipe .hk').count()) > 0, 'в конвейере нет хуков')
+  await waitFor(async () => (await page.locator('.pipe .hk').count()) > 0, 'no hooks in the pipeline')
   await page.keyboard.press('4')
-  await waitFor(async () => (await page.locator('.find').count()) > 0, 'Доктор ничего не нашёл на фикстуре с поломками')
+  await waitFor(async () => (await page.locator('.find').count()) > 0, 'the Doctor found nothing on the fixture with breakages')
   await page.keyboard.press('1')
 
-  // снимки по размерам и разделам
+  // screenshots by size and section
   for (const [w, h] of SIZES) {
     await resize(app, w, h)
     for (const [key, name] of [['1', 'matrix'], ['2', 'radar'], ['3', 'hooks'], ['4', 'doctor']]) {
@@ -374,7 +374,7 @@ try {
       await page.waitForTimeout(250)
       if (key === '1') await layout(page, `${name}@${w}`)
       if (name === 'hooks') {
-        // все события конвейера достижимы: если они не помещаются, сетка прокручивается, а не обрезается
+        // all pipeline events are reachable: if they do not fit, the grid scrolls instead of being clipped
         const reach = await page.evaluate(() => {
           const wrap = document.querySelector('.tablewrap.scrollx')
           const heads = [...document.querySelectorAll('.pipe .h')]
@@ -382,20 +382,20 @@ try {
           const last = heads[heads.length - 1].getBoundingClientRect()
           return { overflowX: getComputedStyle(wrap).overflowX, events: heads.length, lastRight: Math.round(last.right), wrapRight: Math.round(wrap.getBoundingClientRect().right) }
         })
-        must(reach.overflowX === 'auto' && reach.lastRight <= reach.wrapRight + 1, `последнее событие хуков недостижимо: ${JSON.stringify(reach)}`)
+        must(reach.overflowX === 'auto' && reach.lastRight <= reach.wrapRight + 1, `the last hooks event is unreachable: ${JSON.stringify(reach)}`)
         await page.evaluate(() => { document.querySelector('.tablewrap.scrollx').scrollLeft = 0 })
       }
       if (w === 1920) {
         const v = await axeCheck(page, name)
-        must(v.length === 0, `axe нашёл нарушения на экране «${name}»: ${v.map((x) => x.id).join(', ')}`)
+        must(v.length === 0, `axe found violations on the "${name}" screen: ${v.map((x) => x.id).join(', ')}`)
       }
       await shot(page, `m1-${name}-${w}`)
     }
     await page.keyboard.press('1')
   }
 
-  // ---- живое обновление: правка конфига на диске меняет матрицу без кнопки «Скан» и без экрана «загрузка» ----
-  await resize(app, 1100, 700) // минимальный размер окна: шапка по-прежнему в одну строку
+  // ---- live update: editing a config on disk changes the matrix without a "Scan" button and without a "loading" screen ----
+  await resize(app, 1100, 700) // the minimum window size: the header is still on one line
   await page.waitForTimeout(250)
   await headerLayout(page, 'ru@1100')
   await shot(page, 'm1-matrix-1100')
@@ -406,30 +406,30 @@ try {
   await page.evaluate(() => (document.getElementById('grid').dataset.alive = '1'))
   const cfg = join(home, '.codex', 'config.toml')
   const original = readFileSync(cfg, 'utf8')
-  must(String(await cellLabel(page, 'p1', 2)).includes('включено'), 'p1 в Codex исходно включён')
+  must(String(await cellLabel(page, 'p1', 2)).includes('включено'), 'p1 in Codex is enabled initially')
   writeFileSync(cfg, original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false'))
-  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'глиф p1 сменился на «выключено» сам')
-  must((await page.evaluate(() => document.getElementById('grid')?.dataset.alive)) === '1', 'таблица пересоздана: данные должны меняться на месте')
-  must((await page.evaluate(() => document.activeElement?.id)) === 'grid', 'фокус слетел с таблицы при обновлении')
-  must((await page.locator('td.fresh').count()) > 0, 'изменение не подсвечено значком Δ')
-  must((await page.locator('td.fresh .delta').first().innerText()) === 'Δ', 'подсветка без значка (только цвет)')
-  must((await page.locator('[role=status]').count()) === 0, 'при обновлении показан экран «загрузка»')
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'the p1 glyph changed to "disabled" by itself')
+  must((await page.evaluate(() => document.getElementById('grid')?.dataset.alive)) === '1', 'the table was recreated: data must change in place')
+  must((await page.evaluate(() => document.activeElement?.id)) === 'grid', 'focus left the table on update')
+  must((await page.locator('td.fresh').count()) > 0, 'the change is not highlighted with the Δ marker')
+  must((await page.locator('td.fresh .delta').first().innerText()) === 'Δ', 'highlight without a marker (colour only)')
+  must((await page.locator('[role=status]').count()) === 0, 'the "loading" screen is shown on update')
 
-  // ---- убитое ядро поднимается заново, окно догоняет изменения, сделанные за время паузы ----
+  // ---- a killed core comes back up, the window catches up with changes made during the pause ----
   const leaf = home.split(/[\\/]/).pop()
   const pids = sidecarPids(leaf)
-  must(pids.length === 1, `ядро для окна должно быть одно, найдено: ${pids.length}`)
+  must(pids.length === 1, `there must be exactly one core for the window, found: ${pids.length}`)
   execFileSync('taskkill', ['/PID', pids[0], '/F'], { stdio: 'ignore' })
-  writeFileSync(cfg, original) // правка, пока ядра нет
-  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'после перезапуска ядра окно догнало правку', 15000)
+  writeFileSync(cfg, original) // an edit while there is no core
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'after the core restart the window caught up with the edit', 15000)
   const after = sidecarPids(leaf)
-  must(after.length === 1 && after[0] !== pids[0], 'ядро не перезапустилось')
-  // и сторож у нового ядра работает
+  must(after.length === 1 && after[0] !== pids[0], 'the core did not restart')
+  // and the watcher of the new core works
   writeFileSync(cfg, original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false'))
-  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'сторож нового ядра работает')
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'the watcher of the new core works')
   writeFileSync(cfg, original)
 
-  // ---- запись R1: переключил → глиф сменился → откат → глиф вернулся; всё на копии фикстуры и в профиле проверок ----
+  // ---- R1 write: toggled → the glyph changed → rollback → the glyph came back; all on a fixture copy and in the check profile ----
   await resize(app, 1280, 800)
   await page.keyboard.press('1')
   const clickCell = async (rowName, idx) => {
@@ -441,7 +441,7 @@ try {
   }
   const levelSel = page.getByLabel('Уровень записи')
   const levelIs = async (l) => (await levelSel.inputValue()) === l
-  /** Диалог ОС при повышении уровня подменяем в main-процессе: `answer` 1 — «Включить», 0 — «Отмена». */
+  /** The OS dialog on raising the level is replaced in the main process: `answer` 1 is "Enable", 0 is "Cancel". */
   const stubDialog = (answer) =>
     app.evaluate(({ dialog }, a) => {
       globalThis.__answer = a
@@ -449,68 +449,68 @@ try {
     }, answer)
   const dialog = page.locator('[role=dialog][aria-modal=true]')
   const asOff = original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false')
-  must(asOff !== original, 'фикстура: у p1 нет enabled = true')
+  must(asOff !== original, 'fixture: p1 has no enabled = true')
 
-  // одиночные клавиши работают и после клика мышью по кнопке (фокус остаётся на кнопке, а не на таблице)
+  // single keys also work after a mouse click on a button (focus stays on the button, not on the table)
   await page.getByRole('button', { name: /^Радар/ }).click()
   await page.keyboard.press('1')
-  await waitFor(async () => (await page.locator('#grid').count()) === 1, 'после клика по кнопке клавиша 1 открывает матрицу')
-  // журнал пуст, пока записей не было
+  await waitFor(async () => (await page.locator('#grid').count()) === 1, 'after a click on a button the key 1 opens the matrix')
+  // the journal is empty while there were no entries
   await page.keyboard.press('5')
-  await waitFor(async () => (await page.locator('main').innerText()).includes('Операций пока не было'), 'пустой журнал с пояснением')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('Операций пока не было'), 'empty journal with an explanation')
   await shot(page, 'm3-journal-empty-1280')
   await page.keyboard.press('1')
 
   await clickCell('p1', 2)
-  must(await levelIs('R0'), 'по умолчанию уровень R0')
-  must((await page.locator('#scanlines').count()) === 0, 'полосы-сканлайны (линейная горизонтальная рябь) должны быть убраны')
+  must(await levelIs('R0'), 'the default level is R0')
+  must((await page.locator('#scanlines').count()) === 0, 'scanline stripes (a linear horizontal ripple) must be removed')
   await page.keyboard.press('Space')
-  must((await dialog.count()) === 0, 'при R0 предпросмотр не открывается')
-  must((await page.locator('#notice').innerText()).includes('R0'), 'при R0 нет объяснения')
-  must(readFileSync(cfg, 'utf8') === original, 'при R0 файл не должен меняться')
-  must(await page.getByRole('button', { name: 'Выключить', exact: true }).isDisabled(), 'при R0 кнопка в инспекторе неактивна')
+  must((await dialog.count()) === 0, 'at R0 the preview does not open')
+  must((await page.locator('#notice').innerText()).includes('R0'), 'at R0 there is no explanation')
+  must(readFileSync(cfg, 'utf8') === original, 'at R0 the file must not change')
+  must(await page.getByRole('button', { name: 'Выключить', exact: true }).isDisabled(), 'at R0 the button in the inspector is inactive')
 
-  // отказ в окне ОС оставляет R0, согласие поднимает до R1
+  // a refusal in the OS dialog leaves R0, consent raises to R1
   await stubDialog(0)
   await levelSel.selectOption('R1')
   await page.waitForTimeout(600)
-  must(await levelIs('R0'), 'отказ в диалоге ОС должен оставить R0')
+  must(await levelIs('R0'), 'a refusal in the OS dialog must leave R0')
   await stubDialog(1)
   await levelSel.selectOption('R1')
-  await waitFor(() => levelIs('R1'), 'уровень переключился на R1')
+  await waitFor(() => levelIs('R1'), 'the level switched to R1')
   await clickCell('p1', 2)
   await page.keyboard.press('Space')
   await dialog.waitFor({ timeout: 8000 })
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   const dText = await dialog.innerText()
-  must(dText.includes('~/.codex/config.toml') && dText.includes('включено') && dText.includes('выключено'), `предпросмотр без файла и значений: ${dText}`)
-  must(!dText.includes('FAKE-SECRET') && !dText.includes(home.replaceAll('\\', '/')), 'в предпросмотре секрет или путь дома')
-  const v1 = await axeCheck(page, 'предпросмотр')
-  must(v1.length === 0, `axe: предпросмотр: ${v1.map((x) => x.id).join(', ')}`)
+  must(dText.includes('~/.codex/config.toml') && dText.includes('включено') && dText.includes('выключено'), `preview without the file and values: ${dText}`)
+  must(!dText.includes('FAKE-SECRET') && !dText.includes(home.replaceAll('\\', '/')), 'a secret or the home path in the preview')
+  const v1 = await axeCheck(page, 'preview')
+  must(v1.length === 0, `axe: preview: ${v1.map((x) => x.id).join(', ')}`)
   const footerOk = () => page.evaluate(() => { const f = document.querySelector('footer'); return f.scrollHeight <= f.clientHeight + 1 && f.scrollWidth <= f.clientWidth + 1 })
-  must(await footerOk(), 'подвал с сообщением не помещается в одну строку')
+  must(await footerOk(), 'the footer with the message does not fit on one line')
   await shot(page, 'm3-dialog-1280')
   await resize(app, 1920, 1080)
   await page.waitForTimeout(250)
   await shot(page, 'm3-dialog-1920')
   await resize(app, 1280, 800)
   await page.keyboard.press('Escape')
-  must((await dialog.count()) === 0, 'Esc не закрыл предпросмотр')
-  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'после закрытия предпросмотра фокус вернулся на таблицу')
-  must(readFileSync(cfg, 'utf8') === original, 'отмена не должна менять файл')
+  must((await dialog.count()) === 0, 'Esc did not close the preview')
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after closing the preview focus returned to the table')
+  must(readFileSync(cfg, 'utf8') === original, 'cancel must not change the file')
 
-  // файл со смешанными переводами строк: план отказывает, и Esc закрывает окно, даже если фокус не на «Применить»
+  // a file with mixed line endings: the plan refuses, and Esc closes the window even if focus is not on "Apply"
   writeFileSync(cfg, original.replace('\n', '\r\n'))
   await page.waitForTimeout(600)
   await page.keyboard.press('Space')
   await dialog.locator('[role=alert]').waitFor({ timeout: 8000 })
-  must((await dialog.locator('[role=alert]').innerText()).includes('смешанные'), 'смешанные переводы строк должны давать отказ в плане')
+  must((await dialog.locator('[role=alert]').innerText()).includes('смешанные'), 'mixed line endings must make the plan refuse')
   await page.keyboard.press('Escape')
-  must((await dialog.count()) === 0, 'Esc не закрыл предпросмотр с ошибкой плана')
+  must((await dialog.count()) === 0, 'Esc did not close the preview with a plan error')
   writeFileSync(cfg, original)
   await page.waitForTimeout(600)
 
-  // файл изменился между предпросмотром и записью: запись отказывает, чужая правка цела
+  // the file changed between the preview and the write: the write refuses, the foreign edit is intact
   await page.locator('#grid').focus()
   await page.keyboard.press('Space')
   await dialog.getByRole('button', { name: APPLY }).waitFor({ timeout: 8000 })
@@ -519,47 +519,47 @@ try {
   writeFileSync(cfg, touched)
   await dialog.getByRole('button', { name: APPLY }).click()
   await dialog.locator('[role=alert]').waitFor({ timeout: 8000 })
-  must((await dialog.locator('[role=alert]').innerText()).includes('изменился'), 'устаревший план должен быть отвергнут')
-  must(readFileSync(cfg, 'utf8') === touched, 'отказ не должен трогать файл')
+  must((await dialog.locator('[role=alert]').innerText()).includes('изменился'), 'a stale plan must be rejected')
+  must(readFileSync(cfg, 'utf8') === touched, 'the refusal must not touch the file')
   await dialog.getByRole('button', { name: 'Отмена' }).click()
   writeFileSync(cfg, original)
-  await page.waitForTimeout(600) // сторож заметил возврат файла, прежде чем строить новый план
+  await page.waitForTimeout(600) // the watcher noticed the file coming back before a new plan is built
 
-  // обычная запись
+  // a plain write
   await page.locator('#grid').focus()
   await page.keyboard.press('Space')
   await dialog.getByRole('button', { name: APPLY }).waitFor({ timeout: 8000 })
   await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
   await dialog.getByRole('button', { name: APPLY }).click()
-  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'после записи глиф p1 «выключено»')
-  must(readFileSync(cfg, 'utf8') === asOff, 'записан не только enabled у p1')
-  must((await dialog.count()) === 0, 'предпросмотр не закрылся после записи')
-  must((await page.locator('#notice').innerText()).includes('Откат'), 'нет сообщения о записи')
-  must(existsSync(join(profile, 'backups')), 'бэкапы должны лежать в профиле приложения')
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'after the write the p1 glyph is "disabled"')
+  must(readFileSync(cfg, 'utf8') === asOff, 'something besides enabled of p1 was written')
+  must((await dialog.count()) === 0, 'the preview did not close after the write')
+  must((await page.locator('#notice').innerText()).includes('Откат'), 'no message about the write')
+  must(existsSync(join(profile, 'backups')), 'backups must be in the application profile')
 
-  // журнал и откат
+  // journal and rollback
   await page.keyboard.press('5')
   await page.locator('table[aria-label="Журнал операций"] tbody tr').first().waitFor({ timeout: 8000 })
-  must((await page.locator('table[aria-label="Журнал операций"] tbody tr').count()) === 1, 'в журнале должна быть одна операция')
-  const v2 = await axeCheck(page, 'журнал')
-  must(v2.length === 0, `axe: журнал: ${v2.map((x) => x.id).join(', ')}`)
-  must(await footerOk(), 'подвал в журнале не помещается в одну строку')
+  must((await page.locator('table[aria-label="Журнал операций"] tbody tr').count()) === 1, 'the journal must have one operation')
+  const v2 = await axeCheck(page, 'journal')
+  must(v2.length === 0, `axe: journal: ${v2.map((x) => x.id).join(', ')}`)
+  must(await footerOk(), 'the footer in the journal does not fit on one line')
   const wrapped = await page.evaluate(() => [...document.querySelectorAll('table[aria-label="Журнал операций"] td.nw')].filter((td) => { const r = document.createRange(); r.selectNodeContents(td); return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size > 1 }).length)
-  must(wrapped === 0, `в журнале перенесены значения: ${wrapped}`)
+  must(wrapped === 0, `values wrapped in the journal: ${wrapped}`)
   await shot(page, 'm3-journal-1280')
   await resize(app, 1920, 1080)
   await page.waitForTimeout(250)
   await shot(page, 'm3-journal-1920')
   await resize(app, 1280, 800)
   await page.getByRole('button', { name: 'Откатить' }).click()
-  await waitFor(async () => (await page.locator('table[aria-label="Журнал операций"] tbody tr').count()) === 2, 'откат записан в журнал')
-  must(readFileSync(cfg, 'utf8') === original, 'после отката файл побайтово как до записи')
+  await waitFor(async () => (await page.locator('table[aria-label="Журнал операций"] tbody tr').count()) === 2, 'the rollback is recorded in the journal')
+  must(readFileSync(cfg, 'utf8') === original, 'after the rollback the file is byte-for-byte as before the write')
   await page.keyboard.press('1')
-  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'после отката глиф p1 вернулся')
-  // ---- R2: корзина, правка, копирование, профили (тоже на копии фикстуры) ----
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'after the rollback the p1 glyph came back')
+  // ---- R2: trash, edit, copy, profiles (also on a fixture copy) ----
   await stubDialog(1)
   await levelSel.selectOption('R2')
-  await waitFor(() => levelIs('R2'), 'уровень переключился на R2')
+  await waitFor(() => levelIs('R2'), 'the level switched to R2')
   const agFile = join(home, '.gemini', 'config', 'mcp_config.json')
   const agOrig = readFileSync(agFile, 'utf8')
   const agJson = () => JSON.parse(readFileSync(agFile, 'utf8'))
@@ -567,52 +567,52 @@ try {
     await dialog.getByRole('button', { name: label }).waitFor({ timeout: 8000 })
     await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
     await dialog.getByRole('button', { name: label }).click()
-    // Окно закрывается, когда ответ о записи дошёл до страницы, а файл меняется раньше. Пока диалог открыт, одиночные
-    // клавиши (`5` — журнал) отключены, и шаг, нажавший их сразу после появления файла, терял нажатие: так «добавление»
-    // не находилось в журнале. Ждём закрытия здесь, а не в каждом шаге.
+    // The window closes when the write response reached the page, while the file changes earlier. While the dialog is open, single
+    // keys (`5` is the journal) are disabled, and a step that pressed them right after the file appeared lost the key press: that is how the "add"
+    // entry was not found in the journal. We wait for the close here, not in every step.
     await dialog.waitFor({ state: 'detached', timeout: 8000 })
   }
   const openPlan = async () => {
     await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
     return dialog.innerText()
   }
-  const noSecretOnPage = async (what) => must(!(await page.evaluate(() => document.body.innerText)).includes('FAKE-SECRET'), `${what}: в окне найден FAKE-SECRET`)
+  const noSecretOnPage = async (what) => must(!(await page.evaluate(() => document.body.innerText)).includes('FAKE-SECRET'), `${what}: FAKE-SECRET found in the window`)
 
-  // корзина: у MCP Antigravity нет флага, выключение выносит запись из файла
+  // trash: Antigravity MCP has no flag, disabling moves the entry out of the file
   await clickCell('tool-b', 3)
   const col = await page.evaluate(() => {
     const b = [...document.querySelectorAll('aside .actions.col button')]
     const r = b.map((x) => x.getBoundingClientRect())
     return { n: b.length, lefts: new Set(r.map((x) => Math.round(x.left))).size, tops: new Set(r.map((x) => Math.round(x.top))).size }
   })
-  must(col.n >= 4 && col.lefts === 1 && col.tops === col.n, `действия записи в инспекторе должны стоять столбцом, а не рядом: ${JSON.stringify(col)}`)
-  // длинный путь файла переносится по сегментам: ни один сегмент (`/…/`) не разорван между строками
+  must(col.n >= 4 && col.lefts === 1 && col.tops === col.n, `the write actions in the inspector must stand in a column, not side by side: ${JSON.stringify(col)}`)
+  // a long file path wraps by segments: no segment (`/…/`) is torn between lines
   await shot(page, 'm4-inspector-1280')
   const pathSplit = await page.evaluate(() => {
     const dd = [...document.querySelectorAll('aside dd.wrap')].find((d) => d.querySelector('wbr'))
-    // верх первого и последнего знака сегмента: разные — сегмент перенесён внутри
+    // the top of the first and last glyph of a segment: if they differ, the segment is wrapped inside
     const tops = (s) => { const n = s.lastChild, r = document.createRange(); const at = (i) => { r.setStart(n, i); r.setEnd(n, i + 1); return Math.round(r.getBoundingClientRect().top) }; return [at(0), at(n.length - 1)] }
     return dd ? [...dd.querySelectorAll('span')].filter((s) => { const [a, b] = tops(s); return a !== b }).map((s) => s.textContent) : null
   })
-  must(pathSplit !== null && pathSplit.length === 0, `путь файла в инспекторе разорван посреди сегмента: ${JSON.stringify(pathSplit)}`)
+  must(pathSplit !== null && pathSplit.length === 0, `the file path in the inspector is torn in the middle of a segment: ${JSON.stringify(pathSplit)}`)
   await page.keyboard.press('Space')
   const trashText = await openPlan()
-  must(trashText.includes('в корзине Loadout') && trashText.includes('R2'), `предпросмотр выноса в корзину: ${trashText}`)
-  must(!trashText.includes('FAKE-SECRET'), 'в предпросмотре выноса секрет')
+  must(trashText.includes('в корзине Loadout') && trashText.includes('R2'), `trash move preview: ${trashText}`)
+  must(!trashText.includes('FAKE-SECRET'), 'a secret in the trash move preview')
   await shot(page, 'm4-trash-dialog-1280')
   await applyDialog()
-  await waitFor(async () => String(await cellLabel(page, 'tool-b', 3)).includes('выключено'), 'tool-b в корзине: глиф «выключено»')
-  must(!('tool-b' in agJson().mcpServers) && 'tool-a' in agJson().mcpServers, 'запись не вынесена из файла или тронута соседняя')
-  must((await page.locator('aside').innerText()).includes('корзине'), 'инспектор не говорит про корзину')
-  await noSecretOnPage('корзина')
+  await waitFor(async () => String(await cellLabel(page, 'tool-b', 3)).includes('выключено'), 'tool-b in the trash: glyph "disabled"')
+  must(!('tool-b' in agJson().mcpServers) && 'tool-a' in agJson().mcpServers, 'the entry was not moved out of the file or the neighbouring one was touched')
+  must((await page.locator('aside').innerText()).includes('корзине'), 'the inspector does not mention the trash')
+  await noSecretOnPage('trash')
   await page.locator('#grid').focus()
-  await page.keyboard.press('Space') // обратно
+  await page.keyboard.press('Space') // back
   await openPlan()
   await applyDialog()
-  await waitFor(async () => String(await cellLabel(page, 'tool-b', 3)).includes('включено'), 'tool-b вернулся: глиф «включено»')
-  must(JSON.stringify(agJson()) === JSON.stringify(JSON.parse(agOrig)), 'после возврата из корзины файл должен быть равен исходному')
+  await waitFor(async () => String(await cellLabel(page, 'tool-b', 3)).includes('включено'), 'tool-b came back: glyph "enabled"')
+  must(JSON.stringify(agJson()) === JSON.stringify(JSON.parse(agOrig)), 'after the return from the trash the file must equal the original')
 
-  // правка команды: старые значения не показываются, новые секреты в предпросмотре скрыты
+  // editing a command: old values are not shown, new secrets are hidden in the preview
   const deskFile = join(home, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json')
   const deskOrig = readFileSync(deskFile)
   await clickCell('desk-tool', 1)
@@ -622,17 +622,17 @@ try {
   await shot(page, 'm4-edit-dialog-1280')
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
   const editText = await openPlan()
-  must(editText.includes('<masked>') && !editText.includes('FAKE-SECRET'), `предпросмотр правки: ${editText}`)
+  must(editText.includes('<masked>') && !editText.includes('FAKE-SECRET'), `edit preview: ${editText}`)
   await applyDialog()
-  await waitFor(() => JSON.parse(readFileSync(deskFile, 'utf8')).mcpServers['desk-tool'].command === 'new-cmd', 'команда записана в файл')
+  await waitFor(() => JSON.parse(readFileSync(deskFile, 'utf8')).mcpServers['desk-tool'].command === 'new-cmd', 'the command was written to the file')
   const editedDesk = JSON.parse(readFileSync(deskFile, 'utf8')).mcpServers['desk-tool']
-  must(editedDesk.env.TOKEN === 'FAKE-SECRET-DESKENV' && editedDesk.args[1] === 'FAKE-SECRET-NEW', 'правка тронула env или записала не те аргументы')
-  await noSecretOnPage('правка')
+  must(editedDesk.env.TOKEN === 'FAKE-SECRET-DESKENV' && editedDesk.args[1] === 'FAKE-SECRET-NEW', 'the edit touched env or wrote the wrong arguments')
+  await noSecretOnPage('edit')
   await page.keyboard.press('5')
   await page.getByRole('row', { name: /правка/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
-  await waitFor(() => readFileSync(deskFile).equals(deskOrig), 'откат правки вернул файл побайтово')
+  await waitFor(() => readFileSync(deskFile).equals(deskOrig), 'the edit rollback restored the file byte for byte')
 
-  // копирование в другой клиент: формат переводится сам, значения env остаются внутри ядра
+  // copying to another client: the format is converted by itself, env values stay inside the core
   await page.keyboard.press('1')
   const cfgBeforeCopy = readFileSync(cfg)
   await clickCell('tool-a', 3)
@@ -640,16 +640,16 @@ try {
   await dialog.getByLabel('ChatGPT / Codex').check()
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
   const copyText = await openPlan()
-  must(copyText.includes('~/.codex/config.toml') && copyText.includes('R2') && !copyText.includes('FAKE-SECRET'), `предпросмотр копирования: ${copyText}`)
+  must(copyText.includes('~/.codex/config.toml') && copyText.includes('R2') && !copyText.includes('FAKE-SECRET'), `copy preview: ${copyText}`)
   await shot(page, 'm4-copy-dialog-1280')
   await applyDialog()
-  await waitFor(() => readFileSync(cfg, 'utf8').includes('[mcp_servers.tool-a]'), 'запись скопирована в config.toml Codex')
-  await waitFor(async () => String(await cellLabel(page, 'tool-a', 2)).includes('включено'), 'в матрице у Codex появилась запись tool-a')
+  await waitFor(() => readFileSync(cfg, 'utf8').includes('[mcp_servers.tool-a]'), 'the entry was copied to Codex config.toml')
+  await waitFor(async () => String(await cellLabel(page, 'tool-a', 2)).includes('включено'), 'the matrix has a tool-a entry for Codex')
   await page.keyboard.press('5')
   await page.getByRole('row', { name: /копия/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
-  await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'откат копии вернул config.toml побайтово')
+  await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'the copy rollback restored config.toml byte for byte')
 
-  // добавление нового MCP: значения env уходят только в ядро, откат возвращает файл побайтово
+  // adding a new MCP: env values go only to the core, the rollback restores the file byte for byte
   await page.keyboard.press('1')
   await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
   await dialog.getByLabel('Клиент').selectOption({ label: 'ChatGPT / Codex' })
@@ -660,56 +660,56 @@ try {
   await shot(page, 'm4-add-dialog-1280')
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
   const addText = await openPlan()
-  must(addText.includes('~/.codex/config.toml') && addText.includes('API_TOKEN') && !addText.includes('FAKE-SECRET'), `предпросмотр добавления: ${addText}`)
+  must(addText.includes('~/.codex/config.toml') && addText.includes('API_TOKEN') && !addText.includes('FAKE-SECRET'), `add preview: ${addText}`)
   await applyDialog()
-  await waitFor(() => readFileSync(cfg, 'utf8').includes('[mcp_servers.e2e-added]'), 'новый сервер записан в config.toml Codex')
-  await noSecretOnPage('добавление')
+  await waitFor(() => readFileSync(cfg, 'utf8').includes('[mcp_servers.e2e-added]'), 'the new server was written to Codex config.toml')
+  await noSecretOnPage('add')
   await page.keyboard.press('5')
   await page.getByRole('row', { name: /добавление/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
-  await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'откат добавления вернул config.toml побайтово')
+  await waitFor(() => readFileSync(cfg).equals(cfgBeforeCopy), 'the add rollback restored config.toml byte for byte')
 
-  // установка плагина CLI Claude Code: сначала команда, потом отдельное подтверждение; плохие имена отвергаются
+  // installing a Claude Code CLI plugin: first the command, then a separate confirmation; bad names are rejected
   await page.keyboard.press('1')
   const pluginErr = (s, dry) => page.evaluate(async ([x, d]) => (await window.loadout.pluginInstall(x, d)).error ?? 'ok', [s, dry])
-  must((await pluginErr('x@y --scope local', true)) !== 'ok' && (await pluginErr('../x@y', true)) !== 'ok', 'имя плагина с пробелом или путём должно отвергаться')
-  must((await pluginErr('only-name', true)) !== 'ok', 'имя без маркетплейса должно отвергаться')
-  must((await pluginErr('demo@market', false)).includes('предпросмотр'), 'установка без предпросмотра должна отказывать')
-  // маркетплейс: ввод, который стал бы флагом, второй командой или чужой схемой git, отвергается до запуска
+  must((await pluginErr('x@y --scope local', true)) !== 'ok' && (await pluginErr('../x@y', true)) !== 'ok', 'a plugin name with a space or a path must be rejected')
+  must((await pluginErr('only-name', true)) !== 'ok', 'a name without a marketplace must be rejected')
+  must((await pluginErr('demo@market', false)).includes('предпросмотр'), 'install without a preview must refuse')
+  // marketplace: input that would become a flag, a second command or a foreign git scheme is rejected before launch
   const mpErr = (s, dry) => page.evaluate(async ([x, d]) => (await window.loadout.marketplaceAdd(x, d)).error ?? 'ok', [s, dry])
   for (const bad of ['a/b --scope local', '-x', 'ext::sh -c x', 'file:///C:/x', 'https://u:p@x.test/m', '\\\\srv\\share', join(home, 'nope')]) {
-    must((await mpErr(bad, true)) !== 'ok', `источник маркетплейса должен отвергаться: ${bad}`)
+    must((await mpErr(bad, true)) !== 'ok', `the marketplace source must be rejected: ${bad}`)
   }
-  must((await mpErr(marketDir, false)).includes('предпросмотр'), 'добавление маркетплейса без предпросмотра должно отказывать')
-  // маркетплейс → каталог → установка выбором из списка
+  must((await mpErr(marketDir, false)).includes('предпросмотр'), 'adding a marketplace without a preview must refuse')
+  // marketplace → catalog → install by picking from the list
   await page.getByRole('button', { name: 'Установить плагин', exact: true }).click()
   await dialog.getByRole('button', { name: 'Добавить маркетплейс…' }).click()
   await dialog.getByLabel('Источник маркетплейса').fill(marketDir)
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
-  // в предпросмотре домашний каталог свёрнут в `~`; снимка этого шага нет: в поле ввода полный путь с именем пользователя
+  // in the preview the home directory is collapsed to `~`; this step has no screenshot: the input field shows the full path with the user name
   await dialog.getByText(`claude plugin marketplace add --scope user ${tilde(marketDir)}`).waitFor({ timeout: 8000 })
-  must(!existsSync(claudeCalls), 'предпросмотр не должен запускать claude')
+  must(!existsSync(claudeCalls), 'the preview must not run claude')
   await dialog.getByRole('button', { name: 'Добавить маркетплейс', exact: true }).click()
   const catalog = dialog.getByRole('list', { name: 'Каталог e2e-market' })
   await catalog.waitFor({ timeout: 8000 })
-  must(await catalog.getByRole('button', { name: /^tool-plugin/ }).isDisabled(), 'плагин с источником command отсюда не ставится')
+  must(await catalog.getByRole('button', { name: /^tool-plugin/ }).isDisabled(), 'a plugin with a command source cannot be installed from here')
   await catalog.getByRole('button', { name: /^hello-plugin/ }).click()
   await dialog.getByText('claude plugin install hello-plugin@e2e-market --scope user').waitFor({ timeout: 8000 })
-  const vCat = await axeCheck(page, 'каталог маркетплейса')
-  must(vCat.length === 0, `axe: каталог маркетплейса: ${vCat.map((x) => x.id).join(', ')}`)
+  const vCat = await axeCheck(page, 'marketplace catalog')
+  must(vCat.length === 0, `axe: marketplace catalog: ${vCat.map((x) => x.id).join(', ')}`)
   await shot(page, 'm4-plugin-dialog-1280')
   await dialog.getByRole('button', { name: 'Установить', exact: true }).click()
   const calls = () => (existsSync(claudeCalls) ? readFileSync(claudeCalls, 'utf8').trim().split('\n') : [])
-  await waitFor(() => calls().join('|') === `plugin marketplace add --scope user ${marketDir}|plugin install hello-plugin@e2e-market --scope user`, 'claude вызван с точными командами добавления и установки')
+  await waitFor(() => calls().join('|') === `plugin marketplace add --scope user ${marketDir}|plugin install hello-plugin@e2e-market --scope user`, 'claude was called with the exact add and install commands')
   await dialog.waitFor({ state: 'detached', timeout: 8000 })
 
-  // скил из «GitHub» (локальный git-репозиторий вместо сети): что и куда → скачать → выбрать → план ядра → журнал → откат
+  // a skill from "GitHub" (a local git repository instead of the network): what and where → download → choose → core plan → journal → rollback
   const skillErr = (s, dry) => page.evaluate(async ([x, d]) => (await window.loadout.skillFetch(x, d)).error ?? 'ok', [s, dry])
   for (const bad of ['acme/skills --upload-pack=x', '-acme/x', 'acme/skills/../x', 'https://gitlab.com/a/b', 'relative\\dir']) {
-    must((await skillErr(bad, true)) !== 'ok', `источник скила должен отвергаться: ${bad}`)
+    must((await skillErr(bad, true)) !== 'ok', `the skill source must be rejected: ${bad}`)
   }
-  must((await skillErr('acme/skills', false)).includes('скачано'), 'загрузка без показа «что будет скачано» должна отказывать')
+  must((await skillErr('acme/skills', false)).includes('скачано'), 'a download without showing "what will be downloaded" must refuse')
   const badPlan = await page.evaluate(async () => (await window.loadout.plan({ op: 'installSkill', stage: '../../x', sub: '', name: 'a' })).ok)
-  must(badPlan === false, 'план установки скила с путём вместо номера подготовки должен отвергаться')
+  must(badPlan === false, 'a skill install plan with a path instead of a preparation number must be rejected')
   const skillDir = join(home, '.claude', 'skills', 'web-search')
   await page.getByRole('button', { name: 'Установить скил', exact: true }).click()
   await dialog.getByLabel('Источник скила').fill('acme/skills')
@@ -718,44 +718,44 @@ try {
   await dialog.getByRole('button', { name: 'Скачать и показать' }).click()
   await dialog.getByRole('radio', { name: /web-search/ }).waitFor({ timeout: 20000 })
   await dialog.getByRole('radio', { name: /web-search/ }).check()
-  const vSkill = await axeCheck(page, 'выбор скила')
-  must(vSkill.length === 0, `axe: выбор скила: ${vSkill.map((x) => x.id).join(', ')}`)
+  const vSkill = await axeCheck(page, 'skill choice')
+  must(vSkill.length === 0, `axe: skill choice: ${vSkill.map((x) => x.id).join(', ')}`)
   await shot(page, 'm6-skill-dialog-1280')
   await dialog.getByRole('button', { name: 'Предпросмотр установки' }).click()
   const skillPlan = await openPlan()
-  must(skillPlan.includes('~/.claude/skills/web-search/') && skillPlan.includes('helper.py') && skillPlan.includes('файлы кода'), `предпросмотр установки скила: ${skillPlan}`)
-  must(!existsSync(skillDir), 'до подтверждения скил не установлен')
+  must(skillPlan.includes('~/.claude/skills/web-search/') && skillPlan.includes('helper.py') && skillPlan.includes('файлы кода'), `skill install preview: ${skillPlan}`)
+  must(!existsSync(skillDir), 'the skill is not installed before confirmation')
   await shot(page, 'm6-skill-plan-1280')
   await applyDialog()
-  await waitFor(() => existsSync(join(skillDir, 'SKILL.md')) && existsSync(join(skillDir, 'helper.py')), 'скил установлен в ~/.claude/skills/web-search')
+  await waitFor(() => existsSync(join(skillDir, 'SKILL.md')) && existsSync(join(skillDir, 'helper.py')), 'the skill is installed in ~/.claude/skills/web-search')
   await dialog.waitFor({ state: 'detached', timeout: 8000 })
   await page.keyboard.press('1')
   const skillRow = page.locator('tbody tr', { has: page.locator('td.name b', { hasText: /^web-search$/ }) })
-  await waitFor(async () => (await skillRow.count()) === 1, 'установленный скил виден в матрице')
+  await waitFor(async () => (await skillRow.count()) === 1, 'the installed skill is visible in the matrix')
   await page.keyboard.press('5')
   await page.getByRole('row', { name: /установка скила/ }).getByRole('button', { name: 'Откатить', exact: true }).click()
-  await waitFor(() => !existsSync(skillDir), 'откат убрал скил')
+  await waitFor(() => !existsSync(skillDir), 'the rollback removed the skill')
   await page.keyboard.press('1')
-  await waitFor(async () => (await skillRow.count()) === 0, 'после отката скила нет в матрице')
+  await waitFor(async () => (await skillRow.count()) === 0, 'after the skill rollback it is not in the matrix')
 
-  // профили: снять состояние, поправить, применить пакетом, откатить пакет целиком
+  // profiles: capture the state, tweak, apply as a bundle, roll back the whole bundle
   await page.keyboard.press('6')
   await page.getByLabel('Имя профиля').fill('e2e')
   await page.getByRole('button', { name: 'Снять с текущего состояния' }).click()
   const card = page.getByRole('region', { name: 'Профиль e2e' })
   await card.waitFor({ timeout: 8000 })
   await card.getByText('Записи профиля').click()
-  // сразу после открытия список виден с первой строки целиком (обрезка сверху на снимке — прокрутка от `uncheck()` ниже)
+  // right after opening, the list is visible whole from the first row (clipping at the top of the screenshot is the scroll from `uncheck()` below)
   const plistOpen = await card.locator('details .plist').evaluate((ul) => ({ top: ul.scrollTop, gap: Math.round(ul.querySelector('li').getBoundingClientRect().top - ul.getBoundingClientRect().top) }))
-  must(plistOpen.top === 0 && plistOpen.gap >= 0, `список записей профиля открывается обрезанным: ${JSON.stringify(plistOpen)}`)
+  must(plistOpen.top === 0 && plistOpen.gap >= 0, `the profile entry list opens clipped: ${JSON.stringify(plistOpen)}`)
   await card.locator('li', { hasText: 'p1@bundled' }).getByRole('checkbox').uncheck()
   await card.getByRole('button', { name: 'Сохранить изменения' }).click()
-  await waitFor(async () => !(await card.getByRole('button', { name: 'Сохранить изменения' }).isEnabled()), 'профиль сохранён')
+  await waitFor(async () => !(await card.getByRole('button', { name: 'Сохранить изменения' }).isEnabled()), 'profile saved')
   const profLayout = await page.evaluate(() => ({ hscroll: document.documentElement.scrollWidth - document.documentElement.clientWidth, main: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth }))
-  must(profLayout.hscroll <= 0 && profLayout.main <= 1, `горизонтальная прокрутка в профилях: ${JSON.stringify(profLayout)}`)
-  const v3 = await axeCheck(page, 'профили')
-  must(v3.length === 0, `axe: профили: ${v3.map((x) => x.id).join(', ')}`)
-  await card.locator('details .plist').evaluate((ul) => { ul.scrollTop = 0 }) // `uncheck()` прокрутил список к p1: на снимке то, что видно при открытии
+  must(profLayout.hscroll <= 0 && profLayout.main <= 1, `horizontal scroll in profiles: ${JSON.stringify(profLayout)}`)
+  const v3 = await axeCheck(page, 'profiles')
+  must(v3.length === 0, `axe: profiles: ${v3.map((x) => x.id).join(', ')}`)
+  await card.locator('details .plist').evaluate((ul) => { ul.scrollTop = 0 }) // `uncheck()` scrolled the list to p1: the screenshot shows what is seen on opening
   await shot(page, 'm4-profiles-1280')
   await resize(app, 1920, 1080)
   await page.waitForTimeout(250)
@@ -764,210 +764,210 @@ try {
   await card.getByRole('button', { name: 'Применить…' }).click()
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   const batchText = await dialog.innerText()
-  must(batchText.includes('Изменится записей: 1') && batchText.includes('p1@bundled'), `предпросмотр пакета: ${batchText}`)
+  must(batchText.includes('Изменится записей: 1') && batchText.includes('p1@bundled'), `bundle preview: ${batchText}`)
   await shot(page, 'm4-batch-dialog-1280')
   await applyDialog()
-  await dialog.waitFor({ state: 'detached', timeout: 8000 }) // пока диалог открыт, одиночные клавиши отключены
+  await dialog.waitFor({ state: 'detached', timeout: 8000 }) // while the dialog is open, single keys are disabled
   await page.keyboard.press('1')
-  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'профиль применён: p1 выключен')
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'profile applied: p1 disabled')
   await page.keyboard.press('5')
   await page.getByRole('button', { name: 'Откатить пакет' }).click()
   await page.keyboard.press('1')
-  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'пакет откатан: p1 вернулся')
-  must(readFileSync(cfg).equals(cfgBeforeCopy), 'после отката пакета config.toml равен исходному')
+  await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'bundle rolled back: p1 came back')
+  must(readFileSync(cfg).equals(cfgBeforeCopy), 'after the bundle rollback config.toml equals the original')
   await page.keyboard.press('6')
   await card.getByRole('button', { name: 'Удалить профиль' }).click()
-  await waitFor(async () => (await card.count()) === 0, 'профиль удалён')
+  await waitFor(async () => (await card.count()) === 0, 'profile deleted')
 
-  // ---- встроенные Инструменты контекста: установить и применить на копии фикстуры, диагностика и эффективность ----
+  // ---- built-in Context Toolkit: install and apply on a fixture copy, diagnostics and effectiveness ----
   const claudeDir = join(home, '.claude')
   const hookExe = join(claudeDir, 'hooks', 'context-toolkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
-  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 } // форма по умолчанию: советник, основная модель, effort и политики «не менять»
+  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 } // default form: advisor, main model, effort and policies are "do not change"
   const ctxkitJson = join(claudeDir, 'context-toolkit.json')
-  // Настоящий профиль владельца Инструменты контекста трогать не должны: хеши файлов, которые `setup` пишет, до и после всего шага.
-  // `~/.claude.json` не сравниваем: его переписывает работающий Claude Code, setup его только читает (в проверках с --claude-json на копию).
+  // Context Toolkit must not touch the real owner profile: hashes of the files that `setup` writes, before and after the whole step.
+  // `~/.claude.json` is not compared: the running Claude Code rewrites it, setup only reads it (the checks use --claude-json pointing to a copy).
   const realHome = homedir()
   const realFiles = ['.claude/settings.json', '.claude/CLAUDE.md', '.claude/hooks/ctxkit.exe', '.claude/hooks/context-toolkit.exe', '.claude/ctxkit.json', '.claude/context-toolkit.json', '.claude/agents/Explore.md', '.claude/agents/checker.md', '.local/bin/ctxkit.exe', '.local/bin/context-toolkit.exe', '.gemini/config/hooks.json', '.dsh/ctxkit-hooks.json', '.dsh/context-toolkit-hooks.json', '.dsh/cordis.patch.yml', '.dsh/profiles/desktop/cordis.patch.yml', 'AppData/Roaming/Claude/ccd-session-presets.json'].map((r) => join(realHome, r))
   const realState = () => realFiles.map((f) => (existsSync(f) ? createHash('sha256').update(readFileSync(f)).digest('hex') : 'нет'))
   const realBefore = realState()
   const realBackups = () => (existsSync(join(realHome, '.claude', 'backups')) ? readdirSync(join(realHome, '.claude', 'backups')).filter((n) => !n.startsWith('.claude.json.backup')).length : 0)
   const realBackupsBefore = realBackups()
-  must(!existsSync(hookExe), 'в копии фикстуры уже есть Инструменты контекста')
+  must(!existsSync(hookExe), 'the fixture copy already has Context Toolkit')
   await page.keyboard.press('7')
   await page.getByText('context-toolkit 0.', { exact: false }).first().waitFor({ timeout: 15000 })
-  must(await page.getByRole('heading', { name: 'Инструменты контекста', level: 2 }).isVisible(), 'заголовок раздела не «Инструменты контекста»')
-  must(await page.locator('nav').getByRole('button', { name: /^Инструменты контекста/ }).isVisible(), 'в навигации нет «Инструменты контекста»')
-  must((await page.locator('main').innerText()).includes('нет: «Применить» установит'), 'до установки копия хуков должна быть «нет»')
-  must(!(await page.locator('main').innerText()).includes('прежняя версия'), 'на чистой копии фикстуры не должно быть строки о прежней версии')
+  must(await page.getByRole('heading', { name: 'Инструменты контекста', level: 2 }).isVisible(), 'the section heading is not the Context Toolkit one')
+  must(await page.locator('nav').getByRole('button', { name: /^Инструменты контекста/ }).isVisible(), 'the navigation has no Context Toolkit item')
+  must((await page.locator('main').innerText()).includes('нет: «Применить» установит'), 'before the install the hooks copy must be "absent"')
+  must(!(await page.locator('main').innerText()).includes('прежняя версия'), 'a clean fixture copy must have no line about a previous version')
   const applyBtn = page.getByRole('button', { name: /^Применить: установить/ })
-  must(await applyBtn.isDisabled(), 'применение доступно без предпросмотра')
-  // ядро-main отказывает и в обход страницы: без предпросмотра и без нужного уровня
+  must(await applyBtn.isDisabled(), 'apply is available without a preview')
+  // the main-process core refuses even bypassing the page: without a preview and without the required level
   const refusal = (o) => page.evaluate(async (x) => (await window.loadout.ctxkitSetup(x, false)).error ?? 'ok', o)
-  must((await refusal(opts)).includes('предпросмотр'), 'применение без предпросмотра не отвергнуто в main')
-  must((await refusal({ ...opts, lang: 'de' })).includes('язык'), 'неверный язык не отвергнут')
+  must((await refusal(opts)).includes('предпросмотр'), 'apply without a preview was not rejected in main')
+  must((await refusal({ ...opts, lang: 'de' })).includes('язык'), 'an invalid language was not rejected')
   const settingsBefore = readFileSync(settingsFile, 'utf8')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await page.locator('pre.out').waitFor({ timeout: 30000 })
   const preview = await page.locator('pre.out').innerText()
-  // путь настоящего домашнего каталога (с именем пользователя) в выводе недопустим ни с прямыми, ни с обратными слэшами
+  // the path of the real home directory (with the user name) is not allowed in the output, with either forward or back slashes
   const leaks = [realHome, realHome.replaceAll('\\', '/')].some((h) => preview.toLowerCase().includes(h.toLowerCase()))
-  must(preview.includes('Шлюз Stop: включён'), `в предпросмотре нет строки про шлюз Stop: ${preview.slice(0, 300)}`)
-  must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `предпросмотр setup: ${preview.slice(0, 300)}`)
-  must(preview.includes('advisorModel: (не задано) (оставлено'), `предпросмотр с формой по умолчанию должен оставлять advisorModel: ${preview.slice(0, 400)}`)
-  // форма по умолчанию «Политики: не менять»: context-toolkit.json не создаётся и не упоминается как изменение
-  must(preview.includes('политики: нет (оставлено') && !existsSync(ctxkitJson), `«Политики: не менять» не должно создавать context-toolkit.json: ${preview.slice(0, 600)}`)
-  // русский интерфейс: в предпросмотре нет английских служебных фраз старого вывода
-  must(englishLeft(preview).length === 0, `английские фразы в русском предпросмотре setup: ${englishLeft(preview).slice(0, 5).join(' // ')}`)
-  must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'предпросмотр изменил файлы')
-  await waitFor(() => applyBtn.isEnabled(), 'после предпросмотра применение доступно')
+  must(preview.includes('Шлюз Stop: включён'), `no Stop gate line in the preview: ${preview.slice(0, 300)}`)
+  must(preview.includes('[dry-run]') && !preview.includes('FAKE-SECRET') && !leaks, `setup preview: ${preview.slice(0, 300)}`)
+  must(preview.includes('advisorModel: (не задано) (оставлено'), `the preview with the default form must leave advisorModel: ${preview.slice(0, 400)}`)
+  // the default form "Policies: do not change": context-toolkit.json is not created and not mentioned as a change
+  must(preview.includes('политики: нет (оставлено') && !existsSync(ctxkitJson), `"Policies: do not change" must not create context-toolkit.json: ${preview.slice(0, 600)}`)
+  // Russian UI: the preview has no English service phrases of the old output
+  must(englishLeft(preview).length === 0, `English phrases in the Russian setup preview: ${englishLeft(preview).slice(0, 5).join(' // ')}`)
+  must(readFileSync(settingsFile, 'utf8') === settingsBefore && !existsSync(hookExe), 'the preview changed files')
+  await waitFor(() => applyBtn.isEnabled(), 'after the preview apply is available')
   await page.getByLabel('Язык подсказок, хуков и вывода Инструментов контекста').selectOption('en')
-  must(await applyBtn.isDisabled(), 'после смены настроек старый предпросмотр не должен разрешать применение')
+  must(await applyBtn.isDisabled(), 'after the settings change the old preview must not allow apply')
   await page.getByLabel('Язык подсказок, хуков и вывода Инструментов контекста').selectOption('ru')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
-  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр повторён')
+  await waitFor(() => applyBtn.isEnabled(), 'preview repeated')
   await shot(page, 'm5-ctxkit-1280')
   await resize(app, 1920, 1080)
   await page.waitForTimeout(250)
   await shot(page, 'm5-ctxkit-1920')
   await resize(app, 1280, 800)
   await applyBtn.click()
-  await waitFor(() => existsSync(hookExe), 'setup установил бинарь хуков')
-  await waitFor(() => readFileSync(settingsFile, 'utf8').includes('context-toolkit.exe'), 'setup прописал хуки в settings.json')
-  must(existsSync(join(claudeDir, 'backups')), 'setup не сделал бэкап перед записью')
-  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/context-toolkit.exe: ● совпадает'), 'статус: копия хуков совпадает со встроенной')
-  // диагностика и эффективность по транскриптам фикстуры
+  await waitFor(() => existsSync(hookExe), 'setup installed the hooks binary')
+  await waitFor(() => readFileSync(settingsFile, 'utf8').includes('context-toolkit.exe'), 'setup wrote the hooks to settings.json')
+  must(existsSync(join(claudeDir, 'backups')), 'setup did not make a backup before writing')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/context-toolkit.exe: ● совпадает'), 'status: the hooks copy matches the built-in one')
+  // diagnostics and effectiveness on the fixture transcripts
   await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 15000 })
   await page.locator('table[aria-label="Ходы по дням"] tbody tr').first().waitFor({ timeout: 30000 })
   const eff = await page.locator('main').innerText()
-  must(eff.includes('на Sonnet и Haiku') && eff.includes('checker ×'), `нет сводки эффективности: ${eff.slice(-600)}`)
-  // период и «Пересчитать» в одной строке; во время подсчёта кнопка занята и это видно; после — время подсчёта
+  must(eff.includes('на Sonnet и Haiku') && eff.includes('checker ×'), `no effectiveness summary: ${eff.slice(-600)}`)
+  // the period and "Recalculate" on one line; during the calculation the button is busy and it is visible; afterwards the calculation time
   const recalc = page.locator('section[aria-label="Эффективность"]').getByRole('button', { name: /^(Пересчитать|Считаю…)$/ })
-  await waitFor(async () => (await page.locator('section[aria-label="Эффективность"] [role=status]').innerText()).includes('Посчитано в'), 'после первого подсчёта видно время')
+  await waitFor(async () => (await page.locator('section[aria-label="Эффективность"] [role=status]').innerText()).includes('Посчитано в'), 'after the first calculation the time is shown')
   const effRow = await page.evaluate(() => {
     const s = document.querySelector('select[aria-label="Период отчёта"]').getBoundingClientRect()
     const b = [...document.querySelectorAll('section[aria-label="Эффективность"] button')][0].getBoundingClientRect()
     return { dy: Math.abs(s.top + s.height / 2 - (b.top + b.height / 2)), below: b.top > s.bottom }
   })
-  must(effRow.dy <= 4 && !effRow.below, `период и «Пересчитать» должны быть в одной строке: ${JSON.stringify(effRow)}`)
+  must(effRow.dy <= 4 && !effRow.below, `the period and "Recalculate" must be on one line: ${JSON.stringify(effRow)}`)
   await page.getByLabel('Период отчёта').selectOption('30')
-  await waitFor(async () => (await recalc.innerText()).includes('Считаю') || (await page.locator('section[aria-label="Эффективность"] [role=status]').innerText()).includes('Посчитано'), 'смена периода запускает подсчёт')
-  await waitFor(async () => (await recalc.isEnabled()) && (await recalc.innerText()) === 'Пересчитать', 'подсчёт за 30 дней завершился, кнопка снова доступна')
+  await waitFor(async () => (await recalc.innerText()).includes('Считаю') || (await page.locator('section[aria-label="Эффективность"] [role=status]').innerText()).includes('Посчитано'), 'changing the period starts a calculation')
+  await waitFor(async () => (await recalc.isEnabled()) && (await recalc.innerText()) === 'Пересчитать', 'the 30-day calculation finished, the button is available again')
   await page.getByLabel('Период отчёта').selectOption('14')
-  await waitFor(async () => (await recalc.isEnabled()) && (await recalc.innerText()) === 'Пересчитать', 'подсчёт за 14 дней завершился')
-  // список диагностики целиком, без внутренней прокрутки, которая обрезала последнюю находку
+  await waitFor(async () => (await recalc.isEnabled()) && (await recalc.innerText()) === 'Пересчитать', 'the 14-day calculation finished')
+  // the whole diagnostics list, without internal scrolling that clipped the last finding
   const diag = await page.evaluate(() => { const u = document.querySelector('ul[aria-label="Находки диагностики"]'); return u.scrollHeight - u.clientHeight })
-  must(diag <= 1, `список диагностики прокручивается внутри и обрезает строки: ${diag}`)
+  must(diag <= 1, `the diagnostics list scrolls inside and clips rows: ${diag}`)
   await page.locator('section[aria-label="Диагностика"]').screenshot({ path: join(stateDir, 'm5-ctxkit-diag-1280.png') })
   await page.locator('section[aria-label="Эффективность"]').screenshot({ path: join(stateDir, 'm5-ctxkit-efficiency-1280.png') })
   const ctxLayout = await page.evaluate(() => ({ h: document.documentElement.scrollWidth - document.documentElement.clientWidth, m: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth }))
-  must(ctxLayout.h <= 0 && ctxLayout.m <= 1, `горизонтальная прокрутка в разделе Инструментов контекста: ${JSON.stringify(ctxLayout)}`)
-  const v4 = await axeCheck(page, 'Инструменты контекста')
-  must(v4.length === 0, `axe: Инструменты контекста: ${v4.map((x) => x.id).join(', ')}`)
-  await noSecretOnPage('Инструменты контекста')
-  // применение с формой по умолчанию (советник «не менять») не создаёт model, advisorModel и effortLevel
+  must(ctxLayout.h <= 0 && ctxLayout.m <= 1, `horizontal scroll in the Context Toolkit section: ${JSON.stringify(ctxLayout)}`)
+  const v4 = await axeCheck(page, 'Context Toolkit')
+  must(v4.length === 0, `axe: Context Toolkit: ${v4.map((x) => x.id).join(', ')}`)
+  await noSecretOnPage('Context Toolkit')
+  // applying with the default form (advisor "do not change") does not create model, advisorModel and effortLevel
   const sKeep = JSON.parse(readFileSync(settingsFile, 'utf8'))
   const sBase = JSON.parse(settingsBefore)
-  for (const k of ['model', 'advisorModel', 'effortLevel', 'modelSettings']) must(JSON.stringify(sKeep[k]) === JSON.stringify(sBase[k]) && !(k in sKeep), `форма по умолчанию записала ${k}: ${JSON.stringify(sKeep[k])}`)
-  // явный выбор Fable: предпросмотр показывает смену, применение пишет advisorModel
+  for (const k of ['model', 'advisorModel', 'effortLevel', 'modelSettings']) must(JSON.stringify(sKeep[k]) === JSON.stringify(sBase[k]) && !(k in sKeep), `the default form wrote ${k}: ${JSON.stringify(sKeep[k])}`)
+  // an explicit Fable choice: the preview shows the change, apply writes advisorModel
   await page.getByLabel('Модель-советник').selectOption('fable')
-  must(await applyBtn.isDisabled(), 'после выбора советника старый предпросмотр не должен разрешать применение')
+  must(await applyBtn.isDisabled(), 'after choosing the advisor the old preview must not allow apply')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
-  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с советником Fable')
-  must((await page.locator('pre.out').innerText()).includes('advisorModel: (не задано) -> fable'), 'предпросмотр с Fable не показал запись advisorModel')
-  must(!('advisorModel' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'предпросмотр с Fable записал advisorModel')
+  await waitFor(() => applyBtn.isEnabled(), 'preview with the Fable advisor')
+  must((await page.locator('pre.out').innerText()).includes('advisorModel: (не задано) -> fable'), 'the preview with Fable did not show the advisorModel entry')
+  must(!('advisorModel' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'the preview with Fable wrote advisorModel')
   await applyBtn.click()
-  await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).advisorModel === 'fable', 'явный выбор Fable записал advisorModel')
-  // шлюз Stop: по умолчанию ставится (хук + находка stop_gate «ok»), со снятой галочкой хук убирается (находка «нет шлюза»)
+  await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).advisorModel === 'fable', 'the explicit Fable choice wrote advisorModel')
+  // Stop gate: installed by default (hook + finding stop_gate "ok"), with the checkbox cleared the hook is removed (finding "no gate")
   const ourStop = () => (JSON.parse(readFileSync(settingsFile, 'utf8')).hooks?.Stop ?? []).filter((g) => (g.hooks ?? []).some((h) => /(^|[\\/"])context-toolkit(\.exe)?("|\s|$)/i.test(h.command ?? ''))).length
   const findings = () => page.locator('ul[aria-label="Находки диагностики"]').innerText()
-  must(ourStop() === 1, `после применения нет нашего хука Stop (${ourStop()})`)
-  await waitFor(async () => (await findings()).includes('шлюз Stop установлен'), 'доктор: шлюз Stop установлен')
+  must(ourStop() === 1, `our Stop hook is missing after apply (${ourStop()})`)
+  await waitFor(async () => (await findings()).includes('шлюз Stop установлен'), 'doctor: the Stop gate is installed')
   const gateBox = page.getByRole('checkbox', { name: /Шлюз Stop/ })
-  must(await gateBox.isChecked(), 'галочка «Шлюз Stop» по умолчанию должна стоять')
+  must(await gateBox.isChecked(), 'the "Stop gate" checkbox must be checked by default')
   await gateBox.uncheck()
-  must(await applyBtn.isDisabled(), 'после смены галочки старый предпросмотр не должен разрешать применение')
+  must(await applyBtn.isDisabled(), 'after the checkbox changes the old preview must not allow apply')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
-  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр без шлюза Stop')
-  must(ourStop() === 1, 'предпросмотр без шлюза изменил settings.json')
+  await waitFor(() => applyBtn.isEnabled(), 'preview without the Stop gate')
+  must(ourStop() === 1, 'the preview without the gate changed settings.json')
   await applyBtn.click()
-  await waitFor(() => ourStop() === 0, 'setup убрал хук Stop при снятой галочке')
-  await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор: нет шлюза Stop')
-  must(JSON.parse(readFileSync(settingsFile, 'utf8')).hooks.PreToolUse !== undefined, 'снятие шлюза затронуло остальные хуки')
-  // окно передаёт --advisor только при явном выборе: основная модель и effort остаются как были, советник — выбор из формы (Fable выбран выше)
+  await waitFor(() => ourStop() === 0, 'setup removed the Stop hook when the checkbox is cleared')
+  await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'doctor: no Stop gate')
+  must(JSON.parse(readFileSync(settingsFile, 'utf8')).hooks.PreToolUse !== undefined, 'removing the gate affected the other hooks')
+  // the window passes --advisor only on an explicit choice: the main model and effort stay as they were, the advisor is the form's choice (Fable is chosen above)
   const sNow = JSON.parse(readFileSync(settingsFile, 'utf8'))
   const sPre = JSON.parse(settingsBefore)
-  must(sNow.model === sPre.model && sNow.effortLevel === sPre.effortLevel && JSON.stringify(sNow.modelSettings) === JSON.stringify(sPre.modelSettings), 'окно изменило model, effortLevel или modelSettings')
-  must(sNow.advisorModel === 'fable', `advisorModel из формы не записан: ${sNow.advisorModel}`)
-  // селекты «Основная модель» и «Effort»: по умолчанию «Не менять», явный выбор Sonnet + high виден в предпросмотре и пишется после применения
+  must(sNow.model === sPre.model && sNow.effortLevel === sPre.effortLevel && JSON.stringify(sNow.modelSettings) === JSON.stringify(sPre.modelSettings), 'the window changed model, effortLevel or modelSettings')
+  must(sNow.advisorModel === 'fable', `advisorModel from the form was not written: ${sNow.advisorModel}`)
+  // the "Main model" and "Effort" selects: default "Do not change", an explicit Sonnet + high choice is visible in the preview and written after apply
   const mainSel = page.getByLabel('Основная модель', { exact: true })
   const effortSel = page.getByLabel('Effort', { exact: true })
-  must((await mainSel.inputValue()) === 'keep' && (await effortSel.inputValue()) === 'keep', 'селекты основной модели и effort по умолчанию должны быть «Не менять»')
-  must((await mainSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Sonnet|Opus|Haiku', 'варианты основной модели')
-  must((await effortSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|low|medium|high|xhigh', 'варианты effort')
-  must((await page.locator('#ctx-effort-hint').innerText()).includes('2.1.251'), 'под селектом effort нет подсказки про версию Claude Code')
+  must((await mainSel.inputValue()) === 'keep' && (await effortSel.inputValue()) === 'keep', 'the main model and effort selects must default to "Do not change"')
+  must((await mainSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Sonnet|Opus|Haiku', 'main model options')
+  must((await effortSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|low|medium|high|xhigh', 'effort options')
+  must((await page.locator('#ctx-effort-hint').innerText()).includes('2.1.251'), 'there is no Claude Code version hint under the effort select')
   await mainSel.selectOption('sonnet')
   await effortSel.selectOption('high')
-  must(await applyBtn.isDisabled(), 'после выбора модели и effort старый предпросмотр не должен разрешать применение')
+  must(await applyBtn.isDisabled(), 'after choosing the model and effort the old preview must not allow apply')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
-  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с Sonnet и high')
+  await waitFor(() => applyBtn.isEnabled(), 'preview with Sonnet and high')
   const modelPreview = await page.locator('pre.out').innerText()
-  for (const line of ['model: (не задано) -> sonnet', 'effortLevel: (не задано) -> high', 'effort modelSettings.claude-sonnet-5-5: (не задано) -> high']) must(modelPreview.includes(line), `предпросмотр с Sonnet и high без строки «${line}»: ${modelPreview.slice(0, 500)}`)
-  must(englishLeft(modelPreview).length === 0, `английские фразы в русском предпросмотре с моделью: ${englishLeft(modelPreview).slice(0, 5).join(' // ')}`)
-  must(!('model' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'предпросмотр с Sonnet записал model')
+  for (const line of ['model: (не задано) -> sonnet', 'effortLevel: (не задано) -> high', 'effort modelSettings.claude-sonnet-5-5: (не задано) -> high']) must(modelPreview.includes(line), `the preview with Sonnet and high lacks the line "${line}": ${modelPreview.slice(0, 500)}`)
+  must(englishLeft(modelPreview).length === 0, `English phrases in the Russian preview with a model: ${englishLeft(modelPreview).slice(0, 5).join(' // ')}`)
+  must(!('model' in JSON.parse(readFileSync(settingsFile, 'utf8'))), 'the preview with Sonnet wrote model')
   await mainSel.selectOption('keep')
   await effortSel.selectOption('keep')
-  must(await applyBtn.isDisabled(), 'после возврата к «Не менять» старый предпросмотр не должен разрешать применение')
+  must(await applyBtn.isDisabled(), 'after returning to "Do not change" the old preview must not allow apply')
   await mainSel.selectOption('sonnet')
   await effortSel.selectOption('high')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
-  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с Sonnet и high повторён')
+  await waitFor(() => applyBtn.isEnabled(), 'preview with Sonnet and high repeated')
   await applyBtn.click()
-  await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).model === 'sonnet', 'выбор Sonnet записал model')
+  await waitFor(() => JSON.parse(readFileSync(settingsFile, 'utf8')).model === 'sonnet', 'the Sonnet choice wrote model')
   const sModel = JSON.parse(readFileSync(settingsFile, 'utf8'))
-  must(sModel.modelSettings?.['claude-sonnet-5-5']?.effortLevel === 'high' && sModel.effortLevel === 'high', `effort high не записан: ${JSON.stringify({ ms: sModel.modelSettings, e: sModel.effortLevel })}`)
+  must(sModel.modelSettings?.['claude-sonnet-5-5']?.effortLevel === 'high' && sModel.effortLevel === 'high', `effort high was not written: ${JSON.stringify({ ms: sModel.modelSettings, e: sModel.effortLevel })}`)
   const foreignStart = (s) => s.hooks.SessionStart.flatMap((g) => g.hooks ?? []).map((h) => h.command).filter((c) => !/context-toolkit|ctxkit/i.test(c))
-  must(sModel.advisorModel === 'fable' && JSON.stringify(foreignStart(sModel)) === JSON.stringify(foreignStart(sPre)), `запись модели и effort затронула советника или чужие хуки: ${sModel.advisorModel} ${JSON.stringify(sModel.hooks.SessionStart)} / ${JSON.stringify(sPre.hooks.SessionStart)}`)
-  // уход из раздела и возврат: галочка берётся из профиля (шлюза нет), а не сбрасывается на «шлюз включён»
+  must(sModel.advisorModel === 'fable' && JSON.stringify(foreignStart(sModel)) === JSON.stringify(foreignStart(sPre)), `writing the model and effort touched the advisor or foreign hooks: ${sModel.advisorModel} ${JSON.stringify(sModel.hooks.SessionStart)} / ${JSON.stringify(sPre.hooks.SessionStart)}`)
+  // leaving the section and coming back: the checkbox is taken from the profile (no gate), not reset to "gate enabled"
   await page.keyboard.press('1')
   await page.keyboard.press('7')
   await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 15000 })
-  await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'доктор после возврата в раздел')
-  await waitFor(async () => !(await page.getByRole('checkbox', { name: /Шлюз Stop/ }).isChecked()), 'галочка «Шлюз Stop» после возврата в раздел должна остаться снятой')
+  await waitFor(async () => (await findings()).includes('нет шлюза Stop'), 'doctor after returning to the section')
+  await waitFor(async () => !(await page.getByRole('checkbox', { name: /Шлюз Stop/ }).isChecked()), 'the "Stop gate" checkbox must stay cleared after returning to the section')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
-  await waitFor(async () => (await page.locator('pre.out').innerText()).includes('Шлюз Stop: выключен'), 'предпросмотр после возврата должен говорить «Шлюз Stop: выключен»')
-  must(ourStop() === 0, 'предпросмотр после возврата вернул шлюз')
-  // ---- политики «Защиты» из окна: «не менять» не создаёт context-toolkit.json; «включить выбранные» с двумя политиками создаёт его, предпросмотр показывает строки ----
-  must(!existsSync(ctxkitJson), 'до выбора политик context-toolkit.json не должно быть: «не менять» его не создаёт')
+  await waitFor(async () => (await page.locator('pre.out').innerText()).includes('Шлюз Stop: выключен'), 'the preview after returning must say "Stop gate: off"')
+  must(ourStop() === 0, 'the preview after returning brought the gate back')
+  // ---- "Protection" policies from the window: "do not change" does not create context-toolkit.json; "enable selected" with two policies creates it, the preview shows the lines ----
+  must(!existsSync(ctxkitJson), 'context-toolkit.json must not exist before choosing policies: "do not change" does not create it')
   const polSel = page.getByLabel('Политики', { exact: true })
   const hygiene = page.getByRole('checkbox', { name: /Гигиена коммитов/ })
   const slotsBox = page.getByRole('checkbox', { name: /Лимит параллельных сборок/ })
   const slotsNum = page.getByLabel('Лимит параллельных сборок, от 1 до 8')
-  must((await polSel.inputValue()) === 'keep' && (await polSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Включить выбранные|Выключить все', 'селект политик: по умолчанию «Не менять»')
-  must((await page.locator('#ctx-policy-hint').innerText()).includes('файла политик нет'), 'подпись под политиками без файла политик должна говорить, что его нет')
-  must(await hygiene.isDisabled() && await slotsBox.isDisabled() && await page.getByRole('checkbox', { name: /Неожиданные файлы-отчёты/ }).isDisabled() && await page.getByRole('checkbox', { name: /Подтверждение необратимого/ }).isDisabled(), 'при «Не менять» чекбоксы политик должны быть недоступны')
-  // отмеченное при «Не менять» не уходит в setup: окно держит настройки, а main — аргументы (без --policy)
+  must((await polSel.inputValue()) === 'keep' && (await polSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Включить выбранные|Выключить все', 'policies select: default "Do not change"')
+  must((await page.locator('#ctx-policy-hint').innerText()).includes('файла политик нет'), 'the caption under the policies without a policy file must say there is none')
+  must(await hygiene.isDisabled() && await slotsBox.isDisabled() && await page.getByRole('checkbox', { name: /Неожиданные файлы-отчёты/ }).isDisabled() && await page.getByRole('checkbox', { name: /Подтверждение необратимого/ }).isDisabled(), 'with "Do not change" the policy checkboxes must be unavailable')
+  // what is ticked under "Do not change" does not go to setup: the window keeps the settings, and main keeps the arguments (no --policy)
   await polSel.selectOption('on')
   await hygiene.check()
   await slotsBox.check()
   await slotsNum.fill('3')
-  must(await applyBtn.isDisabled(), 'после выбора политик старый предпросмотр не должен разрешать применение')
+  must(await applyBtn.isDisabled(), 'after choosing policies the old preview must not allow apply')
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
-  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр с политиками')
+  await waitFor(() => applyBtn.isEnabled(), 'preview with policies')
   const polPreview = await page.locator('pre.out').innerText()
-  for (const line of ['политика commit_hygiene: выкл -> вкл', 'политика build_slots: выкл -> 3', 'политика stray_files: выкл (без изменений)']) must(polPreview.includes(line), `предпросмотр политик без строки «${line}»: ${polPreview.slice(0, 700)}`)
-  must(englishLeft(polPreview).length === 0, `английские фразы в русском предпросмотре политик: ${englishLeft(polPreview).slice(0, 5).join(' // ')}`)
-  must(!existsSync(ctxkitJson), 'предпросмотр политик создал context-toolkit.json')
+  for (const line of ['политика commit_hygiene: выкл -> вкл', 'политика build_slots: выкл -> 3', 'политика stray_files: выкл (без изменений)']) must(polPreview.includes(line), `the policy preview lacks the line "${line}": ${polPreview.slice(0, 700)}`)
+  must(englishLeft(polPreview).length === 0, `English phrases in the Russian policy preview: ${englishLeft(polPreview).slice(0, 5).join(' // ')}`)
+  must(!existsSync(ctxkitJson), 'the policy preview created context-toolkit.json')
   await page.locator('fieldset.choices', { has: page.locator('#ctx-policy') }).screenshot({ path: join(stateDir, 'm5-ctxkit-policies-1280.png') })
   await applyBtn.click()
-  await waitFor(() => existsSync(ctxkitJson), 'применение создало context-toolkit.json')
+  await waitFor(() => existsSync(ctxkitJson), 'apply created context-toolkit.json')
   const polCfg = JSON.parse(readFileSync(ctxkitJson, 'utf8'))
-  must(polCfg.policies?.commit_hygiene === true && polCfg.policies?.build_slots === 3 && !polCfg.policies?.stray_files && polCfg.created_by === 'context-toolkit setup', `context-toolkit.json после применения: ${JSON.stringify(polCfg)}`)
-  // подпись «сейчас включены» берётся из находки policies, а форму не меняет
-  await waitFor(async () => (await page.locator('#ctx-policy-hint').innerText()).includes('Сейчас включены: commit_hygiene, build_slots=3'), 'подпись «Сейчас включены» из диагностики')
-  must((await polSel.inputValue()) === 'on', 'подпись из диагностики изменила форму')
+  must(polCfg.policies?.commit_hygiene === true && polCfg.policies?.build_slots === 3 && !polCfg.policies?.stray_files && polCfg.created_by === 'context-toolkit setup', `context-toolkit.json after apply: ${JSON.stringify(polCfg)}`)
+  // the "currently enabled" caption comes from the policies finding and does not change the form
+  await waitFor(async () => (await page.locator('#ctx-policy-hint').innerText()).includes('Сейчас включены: commit_hygiene, build_slots=3'), 'the "Currently enabled" caption from diagnostics')
+  must((await polSel.inputValue()) === 'on', 'the caption from diagnostics changed the form')
   await polSel.selectOption('keep')
-  // ---- откат на копии фикстуры: предпросмотр, R2, чужие хуки на месте, повтор безопасен ----
+  // ---- rollback on a fixture copy: preview, R2, foreign hooks in place, a repeat is safe ----
   const undoOpts = { antigravity: false, dsh: false }
   const undoRefusal = (o, dry) => page.evaluate(async ([x, d]) => (await window.loadout.ctxkitUninstall(x, d)).error ?? 'ok', [o, dry])
   const undoPreviewBtn = page.getByRole('button', { name: 'Откатить Инструменты контекста', exact: true })
@@ -976,17 +976,17 @@ try {
   const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v)
   const claudeMd = join(claudeDir, 'CLAUDE.md')
   const settingsHooked = readFileSync(settingsFile, 'utf8')
-  must(foreignCmds(JSON.parse(settingsBefore)).length === 3 && JSON.stringify(foreignCmds(JSON.parse(settingsHooked))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'до отката чужие хуки фикстуры должны быть на месте')
-  must(existsSync(claudeMd) && readFileSync(claudeMd, 'utf8').includes('<!-- context-toolkit:start -->'), 'до отката в CLAUDE.md нет блока правил')
-  must((await undoGoBtn.count()) === 0, 'кнопка отката видна без предпросмотра отката')
-  must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'откат без предпросмотра отката (есть только предпросмотр setup) не отвергнут в main')
-  must((await undoRefusal({ antigravity: 'yes', dsh: false }, true)).includes('параметры'), 'неверные параметры отката не отвергнуты')
-  must((await undoRefusal(undoOpts, 'x')).includes('параметры'), 'неверный dryRun отката не отвергнут')
-  // занятость: сразу после нажатия кнопка показывает «Считаю…» со спиннером, строка состояния говорит, что идёт, все кнопки заблокированы
+  must(foreignCmds(JSON.parse(settingsBefore)).length === 3 && JSON.stringify(foreignCmds(JSON.parse(settingsHooked))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'before the rollback the foreign hooks of the fixture must be in place')
+  must(existsSync(claudeMd) && readFileSync(claudeMd, 'utf8').includes('<!-- context-toolkit:start -->'), 'before the rollback CLAUDE.md has no rules block')
+  must((await undoGoBtn.count()) === 0, 'the rollback button is visible without a rollback preview')
+  must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'a rollback without a rollback preview (only a setup preview exists) was not rejected in main')
+  must((await undoRefusal({ antigravity: 'yes', dsh: false }, true)).includes('параметры'), 'invalid rollback parameters were not rejected')
+  must((await undoRefusal(undoOpts, 'x')).includes('параметры'), 'an invalid rollback dryRun was not rejected')
+  // busy state: right after the click the button shows "Counting…" with a spinner, the status line says it is in progress, all buttons are disabled
   const busyNow = await page.evaluate(() => {
     const sec = document.querySelector('section[aria-label="Применение"]')
     const b = [...sec.querySelectorAll('button')].find((x) => x.textContent === 'Откатить Инструменты контекста')
-    // состояние снимается в первый же момент, когда DOM показал занятость (MutationObserver, а не пауза: ответ быстрый)
+    // the state is captured at the first moment the DOM showed the busy state (MutationObserver, not a pause: the response is fast)
     return new Promise((resolve) => {
       const snap = () => ({ label: b.textContent, spin: !!b.querySelector('.spin'), status: sec.querySelector('[role=status]').textContent, allDisabled: [...sec.querySelectorAll('button')].every((x) => x.disabled) })
       const mo = new MutationObserver(() => {
@@ -999,25 +999,25 @@ try {
       b.click()
     })
   })
-  must(busyNow.label === 'Считаю…' && busyNow.spin && busyNow.status.includes('Считаю предпросмотр отката') && busyNow.allDisabled, `занятость кнопки отката: ${JSON.stringify(busyNow)}`)
+  must(busyNow.label === 'Считаю…' && busyNow.spin && busyNow.status.includes('Считаю предпросмотр отката') && busyNow.allDisabled, `rollback button busy state: ${JSON.stringify(busyNow)}`)
   await undoGoBtn.waitFor({ timeout: 30000 })
-  await waitFor(() => undoGoBtn.isDisabled().then((d) => !d), 'после предпросмотра отката кнопка отката доступна')
+  await waitFor(() => undoGoBtn.isDisabled().then((d) => !d), 'after the rollback preview the rollback button is available')
   const undoPreview = await page.locator('pre.out').innerText()
-  must(undoPreview.includes('[dry-run]') && undoPreview.includes('Не тронуто') && undoPreview.includes('sonnet') && undoPreview.includes('fable'), `предпросмотр отката без списка «не тронуто» с model и advisorModel: ${undoPreview.slice(0, 600)}`)
-  must(![realHome, realHome.replaceAll('\\', '/')].some((h) => undoPreview.toLowerCase().includes(h.toLowerCase())), 'предпросмотр отката показал путь настоящего профиля')
-  must(englishLeft(undoPreview).length === 0, `английские фразы в русском предпросмотре отката: ${englishLeft(undoPreview).slice(0, 5).join(' // ')}`)
-  must(undoPreview.includes('context-toolkit.json удалён (его создал setup)') && existsSync(ctxkitJson), `предпросмотр отката не обещает убрать context-toolkit.json, созданный setup (и не должен трогать его): ${undoPreview.slice(0, 500)}`)
-  must((await page.locator('main').innerText()).includes('Предпросмотр отката: файлы не менялись.'), 'нет подписи предпросмотра отката')
-  must(readFileSync(settingsFile, 'utf8') === settingsHooked && existsSync(hookExe), 'предпросмотр отката изменил файлы')
-  // предпросмотр отката не разрешает «Применить», а смена формы гасит предпросмотр отката
-  must(await applyBtn.isDisabled(), 'после предпросмотра отката «Применить» не должно быть доступно')
-  must((await refusal(opts)).includes('предпросмотр'), 'применение после предпросмотра отката не отвергнуто в main')
+  must(undoPreview.includes('[dry-run]') && undoPreview.includes('Не тронуто') && undoPreview.includes('sonnet') && undoPreview.includes('fable'), `the rollback preview lacks the "not touched" list with model and advisorModel: ${undoPreview.slice(0, 600)}`)
+  must(![realHome, realHome.replaceAll('\\', '/')].some((h) => undoPreview.toLowerCase().includes(h.toLowerCase())), 'the rollback preview showed the path of the real profile')
+  must(englishLeft(undoPreview).length === 0, `English phrases in the Russian rollback preview: ${englishLeft(undoPreview).slice(0, 5).join(' // ')}`)
+  must(undoPreview.includes('context-toolkit.json удалён (его создал setup)') && existsSync(ctxkitJson), `the rollback preview must list the removal of the context-toolkit.json created by setup, and the file must still exist:${undoPreview.slice(0, 500)}`)
+  must((await page.locator('main').innerText()).includes('Предпросмотр отката: файлы не менялись.'), 'no rollback preview caption')
+  must(readFileSync(settingsFile, 'utf8') === settingsHooked && existsSync(hookExe), 'the rollback preview changed files')
+  // the rollback preview does not allow "Apply", and changing the form clears the rollback preview
+  must(await applyBtn.isDisabled(), 'after the rollback preview "Apply" must not be available')
+  must((await refusal(opts)).includes('предпросмотр'), 'apply after the rollback preview was not rejected in main')
   await page.getByRole('checkbox', { name: 'Antigravity' }).check()
-  must((await undoGoBtn.count()) === 0, 'после смены формы кнопка отката должна пропасть')
+  must((await undoGoBtn.count()) === 0, 'after the form changes the rollback button must disappear')
   await page.getByRole('checkbox', { name: 'Antigravity' }).uncheck()
   await undoPreviewBtn.click()
-  await waitFor(() => undoGoBtn.isEnabled(), 'предпросмотр отката повторён')
-  // выравнивание новых строк формы замером: подписи и селекты по одной левой границе, кнопки одной ширины, подсказки в карточке, ничего не обрезано
+  await waitFor(() => undoGoBtn.isEnabled(), 'rollback preview repeated')
+  // alignment of the new form rows by measurement: labels and selects on one left edge, buttons of equal width, hints in the card, nothing clipped
   const formLayout = () => page.evaluate(() => {
     const sec = document.querySelector('section[aria-label="Применение"]')
     const r = (e) => e.getBoundingClientRect()
@@ -1042,47 +1042,47 @@ try {
     await resize(app, w, 800)
     await page.waitForTimeout(250)
     const f = await formLayout()
-    must(f.selDx <= 1 && f.lblDx <= 1 && f.lblSelDx <= 1 && f.btnCount === 4 && f.btnLeftDx <= 1 && f.btnWidthDx <= 1 && !f.btnClipped && f.btnsOrdered && !f.hintsOut && f.statusBelow && f.hScroll <= 0 && f.mScroll <= 1, `выравнивание формы Инструментов контекста на ${w}: ${JSON.stringify(f)}`)
+    must(f.selDx <= 1 && f.lblDx <= 1 && f.lblSelDx <= 1 && f.btnCount === 4 && f.btnLeftDx <= 1 && f.btnWidthDx <= 1 && !f.btnClipped && f.btnsOrdered && !f.hintsOut && f.statusBelow && f.hScroll <= 0 && f.mScroll <= 1, `alignment of the Context Toolkit form at ${w}: ${JSON.stringify(f)}`)
     if (w !== 1100) await shot(page, `m5-ctxkit-undo-${w}`)
   }
   await resize(app, 1280, 800)
   await page.waitForTimeout(250)
-  const v5 = await axeCheck(page, 'Инструменты контекста: предпросмотр отката')
-  must(v5.length === 0, `axe: форма Инструментов контекста с предпросмотром отката: ${v5.map((x) => x.id).join(', ')}`)
+  const v5 = await axeCheck(page, 'Context Toolkit: rollback preview')
+  must(v5.length === 0, `axe: the Context Toolkit form with a rollback preview: ${v5.map((x) => x.id).join(', ')}`)
   await undoGoBtn.click()
-  await waitFor(() => !existsSync(hookExe), 'откат убрал бинарь хуков')
-  await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'после отката нет подписи «Откат выполнен.»')
-  await waitFor(async () => (await page.locator('#notice').innerText().catch(() => '')).includes('Откат Инструментов контекста выполнен'), 'после отката нет уведомления')
-  must(await page.evaluate(() => document.activeElement?.textContent === 'Откатить Инструменты контекста'), 'после отката фокус не вернулся на кнопку предпросмотра отката')
-  must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'один предпросмотр отката разрешил второй откат')
-  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/context-toolkit.exe: ✕ нет'), 'статус после отката: копии хуков нет')
+  await waitFor(() => !existsSync(hookExe), 'the rollback removed the hooks binary')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'after the rollback there is no "Rollback done." caption')
+  await waitFor(async () => (await page.locator('#notice').innerText().catch(() => '')).includes('Откат Инструментов контекста выполнен'), 'after the rollback there is no notification')
+  must(await page.evaluate(() => document.activeElement?.textContent === 'Откатить Инструменты контекста'), 'after the rollback focus did not return to the rollback preview button')
+  must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'one rollback preview allowed a second rollback')
+  await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/context-toolkit.exe: ✕ нет'), 'status after the rollback: the hooks copy is gone')
   const undone = JSON.parse(readFileSync(settingsFile, 'utf8'))
-  must(!/context-toolkit|ctxkit/i.test(JSON.stringify(undone)), `после отката в settings.json остались наши записи: ${JSON.stringify(undone).slice(0, 400)}`)
-  must(JSON.stringify(foreignCmds(undone)) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'откат тронул чужие хуки')
-  must(undone.model === 'sonnet' && undone.advisorModel === 'fable' && undone.modelSettings?.['claude-sonnet-5-5']?.effortLevel === 'high', 'откат тронул модель, советника или effort: их он оставляет')
+  must(!/context-toolkit|ctxkit/i.test(JSON.stringify(undone)), `our entries remain in settings.json after the rollback: ${JSON.stringify(undone).slice(0, 400)}`)
+  must(JSON.stringify(foreignCmds(undone)) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'the rollback touched foreign hooks')
+  must(undone.model === 'sonnet' && undone.advisorModel === 'fable' && undone.modelSettings?.['claude-sonnet-5-5']?.effortLevel === 'high', 'the rollback touched the model, advisor or effort: it leaves them')
   const { model: _m, advisorModel: _a, effortLevel: _e, modelSettings: _s, ...rest } = undone
-  must(JSON.stringify(canon(rest)) === JSON.stringify(canon(JSON.parse(settingsBefore))), `после отката settings.json без модели, советника и effort не равен исходному: ${JSON.stringify(canon(rest)).slice(0, 400)}`)
-  must(!existsSync(claudeMd) || !/context-toolkit|ctxkit/i.test(readFileSync(claudeMd, 'utf8')), 'откат оставил блок правил в CLAUDE.md')
-  must(!existsSync(ctxkitJson), 'откат из окна не убрал context-toolkit.json, который создал setup')
-  must(existsSync(join(claudeDir, 'agents', 'checker.md')) && existsSync(join(claudeDir, 'agents', 'Explore.md')), 'откат удалил агентов: он их оставляет')
-  must((await page.locator('pre.out').innerText()).includes('backups'), 'в выводе отката нет пути к бэкапу settings.json')
-  // повтор безопасен: второй откат ничего не меняет и не падает
+  must(JSON.stringify(canon(rest)) === JSON.stringify(canon(JSON.parse(settingsBefore))), `after the rollback settings.json without model, advisor and effort differs from the original: ${JSON.stringify(canon(rest)).slice(0, 400)}`)
+  must(!existsSync(claudeMd) || !/context-toolkit|ctxkit/i.test(readFileSync(claudeMd, 'utf8')), 'the rollback left the rules block in CLAUDE.md')
+  must(!existsSync(ctxkitJson), 'the rollback from the window did not remove the context-toolkit.json created by setup')
+  must(existsSync(join(claudeDir, 'agents', 'checker.md')) && existsSync(join(claudeDir, 'agents', 'Explore.md')), 'the rollback deleted the agents: it leaves them')
+  must((await page.locator('pre.out').innerText()).includes('backups'), 'the rollback output has no path to the settings.json backup')
+  // a repeat is safe: the second rollback changes nothing and does not fail
   const settingsUndone = readFileSync(settingsFile, 'utf8')
   await undoPreviewBtn.click()
-  await waitFor(() => undoGoBtn.isEnabled(), 'предпросмотр повторного отката')
+  await waitFor(() => undoGoBtn.isEnabled(), 'repeated rollback preview')
   await undoGoBtn.click()
-  await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'повторный откат завершился')
-  must(readFileSync(settingsFile, 'utf8') === settingsUndone && !existsSync(hookExe) && !(await page.locator('section[aria-label="Применение"] [role=alert]').count()), 'повторный откат изменил файлы или показал ошибку')
-  // галочки интеграций доходят до setup: предпросмотр отката с Antigravity и DeepSeek Harness говорит про них (на копии, ничего не пишет)
+  await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'the repeated rollback finished')
+  must(readFileSync(settingsFile, 'utf8') === settingsUndone && !existsSync(hookExe) && !(await page.locator('section[aria-label="Применение"] [role=alert]').count()), 'the repeated rollback changed files or showed an error')
+  // integration checkboxes reach setup: the rollback preview with Antigravity and DeepSeek Harness mentions them (on a copy, writes nothing)
   const integ = await page.evaluate(async () => (await window.loadout.ctxkitUninstall({ antigravity: true, dsh: true }, true)).data?.output ?? '')
-  must(/antigravity/i.test(integ) && /DeepSeek/i.test(integ) && integ.includes('[dry-run]'), `предпросмотр отката с интеграциями без строк про Antigravity и DeepSeek: ${integ.slice(0, 400)}`)
-  must(englishLeft(integ).length === 0, `английские фразы в русском предпросмотре отката с интеграциями: ${englishLeft(integ).slice(0, 5).join(' // ')}`)
-  must(![realHome, realHome.replaceAll('\\', '/')].some((h) => integ.toLowerCase().includes(h.toLowerCase())), 'предпросмотр отката с интеграциями показал путь настоящего профиля')
-  // ---- переход с прежней установки (ctxkit) на копии фикстуры: строка о прежней версии, её кнопка предпросмотра,
-  // «Применить», итог на новом имени, чужое на месте; затем откат возвращает копию к состоянию до шага ----
+  must(/antigravity/i.test(integ) && /DeepSeek/i.test(integ) && integ.includes('[dry-run]'), `the rollback preview with integrations has no lines about Antigravity and DeepSeek: ${integ.slice(0, 400)}`)
+  must(englishLeft(integ).length === 0, `English phrases in the Russian rollback preview with integrations: ${englishLeft(integ).slice(0, 5).join(' // ')}`)
+  must(![realHome, realHome.replaceAll('\\', '/')].some((h) => integ.toLowerCase().includes(h.toLowerCase())), 'the rollback preview with integrations showed the path of the real profile')
+  // ---- migration from the previous install (ctxkit) on a fixture copy: the line about the previous version, its preview button,
+  // "Apply", the result under the new name, foreign entries in place; then the rollback returns the copy to the state before the step ----
   const oldHookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
   mkdirSync(join(claudeDir, 'hooks'), { recursive: true })
-  copyFileSync(join(appDir, 'build', 'context-toolkit.exe'), oldHookExe) // бинарь прежнего имени: его --version тоже «наш продукт»
+  copyFileSync(join(appDir, 'build', 'context-toolkit.exe'), oldHookExe) // a binary with the previous name: its --version is also "our product"
   const oldCmd = `"${oldHookExe.replaceAll('\\', '/')}"`
   const sLegacy = JSON.parse(readFileSync(settingsFile, 'utf8'))
   sLegacy.env = { ...(sLegacy.env ?? {}), CTXKIT_LANG: 'ru' }
@@ -1095,54 +1095,54 @@ try {
   await page.keyboard.press('1')
   await page.keyboard.press('7')
   const legacyLine = 'Установлена прежняя версия (ctxkit): нажмите «Применить», чтобы перейти на «Инструменты контекста»'
-  await waitFor(async () => (await page.locator('main').innerText()).includes(legacyLine), 'раздел не увидел прежнюю установку (ctxkit)')
-  await waitFor(async () => (await findings()).includes('старом имени ctxkit'), 'доктор: нет находки о старом имени')
+  await waitFor(async () => (await page.locator('main').innerText()).includes(legacyLine), 'the section did not see the previous install (ctxkit)')
+  await waitFor(async () => (await findings()).includes('старом имени ctxkit'), 'doctor: no finding about the old name')
   await page.locator('section[aria-label="Установка"]').screenshot({ path: join(stateDir, 'm5-ctxkit-legacy-1280.png') })
-  must((await axeCheck(page, 'Инструменты контекста: прежняя версия')).length === 0, 'axe: строка о прежней версии')
+  must((await axeCheck(page, 'Context Toolkit: previous version')).length === 0, 'axe: the previous version line')
   await page.getByRole('button', { name: 'Предпросмотр перехода', exact: true }).click()
-  await waitFor(() => applyBtn.isEnabled(), 'предпросмотр перехода разрешил «Применить»')
+  await waitFor(() => applyBtn.isEnabled(), 'the migration preview allowed "Apply"')
   const legacyPreview = await page.locator('pre.out').innerText()
-  // старый бинарь ещё запускают хуки DeepSeek Harness фикстуры (~/.dsh/ctxkit-hooks.json, а профиля desktop, который
-  // setup --dsh переписал бы, у фикстуры нет): переход его оставляет и говорит почему, иначе DSH остался бы с хуком на пустое место
-  for (const line of ['старое имя: хуки на ctxkit.exe ->', 'старое имя: env.CTXKIT_LANG -> env.CONTEXT_TOOLKIT_LANG', '[dry-run] старое имя: копирование', 'старый бинарь оставлен', 'читает только этот файл']) must(legacyPreview.includes(line), `предпросмотр перехода без строки «${line}»: ${legacyPreview.slice(0, 800)}`)
-  must(englishLeft(legacyPreview).length === 0, `английские фразы в русском предпросмотре перехода: ${englishLeft(legacyPreview).slice(0, 5).join(' // ')}`)
-  must(existsSync(oldHookExe) && readFileSync(settingsFile, 'utf8').includes('ctxkit.exe'), 'предпросмотр перехода изменил файлы')
+  // the old binary is still run by the DeepSeek Harness hooks of the fixture (~/.dsh/ctxkit-hooks.json, and the desktop profile, which
+  // setup --dsh would rewrite, is absent from the fixture): the migration leaves it and says why, otherwise DSH would be left with a hook pointing nowhere
+  for (const line of ['старое имя: хуки на ctxkit.exe ->', 'старое имя: env.CTXKIT_LANG -> env.CONTEXT_TOOLKIT_LANG', '[dry-run] старое имя: копирование', 'старый бинарь оставлен', 'читает только этот файл']) must(legacyPreview.includes(line), `the migration preview lacks the line "${line}": ${legacyPreview.slice(0, 800)}`)
+  must(englishLeft(legacyPreview).length === 0, `English phrases in the Russian migration preview: ${englishLeft(legacyPreview).slice(0, 5).join(' // ')}`)
+  must(existsSync(oldHookExe) && readFileSync(settingsFile, 'utf8').includes('ctxkit.exe'), 'the migration preview changed files')
   await applyBtn.click()
-  await waitFor(() => existsSync(hookExe) && !readFileSync(settingsFile, 'utf8').includes('ctxkit.exe'), 'переход: хуки на новом бинаре')
+  await waitFor(() => existsSync(hookExe) && !readFileSync(settingsFile, 'utf8').includes('ctxkit.exe'), 'migration: hooks on the new binary')
   const legacyOut = await page.locator('pre.out').innerText()
-  must(existsSync(oldHookExe) && legacyOut.includes('старый бинарь оставлен') && legacyOut.includes('DeepSeek Harness') && legacyOut.includes('context-toolkit setup --dsh'), `переход: старый бинарь, который ещё нужен DSH, должен остаться с объяснением: ${legacyOut.slice(-800)}`)
-  await waitFor(async () => (await page.locator('main').innerText()).includes('Остался бинарь прежней версии ~/.claude/hooks/ctxkit.exe'), 'после перехода нет строки об оставшемся старом бинаре')
+  must(existsSync(oldHookExe) && legacyOut.includes('старый бинарь оставлен') && legacyOut.includes('DeepSeek Harness') && legacyOut.includes('context-toolkit setup --dsh'), `migration: the old binary that DSH still needs must stay with an explanation: ${legacyOut.slice(-800)}`)
+  await waitFor(async () => (await page.locator('main').innerText()).includes('Остался бинарь прежней версии ~/.claude/hooks/ctxkit.exe'), 'after the migration there is no line about the leftover old binary')
   const sMoved = JSON.parse(readFileSync(settingsFile, 'utf8'))
-  must(!JSON.stringify(sMoved.hooks).includes('ctxkit.exe') && JSON.stringify(sMoved.hooks).includes('context-toolkit.exe'), `переход: хуки не на новом бинаре: ${JSON.stringify(sMoved.hooks).slice(0, 400)}`)
-  must(sMoved.env?.CONTEXT_TOOLKIT_LANG === 'ru' && !('CTXKIT_LANG' in (sMoved.env ?? {})), `переход: язык хуков: ${JSON.stringify(sMoved.env)}`)
-  must(JSON.stringify(foreignCmds(sMoved)) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'переход тронул чужие хуки')
+  must(!JSON.stringify(sMoved.hooks).includes('ctxkit.exe') && JSON.stringify(sMoved.hooks).includes('context-toolkit.exe'), `migration: hooks are not on the new binary: ${JSON.stringify(sMoved.hooks).slice(0, 400)}`)
+  must(sMoved.env?.CONTEXT_TOOLKIT_LANG === 'ru' && !('CTXKIT_LANG' in (sMoved.env ?? {})), `migration: hooks language: ${JSON.stringify(sMoved.env)}`)
+  must(JSON.stringify(foreignCmds(sMoved)) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'the migration touched foreign hooks')
   const mdMoved = readFileSync(claudeMd, 'utf8')
-  must(mdMoved.includes('<!-- context-toolkit:start -->') && !mdMoved.includes('ctxkit:') && mdMoved.startsWith(mdOwn.trimEnd()), `переход: блок правил: ${mdMoved.slice(-400)}`)
-  // ctxkit.json, созданный setup, остаётся вместе со старым бинарём, который его читает; новый файл — его копия
-  must(existsSync(join(claudeDir, 'ctxkit.json')) && JSON.parse(readFileSync(ctxkitJson, 'utf8')).policies?.stray_files === true, 'переход: файл политик не скопирован или старый убран, пока старый бинарь ещё нужен')
-  await waitFor(async () => { const m = await page.locator('main').innerText(); return !m.includes('Установлена прежняя версия') && m.includes('~/.claude/hooks/context-toolkit.exe: ● совпадает') }, 'после перехода строка о прежней версии осталась')
+  must(mdMoved.includes('<!-- context-toolkit:start -->') && !mdMoved.includes('ctxkit:') && mdMoved.startsWith(mdOwn.trimEnd()), `migration: rules block: ${mdMoved.slice(-400)}`)
+  // ctxkit.json created by setup stays together with the old binary that reads it; the new file is its copy
+  must(existsSync(join(claudeDir, 'ctxkit.json')) && JSON.parse(readFileSync(ctxkitJson, 'utf8')).policies?.stray_files === true, 'migration: the policy file was not copied or the old one was removed while the old binary is still needed')
+  await waitFor(async () => { const m = await page.locator('main').innerText(); return !m.includes('Установлена прежняя версия') && m.includes('~/.claude/hooks/context-toolkit.exe: ● совпадает') }, 'after the migration the previous version line remained')
   await page.locator('section[aria-label="Установка"]').screenshot({ path: join(stateDir, 'm5-ctxkit-legacy-left-1280.png') })
   await undoPreviewBtn.click()
-  await waitFor(() => undoGoBtn.isEnabled(), 'предпросмотр отката после перехода')
+  await waitFor(() => undoGoBtn.isEnabled(), 'rollback preview after the migration')
   await undoGoBtn.click()
-  await waitFor(() => !existsSync(hookExe) && !existsSync(oldHookExe) && !existsSync(ctxkitJson) && !existsSync(join(claudeDir, 'ctxkit.json')), 'откат после перехода убирает оба бинаря и оба файла политик')
-  must(!/context-toolkit|ctxkit/i.test(readFileSync(settingsFile, 'utf8')) && JSON.stringify(foreignCmds(JSON.parse(readFileSync(settingsFile, 'utf8')))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'откат после перехода оставил наше или тронул чужое')
+  await waitFor(() => !existsSync(hookExe) && !existsSync(oldHookExe) && !existsSync(ctxkitJson) && !existsSync(join(claudeDir, 'ctxkit.json')), 'the rollback after the migration removes both binaries and both policy files')
+  must(!/context-toolkit|ctxkit/i.test(readFileSync(settingsFile, 'utf8')) && JSON.stringify(foreignCmds(JSON.parse(readFileSync(settingsFile, 'utf8')))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'the rollback after the migration left ours or touched foreign')
   await page.keyboard.press('1')
-  await levelSel.selectOption('R0') // понижение подтверждения не требует
-  must((await refusal(opts)).includes('R2'), 'при R0 применение не отвергнуто в main')
-  must((await undoRefusal(undoOpts, false)).includes('R2'), 'при R0 откат не отвергнут в main')
-  must(JSON.stringify(realState()) === JSON.stringify(realBefore), 'setup изменил файл настоящего профиля владельца')
-  must(realBackups() === realBackupsBefore, 'setup создал бэкап в настоящем профиле владельца')
-  await waitFor(() => levelIs('R0'), 'уровень вернулся в R0')
+  await levelSel.selectOption('R0') // lowering needs no confirmation
+  must((await refusal(opts)).includes('R2'), 'at R0 apply was not rejected in main')
+  must((await undoRefusal(undoOpts, false)).includes('R2'), 'at R0 the rollback was not rejected in main')
+  must(JSON.stringify(realState()) === JSON.stringify(realBefore), 'setup changed a file of the real owner profile')
+  must(realBackups() === realBackupsBefore, 'setup created a backup in the real owner profile')
+  await waitFor(() => levelIs('R0'), 'the level went back to R0')
 
-  // reduced motion → «FX: выкл» по умолчанию применяется при загрузке; здесь проверяем переключатель
+  // reduced motion → "FX: off" by default is applied on load; here we check the switch
   await page.getByLabel('Уровень эффектов').selectOption('off')
-  must((await page.evaluate(() => document.documentElement.dataset.fx)) === 'off', 'FX не выключился')
+  must((await page.evaluate(() => document.documentElement.dataset.fx)) === 'off', 'FX did not turn off')
 
-  must(pageErrors.length === 0, `ошибки страницы: ${pageErrors.join(' | ')}`)
+  must(pageErrors.length === 0, `page errors: ${pageErrors.join(' | ')}`)
   await close(session)
 
-  // ---- состояние «загрузка» ----
+  // ---- "loading" state ----
   session = await launch({ LOADOUT_HOME: home, LOADOUT_QA_DELAY_MS: '3000' })
   await session.page.waitForSelector('[role=status]', { timeout: 10000 })
   await resize(session.app, 1280, 800)
@@ -1150,40 +1150,40 @@ try {
   await session.page.waitForSelector('#grid', { timeout: 20000 })
   await close(session)
 
-  // ---- состояние «ошибка»: ядро не найдено ----
+  // ---- "error" state: the core is not found ----
   session = await launch({ LOADOUT_HOME: home, LOADOUT_BIN: join(repo, 'target', 'release', 'loadout-missing.exe') })
   await session.page.waitForSelector('[role=alert]', { timeout: 10000 })
-  must((await session.page.locator('[role=alert]').innerText()).includes('ядро не найдено'), 'сообщение об отсутствии ядра')
+  must((await session.page.locator('[role=alert]').innerText()).includes('ядро не найдено'), 'message about a missing core')
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-error-1280')
   await close(session)
 
-  // ---- «ошибка»: ядро запускается, но отдаёт не то (node.exe под видом ядра) ----
+  // ---- "error": the core starts but returns the wrong thing (node.exe posing as the core) ----
   const fake = join(mkdtempSync(join(tmpdir(), 'loadout-fake-')), 'loadout-fake.exe')
   cpSync(process.execPath, fake)
   homes.push(dirname(fake))
   session = await launch({ LOADOUT_HOME: home, LOADOUT_BIN: fake })
   await session.page.waitForSelector('[role=alert]', { timeout: 15000 })
-  must((await session.page.locator('[role=alert]').innerText()).includes('ядро не ответило'), 'сообщение о сбое ядра')
+  must((await session.page.locator('[role=alert]').innerText()).includes('ядро не ответило'), 'message about a core failure')
   await session.page.getByRole('button', { name: 'Повторить' }).click()
   await close(session)
 
-  // ---- состояние «пусто» ----
+  // ---- "empty" state ----
   const empty = mkdtempSync(join(tmpdir(), 'loadout-empty-'))
   homes.push(empty)
   session = await launch({ LOADOUT_HOME: empty })
   await session.page.waitForSelector('#grid', { timeout: 20000 })
-  must((await session.page.locator('td.empty').innerText()).includes('не найдено'), 'пустое состояние')
+  must((await session.page.locator('td.empty').innerText()).includes('не найдено'), 'empty state')
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-empty-1280')
   await close(session)
   session = undefined
 
-  // ---- английский интерфейс: ни одной кириллической буквы ни в тексте, ни в атрибутах, ни в ответах ядра ----
+  // ---- English UI: not a single Cyrillic letter in the text, in the attributes, or in the core responses ----
   const enHome = materialize(() => {})
   homes.push(enHome)
   writeFileSync(join(profile, 'settings.json'), JSON.stringify({ writeLevel: 'R2' }))
-  // журнал русских сценариев остаётся: записи, сделанные на другом языке, показываются на текущем (relang в ядре)
+  // the journal of the Russian scenarios stays: entries made in another language are shown in the current one (relang in the core)
   const enMarket = sources(enHome)
   session = await launch({ ...fakeEnv(enHome, join(enHome, 'claude-calls.txt')), LOADOUT_LANG: 'en' })
   {
@@ -1192,8 +1192,8 @@ try {
     en.on('pageerror', (e) => enErrors.push(`pageerror: ${e.message.slice(0, 200)}`))
     await en.waitForSelector('#grid', { timeout: 20000 })
     await resize(enApp, 1280, 800)
-    must((await en.evaluate(() => document.documentElement.lang)) === 'en', 'html lang не en')
-    // текст страницы, подписи, подсказки и плейсхолдеры: всё, что видит пользователь или экранный диктор
+    must((await en.evaluate(() => document.documentElement.lang)) === 'en', 'html lang is not en')
+    // page text, labels, tooltips and placeholders: everything the user or a screen reader sees
     const cyrillic = (where) =>
       en.evaluate((w) => {
         const bad = []
@@ -1209,7 +1209,7 @@ try {
       }, where)
     const enOk = async (where) => {
       const bad = await cyrillic(where)
-      must(bad.length === 0, `кириллица в английском интерфейсе:\n${bad.slice(0, 12).join('\n')}`)
+      must(bad.length === 0, `Cyrillic in the English UI:\n${bad.slice(0, 12).join('\n')}`)
     }
     await enOk('matrix')
     await layout(en, 'en-matrix@1280')
@@ -1225,7 +1225,7 @@ try {
       await enOk(name)
       await shot(en, `en-${name}-1280`)
     }
-    // Context Toolkit на английском: форма с политиками, предпросмотр и применение, предпросмотр и откат; вывод ядра (`pre.out`) тоже без кириллицы
+    // Context Toolkit in English: the form with policies, preview and apply, preview and rollback; the core output (`pre.out`) is also free of Cyrillic
     {
       const ctxJson = join(enHome, '.claude', 'context-toolkit.json')
       const ctxHook = join(enHome, '.claude', 'hooks', 'context-toolkit.exe')
@@ -1267,12 +1267,12 @@ try {
       await enOk('ctxkit: rolled back')
     }
     await en.keyboard.press('1')
-    // палитра
+    // palette
     await en.keyboard.press('Control+k')
     await en.waitForTimeout(300)
     await enOk('palette')
     await en.keyboard.press('Escape')
-    // добавление: ошибка ядра (имя занято) и план ядра — оба на английском
+    // add: a core error (the name is taken) and a core plan — both in English
     const enDialog = en.locator('[role=dialog][aria-modal=true]')
     await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
     await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
@@ -1292,7 +1292,7 @@ try {
     await enOk('add: core plan')
     await shot(en, 'en-add-plan-1280')
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
-    // установка плагина: предпросмотр
+    // plugin install: preview
     await en.getByRole('button', { name: 'Install plugin', exact: true }).click()
     await enDialog.getByRole('button', { name: 'Add marketplace…' }).click()
     await enDialog.getByLabel('Marketplace source').fill(enMarket)
@@ -1304,13 +1304,13 @@ try {
     await enDialog.getByText('claude plugin install hello-plugin@e2e-market --scope user').waitFor({ timeout: 8000 })
     await enOk('plugin dialog')
     await shot(en, 'en-plugin-1280')
-    // установка настоящим запуском (подставной claude): команды те же, окно закрывается, в окне ни слова по-русски
+    // install by a real launch (stand-in claude): the same commands, the window closes, not a word of Russian in the window
     await enDialog.getByRole('button', { name: 'Install', exact: true }).click()
     const enCalls = () => (existsSync(join(enHome, 'claude-calls.txt')) ? readFileSync(join(enHome, 'claude-calls.txt'), 'utf8').trim().split('\n') : [])
     await waitFor(() => enCalls().join('|') === `plugin marketplace add --scope user ${enMarket}|plugin install hello-plugin@e2e-market --scope user`, 'claude (EN) called with the exact add and install commands')
     await enDialog.waitFor({ state: 'detached', timeout: 8000 })
     await enOk('plugin installed')
-    // скил: показ «что будет скачано», загрузка, выбор и план ядра
+    // skill: showing "what will be downloaded", download, choice and the core plan
     await en.getByRole('button', { name: 'Install skill', exact: true }).click()
     await enDialog.getByLabel('Skill source').fill('acme/skills')
     await enDialog.getByRole('button', { name: 'What will be downloaded' }).click()
@@ -1323,7 +1323,7 @@ try {
     await enDialog.getByText('~/.claude/skills/web-search/').waitFor({ timeout: 8000 })
     await enOk('skill plan')
     await shot(en, 'en-skill-plan-1280')
-    // установка скила и откат из журнала: запись журнала и всё, что окно показывает при этом, по-английски
+    // skill install and rollback from the journal: the journal entry and everything the window shows meanwhile, in English
     const enSkill = join(enHome, '.claude', 'skills', 'web-search')
     await enDialog.getByRole('button', { name: 'Install', exact: true }).click()
     await enDialog.waitFor({ state: 'detached', timeout: 8000 })
@@ -1338,7 +1338,7 @@ try {
     await enOk('journal after the skill rollback')
     await en.keyboard.press('1')
     await en.waitForSelector('#grid', { timeout: 15000 })
-    // запись из матрицы: корзина, правка и копирование (диалоги и планы ядра)
+    // write from the matrix: trash, edit and copy (dialogs and core plans)
     const enCell = (row, idx) =>
       en.locator('tbody tr', { has: en.locator('td.name b', { hasText: new RegExp(`^${row}$`) }) }).locator('td').nth(idx + 1).click()
     await enCell('tool-a', 3)
@@ -1355,7 +1355,7 @@ try {
     await en.getByRole('button', { name: 'Copy to client…' }).click()
     await enOk('copy dialog')
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
-    // журнал после записи на английском: сама запись и откат
+    // the journal after a write in English: the entry itself and the rollback
     await enCell('tool-a', 3)
     await en.getByRole('button', { name: 'Disable (move to trash)' }).click()
     await enDialog.getByRole('button', { name: 'Move to trash' }).click()
@@ -1364,15 +1364,15 @@ try {
     await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().waitFor({ timeout: 8000 })
     await enOk('journal row')
     await shot(en, 'en-journal-1280')
-    // переключатель языка: на русский и обратно
+    // the language switch: to Russian and back
     await en.getByLabel('Language').selectOption('ru')
     await en.getByRole('button', { name: 'Матрица' }).waitFor({ timeout: 10000 })
-    must((await en.evaluate(() => document.documentElement.lang)) === 'ru', 'после переключения на RU lang не ru')
+    must((await en.evaluate(() => document.documentElement.lang)) === 'ru', 'after switching to RU lang is not ru')
     await en.getByLabel('Язык').selectOption('en')
     await en.getByRole('button', { name: 'Matrix' }).waitFor({ timeout: 10000 })
-    // после RU→EN: уровень записи пережил сохранение языка, перезапущенное ядро говорит по-английски и принимает запись
-    must((await en.getByLabel('Write').inputValue()) === 'R2', 'смена языка стёрла уровень записи')
-    must(JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).lang === 'en', 'язык не сохранён в settings.json')
+    // after RU→EN: the write level survived saving the language, the restarted core speaks English and accepts a write
+    must((await en.getByLabel('Write').inputValue()) === 'R2', 'the language change reset the write level')
+    must(JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).lang === 'en', 'the language was not saved to settings.json')
     await en.waitForSelector('#grid', { timeout: 15000 })
     await enCell('tool-b', 3)
     await en.getByRole('button', { name: 'Disable (move to trash)' }).click()
@@ -1384,12 +1384,12 @@ try {
     await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().getByRole('button', { name: 'Roll back', exact: true }).click()
     await en.waitForTimeout(800)
     await enOk('journal after rollback')
-    must(enErrors.length === 0, `ошибки страницы (EN): ${enErrors.join(' | ')}`)
+    must(enErrors.length === 0, `page errors (EN): ${enErrors.join(' | ')}`)
   }
   await close(session)
   session = undefined
 
-  log('OK: все сценарии прошли')
+  log('OK: all scenarios passed')
 } catch (e) {
   console.error('FAILED:', e instanceof Error ? e.message : e)
   if (session) await close(session).catch(() => {})
@@ -1397,23 +1397,23 @@ try {
 } finally {
   for (const h of homes) rmSync(h, { recursive: true, force: true })
   const core = coreLeftovers()
-  log('оставшихся процессов ядра этого прогона (loadout*.exe с профилем проверок):', core.length)
+  log('remaining core processes of this run (loadout*.exe with the check profile):', core.length)
   for (const id of core) {
     try {
       execFileSync('taskkill', ['/PID', id, '/F'], { stdio: 'ignore' })
     } catch {
-      /* уже закрыт */
+      /* already closed */
     }
   }
   if (core.length) process.exitCode = 1
   const left = leftovers()
-  log('оставшихся процессов electron проверочного профиля:', left.length)
+  log('remaining electron processes of the check profile:', left.length)
   if (left.length) {
     for (const id of left) {
       try {
         execFileSync('taskkill', ['/PID', id, '/T', '/F'], { stdio: 'ignore' })
       } catch {
-        /* уже закрыт */
+        /* already closed */
       }
     }
     process.exitCode = 1

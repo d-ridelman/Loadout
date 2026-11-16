@@ -1,6 +1,6 @@
-// Проверка упакованной сборки (`npm run pack`, затем `node e2e/pack-check.mjs`): запуск dist/win-unpacked/Loadout.exe
-// на своём профиле (`--user-data-dir`, не %APPDATA%\Loadout), подключение по CDP, ядро берётся из resources, переменные
-// LOADOUT_* игнорируются, замер памяти и процессора в простое. Читает настоящие конфиги (только чтение, уровень R0).
+// Check of the packaged build (`npm run pack`, then `node e2e/pack-check.mjs`): launches dist/win-unpacked/Loadout.exe
+// on its own profile (`--user-data-dir`, not %APPDATA%\Loadout), connects over CDP, the core is taken from resources, the LOADOUT_*
+// variables are ignored, idle memory and CPU are measured. Reads the real configs (read-only, level R0).
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -9,11 +9,11 @@ import { chromium } from 'playwright-core'
 
 const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = resolve(appDir, '..')
-// `PACK_DIR` — каталог установленной копии (проверка после тихой установки), по умолчанию распакованная сборка
+// `PACK_DIR` is the directory of an installed copy (a check after a silent install), by default the unpacked build
 const unpacked = process.env.PACK_DIR ?? join(appDir, 'dist', 'win-unpacked')
-// каталог идёт в команду PowerShell: только обычный путь Windows без кавычек и спецсимволов
+// the directory goes into a PowerShell command: only a plain Windows path without quotes or special characters
 if (!/^[A-Za-z]:[\\/][\w .\\/()-]+$/.test(unpacked)) {
-  console.error('FAILED: PACK_DIR содержит недопустимые символы')
+  console.error('FAILED: PACK_DIR contains invalid characters')
   process.exit(1)
 }
 const exe = join(unpacked, 'Loadout.exe')
@@ -26,14 +26,14 @@ const must = (c, m) => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** Процессы сборки: Loadout.exe (оболочка, GPU, рендер) и ядро из resources. */
+/** Build processes: Loadout.exe (shell, GPU, renderer) and the core from resources. */
 function procs() {
   const out = execFileSync(
     'powershell',
     [
       '-NoProfile',
       '-Command',
-      // и по пути сборки, и по своему профилю: запущенный у владельца настоящий Loadout под тем же каталогом не трогаем
+      // by both the build path and our own profile: a real Loadout running for the owner under the same directory is not touched
       `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '${unpacked.replaceAll('/', '\\')}\\*' -and $_.CommandLine -like '*loadout-qa-pack*' } | Select-Object ProcessId, Name, CommandLine, WorkingSetSize, PrivatePageCount, KernelModeTime, UserModeTime | ConvertTo-Json -Compress`,
     ],
     { encoding: 'utf8' },
@@ -46,10 +46,10 @@ function procs() {
 let child
 let browser
 try {
-  must(existsSync(exe), `нет ${exe}: выполните npm run pack`)
+  must(existsSync(exe), `${exe} not found: run npm run pack`)
   rmSync(profile, { recursive: true, force: true })
   mkdirSync(profile, { recursive: true })
-  // LOADOUT_* и APP_QA в упакованной сборке должны игнорироваться: ядро и дом берутся не отсюда
+  // LOADOUT_* and APP_QA must be ignored in the packaged build: the core and the home are not taken from there
   child = spawn(exe, [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`], {
     env: { ...process.env, LOADOUT_HOME: join(repo, 'state', 'no-such-home'), LOADOUT_BIN: 'C:/no/such/loadout.exe', APP_QA: '1', LOADOUT_USER_DATA: join(repo, 'state', 'no-such-profile') },
     stdio: 'ignore',
@@ -59,43 +59,43 @@ try {
     up = await fetch(`http://127.0.0.1:${port}/json/version`).then((r) => r.ok, () => false)
     if (!up) await sleep(300)
   }
-  must(up, 'упакованное приложение не открыло порт отладки')
+  must(up, 'the packaged app did not open the debugging port')
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
   const page = browser.contexts()[0]?.pages().find((p) => p.url().includes('index.html')) ?? (await browser.contexts()[0].waitForEvent('page'))
   const errors = []
   page.on('pageerror', (e) => errors.push(e.message))
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()))
-  // окно сразу уводим за экран: показывать его владельцу незачем
+  // move the window off-screen right away: there is no need to show it to the owner
   await page.evaluate(() => window.moveTo(-6000, 0)).catch(() => {})
 
   await page.waitForSelector('#grid', { timeout: 30_000 })
-  must((await page.title()) === 'Loadout', 'заголовок окна не Loadout')
+  must((await page.title()) === 'Loadout', 'the window title is not Loadout')
   const rows = await page.locator('tbody tr').count()
-  console.log('строк в матрице (настоящие конфиги):', rows)
-  must(rows > 10, 'в матрице мало строк: ядро не найдено в resources или LOADOUT_HOME был принят')
-  must((await page.getByLabel('Уровень записи').inputValue()) === 'R0', 'уровень записи по умолчанию должен быть R0')
-  must((await page.locator('#scanlines').count()) === 0, 'в сборке остались сканлайны')
+  console.log('rows in the matrix (real configs):', rows)
+  must(rows > 10, 'too few rows in the matrix: the core was not found in resources or LOADOUT_HOME was accepted')
+  must((await page.getByLabel('Уровень записи').inputValue()) === 'R0', 'the default write level must be R0')
+  must((await page.locator('#scanlines').count()) === 0, 'scanlines are left in the build')
 
-  // встроенные Инструменты контекста из resources: версия, диагностика и отчёт по настоящим транскриптам (только чтение, ничего не применяется)
-  must(existsSync(join(unpacked, 'resources', 'context-toolkit.exe')), 'в сборке нет resources/context-toolkit.exe')
+  // the built-in Context Toolkit from resources: version, diagnostics and a report on the real transcripts (read-only, nothing is applied)
+  must(existsSync(join(unpacked, 'resources', 'context-toolkit.exe')), 'the build has no resources/context-toolkit.exe')
   await page.keyboard.press('7')
   await page.getByText('context-toolkit 0.', { exact: false }).first().waitFor({ timeout: 20_000 })
   await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 30_000 })
   await page.locator('table[aria-label="Ходы по дням"] tbody tr').first().waitFor({ timeout: 120_000 })
   const ctxText = await page.locator('main').innerText()
-  console.log('context-toolkit в сборке:', /context-toolkit \d+\.\d+\.\d+/.exec(ctxText)?.[0], '| находок диагностики:', await page.locator('ul[aria-label="Находки диагностики"] li').count(), '| дней в отчёте:', await page.locator('table[aria-label="Ходы по дням"] tbody tr').count())
-  // что покажет эта машина про установленные копии (сравнение побайтово со встроенной)
+  console.log('context-toolkit in the build:', /context-toolkit \d+\.\d+\.\d+/.exec(ctxText)?.[0], '| diagnostic findings:', await page.locator('ul[aria-label="Находки диагностики"] li').count(), '| days in the report:', await page.locator('table[aria-label="Ходы по дням"] tbody tr').count())
+  // what this machine will show about the installed copies (compared byte by byte with the built-in one)
   for (const line of ctxText.split('\n').filter((l) => /(context-toolkit|ctxkit)\.exe:/.test(l))) console.log('  ', line.trim())
-  must(!/не удалось|не найден|неподдерживаемая/.test(ctxText), 'в разделе Инструментов контекста ошибка')
+  must(!/не удалось|не найден|неподдерживаемая/.test(ctxText), 'error in the Context Toolkit section')
   await page.keyboard.press('1')
 
   const ps = procs()
   const core = ps.filter((p) => p.Name.toLowerCase() === 'loadout.exe' && /serve/.test(p.CommandLine ?? ''))
-  must(core.length === 1, `ядро из resources должно быть одно, найдено: ${core.length}`)
-  must(/--backups/.test(core[0].CommandLine) && core[0].CommandLine.includes('loadout-qa-pack'), 'ядро запущено без каталога бэкапов в профиле сборки')
-  must(!/--home/.test(core[0].CommandLine), 'ядро получило --home из окружения: LOADOUT_HOME должен игнорироваться')
+  must(core.length === 1, `there must be exactly one core from resources, found: ${core.length}`)
+  must(/--backups/.test(core[0].CommandLine) && core[0].CommandLine.includes('loadout-qa-pack'), 'the core was started without the backups directory in the build profile')
+  must(!/--home/.test(core[0].CommandLine), 'the core got --home from the environment: LOADOUT_HOME must be ignored')
 
-  // простой: память и процессор процессов сборки, при полных эффектах и при выключенных
+  // idle: memory and CPU of the build processes, with full effects and with effects off
   const idle = async (label) => {
     await sleep(8_000)
     const a = procs()
@@ -105,20 +105,20 @@ try {
     const total = b.reduce((s, p) => s + t(p), 0) - a.reduce((s, p) => s + t(p), 0)
     const ws = b.reduce((s, p) => s + Number(p.WorkingSetSize), 0) / 1048576
     const priv = b.reduce((s, p) => s + Number(p.PrivatePageCount), 0) / 1048576
-    console.log(`${label}: процессов ${b.length}, рабочий набор ${ws.toFixed(0)} МБ (общие страницы считаются в каждом процессе), приватная память ${priv.toFixed(0)} МБ, процессор за ${IDLE_MS / 1000} с: ${(total / 10_000).toFixed(0)} мс`)
+    console.log(`${label}: processes ${b.length}, working set ${ws.toFixed(0)} MB (shared pages are counted in every process), private memory ${priv.toFixed(0)} MB, CPU over ${IDLE_MS / 1000} s: ${(total / 10_000).toFixed(0)} ms`)
     for (const p of b) {
       const before = a.find((x) => x.ProcessId === p.ProcessId)
       const type = /--type=([a-z-]+)/.exec(p.CommandLine ?? '')?.[1] ?? (p.Name === 'loadout.exe' ? 'core' : 'main')
-      console.log(`   ${type.padEnd(10)} ${(Number(p.WorkingSetSize) / 1048576).toFixed(0).padStart(4)} МБ  ${before ? ((t(p) - t(before)) / 10_000).toFixed(0) : '?'} мс`)
+      console.log(`   ${type.padEnd(10)} ${(Number(p.WorkingSetSize) / 1048576).toFixed(0).padStart(4)} MB  ${before ? ((t(p) - t(before)) / 10_000).toFixed(0) : '?'} ms`)
     }
     return total / 10_000
   }
-  await idle('FX полные')
+  await idle('FX full')
   await page.evaluate(() => { document.documentElement.dataset.fx = 'off' })
-  await idle('FX выкл')
-  console.log('ошибки страницы:', errors.length)
-  must(errors.length === 0, `ошибки страницы: ${errors.join(' | ')}`)
-  console.log('OK: упакованная сборка работает')
+  await idle('FX off')
+  console.log('page errors:', errors.length)
+  must(errors.length === 0, `page errors: ${errors.join(' | ')}`)
+  console.log('OK: the packaged build works')
 } catch (e) {
   console.error('FAILED:', e instanceof Error ? e.message : e)
   process.exitCode = 1
@@ -128,17 +128,17 @@ try {
     try {
       execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
     } catch {
-      /* уже закрыт */
+      /* already closed */
     }
   }
   await sleep(1500)
   const left = procs()
-  console.log('оставшихся процессов сборки:', left.length)
+  console.log('remaining build processes:', left.length)
   for (const p of left) {
     try {
       execFileSync('taskkill', ['/PID', String(p.ProcessId), '/T', '/F'], { stdio: 'ignore' })
     } catch {
-      /* уже закрыт */
+      /* already closed */
     }
   }
   if (left.length) process.exitCode = 1
