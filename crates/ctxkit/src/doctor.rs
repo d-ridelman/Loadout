@@ -323,9 +323,11 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
     // ctxkit.json: silent when absent (the policies are opt-in); a broken file switches every policy off without a word.
     let cfg_path = profile.join(crate::policy::FILE);
     if cfg_path.exists() {
+        // strict UTF-8 like the hooks and setup: a file the hooks cannot read must not look fine here
         let parsed = fs::read(&cfg_path)
             .map_err(|e| e.to_string())
-            .and_then(|b| crate::policy::parse(&String::from_utf8_lossy(&b)));
+            .and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+            .and_then(|text| crate::policy::parse(&text));
         out.push(match parsed {
             Ok(c) => f(
                 "policies",
@@ -343,7 +345,11 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                     "ctxkit.json не разбирается: все политики выключены, хуки молчат",
                 ),
                 Some(format!("{}: {e}", cfg_path.display())),
-                Some("ctxkit setup --policy <list>"),
+                Some(t(
+                    lang,
+                    "fix the JSON or delete the file (setup refuses it as it is), then ctxkit setup --policy <list>",
+                    "поправь JSON или удали файл (setup в таком виде его не принимает), затем ctxkit setup --policy <list>",
+                )),
             ),
         });
     }
@@ -630,6 +636,18 @@ mod tests {
         assert_eq!(bad.severity, "warn");
         assert!(bad.detail.unwrap().contains("commit_hygiene"));
         assert_eq!(find(Some("{")).unwrap().severity, "warn");
+        // a file with a byte that is not UTF-8 is unreadable for the hooks, so it is not "fine" here either
+        fs::write(
+            d.join("ctxkit.json"),
+            b"{\"policies\":{\"stray_files\":true}} \xff",
+        )
+        .unwrap();
+        let utf = diagnose(&d, Lang::En)
+            .into_iter()
+            .find(|x| x.id == "policies")
+            .unwrap();
+        assert_eq!(utf.severity, "warn");
+        assert!(utf.fix.unwrap().contains("delete the file"));
         let _ = fs::remove_dir_all(&d);
     }
 

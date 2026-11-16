@@ -102,10 +102,24 @@ fn git_check(args: &[String]) -> Option<&'static str> {
 
 /// `path` normalised for comparison: forward slashes, lower case, quotes off.
 fn norm(p: &str) -> String {
-    p.trim()
+    let mut s = p
+        .trim()
         .trim_matches(|c| c == '"' || c == '\'')
         .replace('\\', "/")
-        .to_lowercase()
+        .to_lowercase();
+    // Git Bash, WSL and Cygwin spell `C:\Users\x` as `/c/Users/x`, `/mnt/c/...`, `/cygdrive/c/...`
+    for prefix in ["/mnt/", "/cygdrive/"] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = format!("/{rest}");
+            break;
+        }
+    }
+    let b = s.as_bytes();
+    if b.len() >= 2 && b[0] == b'/' && b[1].is_ascii_alphabetic() && (b.len() == 2 || b[2] == b'/')
+    {
+        s = format!("{}:{}", b[1] as char, &s[2..]);
+    }
+    s
 }
 
 /// The home directory in the form `is_root_or_home` compares with.
@@ -317,6 +331,22 @@ mod tests {
             "if git push; then echo ok; fi",
             "time git push",
             "git commit -m x && git push",
+            // redirects glued to the command, wrappers with option values, shell scripts on stdin
+            "git push&>/dev/null",
+            "git push>out.log",
+            "git push 2>&1 | tail -3",
+            "sudo -u bob git push",
+            "timeout 60 git push",
+            "nice -n 5 git push --force",
+            "xargs -0 rm -rf",
+            "bash <<'EOF'\ngit push\nEOF",
+            "echo $((1<<2))\ngit push",
+            "(( x = 1<<2 ))\ngit push",
+            // Git Bash spellings of a drive root and of the home directory
+            "rm -r /c",
+            "rm -r /c/",
+            "rm -r /mnt/c",
+            "rm -r /c/Users/ann",
         ] {
             assert!(bash(cmd), "{cmd}");
         }
@@ -429,5 +459,10 @@ mod tests {
             Some("c:/users/ann")
         ));
         assert!(!is_root_or_home("", Some("c:/users/ann")));
+        assert!(is_root_or_home("/c/Users/Ann", Some("c:/users/ann")));
+        assert!(is_root_or_home("/mnt/c/Users/Ann/", Some("c:/users/ann")));
+        assert!(!is_root_or_home("/c/Users/Ann/src", Some("c:/users/ann")));
+        assert!(!is_root_or_home("/usr", Some("c:/users/ann")));
+        assert!(!is_root_or_home("/mnt/data", None));
     }
 }

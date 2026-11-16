@@ -1155,6 +1155,9 @@ const cases = [
     const refused = run('--policy', 'none');
     const settingsAfter = existsSync(join(profile, 'settings.json')) ? readFileSync(join(profile, 'settings.json'), 'utf8') : null;
     if (refused.status !== 1 || !refused.stderr.includes('ctxkit.json') || settingsBefore !== settingsAfter) return 'broken ctxkit.json must be refused untouched';
+    // without --policy / --with-rules the broken file does not stop setup, but the owner is told
+    const told = run();
+    if (told.status !== 0 || !told.stdout.includes('every policy is off until it is fixed')) return `no warning: ${told.stdout}`;
     // rollback: the file setup made is deleted; the owner's keys stay
     writeFileSync(file, JSON.stringify({ created_by: 'ctxkit setup', policies: { stray_files: true } }));
     const un = spawnSync(exe, ['setup', '--uninstall', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit'], { encoding: 'utf8' });

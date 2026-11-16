@@ -29,6 +29,20 @@ pub(super) fn run(
 ) -> Result<Config, String> {
     let p = path(profile);
     let Some(sel) = sel else {
+        // not an error without `--policy`/`--with-rules` (preflight guards those), but the owner is told:
+        // a file that does not parse means every policy is off
+        if p.exists() {
+            let broken = fs::read_to_string(&p)
+                .map_err(|e| e.to_string())
+                .and_then(|t| policy::parse(&t))
+                .err();
+            if let Some(e) = broken {
+                println!(
+                    "  [warn] {}: {e}; every policy is off until it is fixed or deleted",
+                    p.display()
+                );
+            }
+        }
         let cfg = policy::load_from(profile);
         println!(
             "{}",

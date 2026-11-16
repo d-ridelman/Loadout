@@ -96,13 +96,19 @@ pub fn acquire(
     fs::create_dir_all(dir).ok()?;
     let start = Instant::now();
     let mut last_report: Option<Instant> = None;
+    // A holder counts as hung only when two passes in a row see it so: between its `try_lock` and the write of
+    // its `.info` a live new holder still shows the old, hung-looking start time of the process before it.
+    let mut hung_before = vec![false; limit];
     loop {
         let (mut busy, mut hung) = (0, 0);
-        for n in 0..limit {
+        for (n, before) in hung_before.iter_mut().enumerate() {
             match take(dir, n) {
                 Take::Got(s) => return Some(s),
-                Take::Busy { hung: true } => hung += 1,
-                Take::Busy { hung: false } => busy += 1,
+                Take::Busy { hung: true } if *before => hung += 1,
+                Take::Busy { hung } => {
+                    *before = hung;
+                    busy += 1;
+                }
                 Take::Broken => return None,
             }
         }

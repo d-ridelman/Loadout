@@ -51,12 +51,18 @@ pub fn parse(src: &str, d: Dialect) -> Option<Vec<Cmd>> {
     let Lx {
         mut out, bodies, ..
     } = lx;
+    let index: std::collections::HashMap<usize, usize> =
+        out.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
     for (id, body) in bodies {
-        if let Some(c) = out.iter_mut().find(|c| c.id == id) {
-            c.heredocs.push(body);
+        if let Some(&i) = index.get(&id) {
+            out[i].heredocs.push(body);
         }
     }
     Some(out)
+}
+
+fn is_redirect_char(c: char) -> bool {
+    matches!(c, '<' | '>' | '&')
 }
 
 impl Lx {
@@ -133,9 +139,12 @@ impl Lx {
                     self.i += 1;
                 }
                 '&' => {
-                    let redirect = self.i > 0 && matches!(self.c[self.i - 1], '>' | '<')
-                        || self.peek(1) == Some('>');
-                    if redirect {
+                    // `&` of a redirect (`>&2`, `&>f`) belongs to the redirect word; any other `&` ends the command
+                    let in_redirect = !word.is_empty() && word.chars().all(is_redirect_char);
+                    if in_redirect || self.peek(1) == Some('>') {
+                        if !in_redirect {
+                            flush!();
+                        }
                         word.push('&');
                         in_word = true;
                     } else {
@@ -177,8 +186,24 @@ impl Lx {
                     while matches!(self.peek(0), Some(' ' | '\t')) {
                         self.i += 1;
                     }
-                    let delim = self.heredoc_delimiter()?;
-                    pending.push((cur.id, delim, strip));
+                    let (delim, quoted) = self.heredoc_delimiter()?;
+                    if !quoted && delim.chars().all(|c| c.is_ascii_digit()) {
+                        // `1<<2` (a shift in `$(( ))`) is not a heredoc
+                        word.push_str("<<");
+                        word.push_str(&delim);
+                        in_word = true;
+                    } else {
+                        pending.push((cur.id, delim, strip));
+                    }
+                }
+                // a redirect operator is a word of its own: `git push>out.log` is `git push` and `>out.log`
+                '<' | '>' => {
+                    if !(!word.is_empty() && word.chars().all(is_redirect_char)) {
+                        flush!();
+                    }
+                    word.push(ch);
+                    in_word = true;
+                    self.i += 1;
                 }
                 '@' if self.ps() && !in_word && self.here_string_start().is_some() => {
                     let q = self.here_string_start()?;
@@ -324,12 +349,15 @@ impl Lx {
         Some(())
     }
 
-    fn heredoc_delimiter(&mut self) -> Option<String> {
+    /// The delimiter word after `<<` and whether any of it was quoted.
+    fn heredoc_delimiter(&mut self) -> Option<(String, bool)> {
         let mut delim = String::new();
         let mut any = false;
+        let mut quoted = false;
         while let Some(c) = self.peek(0) {
             match c {
                 '\'' | '"' => {
+                    quoted = true;
                     self.i += 1;
                     loop {
                         let q = self.peek(0)?;
@@ -352,7 +380,7 @@ impl Lx {
                 }
             }
         }
-        any.then_some(delim)
+        any.then_some((delim, quoted))
     }
 
     fn heredoc_body(&mut self, delim: &str, strip_tabs: bool) -> String {
@@ -475,23 +503,59 @@ pub fn base_name(w: &str) -> String {
 /// shell keywords and the PowerShell call operator.
 pub fn command_of(words: &[String]) -> Option<(String, &[String])> {
     let mut i = 0;
-    let mut wrapped = false;
+    // the wrapper whose options are being skipped (`sudo -u bob`, `timeout 60`, `nice -n 5`)
+    let mut wrapper: Option<String> = None;
+    let mut duration_due = false;
     while let Some(w) = words.get(i) {
-        let skip = is_assignment(w)
-            || (wrapped && w.starts_with('-'))
+        i += 1;
+        if let Some(wr) = &wrapper {
+            if w.starts_with('-') {
+                let takes_value = match wr.as_str() {
+                    "sudo" | "doas" => {
+                        ["-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"].as_slice()
+                    }
+                    "env" => &["-u", "-C", "-S"],
+                    "nice" => &["-n"],
+                    "timeout" => &["-k", "-s"],
+                    "xargs" => &["-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a"],
+                    _ => &[],
+                };
+                i += usize::from(takes_value.contains(&w.as_str()));
+                continue;
+            }
+            if duration_due {
+                duration_due = false;
+                continue;
+            }
+        }
+        let name = base_name(w);
+        if is_assignment(w)
             || matches!(
                 w.as_str(),
                 "!" | "{" | "}" | "then" | "do" | "else" | "elif" | "if" | "while" | "until" | "&"
-            );
-        let wrapper = matches!(
-            w.as_str(),
-            "env" | "sudo" | "command" | "nohup" | "exec" | "time" | "builtin"
-        );
-        if !(skip || wrapper) {
-            return Some((base_name(w), &words[i + 1..]));
+            )
+        {
+            continue;
         }
-        wrapped = wrapper || (wrapped && skip);
-        i += 1;
+        if matches!(
+            name.as_str(),
+            "env"
+                | "sudo"
+                | "doas"
+                | "command"
+                | "nohup"
+                | "exec"
+                | "time"
+                | "builtin"
+                | "nice"
+                | "timeout"
+                | "xargs"
+        ) {
+            duration_due = name == "timeout";
+            wrapper = Some(name);
+            continue;
+        }
+        return Some((name, &words[i..]));
     }
     None
 }
@@ -501,13 +565,17 @@ fn nested_script(c: &Cmd) -> Option<(String, Dialect)> {
     let (name, args) = command_of(&c.words)?;
     match name.as_str() {
         "bash" | "sh" | "zsh" | "dash" | "ksh" => {
-            let k = args.iter().position(|a| {
+            let Some(k) = args.iter().position(|a| {
                 a.len() > 1
                     && a.starts_with('-')
                     && !a.starts_with("--")
                     && a[1..].chars().all(|c| c.is_ascii_alphabetic())
                     && a.contains('c')
-            })?;
+            }) else {
+                // `bash <<'EOF' ... EOF`: the heredoc is the script (no file or -c given)
+                return (!c.heredocs.is_empty() && args.iter().all(|a| a.starts_with('-')))
+                    .then(|| (c.heredocs.join("\n"), Dialect::Posix));
+            };
             Some((args.get(k + 1)?.clone(), Dialect::Posix))
         }
         "pwsh" | "powershell" => {
@@ -602,8 +670,19 @@ mod tests {
         );
         assert_eq!(
             w("a 2>&1 | b &> f"),
-            [v(&["a", "2>&1"]), v(&["b", "&>", "f"])]
+            [v(&["a", "2", ">&1"]), v(&["b", "&>", "f"])]
         );
+        // a redirect glued to a word is a word of its own (the command must stay readable)
+        assert_eq!(
+            w("git push&>/dev/null"),
+            [v(&["git", "push", "&>/dev/null"])]
+        );
+        assert_eq!(w("git push>out.log"), [v(&["git", "push", ">out.log"])]);
+        assert_eq!(
+            w("git push>>log 2>&1"),
+            [v(&["git", "push", ">>log", "2", ">&1"])]
+        );
+        assert_eq!(w("a & b"), [v(&["a"]), v(&["b"])]);
         assert_eq!(
             w("(a; b) && { c; }"),
             [v(&["a"]), v(&["b"]), v(&["{", "c"]), v(&["}"])]
@@ -722,6 +801,23 @@ mod tests {
             Some(("git".into(), v(&["push"])))
         );
         assert_eq!(c("if git push"), Some(("git".into(), v(&["push"]))));
+        // wrappers with options that take a value
+        for cmd in [
+            "sudo -u bob git push",
+            "sudo -n -u bob -- git push",
+            "timeout 60 git push",
+            "timeout -k 5 60 git push",
+            "nice -n 5 git push",
+            "env -u HOME FOO=1 git push",
+            "xargs -n 1 git push",
+            "sudo env X=1 nice -n 5 timeout 9 git push",
+            "/usr/bin/env git push",
+        ] {
+            let got = c(cmd);
+            let name = got.as_ref().map(|g| g.0.clone());
+            assert_eq!(name.as_deref(), Some("git"), "{cmd}: {got:?}");
+        }
+        assert_eq!(c("xargs -0 rm -rf").unwrap().0, "rm");
         assert_eq!(c("FOO=1"), None);
         let ps = words("& 'C:/Git/git.exe' push", Dialect::Ps).remove(0);
         assert_eq!(command_of(&ps).unwrap().0, "git");
@@ -760,6 +856,14 @@ mod tests {
         ));
         assert!(hit("powershell -c target", Dialect::Ps));
         assert!(hit("bash -c \"bash -c 'target'\"", Dialect::Posix));
+        // a heredoc fed to a shell is its script
+        assert!(hit("bash <<'EOF'\ntarget\nEOF", Dialect::Posix));
+        assert!(hit("sh -s <<EOF\necho a\ntarget\nEOF", Dialect::Posix));
+        assert!(!hit("bash script.sh <<'EOF'\ntarget\nEOF", Dialect::Posix));
+        assert!(!hit("cat <<'EOF'\ntarget\nEOF", Dialect::Posix));
+        // `<<` that is a shift, not a heredoc, swallows nothing
+        assert!(hit("echo $((1<<2))\ntarget", Dialect::Posix));
+        assert!(hit("(( x = 1<<2 ))\ntarget", Dialect::Posix));
         assert!(!hit("echo target", Dialect::Posix));
         assert!(!hit("echo \"target\"", Dialect::Posix));
         assert!(!hit("bash script.sh target", Dialect::Posix));
