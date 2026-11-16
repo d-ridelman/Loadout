@@ -113,7 +113,10 @@ fn find_program(bin: &str, path_var: &OsStr, pathext: &str) -> Option<PathBuf> {
     let dirs: Vec<PathBuf> = if bin.contains(['/', '\\']) {
         vec![PathBuf::new()]
     } else {
-        std::iter::once(PathBuf::new())
+        // The current folder first, as cmd does; as an absolute path, because `Command` looks a bare
+        // relative name up on PATH only.
+        env::current_dir()
+            .into_iter()
             .chain(env::split_paths(path_var))
             .collect()
     };
@@ -134,13 +137,40 @@ fn find_program(bin: &str, path_var: &OsStr, pathext: &str) -> Option<PathBuf> {
     None
 }
 
+/// The commands `cmd.exe` runs itself; it prefers them to any file of the same name (Git for Windows puts a
+/// coreutils `dir.exe` and `echo.exe` on PATH, which would otherwise take over).
+fn is_cmd_builtin(name: &str) -> bool {
+    const BUILTINS: &[&str] = &[
+        "assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir",
+        "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink",
+        "move", "path", "pause", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir",
+        "set", "setlocal", "shift", "start", "time", "title", "type", "ver", "verify", "vol",
+    ];
+    BUILTINS.contains(&name.to_ascii_lowercase().as_str())
+}
+
+/// Files `CreateProcess` can start itself; any other `PATHEXT` kind (`.js`, `.vbs`, `.py`) needs the
+/// file association, which only `cmd` applies.
+fn startable_directly(program: &Path) -> bool {
+    program
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["exe", "com", "bat", "cmd"].contains(&e.to_ascii_lowercase().as_str()))
+}
+
 /// How `ctxkit check` starts the command. On Windows a program found on `PATH` (an `.exe`, or an
 /// `npm.cmd` / `.bat`, which std quotes for `cmd.exe` itself) is started directly, so `&`, `|`, `%` and
-/// `^` in its arguments reach it as they are. Only a name that is no file (a `cmd` built-in such as
-/// `dir`) goes through `cmd.exe /d /c`, where those characters keep their `cmd` meaning.
+/// `^` in its arguments reach it as they are. What only `cmd` can run (one of its built-ins such as `dir`,
+/// a name that is no file, a script run through its file association) goes through `cmd.exe /d /c`,
+/// where those characters keep their `cmd` meaning.
 fn build_command(args: &[String], path_var: &OsStr, pathext: &str) -> Command {
     if cfg!(windows) {
-        match find_program(&args[0], path_var, pathext) {
+        let direct = if is_cmd_builtin(&args[0]) {
+            None
+        } else {
+            find_program(&args[0], path_var, pathext).filter(|p| startable_directly(p))
+        };
+        match direct {
             Some(program) => {
                 let mut cmd = Command::new(program);
                 cmd.args(&args[1..]);
@@ -374,6 +404,18 @@ mod tests {
         assert!(String::from_utf8_lossy(&out.stdout).contains("built-in"));
         assert!(find_program("echoargs", path, ext).is_some());
         assert!(find_program("echo", path, ext).is_none());
+        // a coreutils-style `dir.exe` on PATH does not take a cmd built-in over; a `.js` goes through cmd
+        fs::write(d.join("dir.exe"), "x").unwrap();
+        fs::write(d.join("tool.js"), "x").unwrap();
+        assert!(is_cmd_builtin("DIR") && is_cmd_builtin("echo") && !is_cmd_builtin("echoargs"));
+        assert!(find_program("dir", path, ext).is_some() && is_cmd_builtin("dir"));
+        let tool = find_program("tool", path, ".JS;.CMD").unwrap();
+        assert!(!startable_directly(&tool));
+        assert!(startable_directly(&d.join("a.CMD")) && startable_directly(Path::new("x.exe")));
+        assert!(!startable_directly(Path::new("noext")));
+        // a bare name in the current folder is found as an absolute path
+        let here = find_program("Cargo", OsStr::new(""), ".toml").unwrap();
+        assert!(here.is_absolute(), "{here:?}");
         let _ = fs::remove_dir_all(&d);
     }
 

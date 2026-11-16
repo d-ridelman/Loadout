@@ -476,7 +476,7 @@ const cases = [
     if (desk1.byAccount.acct1.builtIns.local.settings.modelId !== 'claude-sonnet-5-5') return false;
 
     const agy1 = JSON.parse(readFileSync(agyFile, 'utf8'));
-    if (!agy1['other-hook'] || agy1['claude-guard'] || agy1['ctxkit']?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'test-ctxkit') return false;
+    if (!agy1['other-hook'] || agy1['claude-guard'] || agy1['ctxkit']?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'test-ctxkit --agy') return false; // a custom --hook-cmd gets --agy appended
 
     if (!run1.stdout.includes('3 global MCP servers')) return false;
     if (!run1.stdout.includes('Antigravity Diagnostics:')) return false;

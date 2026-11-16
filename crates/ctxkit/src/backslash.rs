@@ -421,9 +421,11 @@ fn blank_jsonc(src: &str) -> String {
             i = end + 2;
         } else {
             if c == '}' || c == ']' {
-                if let Some(prev) = out.iter_mut().rev().find(|p| !p.is_whitespace()) {
-                    if *prev == ',' {
-                        *prev = ' ';
+                // A comma after a value is a trailing one; `[,]`, `{,}` and `,,` stay errors.
+                let mut kept = out.iter_mut().rev().filter(|p| !p.is_whitespace());
+                if let (Some(comma), Some(before)) = (kept.next(), kept.next()) {
+                    if *comma == ',' && !matches!(*before, '[' | '{' | ',') {
+                        *comma = ' ';
                     }
                 }
             }
@@ -562,6 +564,10 @@ mod tests {
         assert!(json_error("a.json", "{\n  // c\n  \"a\": 1\n  \"b\": 2\n}").is_some());
         assert!(json_error("b.json", "{ \"a\": 1 /* open").is_some());
         assert!(json_error("c.json", "{ \"a\": 1,, }").is_some());
+        assert!(json_error("d1.json", "[,]").is_some());
+        assert!(json_error("d2.json", "{,}").is_some());
+        assert!(json_error("d3.json", "[1, /* c */ ,]").is_some());
+        assert_eq!(json_error("d4.json", "[1, // c\n]"), None);
         // the error still names the right line (offsets are kept)
         let e = json_error("d.json", "{\n  // one\n  /* two\n  three */\n  \"a\" 1\n}").unwrap();
         assert!(e.contains("line 5"), "{e}");

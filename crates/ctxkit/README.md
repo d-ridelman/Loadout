@@ -95,7 +95,7 @@ Before it copies the binary or writes anything, `setup` reads every file it is g
 | `--effort <level>` | Write the effort: `modelSettings.<model>.effortLevel` for `--main-model` or your own `model` (known model, `low`/`medium`/`high`/`xhigh`), the top-level `effortLevel`, and the effort of Desktop presets with `--desktop` |
 | `--desktop` | Set the `modelId` (`--desktop-model`) of Claude Desktop presets (`ccd-session-presets.json`); the effort of a preset changes only with `--effort`. Run it with Claude Desktop fully quit (tray icon too): the running app keeps presets in memory and saves them over the file, so setup skips the write and warns while it runs |
 | `--desktop-model <id>` | Desktop preset `modelId` override (default: `claude-sonnet-5-5`) |
-| `--antigravity` | Register `ctxkit` in `~/.gemini/config/hooks.json` and audit Antigravity MCPs, plugins, and CLI model |
+| `--antigravity` | Register `ctxkit --agy` in `~/.gemini/config/hooks.json` (a custom `--hook-cmd` gets ` --agy` appended) and audit Antigravity MCPs, plugins, and CLI model |
 | `--dsh` | Write `~/.dsh/ctxkit-hooks.json` and mount the `@deepseek-ai/dsh-hooks-claude-code` bridge on it in the DeepSeek Harness `desktop` profile (`--dsh-home <path>` overrides `~/.dsh`); warns with the exact `pnpm add` command when the bridge package is missing |
 | `--with-rules` | Insert or update the compact rule block in `CLAUDE.md` between `ctxkit` markers |
 | `--force-agents` | Overwrite existing `Explore.md` and `checker.md` |

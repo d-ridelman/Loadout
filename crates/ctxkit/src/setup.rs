@@ -351,10 +351,12 @@ pub fn run_setup(args: &[String]) -> i32 {
             .agy_file
             .clone()
             .unwrap_or_else(|| home.join(".gemini").join("config").join("hooks.json"));
-        let agy_cmd = opts
-            .hook_cmd
-            .clone()
-            .unwrap_or_else(|| format_antigravity_command(&hook_bin_path, opts.lang));
+        // A custom --hook-cmd gets the `--agy` flag too (like `--dsh` for DeepSeek Harness), unless it has it.
+        let agy_cmd = match opts.hook_cmd.clone() {
+            Some(cmd) if cmd.split_whitespace().any(|w| w == "--agy") => cmd,
+            Some(cmd) => format!("{} --agy", cmd.trim()),
+            None => format_antigravity_command(&hook_bin_path, opts.lang),
+        };
         if let Err(e) = update_antigravity_hooks(&apath, &agy_cmd, opts.dry_run) {
             eprintln!("ERR: {e}");
             return 1;
