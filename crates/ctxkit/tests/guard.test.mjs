@@ -191,6 +191,64 @@ const cases = [
     return pol(isoProfile, 'Bash', { command: 'git push' }) === '' && pol(polProfile('irrev-broken', '{'), 'Bash', { command: 'git push' }) === '' && pol(on, 'Bash', { command: 'git push' }, { env: { CTXKIT_GUARD: 'off' } }) === '';
   }],
 
+  // Policy build_slots: three parallel `ctxkit check` runs, two slots; a killed holder frees its slot
+  [true, () => {
+    const root = join(dir, 'slots-test');
+    const tmp = join(root, 'tmp');
+    mkdirSync(tmp, { recursive: true });
+    const worker = join(root, 'worker.mjs');
+    writeFileSync(worker, [
+      "import { writeFileSync, readdirSync, rmSync, appendFileSync, mkdirSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      'const d = process.env.SLOT_TEST_DIR; mkdirSync(d, { recursive: true });',
+      "const me = join(d, `run-${process.pid}`); writeFileSync(me, '');",
+      "appendFileSync(join(d, 'seen.txt'), readdirSync(d).filter((f) => f.startsWith('run-')).length + '\\n');",
+      'await new Promise((r) => setTimeout(r, Number(process.env.SLOT_HOLD_MS ?? 800)));',
+      'rmSync(me, { force: true });',
+    ].join('\n'));
+    const driver = join(root, 'driver.mjs');
+    writeFileSync(driver, [
+      "import { spawn } from 'node:child_process';",
+      'const [exe, worker, n] = process.argv.slice(2);',
+      "const runs = Array.from({ length: +n }, () => new Promise((res) => { const c = spawn(exe, ['check', 'node', worker], { stdio: ['ignore', 'pipe', 'pipe'] }); let err = ''; let out = ''; c.stdout.on('data', (d) => (out += d)); c.stderr.on('data', (d) => (err += d)); c.on('close', (code) => res({ code, err, out })); }));",
+      'console.log(JSON.stringify(await Promise.all(runs)));',
+    ].join('\n'));
+    const env = (profile, extra = {}) => ({ ...process.env, CTXKIT_LANG: 'en', CLAUDE_CONFIG_DIR: profile, TMP: tmp, TEMP: tmp, TMPDIR: tmp, SLOT_TEST_DIR: join(root, 'seen'), ...extra });
+    const slotsProfile = P('slots', { build_slots: 2 });
+    const r = spawnSync('node', [driver, exe, worker, '3'], { encoding: 'utf8', env: env(slotsProfile) });
+    if (r.status !== 0) return `driver: ${r.stderr}`;
+    const runs = JSON.parse(r.stdout);
+    if (!runs.every((x) => x.code === 0 && x.out.startsWith('OK'))) return `runs failed: ${r.stdout}`;
+    const seen = readFileSync(join(root, 'seen', 'seen.txt'), 'utf8').trim().split('\n').map(Number);
+    if (Math.max(...seen) !== 2) return `limit 2, saw ${seen}`;
+    if (!runs.some((x) => x.err.includes('waiting for a build slot (2 busy)'))) return `no wait message: ${r.stdout}`;
+    // the policy off: all three run together
+    rmSync(join(root, 'seen'), { recursive: true, force: true });
+    const free = spawnSync('node', [driver, exe, worker, '3'], { encoding: 'utf8', env: env(isoProfile) });
+    const seenFree = readFileSync(join(root, 'seen', 'seen.txt'), 'utf8').trim().split('\n').map(Number);
+    if (free.status !== 0 || Math.max(...seenFree) !== 3 || free.stdout.includes('waiting for a build slot')) return `off must not limit: ${seenFree}`;
+    // a killed holder frees its slot: limit 1, the first run is killed while it holds it
+    const one = P('slots-one', { build_slots: 1 });
+    const killer = join(root, 'killer.mjs');
+    writeFileSync(killer, [
+      "import { spawn } from 'node:child_process'; import { existsSync, readdirSync } from 'node:fs'; import { join } from 'node:path';",
+      'const [exe, worker, seen] = process.argv.slice(2);',
+      "const first = spawn(exe, ['check', 'node', worker], { stdio: 'ignore', env: { ...process.env, SLOT_HOLD_MS: '6000' } });",
+      "for (let i = 0; i < 100 && !(existsSync(seen) && readdirSync(seen).some((f) => f.startsWith('run-'))); i++) await new Promise((r) => setTimeout(r, 100));",
+      'first.kill();',
+      'const t0 = Date.now();',
+      "const second = spawn(exe, ['check', 'node', worker], { stdio: 'ignore', env: { ...process.env, SLOT_HOLD_MS: '10' } });",
+      "const code = await new Promise((res) => second.on('close', res));",
+      'console.log(JSON.stringify({ code, ms: Date.now() - t0 }));',
+    ].join('\n'));
+    rmSync(join(root, 'seen'), { recursive: true, force: true });
+    const k = spawnSync('node', [killer, exe, worker, join(root, 'seen')], { encoding: 'utf8', env: env(one), timeout: 60000 });
+    if (!k.stdout) return `killed holder kept the slot (no answer in 60 s): ${k.stderr}`;
+    const kr = JSON.parse(k.stdout);
+    if (kr.code !== 0 || kr.ms > 5000) return `killed holder kept the slot: ${k.stdout}`;
+    return true;
+  }],
+
   // Second review pass: redirect detection must survive escapes and odd quotes
   [true, () => sh(`echo "C:${B}${B}dir${B}${B}" > f.txt`)],
   [true, () => sh(`printf 'it'${B}''s a${B}n' > f.txt`)],

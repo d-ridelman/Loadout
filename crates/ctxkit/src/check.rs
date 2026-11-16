@@ -16,6 +16,30 @@ pub fn run_check(args: &[String]) -> i32 {
         return 2;
     }
 
+    // Policy build_slots (ctxkit.json): wait for a machine-wide slot; held until this function returns,
+    // also on a panic. Off by default; any trouble with the slot files means no slot and no waiting.
+    let _slot = crate::policy::load().build_slots.and_then(|n| {
+        let lang = crate::detect_lang(&[]);
+        let waited = Instant::now();
+        let slot = crate::slots::acquire(
+            &crate::slots::dir(),
+            n as usize,
+            crate::slots::MAX_WAIT,
+            &mut |busy| eprintln!("{}", crate::slots::wait_message(lang, busy)),
+        );
+        if slot.is_none() && waited.elapsed() >= crate::slots::MAX_WAIT {
+            eprintln!(
+                "{}",
+                crate::t(
+                    lang,
+                    "no build slot after 10 minutes: running anyway",
+                    "слот сборки не освободился за 10 минут: запускаю без него"
+                )
+            );
+        }
+        slot
+    });
+
     let start = Instant::now();
     let is_cargo = is_cargo_diagnostic(args);
     let mut final_args: Vec<String> = args.to_vec();

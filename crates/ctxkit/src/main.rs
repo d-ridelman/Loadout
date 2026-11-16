@@ -10,6 +10,7 @@ mod policy;
 mod report;
 mod setup;
 mod shell;
+mod slots;
 
 use serde_json::{json, Value};
 use shell::Dialect;
