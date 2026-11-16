@@ -542,6 +542,28 @@ fn owners_stash_entry_returns_inside_the_file_and_other_stash_keys_stay() {
     );
 }
 
+/// A return from the owner's stash over a file the client has rewritten since is undone by moving the entry to the
+/// Loadout trash: the journal says so (`rollback_to`) instead of promising the stash.
+#[test]
+fn stash_return_over_a_changed_file_rolls_back_into_the_trash_and_the_journal_says_so() {
+    let e = env();
+    let id = id_in(&e, Client::ClaudeCode, "old");
+    let cj = e.home.join(".claude.json");
+    let done = apply_i(&e, &tog(&id, true)).unwrap();
+    assert_eq!(journal(&e.home, &e.store)[0].rollback_to, None);
+    let mut v = read_json(&cj);
+    v["numStartups"] = serde_json::json!(9);
+    fs::write(&cj, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    let j = journal(&e.home, &e.store);
+    assert!(j[0].can_rollback);
+    assert_eq!(j[0].rollback_to.as_deref(), Some("в корзине Loadout"));
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert!(read_json(&cj)["mcpServers"].get("old").is_none());
+    assert!(read_json(&cj)["_disabledMcpServers"].get("old").is_none());
+    let live = id_in(&e, Client::ClaudeCode, "old");
+    assert!(e.store.join("trash").join(format!("{live}.json")).exists());
+}
+
 #[test]
 fn edit_replaces_command_and_args_masks_the_log_and_rolls_back_to_identical_bytes() {
     let e = env();
@@ -1535,44 +1557,92 @@ fn toml_keys(pointer: &str) -> Vec<String> {
     keys
 }
 
-/// The value under the plan's key: a JSON pointer for JSON, a dotted path for TOML. `None` when the key is absent.
-fn value_at(file: &str, bytes: &[u8], pointer: &str) -> Option<serde_json::Value> {
+/// A client file as a value: JSON as is, TOML through `toml`.
+fn parsed(file: &str, bytes: &[u8]) -> serde_json::Value {
     let text = String::from_utf8_lossy(bytes);
     let text = text.trim_start_matches('\u{feff}');
     if file.ends_with(".toml") {
-        let t: toml::Table = text.parse().unwrap();
-        let mut v = serde_json::to_value(t).unwrap();
-        for k in toml_keys(pointer) {
-            v = v.get(&k)?.clone();
-        }
-        Some(v)
+        serde_json::to_value(text.parse::<toml::Table>().unwrap()).unwrap()
     } else {
-        let v: serde_json::Value = serde_json::from_str(text).unwrap();
-        v.pointer(pointer).cloned()
+        serde_json::from_str(text).unwrap()
     }
 }
 
-/// Exactly one file changed, it is the one named by `file`, and (JSON, TOML) the value under `pointer` differs.
-fn assert_only(e: &Env, before: &Tree, after: &Tree, file: &str, pointer: &str, what: &str) {
+/// The key path of a plan pointer: a JSON pointer for JSON, a dotted path for TOML.
+fn keys_of(file: &str, pointer: &str) -> Vec<String> {
+    if file.ends_with(".toml") {
+        toml_keys(pointer)
+    } else {
+        pointer
+            .split('/')
+            .skip(1)
+            .map(|k| k.replace("~1", "/").replace("~0", "~"))
+            .collect()
+    }
+}
+
+/// The value under the key (`None` when absent) and the rest of the file with that key taken out.
+fn split_at(
+    file: &str,
+    bytes: &[u8],
+    pointer: &str,
+) -> (Option<serde_json::Value>, serde_json::Value) {
+    let mut rest = parsed(file, bytes);
+    let keys = keys_of(file, pointer);
+    let (last, parents) = keys.split_last().unwrap();
+    let mut obj = Some(&mut rest);
+    for k in parents {
+        obj = obj.and_then(|o| o.get_mut(k));
+    }
+    let taken = obj
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|o| o.remove(last));
+    (taken, rest)
+}
+
+/// Exactly one file changed, it is the one named by `file`; in JSON and TOML the value under `pointer` differs and
+/// nothing else in the file does (`also`: a second key the same write moves, the owner's stash).
+fn assert_only(
+    e: &Env,
+    (before, after): (&Tree, &Tree),
+    file: &str,
+    pointer: &str,
+    also: Option<&str>,
+    what: &str,
+) {
     let home = e.home.to_string_lossy().replace('\\', "/");
     let rel = file
         .strip_prefix("~/")
         .or_else(|| file.strip_prefix(&format!("{home}/")))
         .unwrap_or_else(|| panic!("{what}: the plan names a file outside home: {file}"));
     assert_eq!(changed_files(before, after), vec![rel.to_owned()], "{what}");
+    assert!(!pointer.is_empty(), "{what}: no key in the plan");
     if rel.ends_with(".json") || rel.ends_with(".toml") {
-        let at = |x: Option<&Vec<u8>>| x.and_then(|bytes| value_at(rel, bytes, pointer));
-        assert!(!pointer.is_empty(), "{what}: no key in the plan");
+        let cut = |x: Option<&Vec<u8>>| {
+            x.map(|bytes| {
+                let (v, mut rest) = split_at(rel, bytes, pointer);
+                if let Some(p) = also {
+                    let text = serde_json::to_vec(&rest).unwrap();
+                    rest = split_at(".json", &text, p).1;
+                }
+                (v, rest)
+            })
+        };
+        let (b, a) = (cut(before.get(rel)).unwrap(), cut(after.get(rel)).unwrap());
         assert_ne!(
-            at(before.get(rel)),
-            at(after.get(rel)),
+            b.0, a.0,
             "{what}: nothing changed under {pointer} in {file}"
         );
+        assert_eq!(b.1, a.1, "{what}: {file} changed outside {pointer}");
     }
 }
 
 /// Applies `i` and checks the plan and its journal line against the disk.
 fn check_write(e: &Env, i: &Intent, what: &str) -> (Plan, Applied) {
+    check_write_also(e, i, None, what)
+}
+
+fn check_write_also(e: &Env, i: &Intent, also: Option<&str>, what: &str) -> (Plan, Applied) {
     let p = plan_s(e, i).unwrap_or_else(|err| panic!("{what}: {err}"));
     let before = tree(&e.home);
     let done =
@@ -1586,7 +1656,7 @@ fn check_write(e: &Env, i: &Intent, what: &str) -> (Plan, Applied) {
             "{what}: {ch:?}"
         );
     } else {
-        assert_only(e, &before, &after, &p.file, &p.pointer, what);
+        assert_only(e, (&before, &after), &p.file, &p.pointer, also, what);
     }
     let j = journal(&e.home, &e.store);
     assert_eq!(
@@ -1597,8 +1667,12 @@ fn check_write(e: &Env, i: &Intent, what: &str) -> (Plan, Applied) {
     (p, done)
 }
 
-/// Rolls back `op` and checks that only the file named in its journal line changed.
+/// Rolls back `op` and checks that only the file and key named in its journal line changed.
 fn check_rollback(e: &Env, op: &str, what: &str) {
+    check_rollback_also(e, op, None, what);
+}
+
+fn check_rollback_also(e: &Env, op: &str, also: Option<&str>, what: &str) {
     let j = journal(&e.home, &e.store);
     let line = j.iter().find(|x| x.id == op).unwrap();
     let before = tree(&e.home);
@@ -1610,27 +1684,34 @@ fn check_rollback(e: &Env, op: &str, what: &str) {
         assert!(ch.iter().all(|f| f.starts_with(dir)), "{what}: {ch:?}");
     } else {
         let what = format!("{what}: rollback");
-        assert_only(e, &before, &after, &line.file, &line.pointer, &what);
+        assert_only(e, (&before, &after), &line.file, &line.pointer, also, &what);
     }
 }
 
 #[test]
 fn every_write_changes_exactly_the_file_and_key_its_plan_and_journal_name() {
     let scan = loadout_core::scan(&env().home);
-    let mut rows = 0;
-    // toggles: every switchable entry of every client, then back from the trash, then the rollback
+    let mut rows: std::collections::BTreeMap<&str, usize> = Default::default();
+    // toggles: every switchable entry of every client, then back from the trash, then the rollbacks
     for x in scan.entities.iter().filter(|x| x.can_toggle) {
         let e = env();
         let what = format!("toggle {:?} {:?} {}", x.client, x.kind, x.name);
         let enable = matches!(x.state, State::Off | State::Unknown);
         let p = plan_s(&e, &tog(&x.id, enable)).unwrap_or_else(|err| panic!("{what}: {err}"));
         if p.noop {
+            *rows.entry("noop").or_default() += 1;
             continue;
         }
+        // a return from the owner's stash moves the entry out of the stash key too
+        let stash = p.from == "в стэше владельца";
+        let also = stash.then_some(x.origin.pointer.as_str());
         let original = tree(&e.home);
-        let (p, first) = check_write(&e, &tog(&x.id, enable), &what);
-        rows += 1;
+        let (p, first) = check_write_also(&e, &tog(&x.id, enable), also, &what);
+        *rows
+            .entry(if stash { "stash" } else { "toggle" })
+            .or_default() += 1;
         if p.trash == "out" {
+            *rows.entry("trash").or_default() += 1;
             // back from the trash: the key returns to the same place, the file is the original byte for byte
             let (_, back) = check_write(&e, &tog(&x.id, true), &format!("{what}: back"));
             assert_eq!(
@@ -1639,8 +1720,12 @@ fn every_write_changes_exactly_the_file_and_key_its_plan_and_journal_name() {
                 "{what}: the entry came back to another place"
             );
             check_rollback(&e, &back.op, &what);
+            // and the move itself rolls back from the journal, in a fresh copy
+            let e = env();
+            let (_, out) = check_write(&e, &tog(&x.id, false), &what);
+            check_rollback(&e, &out.op, &format!("{what}: out"));
         } else {
-            check_rollback(&e, &first.op, &what);
+            check_rollback_also(&e, &first.op, also, &what);
         }
     }
     // edits and copies of every editable MCP, additions to every client that takes them
@@ -1656,7 +1741,7 @@ fn every_write_changes_exactly_the_file_and_key_its_plan_and_journal_name() {
         if plan_s(&e, &edit).is_ok() {
             let (_, a) = check_write(&e, &edit, &what);
             check_rollback(&e, &a.op, &what);
-            rows += 1;
+            *rows.entry("edit").or_default() += 1;
         }
         for c in to.iter().filter(|c| **c != x.client.slug()) {
             let e = env();
@@ -1668,7 +1753,13 @@ fn every_write_changes_exactly_the_file_and_key_its_plan_and_journal_name() {
                 let what = format!("copy {:?} {} -> {c}", x.client, x.name);
                 let (_, a) = check_write(&e, &copy, &what);
                 check_rollback(&e, &a.op, &what);
-                rows += 1;
+                *rows
+                    .entry(if c == &"codex" {
+                        "copy toml"
+                    } else {
+                        "copy json"
+                    })
+                    .or_default() += 1;
             }
         }
     }
@@ -1677,7 +1768,7 @@ fn every_write_changes_exactly_the_file_and_key_its_plan_and_journal_name() {
         let what = format!("add -> {c}");
         let (_, a) = check_write(&e, &add_local(c, "tbl.added"), &what);
         check_rollback(&e, &a.op, &what);
-        rows += 1;
+        *rows.entry("add").or_default() += 1;
     }
     // a profile bundle: the files its lines name are exactly the files that changed
     let e = env();
@@ -1711,7 +1802,19 @@ fn every_write_changes_exactly_the_file_and_key_its_plan_and_journal_name() {
     stage(&e, st, &[("SKILL.md", "---\nname: tbl\n---\n")]);
     let (_, a) = check_write(&e, &skill(st, "", "tbl"), "skill");
     check_rollback(&e, &a.op, "skill");
-    assert!(rows > 15, "too few rows: {rows}");
+    // no kind of write may silently drop out of the table (a fixture change or a refusal would hide it)
+    let at_least = [
+        ("toggle", 8),
+        ("trash", 4),
+        ("stash", 1),
+        ("edit", 3),
+        ("copy json", 3),
+        ("copy toml", 2),
+        ("add", 4),
+    ];
+    for (k, n) in at_least {
+        assert!(rows.get(k).copied().unwrap_or(0) >= n, "{k}: {rows:?}");
+    }
 }
 
 /// The Claude Code plugin is found in `installed_plugins.json` but switched in `settings.json`: the plan and the
@@ -1733,5 +1836,18 @@ fn claude_code_plugin_plan_names_settings_json_and_enabled_plugins() {
     assert_eq!(
         (p.file.as_str(), p.pointer.as_str()),
         ("~/.claude/settings.json", "/enabledPlugins/alpha@mp")
+    );
+    // a journal line written before this fix named installed_plugins.json and its key: the journal shows the
+    // written file and no key of another file
+    let done = wapply(&e.home, &e.store, &tog(&x.id, false), &p.base_sha).unwrap();
+    let mf = e.store.join(&done.op).join("manifest.json");
+    let mut m: serde_json::Value = serde_json::from_str(&fs::read_to_string(&mf).unwrap()).unwrap();
+    m["file"] = "~/.claude/plugins/installed_plugins.json".into();
+    m["pointer"] = "/plugins/alpha@mp/0".into();
+    fs::write(&mf, serde_json::to_vec(&m).unwrap()).unwrap();
+    let j = journal(&e.home, &e.store);
+    assert_eq!(
+        (j[0].file.as_str(), j[0].pointer.as_str()),
+        ("~/.claude/settings.json", "")
     );
 }

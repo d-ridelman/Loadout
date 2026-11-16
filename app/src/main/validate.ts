@@ -201,6 +201,7 @@ export function validateJournal(raw: unknown): JournalEntry[] {
       name: r['name'], pointer: r['pointer'], file: r['file'], from: r['from'], to: r['to'],
       rolledBack: r['rolledBack'], canRollback: r['canRollback'],
       ...(isStr(r['why']) ? { why: r['why'] } : {}),
+      ...(isStr(r['rollbackTo']) ? { rollbackTo: r['rollbackTo'] } : {}),
     }
   })
 }

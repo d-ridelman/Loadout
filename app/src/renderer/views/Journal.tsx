@@ -127,7 +127,8 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
                         ) : null}
                         {/* the reason is text in the row, not a tooltip on a disabled button */}
                         {j.op !== 'rollback' && !j.canRollback && !j.rolledBack && j.why ? <span className="mute small">{t(`Нельзя: ${j.why}`, `Not possible: ${j.why}`)}</span> : null}
-                        {(j.canRollback || batchHead) && !ok ? <span className="mute small">{t(`Нужен уровень ${j.level} в шапке`, `Needs level ${j.level} in the header`)}</span> : null}
+                        {j.canRollback && !ok ? <span className="mute small">{t(`Нужен уровень ${j.level} в шапке`, `Needs level ${j.level} in the header`)}</span> : null}
+                        {batchHead && !levelOk(level, 'R2') ? <span className="mute small">{t('Пакет откатывается на уровне R2', 'A batch rolls back at level R2')}</span> : null}
                       </div>
                     </td>
                   </tr>

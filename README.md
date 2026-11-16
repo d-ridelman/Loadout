@@ -40,7 +40,7 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 
 ### Safe write pipeline
 
-plan → preview → hash lock (`base_sha`) → backup + manifest → temp file + rename → re-read and verify → journal / rollback. If a file changed after the preview, the write is refused. JSON is edited in place, TOML through `toml_edit`, YAML line by line: comments, key order and line endings stay (an MCP server back from the trash goes in front of the key that followed it). Details: [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §5.
+plan → preview → hash lock (`base_sha`) → backup + manifest → temp file + rename → re-read and verify → journal / rollback. If a file changed after the preview, the write is refused. JSON is edited in place, TOML through `toml_edit`, YAML line by line: comments, key order and line endings stay (an MCP server back from the trash goes in front of the key that followed it; one moved out by Loadout 0.0.7 or older goes to the end). Details: [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §5.
 
 ### Copies and secrets
 

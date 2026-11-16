@@ -31,7 +31,7 @@ export function withModifier(e: { ctrlKey: boolean; metaKey: boolean; altKey: bo
   return e.ctrlKey || e.metaKey || e.altKey
 }
 
-const STATES: EntityState[] =['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
+const STATES: EntityState[] = ['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
 
 interface Props {
   rows: Row[]
@@ -58,7 +58,8 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTableElement>) => {
-    if (withModifier(e)) return
+    // Ctrl+Home / Ctrl+End still jump to the first / last row, as they always did
+    if (withModifier(e) && e.key !== 'Home' && e.key !== 'End') return
     const k = keyOf(e.nativeEvent)
     const move: Record<string, [number, number]> = {
       j: [1, 0], ArrowDown: [1, 0], k: [-1, 0], ArrowUp: [-1, 0],

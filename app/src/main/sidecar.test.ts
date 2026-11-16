@@ -231,6 +231,7 @@ describe('validate', () => {
     expect(validateJournal([{ ...row, op: 'copy', batch: '1700000000000', level: 'R2' }])[0]).toMatchObject({ op: 'copy', batch: '1700000000000', level: 'R2' })
     expect(() => validateJournal([{ ...row, level: 'R9' }])).toThrow()
     expect(validateJournal([{ ...row, why: 'уже откатано' }])[0]?.why).toBe('уже откатано')
+    expect(validateJournal([{ ...row, rollbackTo: 'в корзине Loadout' }])[0]?.rollbackTo).toBe('в корзине Loadout')
   })
 
   it('toggleAt passes only as a file and pointer pair', () => {

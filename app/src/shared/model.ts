@@ -165,6 +165,8 @@ export interface JournalEntry {
   canRollback: boolean
   /** Why it cannot be rolled back (the file changed, already rolled back…), shown as text in the row. */
   why?: string
+  /** What the rollback leaves when that is not `from` (a return from the owner's stash over a changed file goes to the trash). */
+  rollbackTo?: string
 }
 
 /** R0 is read-only, R1 is flags, R2 is trash, edit, copy, profiles. Each level includes the previous ones. */

@@ -1103,6 +1103,9 @@ pub struct Entry {
     /// Why the operation cannot be rolled back (none for a rollback line itself): the window shows it as text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// What the rollback leaves when that is not the line's `from` (the preview shows it as "after").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollback_to: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1673,6 +1676,26 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
                 }
             };
             let can_rollback = m.op != "rollback" && why.is_none();
+            // A return from the owner's stash over a file changed since is undone by the inverse operation
+            // (`rollback_one`), which moves the entry to the Loadout trash, not back into the stash.
+            let rollback_to = (can_rollback
+                && m.inverse_enable == Some(false)
+                && m.trash_id.is_none()
+                && file_sha(Path::new(&m.path)).as_deref() != Some(m.sha_after.as_str()))
+            .then(|| crate::tr!("в корзине Loadout", "in Loadout trash"));
+            // The written file itself. Older lines named the file the entry was found in (a Claude Code plugin:
+            // installed_plugins.json) with a key of that file: such a key is not shown next to the real file.
+            let (file, pointer) = if m.kind == "skill" || m.path.is_empty() {
+                (m.file.clone(), m.pointer.clone())
+            } else {
+                let real = crate::scrub_home(home, &tilde(home, Path::new(&m.path)));
+                let pointer = if real == m.file {
+                    m.pointer.clone()
+                } else {
+                    String::new()
+                };
+                (real, pointer)
+            };
             Entry {
                 id: m.id.clone(),
                 time: m.time,
@@ -1683,18 +1706,14 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
                 client: m.client.clone(),
                 kind: m.kind.clone(),
                 name: m.name.clone(),
-                pointer: m.pointer.clone(),
-                // the written file itself: older lines named the file the entry was found in
-                file: if m.kind == "skill" || m.path.is_empty() {
-                    m.file.clone()
-                } else {
-                    crate::scrub_home(home, &tilde(home, Path::new(&m.path)))
-                },
+                pointer,
+                file,
                 from: relang(&m.from),
                 to: relang(&m.to),
                 rolled_back,
                 can_rollback,
                 why,
+                rollback_to,
             }
         })
         .collect()

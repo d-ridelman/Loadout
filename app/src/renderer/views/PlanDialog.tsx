@@ -88,13 +88,13 @@ export function RollbackDialog({ rows, batch, onClose, onDone }: RollbackProps) 
           <p>
             <b>{r.name}</b> <span className="mute">· {clientName(r.client)}</span>
           </p>
-          <Change file={r.file} pointer={r.pointer} from={r.to} to={r.from} />
+          <Change file={r.file} pointer={r.pointer} from={r.to} to={r.rollbackTo ?? r.from} />
         </div>
       ))}
       <p className="mute small">
         {t(
-          'Перед записью копия файла сохранится в бэкап, остальное содержимое не меняется. Если файл изменили после операции, откат не пройдёт.',
-          'Before writing, a copy of the file is saved as a backup; nothing else in it changes. If the file changed after the operation, the rollback will not go through.',
+          'Перед записью копия файла сохранится в бэкап, остальное содержимое не меняется. Ядро ещё раз сверит файл и запись: если после операции их изменили так, что откат затёр бы чужие правки, он не пройдёт.',
+          'Before writing, a copy of the file is saved as a backup; nothing else in it changes. The core checks the file and the entry again: if they changed after the operation so that the rollback would overwrite someone else’s edits, it will not go through.',
         )}
       </p>
       {error ? <p className="s-broken" role="alert">{error}</p> : null}
