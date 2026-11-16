@@ -1139,6 +1139,16 @@ const cases = [
     if (on.status !== 0 || cfg.policies.commit_hygiene !== true || cfg.policies.build_slots !== 2 || cfg.created_by !== 'ctxkit setup') return `on: ${on.stdout}`;
     const off = run('--policy', 'none');
     if (off.status !== 0 || !off.stdout.includes('policy commit_hygiene: on -> off') || Object.keys(JSON.parse(readFileSync(file, 'utf8')).policies).length !== 0) return `off: ${off.stdout}`;
+    // the rules block lists the policies that are on and the owner's own `rules` items; off drops the lines again
+    const withRules = JSON.parse(readFileSync(file, 'utf8'));
+    withRules.rules = ['My own item for the block, five words'];
+    writeFileSync(file, JSON.stringify(withRules));
+    run('--policy', 'commit-hygiene,stray-files', '--with-rules');
+    const md1 = readFileSync(join(profile, 'CLAUDE.md'), 'utf8');
+    if (!md1.includes('`Co-Authored-By`') || !md1.includes('`report*.md`') || !md1.includes('- My own item for the block, five words\n') || md1.includes('git push')) return `rules lines: ${md1}`;
+    run('--policy', 'none', '--with-rules');
+    const md2 = readFileSync(join(profile, 'CLAUDE.md'), 'utf8');
+    if (md2.includes('Co-Authored-By') || !md2.includes('My own item for the block')) return `rules lines off: ${md2}`;
     // a broken file stops setup before anything else is written
     writeFileSync(file, '{"policies":{"commit_hygiene":"yes"}}');
     const settingsBefore = existsSync(join(profile, 'settings.json')) ? readFileSync(join(profile, 'settings.json'), 'utf8') : null;

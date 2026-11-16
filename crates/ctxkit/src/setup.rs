@@ -1,5 +1,5 @@
 use crate::fsx::write_atomic;
-use crate::{parse_lang, Lang};
+use crate::{parse_lang, t, Lang};
 use serde_json::{json, Map, Value};
 use std::env;
 use std::fs;
@@ -1549,6 +1549,52 @@ You are an independent verifier. You did not write this code and must never modi
     }
 }
 
+/// The block's lines that come from `ctxkit.json`, the one source of the policies: one short line per policy
+/// that is on, then the owner's own `rules` items as they are (not translated; a leading `- ` is not doubled).
+/// Whatever is off or absent adds nothing, so turning a policy off and rerunning `--with-rules` drops its line.
+fn policy_lines(cfg: &policy::Config, lang: Lang) -> String {
+    let mut out = String::new();
+    // `bullet`: the line gets the `- ` of a list item unless it brings one
+    let mut add = |line: &str| {
+        if !(line.starts_with("- ") || line.starts_with("* ")) {
+            out.push_str("- ");
+        }
+        out.push_str(line);
+        out.push('\n');
+    };
+    if cfg.commit_hygiene {
+        add(t(
+            lang,
+            "Commit messages carry no `Co-Authored-By` or `Generated with` lines: the ctxkit hook blocks such a commit.",
+            "В сообщениях коммитов нет `Co-Authored-By` и `Generated with`: хук ctxkit такой коммит блокирует.",
+        ));
+    }
+    if cfg.confirm_irreversible {
+        add(t(
+            lang,
+            "Irreversible commands (`git push`, `git reset --hard`, `git clean -f`, `git branch -D`, `rm -rf`) need the owner's confirmation: the ctxkit hook asks.",
+            "Необратимое (`git push`, `git reset --hard`, `git clean -f`, `git branch -D`, `rm -rf`) — только с подтверждения владельца: хук ctxkit спросит.",
+        ));
+    }
+    if cfg.stray_files {
+        add(t(
+            lang,
+            "Reports and notes go in the chat, not into a `report*.md` or `notes*.md` file in the project root: the ctxkit hook asks.",
+            "Отчёты и заметки отдавай в чат, не файлом `report*.md` или `notes*.md` в корне проекта: хук ctxkit спросит.",
+        ));
+    }
+    if let Some(n) = cfg.build_slots {
+        add(&match lang {
+            Lang::En => format!("Run builds and tests through `ctxkit check`: it keeps at most {n} running at once on this machine."),
+            Lang::Ru => format!("Сборки и тесты запускай через `ctxkit check`: он держит на машине не больше {n} одновременных."),
+        });
+    }
+    for rule in &cfg.rules {
+        add(rule);
+    }
+    out
+}
+
 /// The rules block. Model names come from `settings` (the result of this run: the flags, else the user's
 /// own `model` / `advisorModel`); a model that is not set anywhere is not named.
 fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
@@ -1570,6 +1616,7 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
             "; the Stop hook sends you back once if edits were left without `checker`"
         }
     };
+    let extra = policy_lines(&opts.config, opts.lang);
     match opts.lang {
         Lang::Ru => {
             let adv_line = match (main, adv) {
@@ -1592,7 +1639,7 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
 - Не объявляй задачу готовой без `checker` (Opus), кроме правки одного файла без изменения логики{gate}.\n\
 - Группируй независимые `Read`/`Edit`; не читай длинные файлы целиком: сначала `Grep` или LSP, затем диапазон.\n\
 - Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `ctxkit check <cmd>`.\n\
-{MARKER_END}",
+{extra}{MARKER_END}",
                 sub = opts.subagent
             )
         }
@@ -1615,7 +1662,7 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
 - Do not declare work done without `checker` (Opus), except a one-file change with no logic change{gate}.\n\
 - Batch independent `Read`/`Edit` calls; locate symbols via `Grep`/LSP first, then read tight line ranges.\n\
 - Run `ctxkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n\
-{MARKER_END}",
+{extra}{MARKER_END}",
                 sub = opts.subagent
             )
         }
@@ -2396,6 +2443,75 @@ mod tests {
             assert!(!blank.contains("sonnet") && !blank.contains("opus"));
             assert!(!blank.contains("advisor"));
         }
+    }
+
+    #[test]
+    fn rules_block_lists_the_policies_that_are_on_and_the_owners_own_items() {
+        let snippet = |cfg: &str, lang: Lang| {
+            let opts = SetupOpts {
+                config: policy::parse(cfg).unwrap(),
+                lang,
+                ..SetupOpts::default()
+            };
+            rules_snippet(&opts, &json!({}))
+        };
+        let all = r#"{"policies":{"commit_hygiene":true,"confirm_irreversible":true,"stray_files":true,"build_slots":3},
+            "rules":["Субагентам, которые правят код, задавай model: \"sonnet\", никогда haiku","- a line that is a bullet already"]}"#;
+        let en = snippet(all, Lang::En);
+        for want in [
+            "`Co-Authored-By`",
+            "`git push`",
+            "`report*.md`",
+            "at most 3 running",
+            "- Субагентам, которые правят код, задавай model: \"sonnet\", никогда haiku\n",
+            "\n- a line that is a bullet already\n",
+        ] {
+            assert!(en.contains(want), "{want}\n{en}");
+        }
+        assert!(!en.contains("- - "), "a bullet is not doubled");
+        let ru = snippet(all, Lang::Ru);
+        assert!(ru.contains("хук ctxkit спросит") && ru.contains("не больше 3 одновременных"));
+        // all of it sits between the markers; the owner's items come last
+        let (s, e) = marker_span(&en).unwrap();
+        assert_eq!((s, e), (0, en.len()));
+        assert!(en
+            .trim_end_matches(MARKER_END)
+            .trim_end()
+            .ends_with("a bullet already"));
+        // one line per policy and per item, no more
+        let base = snippet("{}", Lang::En).lines().count();
+        assert_eq!(en.lines().count(), base + 6);
+        // off or absent policies add nothing: the block is the old one
+        for off in [
+            "{}",
+            r#"{"policies":{"commit_hygiene":false,"build_slots":0}}"#,
+        ] {
+            assert_eq!(
+                snippet(off, Lang::En),
+                rules_snippet(&SetupOpts::default(), &json!({}))
+            );
+        }
+        // idempotent in the file, and a policy turned off drops its line on the next run
+        let d = std::env::temp_dir().join(format!("ctxkit_rules_policy_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let (md, bak) = (d.join("CLAUDE.md"), d.join("backups"));
+        fs::write(&md, "# Mine\nkeep this line\n").unwrap();
+        upsert_claude_md(&md, &bak, &en, false).unwrap();
+        let once = fs::read_to_string(&md).unwrap();
+        upsert_claude_md(&md, &bak, &en, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(&md).unwrap(),
+            once,
+            "second run changes nothing"
+        );
+        assert!(once.starts_with("# Mine\nkeep this line\n"));
+        let slim = snippet(r#"{"policies":{"stray_files":true}}"#, Lang::En);
+        upsert_claude_md(&md, &bak, &slim, false).unwrap();
+        let after = fs::read_to_string(&md).unwrap();
+        assert!(after.contains("`report*.md`") && !after.contains("Co-Authored-By"));
+        assert_eq!(after.matches(MARKER_START).count(), 1);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
