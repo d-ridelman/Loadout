@@ -2,7 +2,7 @@
 members = ["crates/loadout-core", "crates/loadoutd", "crates/context-toolkit"]
 resolver = "2"
 
-# Профиль относится к воркспейсу: прежний [profile.release] крейта context-toolkit (быстрый старт хука, маленький бинарь) перенесён сюда
+# The profile belongs to the workspace: the former [profile.release] of the context-toolkit crate (fast hook start, small binary) was moved here
 [profile.release]
 lto = true
 codegen-units = 1

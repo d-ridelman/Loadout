@@ -1,5 +1,5 @@
-// Окно на настоящих данных владельца (без LOADOUT_HOME) под проверочным профилем. Окно за экраном.
-// Снимки пишутся в state/real-*.png: там реальные имена, поэтому они в .gitignore и в репозиторий не попадают.
+// The window on the owner's real data (without LOADOUT_HOME) under a check profile. The window is kept off-screen.
+// Screenshots go to state/real-*.png: they contain real names, so they are in .gitignore and do not reach the repository.
 import { mkdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,19 +24,19 @@ try {
   await page.waitForSelector('#grid', { timeout: 20000 })
   await page.waitForTimeout(500)
   const rows = await page.locator('tbody tr').count()
-  console.log('строк в матрице на реальных данных:', rows)
+  console.log('rows in the matrix on real data:', rows)
   for (const [key, name] of [['1', 'matrix'], ['2', 'radar'], ['3', 'hooks'], ['4', 'doctor']]) {
     await page.keyboard.press(key)
     await page.waitForTimeout(300)
     await page.screenshot({ path: join(repo, 'state', `real-${name}.png`) })
   }
-  console.log('находок Доктора:', await page.evaluate(() => document.querySelectorAll('.find').length))
+  console.log('Doctor findings:', await page.evaluate(() => document.querySelectorAll('.find').length))
 } finally {
   await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 8000))])
   try {
     execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
   } catch {
-    /* уже закрыт */
+    /* already closed */
   }
   rmSync(profile, { recursive: true, force: true })
 }

@@ -1,5 +1,5 @@
-// Подставной `claude` для e2e: ничего не скачивает. Записывает свои аргументы в FAKE_CLAUDE_CALLS, а `plugin marketplace add <папка>`
-// повторяет то, что делает настоящий CLI с локальным маркетплейсом: запись в known_marketplaces.json (каталог читается на месте).
+// Stand-in `claude` for e2e: downloads nothing. It records its arguments in FAKE_CLAUDE_CALLS, and `plugin marketplace add <folder>`
+// mimics what the real CLI does with a local marketplace: it writes an entry to known_marketplaces.json (the catalog is read in place).
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
