@@ -1,5 +1,5 @@
-//! Интеграционные проверки `loadout serve`: JSON-RPC по stdio и сторож файлов. Каждый тест поднимает свой процесс
-//! на копии фикстуры (`fixtures/home` с подставленным `{HOME}`).
+//! Integration checks for `loadout serve`: JSON-RPC over stdio and the file watcher. Each test starts its own process
+//! on a copy of the fixture (`fixtures/home` with `{HOME}` substituted).
 
 use serde_json::{json, Value};
 use std::fs;
@@ -33,7 +33,7 @@ struct Server {
     stdin: Option<ChildStdin>,
     rx: Receiver<Result<Value, String>>,
     home: PathBuf,
-    /// Уведомления, пришедшие, пока ждали ответ на запрос.
+    /// Notifications that arrived while waiting for a response to a request.
     parked: Vec<Value>,
     next_id: u64,
 }
@@ -43,17 +43,17 @@ impl Server {
         Server::start_with(|_| {})
     }
 
-    /// Ядро с каталогом бэкапов рядом с копией фикстуры: методы записи включены.
+    /// A core with a backups directory next to the fixture copy: write methods are enabled.
     fn start_writable() -> Server {
         Server::launch(|_| {}, true)
     }
 
-    /// `prep` правит копию фикстуры до запуска ядра (например, убирает каталог клиента).
+    /// `prep` edits the fixture copy before the core starts (for example, removes a client directory).
     fn start_with(prep: impl FnOnce(&Path)) -> Server {
         Server::launch(prep, false)
     }
 
-    /// Ядро с английскими сообщениями (`--lang en`) и каталогом бэкапов.
+    /// A core with English messages (`--lang en`) and a backups directory.
     fn start_en() -> Server {
         Server::launch_lang(|_| {}, true, "en")
     }
@@ -63,7 +63,7 @@ impl Server {
     }
 
     fn launch_lang(prep: impl FnOnce(&Path), writable: bool, lang: &str) -> Server {
-        // имя без случайных букв и цифр: ядро скрывает токеноподобные сегменты путей
+        // a name without random letters and digits: the core hides token-like path segments
         let home = std::env::temp_dir().join(format!(
             "loadout-serve-{}-{}",
             std::process::id(),
@@ -84,14 +84,14 @@ impl Server {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("loadout serve запускается");
+            .expect("loadout serve starts");
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().unwrap();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
-                // всё, что попадает в stdout, обязано быть одним JSON-сообщением в строке
+                // everything that reaches stdout must be exactly one JSON message per line
                 let _ = tx.send(
                     serde_json::from_str::<Value>(&line).map_err(|e| format!("{e}: {line:.80}")),
                 );
@@ -107,10 +107,10 @@ impl Server {
         };
         let ready = s
             .wait_method("ready", Duration::from_secs(20))
-            .expect("сервер сообщает `ready` после запуска сторожа");
+            .expect("the server reports `ready` after the watcher starts");
         assert!(
             ready["params"]["watching"].as_u64().unwrap_or(0) > 0,
-            "сторож слушает хотя бы один каталог"
+            "the watcher listens to at least one directory"
         );
         s
     }
@@ -118,12 +118,12 @@ impl Server {
     fn recv(&mut self, timeout: Duration) -> Option<Value> {
         match self.rx.recv_timeout(timeout) {
             Ok(Ok(v)) => Some(v),
-            Ok(Err(bad)) => panic!("в stdout не JSON: {bad}"),
+            Ok(Err(bad)) => panic!("stdout is not JSON: {bad}"),
             Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => None,
         }
     }
 
-    /// Ждёт уведомление с методом `method`; остальные уведомления откладывает.
+    /// Waits for a notification with method `method`; other notifications are parked.
     fn wait_method(&mut self, method: &str, within: Duration) -> Option<Value> {
         if let Some(i) = self.parked.iter().position(|m| m["method"] == method) {
             return Some(self.parked.remove(i));
@@ -139,7 +139,7 @@ impl Server {
         None
     }
 
-    /// Ждёт `changed`, у которого `field` — непустой список (или `true`); прочие `changed` пропускает.
+    /// Waits for a `changed` whose `field` is a non-empty list (or `true`); other `changed` are skipped.
     fn wait_changed_with(&mut self, field: &str, within: Duration) -> Option<Value> {
         let end = Instant::now() + within;
         while let Some(left) = end.checked_duration_since(Instant::now()) {
@@ -160,7 +160,7 @@ impl Server {
         let id = self.next_id;
         self.next_id += 1;
         let line = json!({ "id": id, "method": method, "params": params }).to_string();
-        let stdin = self.stdin.as_mut().expect("stdin открыт");
+        let stdin = self.stdin.as_mut().expect("stdin is open");
         writeln!(stdin, "{line}").unwrap();
         stdin.flush().unwrap();
         let end = Instant::now() + Duration::from_secs(20);
@@ -171,7 +171,7 @@ impl Server {
                 None => break,
             }
         }
-        panic!("нет ответа на {method}");
+        panic!("no response to {method}");
     }
 }
 
@@ -200,14 +200,14 @@ fn snapshot_scan_and_status_answer_over_jsonrpc() {
     let scan = s.call("scan");
     assert_eq!(
         scan["result"]["entities"], snap["result"]["entities"],
-        "без правок скан и снимок совпадают"
+        "without edits the scan and the snapshot match"
     );
     let status = s.call("status");
     assert!(status["result"]["watching"].as_u64().unwrap_or(0) > 0);
     let unknown = s.call("rm -rf");
     assert!(
         unknown["error"]["message"].is_string(),
-        "неизвестный метод — ошибка, процесс жив: {unknown}"
+        "an unknown method is an error and the process stays alive: {unknown}"
     );
     assert!(s.call("snapshot")["result"].is_object());
 }
@@ -222,17 +222,17 @@ fn real_change_produces_changed_without_raw_paths() {
 
     let ev = s
         .wait_method("changed", Duration::from_secs(10))
-        .expect("правка включённого плагина даёт `changed`");
+        .expect("editing an enabled plugin yields `changed`");
     let changed = ev["params"]["changed"]
         .as_array()
-        .expect("список изменённых id");
+        .expect("list of changed ids");
     assert!(!changed.is_empty(), "{ev}");
     let raw = ev.to_string();
     assert!(
         !raw.contains(&s.home.to_string_lossy().replace('\\', "/")) && !raw.contains("config.toml"),
-        "в событии нет путей: {raw}"
+        "the event contains no paths: {raw}"
     );
-    // снимок уже содержит новое состояние
+    // the snapshot already contains the new state
     let snap = s.call("snapshot");
     let p1 = snap["result"]["entities"]
         .as_array()
@@ -249,12 +249,12 @@ fn rewrite_without_semantic_change_is_silent() {
     let cfg = s.home.join(".codex/config.toml");
     let text = fs::read_to_string(&cfg).unwrap();
     for _ in 0..3 {
-        fs::write(&cfg, &text).unwrap(); // то же содержимое: файл переписан, скан тот же
+        fs::write(&cfg, &text).unwrap(); // same content: the file is rewritten, the scan is the same
         std::thread::sleep(Duration::from_millis(150));
     }
     assert!(
         s.wait_method("changed", Duration::from_secs(3)).is_none(),
-        "переписывание без смысловых изменений не шлёт `changed`"
+        "a rewrite without semantic changes does not send `changed`"
     );
 }
 
@@ -270,7 +270,7 @@ fn new_skill_directory_is_noticed() {
     .unwrap();
     let ev = s
         .wait_method("changed", Duration::from_secs(10))
-        .expect("новый скил даёт `changed`");
+        .expect("a new skill yields `changed`");
     assert!(
         !ev["params"]["added"].as_array().unwrap().is_empty(),
         "{ev}"
@@ -283,9 +283,9 @@ const SKILL: &str = "---\nname: fresh-skill\ndescription: новый\n---\n";
 fn recreated_directory_stays_watched() {
     let mut s = Server::start();
     let skills = s.home.join(".claude/skills");
-    // каталог скилов исчез и тут же вернулся с тем же содержимым (как при `git checkout`): скан тот же, `changed` нет,
-    // но подписка на старый каталог мертва, и сторож обязан подписаться снова
-    let aside = s.home.join("skills-aside"); // вне слушаемых каталогов
+    // the skills directory vanished and immediately came back with the same content (as with `git checkout`): the scan is the same, no `changed`,
+    // but the subscription to the old directory is dead, and the watcher must subscribe again
+    let aside = s.home.join("skills-aside"); // outside the watched directories
     copy_tree(&skills, &aside, "");
     fs::remove_dir_all(&skills).unwrap();
     copy_tree(&aside, &skills, "");
@@ -295,7 +295,7 @@ fn recreated_directory_stays_watched() {
     assert!(
         s.wait_changed_with("added", Duration::from_secs(10))
             .is_some(),
-        "скил в пересозданном каталоге замечен"
+        "a skill in the recreated directory is noticed"
     );
     fs::create_dir_all(skills.join("second")).unwrap();
     fs::write(
@@ -306,7 +306,7 @@ fn recreated_directory_stays_watched() {
     assert!(
         s.wait_changed_with("added", Duration::from_secs(10))
             .is_some(),
-        "и следующий скил тоже: подписка живая"
+        "and the next skill too: the subscription is alive"
     );
 }
 
@@ -323,20 +323,20 @@ fn client_directory_created_after_start_is_noticed() {
     assert!(
         s.wait_changed_with("added", Duration::from_secs(10))
             .is_some(),
-        "клиент, поставленный после запуска ядра, замечен"
+        "a client installed after the core started is noticed"
     );
 }
 
 #[test]
 fn client_directory_with_unwatched_parent_is_noticed() {
-    // `.gemini/config` (Antigravity): родитель `.gemini` сам не слушается, пока его нет; Claude Desktop — то же с `AppData/Roaming`
+    // `.gemini/config` (Antigravity): the parent `.gemini` itself is not watched while it does not exist; Claude Desktop is the same with `AppData/Roaming`
     let aside = std::env::temp_dir().join(format!("loadout-aside-{}", std::process::id()));
     let _ = fs::remove_dir_all(&aside);
     let mut s = Server::start_with(|h| {
         copy_tree(&h.join(".gemini"), &aside, "");
         fs::remove_dir_all(h.join(".gemini")).unwrap();
     });
-    // сначала появляется только родитель, `config` — позже: слушать нужно ближайшего существующего предка
+    // first only the parent appears, `config` comes later: the nearest existing ancestor has to be watched
     fs::create_dir_all(s.home.join(".gemini")).unwrap();
     std::thread::sleep(Duration::from_millis(800));
     copy_tree(&aside, &s.home.join(".gemini"), "");
@@ -344,7 +344,7 @@ fn client_directory_with_unwatched_parent_is_noticed() {
     let _ = fs::remove_dir_all(&aside);
     assert!(
         ev.is_some(),
-        "Antigravity, поставленный после запуска ядра, замечен"
+        "Antigravity installed after the core started is noticed"
     );
 }
 
@@ -359,7 +359,7 @@ fn new_remote_catalog_entry_is_noticed() {
     assert!(
         s.wait_changed_with("added", Duration::from_secs(10))
             .is_some(),
-        "новая запись каталога удалённых плагинов замечена"
+        "a new entry in the remote plugins directory is noticed"
     );
 }
 
@@ -370,12 +370,12 @@ fn new_backup_file_changes_facts() {
     assert!(
         s.wait_changed_with("factsChanged", Duration::from_secs(10))
             .is_some(),
-        "новая резервная копия меняет факты"
+        "a new backup changes the facts"
     );
 }
 
-/// Английский язык ядра (`--lang en`): ошибки, примечания плана и слова `from`/`to` без единой кириллической буквы,
-/// мусорное значение языка не роняет процесс и даёт русский.
+/// English language of the core (`--lang en`): errors, plan notes and the words `from`/`to` without a single Cyrillic letter,
+/// a garbage language value does not crash the process and falls back to Russian.
 #[test]
 fn english_core_speaks_english_and_a_bad_lang_falls_back_to_russian() {
     let has_cyr = |v: &Value| {
@@ -384,16 +384,16 @@ fn english_core_speaks_english_and_a_bad_lang_falls_back_to_russian() {
             .any(|c| ('а'..='я').contains(&c) || ('А'..='Я').contains(&c) || c == 'ё')
     };
     let mut s = Server::start_en();
-    // ошибка ядра: параметры плана неверны
+    // core error: the plan parameters are invalid
     let bad = s.call_with(
         "plan",
         json!({"op": "toggle", "entity": "nope", "enable": true}),
     );
     assert!(bad["error"]["message"].is_string(), "{bad}");
-    assert!(!has_cyr(&bad), "ошибка по-английски: {bad}");
+    assert!(!has_cyr(&bad), "the error is in English: {bad}");
     let unknown = s.call("no_such_method");
     assert!(!has_cyr(&unknown), "{unknown}");
-    // план реальной записи: слова from/to и примечания
+    // the plan of a real entry: the words from/to and notes
     let snap = s.call("snapshot");
     let id = snap["result"]["entities"]
         .as_array()
@@ -401,17 +401,17 @@ fn english_core_speaks_english_and_a_bad_lang_falls_back_to_russian() {
         .iter()
         .find(|e| e["kind"] == "mcp" && e["canToggle"] == true)
         .and_then(|e| e["id"].as_str())
-        .expect("есть MCP, который можно переключить")
+        .expect("there is an MCP that can be toggled")
         .to_owned();
     let plan = s.call_with(
         "plan",
         json!({"op": "toggle", "entity": id, "enable": false}),
     );
     assert!(plan["result"].is_object(), "{plan}");
-    assert!(!has_cyr(&plan), "план по-английски: {plan}");
+    assert!(!has_cyr(&plan), "the plan is in English: {plan}");
     drop(s);
 
-    // мусорное значение языка: русский, процесс жив
+    // garbage language value: Russian, the process is alive
     let home = std::env::temp_dir().join("loadout-serve-badlang");
     let _ = fs::remove_dir_all(&home);
     copy_tree(
@@ -424,8 +424,11 @@ fn english_core_speaks_english_and_a_bad_lang_falls_back_to_russian() {
         .arg(&home)
         .stdin(Stdio::null())
         .output()
-        .expect("запускается");
-    assert!(out.status.success(), "мусорный --lang не роняет процесс");
+        .expect("starts");
+    assert!(
+        out.status.success(),
+        "a garbage --lang does not crash the process"
+    );
     let _ = fs::remove_dir_all(&home);
 }
 
@@ -437,11 +440,11 @@ fn invalid_utf8_line_does_not_kill_the_server() {
     stdin.flush().unwrap();
     assert!(
         s.call("snapshot")["result"].is_object(),
-        "процесс жив и отвечает"
+        "the process is alive and responding"
     );
     assert!(
         s.parked.iter().any(|m| m["error"]["message"].is_string()),
-        "битая строка получила ошибку: {:?}",
+        "the broken line got an error: {:?}",
         s.parked
     );
 }
@@ -451,18 +454,18 @@ fn request_flood_does_not_postpone_the_rescan() {
     let mut s = Server::start();
     let cfg = s.home.join(".codex/config.toml");
     let text = fs::read_to_string(&cfg).unwrap();
-    // Запросы идут непрерывно секунды: скан обязан пройти по сроку (300 мс тишины или 2 с), а не после потока. Запрос
-    // тяжёлый для ядра (план записи — полный скан, десятки мс), ответ короткий; поступают они чуть быстрее, чем
-    // обрабатываются, но не залпом: событие файла встаёт в ту же очередь, и залп из сотен запросов, пришедший раньше
-    // него, законно обработался бы раньше (очередь одна, порядок прихода). Лёгкий `status` на быстрой машине кончал поток
-    // раньше срока скана, и проверка ничего не проверяла.
+    // Requests flow continuously for seconds: the scan must run on schedule (300 ms of quiet or 2 s), not after the flood. The request
+    // is heavy for the core (a write plan is a full scan, tens of ms), the response is short; they arrive slightly faster than
+    // they are processed, but not in a burst: a file event goes into the same queue, and a burst of hundreds of requests that arrived before
+    // it would legitimately be processed earlier (there is one queue, in arrival order). A light `status` on a fast machine ended the flood
+    // before the scan deadline, and the check verified nothing.
     let id = s.call("snapshot")["result"]["entities"]
         .as_array()
         .unwrap()
         .iter()
         .find(|e| e["kind"] == "mcp" && e["canToggle"] == true)
         .and_then(|e| e["id"].as_str())
-        .expect("есть MCP, который можно переключить")
+        .expect("there is an MCP that can be toggled")
         .to_owned();
     let mut stdin = s.stdin.take().unwrap();
     let flood = std::thread::spawn(move || {
@@ -498,11 +501,11 @@ fn request_flood_does_not_postpone_the_rescan() {
         }
     }
     s.stdin = flood.join().ok();
-    let l = last_at.expect("ответ на последний запрос пришёл");
-    let c = changed_at.expect("`changed` пришёл");
+    let l = last_at.expect("the response to the last request arrived");
+    let c = changed_at.expect("`changed` arrived");
     assert!(
         c < l,
-        "`changed` (сообщение {c}) пришёл только после всего потока запросов (последний ответ {l})"
+        "`changed` (message {c}) arrived only after the whole flood of requests (last response {l})"
     );
 }
 
@@ -513,10 +516,10 @@ fn closing_stdin_stops_the_process() {
     let end = Instant::now() + Duration::from_secs(3);
     loop {
         if let Some(status) = s.child.try_wait().unwrap() {
-            assert!(status.success(), "выход по EOF без ошибки: {status}");
+            assert!(status.success(), "exit on EOF without an error: {status}");
             return;
         }
-        assert!(Instant::now() < end, "процесс пережил закрытие stdin");
+        assert!(Instant::now() < end, "the process outlived closing stdin");
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -574,10 +577,10 @@ fn toggle_and_rollback_over_jsonrpc_announce_changes_without_paths() {
         json!({ "entity": id, "enable": false, "baseSha": base }),
     );
     assert!(done["result"]["op"].is_string(), "{done}");
-    // `changed` приходит сразу после записи, не дожидаясь сторожа
+    // `changed` arrives right after the write, without waiting for the watcher
     let ev = s
         .wait_method("changed", Duration::from_secs(5))
-        .expect("changed после записи");
+        .expect("changed after the write");
     assert!(
         ev["params"]["changed"]
             .as_array()
@@ -629,7 +632,10 @@ fn write_methods_validate_params() {
         let r = s.call_with(m, p.clone());
         assert!(r["error"]["message"].is_string(), "{m} {p}: {r}");
     }
-    assert!(s.call("snapshot")["result"].is_object(), "процесс жив");
+    assert!(
+        s.call("snapshot")["result"].is_object(),
+        "the process is alive"
+    );
 }
 
 #[test]
@@ -646,13 +652,13 @@ fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() 
     assert_eq!(e["canToggle"], true);
     assert_eq!(e["canEdit"], true);
 
-    // вынос в корзину: R2, запись остаётся в списке выключенной с тем же id
+    // moving to the trash: R2, the entry stays in the list as disabled with the same id
     let plan = s.call_with(
         "plan",
         json!({ "op": "toggle", "entity": id, "enable": false }),
     );
     assert_eq!(plan["result"]["level"], "R2", "{plan}");
-    // без разрешения main (maxLevel) операция R2 не проходит, значит, уровень проверяет и ядро
+    // without main's permission (maxLevel) an R2 operation does not pass, so the core checks the level too
     let denied = s.call_with(
         "apply",
         json!({ "op": "toggle", "entity": id, "enable": false, "baseSha": plan["result"]["baseSha"] }),
@@ -661,7 +667,7 @@ fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() 
         denied["error"]["message"].as_str().unwrap().contains("R2"),
         "{denied}"
     );
-    // мусорное значение уровня — отказ, а не молчаливое R1
+    // a garbage level value is a refusal, not a silent R1
     for bad in [json!("R0"), json!("r2"), json!(2), json!("")] {
         let r = s.call_with(
             "apply",
@@ -678,17 +684,17 @@ fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() 
     );
     assert!(done["result"]["op"].is_string(), "{done}");
     s.wait_method("changed", Duration::from_secs(5))
-        .expect("changed после выноса");
+        .expect("changed after the removal");
     let after = s.call("snapshot");
     let e = after["result"]["entities"]
         .as_array()
         .unwrap()
         .iter()
         .find(|x| x["id"] == json!(id))
-        .expect("запись из корзины видна с прежним id");
+        .expect("the entry from the trash is visible with the same id");
     assert_eq!(e["state"], "off");
 
-    // правка и копирование (R2): в ответах нет значений секретов
+    // edit and copy (R2): the responses contain no secret values
     let id_a = entity_id(&s.call("snapshot"), "antigravity", "tool-a");
     let edit =
         json!({ "op": "edit", "entity": id_a, "command": "npx", "args": ["-y", "tool-a-mcp@2"] });
@@ -705,7 +711,7 @@ fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() 
     let bad = s.call_with("plan", json!({ "op": "delete", "entity": id_a }));
     assert!(
         bad["error"]["message"].is_string(),
-        "неизвестная операция не проходит: {bad}"
+        "an unknown operation does not pass: {bad}"
     );
 
     let all = format!("{plan}{done}{p}{d}{}", s.call("journal"));
@@ -720,7 +726,7 @@ fn trash_edit_and_copy_work_over_jsonrpc_and_the_secret_never_leaves_the_core() 
 fn profiles_save_plan_apply_and_roll_back_over_jsonrpc() {
     let mut s = Server::start_writable();
     let saved = s.call_with("profileSave", json!({ "name": "рабочий" }));
-    let list = saved["result"].as_array().expect("список профилей");
+    let list = saved["result"].as_array().expect("list of profiles");
     assert_eq!(list.len(), 1, "{saved}");
     let mut items = list[0]["items"].clone();
     for it in items.as_array_mut().unwrap() {
@@ -750,7 +756,7 @@ fn profiles_save_plan_apply_and_roll_back_over_jsonrpc() {
     assert_eq!(del["result"].as_array().unwrap().len(), 0);
 }
 
-/// Каталоги «операций» с давними ID: чистка по сроку удаляет их все, корзина и прочее остаются.
+/// "Operation" directories with old IDs: cleanup by age removes them all, the trash and the rest remain.
 #[test]
 fn old_backups_are_pruned_by_the_rpc_method_and_by_the_prune_command() {
     let mut s = Server::start_writable();
@@ -768,11 +774,11 @@ fn old_backups_are_pruned_by_the_rpc_method_and_by_the_prune_command() {
         .args(["prune", "--backups"])
         .arg(&store)
         .output()
-        .expect("loadout prune запускается");
+        .expect("loadout prune starts");
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("удалено операций: 1"));
     assert!(!store.join("0000000000003-00").exists());
-    // без каталога копий команда отказывает, а не создаёт его
+    // without a backups directory the command refuses instead of creating it
     let missing = Command::new(env!("CARGO_BIN_EXE_loadout"))
         .args(["prune", "--backups"])
         .arg(store.join("нет"))
@@ -781,7 +787,7 @@ fn old_backups_are_pruned_by_the_rpc_method_and_by_the_prune_command() {
     assert_eq!(missing.status.code(), Some(2));
 }
 
-/// Без `--backups` команда берёт `%APPDATA%\<name из app/package.json>\backups`: так Electron называет `userData`.
+/// Without `--backups` the command uses `%APPDATA%\<name from app/package.json>\backups`: that is how Electron names `userData`.
 #[test]
 fn prune_defaults_to_the_electron_user_data_dir_named_after_the_package() {
     let pkg: Value = serde_json::from_str(
@@ -792,7 +798,7 @@ fn prune_defaults_to_the_electron_user_data_dir_named_after_the_package() {
     let name = pkg["name"].as_str().unwrap();
     assert!(
         pkg.get("productName").is_none(),
-        "с productName в package.json имя каталога данных другое: поправьте APP_DATA_DIR и тексты"
+        "with productName in package.json the data directory name differs: fix APP_DATA_DIR and the texts"
     );
     let appdata = std::env::temp_dir().join(format!("loadout-appdata-{}", std::process::id()));
     let dir = appdata.join(name).join("backups").join("0000000000001-00");
@@ -829,7 +835,7 @@ fn broken_profiles_file_is_an_error_over_jsonrpc_and_is_set_aside_on_request() {
     }
     assert_eq!(fs::read_to_string(&file).unwrap(), "{ битый");
     let q = s.call("profilesQuarantine");
-    let name = q["result"].as_str().expect("имя отложенного файла");
+    let name = q["result"].as_str().expect("name of the set-aside file");
     assert!(name.starts_with("profiles.json.broken-"), "{q}");
     assert!(!file.exists());
     assert_eq!(s.call("profiles")["result"].as_array().unwrap().len(), 0);
@@ -847,24 +853,24 @@ fn claude_json_rewrites_are_scanned_at_most_every_ten_seconds_but_other_files_ar
         text.replace("\"command\": \"old\"", "\"command\": \"older\""),
     )
     .unwrap();
-    // шумный файл: скан не раньше, чем через NOISY_MIN после предыдущего (за 4 с окно его не видит)
+    // a noisy file: the scan comes no sooner than NOISY_MIN after the previous one (within 4 s the window does not see it)
     assert!(
         s.wait_method("changed", Duration::from_secs(4)).is_none(),
-        "изменение ~/.claude.json не должно сканироваться сразу"
+        "a change to ~/.claude.json must not be scanned immediately"
     );
     let ev = s
         .wait_method("changed", Duration::from_secs(12))
-        .expect("но в итоге изменение замечено");
+        .expect("but the change is noticed in the end");
     assert!(
         !ev["params"]["changed"].as_array().unwrap().is_empty(),
         "{ev}"
     );
-    // обычный файл (`config.toml` Codex) идёт с обычной задержкой, шумное ограничение его не касается
+    // a regular file (Codex `config.toml`) goes with the normal delay, the noisy limit does not apply to it
     let cfg = s.home.join(".codex/config.toml");
     let t = fs::read_to_string(&cfg).unwrap();
     fs::write(&cfg, t.replacen("enabled = true", "enabled = false", 1)).unwrap();
     assert!(
         s.wait_method("changed", Duration::from_secs(5)).is_some(),
-        "правка config.toml должна дойти за секунды"
+        "an edit of config.toml must arrive within seconds"
     );
 }

@@ -8,7 +8,7 @@ authors.workspace = true
 repository.workspace = true
 description = "loadout: CLI (scan, prune) and the sidecar process of the Loadout window (serve, JSON-RPC over stdio)"
 
-# Бинарь называется `loadout`: CLI (`scan`, `prune`) и процесс-ядро окна (`loadout serve`, JSON-RPC по stdio).
+# The binary is called `loadout`: the CLI (`scan`, `prune`) and the window's core process (`loadout serve`, JSON-RPC over stdio).
 [[bin]]
 name = "loadout"
 path = "src/main.rs"

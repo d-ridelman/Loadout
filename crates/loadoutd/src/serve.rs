@@ -1,11 +1,11 @@
-//! `loadout serve`: постоянный процесс для окна. JSON-RPC по stdio, по одному сообщению в строке, и сторож файлов.
+//! `loadout serve`: a long-running process for the window. JSON-RPC over stdio, one message per line, plus a file watcher.
 //!
-//! Протокол (stdout только под JSON, всё остальное в stderr):
-//! - запрос `{"id":N,"method":"scan"|"snapshot"|"status"}`, а для записи R1 `plan`/`apply`/`journal`/`rollback`
-//!   (только id записи и желаемое состояние, см. `loadout_core::write`; без `--backups` запись выключена); ответ `{"id":N,"result":…}` или `{"id":N,"error":{"message":…}}`;
-//! - уведомление `ready` после запуска сторожа и `changed` при смысловом изменении скана; в `changed` только id записей.
+//! Protocol (stdout carries only JSON, everything else goes to stderr):
+//! - request `{"id":N,"method":"scan"|"snapshot"|"status"}`, and for R1 writes `plan`/`apply`/`journal`/`rollback`
+//!   (only the entry id and the desired state, see `loadout_core::write`; without `--backups` writing is disabled); response `{"id":N,"result":…}` or `{"id":N,"error":{"message":…}}`;
+//! - notification `ready` after the watcher starts and `changed` on a semantic change of the scan; `changed` carries only entry ids.
 //!
-//! Методов с путями от страницы нет. EOF на stdin завершает процесс, иначе на Windows он пережил бы окно.
+//! No method takes paths from the page. EOF on stdin ends the process, otherwise on Windows it would outlive the window.
 
 use loadout_core::diff::diff;
 use loadout_core::model::ScanResult;
@@ -20,16 +20,16 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-/// Версия протокола JSON-RPC: растёт при несовместимых изменениях методов и форм ответов. Окно, `context-toolkit` и другие
-/// оболочки сверяют её по `ready` и `status` (см. CONCEPT.md §13).
+/// JSON-RPC protocol version: bumped on incompatible changes to methods and response shapes. The window, `context-toolkit` and other
+/// shells check it via `ready` and `status` (see CONCEPT.md §13).
 const PROTOCOL: u32 = 1;
 
-/// Тишина, после которой пачка событий считается законченной.
+/// Quiet period after which a batch of events is considered finished.
 const DEBOUNCE: Duration = Duration::from_millis(300);
-/// Предел ожидания, если события идут без перерыва (`.claude.json` переписывается постоянно).
+/// Waiting limit when events keep coming without a pause (`.claude.json` is rewritten constantly).
 const MAX_WAIT: Duration = Duration::from_secs(2);
-/// Скан по событиям только от `~/.claude.json` не чаще раза в это время: на машине с работающим Claude Code файл
-/// переписывается каждые секунды, а полный скан стоит 50–100 мс (CONCEPT.md §7, простой в 0 % процессора).
+/// A scan triggered only by `~/.claude.json` events runs at most once per this interval: on a machine with Claude Code running the file
+/// is rewritten every few seconds, and a full scan costs 50–100 ms (CONCEPT.md §7, 0 % CPU when idle).
 const NOISY_MIN: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(3600);
 
@@ -39,7 +39,7 @@ enum Msg {
     Fs(notify::Result<Event>),
 }
 
-/// Одно сообщение — одна строка со сбросом буфера. Закрытый stdout означает, что окна нет: выходим.
+/// One message is one line, with a buffer flush. A closed stdout means the window is gone: exit.
 fn send(v: &Value) {
     let mut out = std::io::stdout().lock();
     if writeln!(out, "{v}").and_then(|()| out.flush()).is_err() {
@@ -54,7 +54,7 @@ struct Server {
     watcher: Option<RecommendedWatcher>,
     watched: BTreeMap<PathBuf, RecursiveMode>,
     seq: u64,
-    /// Каталог бэкапов и журнала; без него запись выключена.
+    /// Directory of backups and the journal; without it writing is disabled.
     backups: Option<PathBuf>,
 }
 
@@ -75,7 +75,7 @@ impl Server {
         s
     }
 
-    /// Каталог из набора исчез или переименован: его подписка мертва, даже если каталог тут же создали заново.
+    /// A directory from the set vanished or was renamed: its subscription is dead even if the directory was immediately recreated.
     fn forget_watch(&mut self, path: &Path) {
         if self.watched.remove(path).is_some() {
             if let Some(w) = self.watcher.as_mut() {
@@ -84,8 +84,8 @@ impl Server {
         }
     }
 
-    /// Приводит набор слушаемых каталогов к `targets`. Ошибка слежения не фатальна: путь мог исчезнуть.
-    /// `reset` сбрасывает все подписки: после ошибки сторожа неизвестно, какие из них живы.
+    /// Brings the set of watched directories in line with `targets`. A watch error is not fatal: the path may have vanished.
+    /// `reset` drops all subscriptions: after a watcher error it is unknown which of them are still alive.
     fn sync_watches(&mut self, reset: bool) {
         let Some(w) = self.watcher.as_mut() else {
             return;
@@ -142,10 +142,10 @@ impl Server {
         }
     }
 
-    /// Новый скан; события шлются только при смысловом отличии от прошлого.
+    /// A new scan; events are sent only when it differs semantically from the previous one.
     fn rescan(&mut self, announce: bool, reset: bool) {
         let new = loadout_core::scan_with(&self.home, self.backups.as_deref());
-        // набор путей пересобирается на каждом скане, даже без смысловых изменений: каталог мог появиться или исчезнуть
+        // the set of paths is rebuilt on every scan, even without semantic changes: a directory may have appeared or vanished
         self.targets = Targets::from_scan(&self.home, &new);
         self.sync_watches(reset);
         let d = diff(&self.last, &new);
@@ -155,17 +155,17 @@ impl Server {
         self.last = new;
         if announce {
             self.seq += 1;
-            // в событии только id записей и признаки изменений: путей и значений в нём нет
+            // the event carries only entry ids and change flags: no paths or values in it
             let mut params = serde_json::to_value(&d).unwrap_or_else(|_| json!({}));
             params["seq"] = json!(self.seq);
             send(&json!({ "jsonrpc": "2.0", "method": "changed", "params": params }));
         }
     }
 
-    /// Методы записи (R1). Принимают только id записи и желаемое состояние: путей от страницы нет, цель ядро находит само.
-    /// Без `--backups` изменять файлы нельзя. Окно передаёт каталог всегда, а право писать даёт `maxLevel`
-    /// (R1 или R2), который main присылает в том же запросе, что и запись; ядро само отказывает, если операции нужен
-    /// уровень выше.
+    /// Write methods (R1). They accept only the entry id and the desired state: no paths from the page, the core finds the target itself.
+    /// Without `--backups` files cannot be changed. The window always passes the directory, and the right to write comes from `maxLevel`
+    /// (R1 or R2), which main sends in the same request as the write; the core itself refuses if the operation needs
+    /// a higher level.
     fn write_method(&mut self, method: &str, p: &Value) -> Result<Value, String> {
         let str_of = |k: &str| {
             p.get(k)
@@ -183,7 +183,7 @@ impl Server {
         fn json<T: serde::Serialize>(v: &T) -> Result<Value, String> {
             serde_json::to_value(v).map_err(|e| e.to_string())
         }
-        // Намерение: `op` по умолчанию `toggle` (так звал окно в M3); неизвестные поля и варианты — ошибка разбора.
+        // Intent: `op` defaults to `toggle` (that is how the window called it in M3); unknown fields and variants are a parse error.
         let intent = || -> Result<write::Intent, String> {
             let mut v = p.clone();
             if let Some(o) = v.as_object_mut() {
@@ -193,8 +193,8 @@ impl Server {
                 loadout_core::tr!("неверные параметры намерения", "invalid intent parameters")
             })
         };
-        // Наибольший уровень записи, который main разрешил для этого вызова; без параметра — только флаги (R1).
-        // Присланное неизвестное значение (`R0`, `r2`, число) — отказ: ошибка уровня не должна открывать запись.
+        // The highest write level main allowed for this call; without the parameter only flags (R1).
+        // An unknown value that was sent (`R0`, `r2`, a number) is a refusal: a level error must not unlock writing.
         let max_level = || -> Result<&str, String> {
             match p.get("maxLevel") {
                 None | Some(Value::Null) => Ok("R1"),
@@ -221,7 +221,7 @@ impl Server {
                 &intent()?,
             )?)?,
             "journal" => json(&write::journal(&self.home, &store()?))?,
-            // очистка старых копий (последние 100 операций и не старше 90 дней); окно просит её явной кнопкой
+            // cleanup of old backups (the last 100 operations and those not older than 90 days); the window asks for it with an explicit button
             "pruneBackups" => json(&write::prune_backups(&store()?))?,
             "apply" => json(&write::apply(
                 &self.home,
@@ -246,7 +246,7 @@ impl Server {
             "profileSave" => {
                 let name = profile_name()?;
                 let profile = match p.get("items") {
-                    // без `items` профиль снимается с текущего состояния
+                    // without `items` the profile is captured from the current state
                     None | Some(Value::Null) => {
                         loadout_core::profiles::from_current(&self.home, &store()?, &name)
                     }
@@ -264,7 +264,7 @@ impl Server {
                 loadout_core::profiles::delete(&store()?, &profile_name()?)?;
                 json(&loadout_core::profiles::list(&store()?)?)?
             }
-            // явное действие владельца (кнопка в окне): повреждённый profiles.json откладывается, а не затирается
+            // an explicit action by the owner (a button in the window): a corrupted profiles.json is set aside rather than overwritten
             "profilesQuarantine" => json(&loadout_core::profiles::quarantine(&store()?)?)?,
             "planProfile" => {
                 let st = store()?;
@@ -288,7 +288,7 @@ impl Server {
             method,
             "apply" | "rollback" | "rollbackBatch" | "applyProfile"
         ) {
-            // окно узнаёт об изменении сразу, а не после срабатывания сторожа
+            // the window learns about the change right away, not after the watcher fires
             self.rescan(true, false);
         }
         Ok(out)
@@ -303,7 +303,7 @@ impl Server {
         };
         let id = req.get("id").cloned().unwrap_or(Value::Null);
         let reply = match req.get("method").and_then(Value::as_str) {
-            // `scan` и `snapshot` отдают одно и то же; `scan` сначала перечитывает диск и не шлёт `changed` тому, кто спросил сам
+            // `scan` and `snapshot` return the same thing; `scan` rereads the disk first and does not send `changed` to whoever asked itself
             Some("scan") => {
                 self.rescan(false, false);
                 json!({ "result": &self.last })
@@ -335,7 +335,7 @@ impl Server {
 
 fn spawn_stdin_reader(tx: Sender<Msg>) {
     std::thread::spawn(move || {
-        // побайтово: невалидный UTF-8 в строке — ошибка запроса, а не конец работы
+        // byte by byte: invalid UTF-8 in a line is a request error, not the end of the run
         for line in std::io::stdin().lock().split(b'\n') {
             let Ok(l) = line else { break };
             if tx
@@ -369,7 +369,7 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
         &json!({ "jsonrpc": "2.0", "method": "ready", "params": { "watching": server.watched.len(), "protocol": PROTOCOL } }),
     );
 
-    // (первое событие пачки, последнее, пересоздать ли подписки, все события пачки «шумные»)
+    // (first event of the batch, last, whether to recreate subscriptions, whether all events of the batch are "noisy")
     type Dirty = Option<(Instant, Instant, bool, bool)>;
     let mut dirty: Dirty = None;
     let mark = |dirty: &mut Dirty, reset: bool, noisy: bool| {
@@ -377,8 +377,8 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
         let (first, _, was, was_noisy) = dirty.unwrap_or((now, now, false, true));
         *dirty = Some((first, now, was || reset, was_noisy && noisy));
     };
-    // Когда пачка должна уйти в скан: после тишины, но не дольше MAX_WAIT; «шумная» пачка (только `~/.claude.json`,
-    // который работающий Claude Code переписывает постоянно) не чаще одного скана за NOISY_MIN.
+    // When a batch must go to a scan: after the quiet period, but no later than MAX_WAIT; a "noisy" batch (only `~/.claude.json`,
+    // which a running Claude Code rewrites constantly) triggers at most one scan per NOISY_MIN.
     let due_of = |first: Instant, last: Instant, reset: bool, noisy: bool, last_scan: Instant| {
         let due = (last + DEBOUNCE).min(first + MAX_WAIT);
         if noisy && !reset {
@@ -389,7 +389,7 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
     };
     let mut last_scan = Instant::now();
     loop {
-        // срок проверяем в начале каждого шага: поток запросов не должен откладывать скан дольше MAX_WAIT
+        // check the deadline at the start of every step: a stream of requests must not delay the scan beyond MAX_WAIT
         if let Some((first, last, reset, noisy)) = dirty {
             if due_of(first, last, reset, noisy, last_scan) <= Instant::now() {
                 dirty = None;
@@ -408,7 +408,7 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
                 if ev.kind.is_access() {
                     continue;
                 }
-                // каталог создан, удалён или переименован: подписка на удалённый мертва, даже если его создали заново
+                // a directory was created, removed or renamed: a subscription to a removed one is dead even if it was recreated
                 let structural = ev.kind.is_create()
                     || ev.kind.is_remove()
                     || matches!(ev.kind, EventKind::Modify(ModifyKind::Name(_)));
@@ -433,7 +433,7 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
                     mark(&mut dirty, false, noisy);
                 }
             }
-            // любая ошибка сторожа — повод перечитать диск: событие могло потеряться, а подписки — умереть
+            // any watcher error is a reason to reread the disk: an event may have been lost and subscriptions may have died
             Ok(Msg::Fs(Err(e))) => {
                 eprintln!("{}", loadout_core::tr!("сторож: {e}", "watcher: {e}"));
                 mark(&mut dirty, true, false);

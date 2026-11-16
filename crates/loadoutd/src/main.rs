@@ -1,4 +1,4 @@
-//! `loadout scan [--json] [--pretty] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek]` — только чтение.
+//! `loadout scan [--json] [--pretty] [--home PATH] [--client claude-code|claude-desktop|codex|antigravity|deepseek]` — read-only.
 
 mod serve;
 
@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-/// Каталог данных окна в `%APPDATA%`: Electron называет его по `name` из `app/package.json` (тест `serve.rs` сверяет).
+/// The window's data directory in `%APPDATA%`: Electron names it after `name` from `app/package.json` (the `serve.rs` test checks this).
 const APP_DATA_DIR: &str = "loadout-app";
 
 fn home_or_default(home: Option<PathBuf>) -> Option<PathBuf> {
@@ -29,8 +29,8 @@ fn no_home() -> ExitCode {
     ExitCode::from(2)
 }
 
-/// `loadout serve [--home ПУТЬ] [--backups КАТАЛОГ] [--lang ru|en]`: постоянный процесс для окна (JSON-RPC по stdio и сторож файлов).
-/// Без `--backups` методы записи (R1) отказывают.
+/// `loadout serve [--home PATH] [--backups DIR] [--lang ru|en]`: a long-running process for the window (JSON-RPC over stdio and a file watcher).
+/// Without `--backups` the write methods (R1) refuse.
 fn serve_main(args: &[String]) -> ExitCode {
     let (mut home, mut backups) = (None, None);
     let mut it = args.iter();
@@ -55,8 +55,8 @@ fn serve_main(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `loadout prune [--backups КАТАЛОГ] [--lang ru|en]`: удаляет старые копии операций (оставляет последние 100 и не старше
-/// 90 дней, корзина не трогается). Без `--backups` берёт `%APPDATA%\loadout-app\backups`, куда складывает копии окно.
+/// `loadout prune [--backups DIR] [--lang ru|en]`: deletes old operation backups (keeps the last 100 and those not older than
+/// 90 days; the trash is left alone). Without `--backups` it uses `%APPDATA%\loadout-app\backups`, where the window puts its backups.
 fn prune_main(args: &[String]) -> ExitCode {
     let mut backups = None;
     let mut it = args.iter();
@@ -188,7 +188,7 @@ fn main() -> ExitCode {
         } else {
             serde_json::to_string(&res)
         };
-        println!("{}", out.expect("ScanResult сериализуется"));
+        println!("{}", out.expect("ScanResult is serializable"));
     } else {
         summary(&res);
     }
