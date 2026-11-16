@@ -3,8 +3,8 @@ import { defineConfig } from 'electron-vite'
 import type { Plugin } from 'vite'
 
 /**
- * Content-Security-Policy только в сборке: у dev-сервера inline-скрипт HMR, ему CSP мешает.
- * `style-src 'unsafe-inline'` нужен для атрибутов `style` у React; скрипты только из `self`, сеть закрыта.
+ * Content-Security-Policy only in the build: the dev server uses an inline HMR script, which the CSP would block.
+ * `style-src 'unsafe-inline'` is needed for React's `style` attributes; scripts only from `self`, network closed.
  */
 const csp: Plugin = {
   name: 'loadout-csp',
@@ -27,8 +27,8 @@ export default defineConfig({
   preload: {},
   renderer: {
     plugins: [react(), csp],
-    // Без `data:`-шрифтов: Vite встраивает мелкие файлы base64, а CSP (`font-src 'self'`) такие шрифты блокирует
-    // (e2e поймал console.error на каждый). Все ресурсы остаются файлами.
+    // No `data:` fonts: Vite inlines small files as base64, and the CSP (`font-src 'self'`) blocks such fonts
+    // (e2e caught a console.error for each). All assets stay as files.
     build: { assetsInlineLimit: 0 },
   },
 })
