@@ -24,6 +24,7 @@
 //!   the next two words that count are negated (unless they stood before it), and a shared anchor or action
 //!   negated on one side only cancels the pair ("`git push` to my fork without confirmation"). Two or more
 //!   negations ("do not lock a plan without calling the advisor") mark nothing: such a rule is positive.
+//!   One negation against none, wherever it stands ("confirmation is not required"), also cancels the pair.
 //!
 //! Measured on the corpus of the tests (the real block of `setup --with-rules`, 18 paraphrases, 34 + 8 lines
 //! on the same topics with another meaning) and on a set of 12 + 15 written blind by another model; see README.
@@ -309,6 +310,8 @@ struct Unit {
     anchors: HashSet<String>,
     concepts: HashSet<String>,
     negated: bool,
+    /// How many negation words the piece has.
+    negations: usize,
     /// The anchors and concepts a single negation stands before ("без `ctxkit check`", "needs no confirmation").
     neg_anchors: HashSet<String>,
     neg_concepts: HashSet<String>,
@@ -392,6 +395,7 @@ fn unit_of(text: &str) -> Unit {
         anchors,
         concepts,
         negated: !negations.is_empty(),
+        negations: negations.len(),
         neg_anchors,
         neg_concepts,
     }
@@ -411,7 +415,9 @@ fn paraphrase(u: &Unit, v: &Unit) -> bool {
         || shared_anchors
             .iter()
             .any(|a| u.neg_anchors.contains(*a) != v.neg_anchors.contains(*a));
-    if flipped {
+    // one negation against none, wherever it stands ("confirmation is not required"), is the other polarity
+    let one_against_none = matches!((u.negations, v.negations), (1, 0) | (0, 1));
+    if flipped || one_against_none {
         return false;
     }
     let n = common.len();
