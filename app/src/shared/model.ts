@@ -164,14 +164,16 @@ export interface JournalEntry {
 }
 
 /** R0 — только чтение, R1 — флаги, R2 — корзина, правка, копирование, профили. Каждый уровень включает прежние. */
-/** Встроенный ctxkit (CONCEPT.md §13): состояние установки, диагностика и счётчики эффективности. */
+/** Встроенные Инструменты контекста (CONCEPT.md §13): состояние установки, диагностика и счётчики эффективности. */
 export interface CtxkitStatus {
-  /** Бинарь ctxkit есть в составе приложения. */
+  /** Бинарь context-toolkit есть в составе приложения. */
   available: boolean
   version: string | null
   /** Копия в `~/.claude/hooks` (её вызывают хуки) и в `~/.local/bin` (PATH): совпадает со встроенной, отличается или нет. */
   hook: 'same' | 'different' | 'missing'
   bin: 'same' | 'different' | 'missing'
+  /** В `~/.claude/hooks` лежит `ctxkit.exe` — бинарь прежнего имени: «Применить» переведёт установку на новое. */
+  legacy: boolean
 }
 
 export type FindingSeverity = 'ok' | 'info' | 'warn' | 'error'
@@ -222,7 +224,7 @@ export interface SetupOptions {
   mainModel: 'keep' | 'sonnet' | 'opus' | 'haiku'
   /** 'keep' — `--effort` не передаётся: effort остаётся как есть */
   effort: 'keep' | 'low' | 'medium' | 'high' | 'xhigh'
-  /** 'keep' — `--policy` не передаётся (ctxkit.json не трогается); 'on' — включены ровно отмеченные политики ниже; 'off' — `--policy none` */
+  /** 'keep' — `--policy` не передаётся (context-toolkit.json не трогается); 'on' — включены ровно отмеченные политики ниже; 'off' — `--policy none` */
   policyMode: 'keep' | 'on' | 'off'
   /** Политики «Защиты» (учитываются при policyMode 'on'): гигиена коммитов, подтверждение необратимого, неожиданные файлы-отчёты, лимит сборок */
   commitHygiene: boolean
@@ -233,7 +235,7 @@ export interface SetupOptions {
   buildSlotsN: number
 }
 
-/** Верхняя граница лимита сборок в окне. ctxkit сам принимает до 64 (`MAX_SLOTS`): окно ограничивает себя, и уже записанное в ctxkit.json значение выше 8 оно только понижает. */
+/** Верхняя граница лимита сборок в окне. Инструменты контекста сами принимают до 64 (`MAX_SLOTS`): окно ограничивает себя, и уже записанное в ctxkit.json значение выше 8 оно только понижает. */
 export const MAX_BUILD_SLOTS = 8
 
 /** Что окно просит убрать вместе с настройками Claude Code: интеграции, которые `setup` поставил по галочкам. */
@@ -244,13 +246,13 @@ export interface UninstallOptions {
 
 export interface SetupResult {
   dryRun: boolean
-  /** Код выхода ctxkit: 0 — готово. */
+  /** Код выхода context-toolkit: 0 — готово. */
   code: number
-  /** Вывод ctxkit (stdout и stderr), путь домашнего каталога заменён на `~`. */
+  /** Вывод context-toolkit (stdout и stderr), путь домашнего каталога заменён на `~`. */
   output: string
 }
 
-/** R0 — только чтение, R1 — флаги, R2 — корзина, правка, копирование, профили, применение ctxkit. */
+/** R0 — только чтение, R1 — флаги, R2 — корзина, правка, копирование, профили, применение Инструментов контекста. */
 export type WriteLevel = 'R0' | 'R1' | 'R2'
 export const LEVEL_RANK: Record<WriteLevel, number> = { R0: 0, R1: 1, R2: 2 }
 
@@ -321,7 +323,7 @@ export interface LoadoutApi {
   ctxkitReport: (days: 7 | 14 | 30) => Promise<Result<CtxkitReport>>
   /** `dryRun` — предпросмотр (любой уровень); применение требует R2 и совпадающего предпросмотра. */
   ctxkitSetup: (options: SetupOptions, dryRun: boolean) => Promise<Result<SetupResult>>
-  /** Откат `ctxkit setup --uninstall`: `dryRun` — предпросмотр; откат требует R2 и такого же предпросмотра. */
+  /** Откат `context-toolkit setup --uninstall`: `dryRun` — предпросмотр; откат требует R2 и такого же предпросмотра. */
   ctxkitUninstall: (options: UninstallOptions, dryRun: boolean) => Promise<Result<SetupResult>>
   /** Установка плагина Claude Code через его CLI (`имя@маркетплейс`). `dryRun` — показать команду; установка требует R2 и такого же предпросмотра. */
   pluginInstall: (spec: string, dryRun: boolean) => Promise<Result<SetupResult>>

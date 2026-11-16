@@ -471,10 +471,12 @@ void app.whenReady().then(() => {
       return validateBatchApplied(await core('applyProfile', { name: n, batchSha: sha, maxLevel: grantedLevel() }))
     })
   })
-  // ---- встроенный ctxkit (CONCEPT.md §13): бинарь лежит в составе приложения, путь зашит ----
+  // ---- встроенные Инструменты контекста (CONCEPT.md §13): бинарь лежит в составе приложения, путь зашит ----
   const ctxBin = (): string =>
-    app.isPackaged ? join(process.resourcesPath, 'ctxkit.exe') : (envOf('LOADOUT_CTXKIT') ?? resolve(app.getAppPath(), 'build', 'ctxkit.exe'))
-  /** В разработке и проверках (`LOADOUT_HOME`) ctxkit работает в этом каталоге, а не в настоящем профиле. */
+    app.isPackaged
+      ? join(process.resourcesPath, 'context-toolkit.exe')
+      : (envOf('LOADOUT_CONTEXT_TOOLKIT') ?? envOf('LOADOUT_CTXKIT') ?? resolve(app.getAppPath(), 'build', 'context-toolkit.exe'))
+  /** В разработке и проверках (`LOADOUT_HOME`) Инструменты контекста работают в этом каталоге, а не в настоящем профиле. */
   const ctxHome = (): string | undefined => envOf('LOADOUT_HOME')
   const userHome = (): string => ctxHome() ?? app.getPath('home')
   let lastSetupPreview: string | undefined
@@ -483,7 +485,7 @@ void app.whenReady().then(() => {
   ipcMain.handle('ctxkit:status', (e) => {
     guard(e)
     return guarded(() =>
-      ctxkit.status(ctxBin(), join(userHome(), '.claude', 'hooks', 'ctxkit.exe'), join(userHome(), '.local', 'bin', 'ctxkit.exe')),
+      ctxkit.status(ctxBin(), join(userHome(), '.claude', 'hooks'), join(userHome(), '.local', 'bin')),
     )
   })
   ipcMain.handle('ctxkit:doctor', (e) => {
@@ -510,7 +512,7 @@ void app.whenReady().then(() => {
     guarded(async () => {
       if (typeof dryRun !== 'boolean') throw new Error(t('неверные параметры', 'invalid parameters'))
       const { key, args } = plan()
-      if (setupBusy) throw new Error(t('ctxkit уже работает: дождитесь окончания', 'ctxkit is already running: wait for it to finish'))
+      if (setupBusy) throw new Error(t('Инструменты контекста уже работают: дождитесь окончания', 'Context Toolkit is already running: wait for it to finish'))
       if (!dryRun) {
         // запись в конфиги клиентов: нужен R2 и предпросмотр с точно такими же настройками
         if (readWriteLevel() !== 'R2') throw new Error(t(`для этого действия (${what}) нужен уровень R2: включите его в шапке окна`, `this action (${what}) requires level R2: enable it in the window header`))
@@ -529,14 +531,14 @@ void app.whenReady().then(() => {
     })
   ipcMain.handle('ctxkit:setup', (e, raw: unknown, dryRun: unknown) => {
     guard(e)
-    return ctxkitStep(dryRun, t('применение ctxkit', 'applying ctxkit'), () => {
+    return ctxkitStep(dryRun, t('применение Инструментов контекста', 'applying Context Toolkit'), () => {
       const options = ctxkit.parseSetupOptions(raw)
       return { key: `setup:${JSON.stringify(options)}`, args: ctxkit.setupArgs(options, dryRun as boolean, ctxHome()) }
     })
   })
   ipcMain.handle('ctxkit:uninstall', (e, raw: unknown, dryRun: unknown) => {
     guard(e)
-    return ctxkitStep(dryRun, t('откат ctxkit', 'rolling back ctxkit'), () => {
+    return ctxkitStep(dryRun, t('откат Инструментов контекста', 'rolling back Context Toolkit'), () => {
       const options = ctxkit.parseUninstallOptions(raw)
       return { key: `uninstall:${JSON.stringify(options)}`, args: ctxkit.uninstallArgs(options, dryRun as boolean, getLang(), ctxHome()) }
     })

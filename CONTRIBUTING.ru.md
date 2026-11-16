@@ -29,7 +29,7 @@ npx vitest run
 npm run e2e          # собирает ядро и окно, гоняет настоящее приложение на фикстурах
 ```
 
-У `crates/ctxkit` есть ещё `node crates/ctxkit/tests/guard.test.mjs` (сначала `cargo build --release`).
+У `crates/context-toolkit` есть ещё `node crates/context-toolkit/tests/guard.test.mjs` (сначала `cargo build --release`).
 
 ## Правила, которые важны
 

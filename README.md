@@ -33,7 +33,7 @@ Loadout reads all five clients, shows everything in one matrix and changes it **
 - **Profiles**: snapshot a set of enabled entries, apply it as one batch, roll the whole batch back.
 - **Journal** of every write with one-click rollback. Before any write the file is copied to a backup.
 - **Doctor** finds broken links, drift, duplicates and stray backups.
-- **ctxkit** built in: install, apply and see its effect (see below).
+- **Context Toolkit** built in: install, apply and see its effect (see below).
 - **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; messages of the core follow the choice too.
 - Read-only by default (R0). Raising the write level needs an OS confirmation dialog.
 
@@ -57,11 +57,11 @@ Operation backups and the Loadout trash keep client configs **in full and as pla
 |---|---|
 | ![Journal](docs/screenshots/en-journal.png) | ![Doctor](docs/screenshots/en-doctor.png) |
 
-## ctxkit
+## Context Toolkit
 
-[`crates/ctxkit`](crates/ctxkit/README.md) is a toolkit of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review (model, advisor and effort change only on explicit flags or an explicit choice in the form). It is built into the app (the **ctxkit** section: preview, apply, roll back) and can also be installed on its own.
+[`crates/context-toolkit`](crates/context-toolkit/README.md) (formerly ctxkit; `context-toolkit setup` moves an earlier installation to the new name) is a toolkit of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review (model, advisor and effort change only on explicit flags or an explicit choice in the form). It is built into the app (the **Context Toolkit** section: preview, apply, roll back) and can also be installed on its own.
 
-![ctxkit in the app](docs/screenshots/en-ctxkit.png)
+![Context Toolkit in the app](docs/screenshots/en-ctxkit.png)
 
 ## Repository layout
 
@@ -69,7 +69,7 @@ Operation backups and the Loadout trash keep client configs **in full and as pla
 |---|---|
 | `app/` | Desktop app (Electron + React, Windows) |
 | `crates/loadout-core`, `crates/loadoutd` | Rust core: scan, write pipeline, file watcher, sidecar process for the window |
-| `crates/ctxkit` | ctxkit, built in the same Cargo workspace |
+| `crates/context-toolkit` | Context Toolkit, built in the same Cargo workspace |
 | `docs/CONCEPT.en.md`, `docs/CONCEPT.md` | Design, decisions, milestone and audit notes (English, Russian) |
 | `docs/screenshots/` | Screenshots used in this README |
 | `fixtures/`, `state/` | Test data and window snapshots produced by the e2e scenarios |
@@ -79,14 +79,14 @@ Operation backups and the Loadout trash keep client configs **in full and as pla
 Requirements: Rust (MSVC toolchain), Node.js, Windows 10/11.
 
 ```bash
-cargo build --release          # core and ctxkit (binaries in target/release)
+cargo build --release          # core and Context Toolkit (binaries in target/release)
 cargo test                     # Rust tests
 cd app && npm install
 npm run e2e                    # build and drive the real window
 npm run dist                   # installer (NSIS, unsigned)
 ```
 
-`ctxkit.exe` for the app is built from `crates/ctxkit` (`npm run bundle:ctxkit`).
+`context-toolkit.exe` for the app is built from `crates/context-toolkit` (`npm run bundle:context-toolkit`).
 
 ## Status
 

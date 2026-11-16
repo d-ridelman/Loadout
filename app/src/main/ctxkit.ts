@@ -8,7 +8,7 @@ import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, DayStats, DoctorFinding,
 
 /** Разбор настроек `setup` от страницы: только булевы флаги и перечисления, всё остальное — отказ. */
 export function parseSetupOptions(raw: unknown): SetupOptions {
-  const invalid = (): Error => new Error(t('неверные параметры ctxkit', 'invalid ctxkit parameters'))
+  const invalid = (): Error => new Error(t('неверные параметры Инструментов контекста', 'invalid Context Toolkit parameters'))
   if (typeof raw !== 'object' || raw === null) throw invalid()
   const r = raw as Record<string, unknown>
   const flag = (k: string): boolean => {
@@ -17,16 +17,16 @@ export function parseSetupOptions(raw: unknown): SetupOptions {
   }
   const lang = r['lang']
   const advisor = r['advisor']
-  if (lang !== 'en' && lang !== 'ru') throw new Error(t('неверный язык ctxkit', 'invalid ctxkit language'))
-  if (advisor !== 'keep' && advisor !== 'fable' && advisor !== 'opus' && advisor !== 'none') throw new Error(t('неверный советник ctxkit', 'invalid ctxkit advisor'))
+  if (lang !== 'en' && lang !== 'ru') throw new Error(t('неверный язык Инструментов контекста', 'invalid Context Toolkit language'))
+  if (advisor !== 'keep' && advisor !== 'fable' && advisor !== 'opus' && advisor !== 'none') throw new Error(t('неверный советник Инструментов контекста', 'invalid Context Toolkit advisor'))
   const mainModel = r['mainModel']
   const effort = r['effort']
-  if (mainModel !== 'keep' && mainModel !== 'sonnet' && mainModel !== 'opus' && mainModel !== 'haiku') throw new Error(t('неверная основная модель ctxkit', 'invalid ctxkit main model'))
-  if (effort !== 'keep' && effort !== 'low' && effort !== 'medium' && effort !== 'high' && effort !== 'xhigh') throw new Error(t('неверный effort ctxkit', 'invalid ctxkit effort'))
+  if (mainModel !== 'keep' && mainModel !== 'sonnet' && mainModel !== 'opus' && mainModel !== 'haiku') throw new Error(t('неверная основная модель Инструментов контекста', 'invalid Context Toolkit main model'))
+  if (effort !== 'keep' && effort !== 'low' && effort !== 'medium' && effort !== 'high' && effort !== 'xhigh') throw new Error(t('неверный effort Инструментов контекста', 'invalid Context Toolkit effort'))
   const policyMode = r['policyMode']
-  if (policyMode !== 'keep' && policyMode !== 'on' && policyMode !== 'off') throw new Error(t('неверный режим политик ctxkit', 'invalid ctxkit policy mode'))
+  if (policyMode !== 'keep' && policyMode !== 'on' && policyMode !== 'off') throw new Error(t('неверный режим политик Инструментов контекста', 'invalid Context Toolkit policy mode'))
   const slots = r['buildSlotsN']
-  if (typeof slots !== 'number' || !Number.isInteger(slots) || slots < 1 || slots > MAX_BUILD_SLOTS) throw new Error(t('неверный лимит сборок ctxkit (1–8)', 'invalid ctxkit build limit (1–8)'))
+  if (typeof slots !== 'number' || !Number.isInteger(slots) || slots < 1 || slots > MAX_BUILD_SLOTS) throw new Error(t('неверный лимит сборок Инструментов контекста (1–8)', 'invalid Context Toolkit build limit (1–8)'))
   return {
     withRules: flag('withRules'),
     desktop: flag('desktop'),
@@ -57,13 +57,13 @@ export function policyArg(o: SetupOptions): string | undefined {
 /** Разбор настроек отката от страницы: два булевых флага, остальное — отказ. */
 export function parseUninstallOptions(raw: unknown): UninstallOptions {
   const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
-  if (typeof r['antigravity'] !== 'boolean' || typeof r['dsh'] !== 'boolean') throw new Error(t('неверные параметры ctxkit', 'invalid ctxkit parameters'))
+  if (typeof r['antigravity'] !== 'boolean' || typeof r['dsh'] !== 'boolean') throw new Error(t('неверные параметры Инструментов контекста', 'invalid Context Toolkit parameters'))
   return { antigravity: r['antigravity'], dsh: r['dsh'] }
 }
 
 /**
- * Аргументы `ctxkit setup`. `home` задан только в разработке и проверках (`LOADOUT_HOME`): тогда всё, что пишет ctxkit,
- * уходит в этот каталог, а не в настоящий профиль (ctxkit при `--profile` не копирует себя в `~/.local/bin`).
+ * Аргументы `context-toolkit setup`. `home` задан только в разработке и проверках (`LOADOUT_HOME`): тогда всё, что пишут
+ * Инструменты контекста, уходит в этот каталог, а не в настоящий профиль (при `--profile` они не копируют себя в `~/.local/bin`).
  */
 export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): string[] {
   const a = ['setup']
@@ -79,7 +79,7 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
   if (o.effort !== 'keep') a.push('--effort', o.effort)
   const policy = policyArg(o)
   if (policy) a.push('--policy', policy)
-  // версию claude ctxkit проверяет в самом конце, уже после записи, и зависший `claude` оставил бы окно с ошибкой при
+  // версию claude setup проверяет в самом конце, уже после записи, и зависший `claude` оставил бы окно с ошибкой при
   // изменённых файлах; предпросмотр проверку оставляет (она нужна диагностике)
   if (!dryRun) a.push('--skip-version-check')
   if (home) a.push(...homeArgs(home))
@@ -87,8 +87,8 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
 }
 
 /**
- * Аргументы `ctxkit setup --uninstall`: только проверенные флаги, ни одного флага самого `setup` (ctxkit их отвергает).
- * Интеграции Antigravity и DSH ctxkit включает по самим флагам путей (`--agy-file`, `--dsh-home`), поэтому в разработке и проверках
+ * Аргументы `context-toolkit setup --uninstall`: только проверенные флаги, ни одного флага самого `setup` (откат их отвергает).
+ * Интеграции Antigravity и DSH откат включает по самим флагам путей (`--agy-file`, `--dsh-home`), поэтому в разработке и проверках
  * пути передаются только вместе с галочкой, как в настоящем профиле. Пресеты Claude Desktop откат не трогает: флаг `--desktop` не нужен.
  */
 export function uninstallArgs(o: UninstallOptions, dryRun: boolean, lang: 'en' | 'ru', home?: string): string[] {
@@ -104,7 +104,7 @@ export function uninstallArgs(o: UninstallOptions, dryRun: boolean, lang: 'en' |
   return a
 }
 
-/** Пути, которые ctxkit иначе берёт из настоящего профиля пользователя. */
+/** Пути, которые Инструменты контекста иначе берут из настоящего профиля пользователя. */
 function homeArgs(home: string): string[] {
   return [
     '--profile', join(home, '.claude'),
@@ -124,18 +124,18 @@ export interface RunResult {
   stderr: string
 }
 
-/** Запуск встроенного ctxkit: без оболочки, с таймаутом, окно не показывается. Ненулевой код — не исключение (`doctor` так сообщает об ошибках). */
+/** Запуск встроенных Инструментов контекста: без оболочки, с таймаутом, окно не показывается. Ненулевой код — не исключение (`doctor` так сообщает об ошибках). */
 export function run(bin: string, args: string[], timeoutMs: number, env?: Record<string, string>): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const opts = { windowsHide: true, timeout: timeoutMs, maxBuffer: 8 << 20, encoding: 'utf8' as const, ...(env ? { env: { ...process.env, ...env } } : {}) }
     execFile(bin, args, opts, (err, stdout, stderr) => {
-      const isCtxkit = bin.toLowerCase().includes('ctxkit')
+      const isCtxkit = /context-toolkit|ctxkit/i.test(bin)
       if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
         if (bin === 'git') return reject(new Error(t('git не найден в PATH: установите Git for Windows', 'git not found in PATH: install Git for Windows')))
-        return reject(new Error(isCtxkit ? t('ctxkit не найден в составе приложения', 'ctxkit not found in the app bundle') : t('Claude Code CLI (`claude`) не найден в PATH', 'Claude Code CLI (`claude`) not found in PATH')))
+        return reject(new Error(isCtxkit ? t('Инструменты контекста не найдены в составе приложения', 'Context Toolkit not found in the app bundle') : t('Claude Code CLI (`claude`) не найден в PATH', 'Claude Code CLI (`claude`) not found in PATH')))
       }
       const e = err as (Error & { code?: number | string; killed?: boolean }) | null
-      if (e?.killed) return reject(new Error(isCtxkit ? t('ctxkit не ответила вовремя', 'ctxkit did not respond in time') : t('команда не ответила вовремя', 'the command did not respond in time')))
+      if (e?.killed) return reject(new Error(isCtxkit ? t('Инструменты контекста не ответили вовремя', 'Context Toolkit did not respond in time') : t('команда не ответила вовремя', 'the command did not respond in time')))
       resolve({ code: e ? (typeof e.code === 'number' ? e.code : 1) : 0, stdout, stderr })
     })
   })
@@ -143,18 +143,24 @@ export function run(bin: string, args: string[], timeoutMs: number, env?: Record
 
 const sha = (p: string): string | undefined => (existsSync(p) ? createHash('sha256').update(readFileSync(p)).digest('hex') : undefined)
 
-/** Копия ctxkit по пути: совпадает с встроенной побайтово, отличается или нет. Чужие копии не запускаются, только сравниваются. */
+/** Копия бинаря по пути: совпадает с встроенной побайтово, отличается или нет. Чужие копии не запускаются, только сравниваются. */
 export function compareCopy(bundled: string, copy: string): 'same' | 'different' | 'missing' {
   const c = sha(copy)
   if (c === undefined) return 'missing'
   return c === sha(bundled) ? 'same' : 'different'
 }
 
-export async function status(bundled: string, hookCopy: string, binCopy: string): Promise<CtxkitStatus> {
-  if (!existsSync(bundled)) return { available: false, version: null, hook: 'missing', bin: 'missing' }
+export const BIN = 'context-toolkit.exe'
+/** Имя бинаря до переименования: его копия в `hooks/` — признак прежней установки, которую «Применить» переводит на новое имя. */
+export const OLD_BIN = 'ctxkit.exe'
+
+/** Состояние установки: копии в `hooksDir` (её вызывают хуки) и `binDir` (PATH) и копия прежнего имени в `hooksDir`. */
+export async function status(bundled: string, hooksDir: string, binDir: string): Promise<CtxkitStatus> {
+  const legacy = existsSync(join(hooksDir, OLD_BIN))
+  if (!existsSync(bundled)) return { available: false, version: null, hook: 'missing', bin: 'missing', legacy }
   const v = await run(bundled, ['--version'], 5000).catch(() => undefined)
   const version = /\d+\.\d+\.\d+\S*/.exec(v?.stdout ?? '')?.[0] ?? null
-  return { available: true, version, hook: compareCopy(bundled, hookCopy), bin: compareCopy(bundled, binCopy) }
+  return { available: true, version, hook: compareCopy(bundled, join(hooksDir, BIN)), bin: compareCopy(bundled, join(binDir, BIN)), legacy }
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -166,21 +172,23 @@ function parseJson(text: string, what: string): Record<string, unknown> {
   try {
     v = JSON.parse(text)
   } catch {
-    throw new Error(t(`ctxkit вернул не JSON (${what})`, `ctxkit returned non-JSON output (${what})`))
+    throw new Error(t(`Инструменты контекста вернули не JSON (${what})`, `Context Toolkit returned non-JSON output (${what})`))
   }
-  // контракт ctxkit: `schema: 1`; другую версию не разбираем, а честно сообщаем
-  if (!isObj(v) || v['tool'] !== 'ctxkit' || v['schema'] !== 1) throw new Error(t(`ctxkit ${what}: неподдерживаемая версия контракта (нужна schema 1)`, `ctxkit ${what}: unsupported contract version (schema 1 required)`))
+  // контракт: `schema: 1`, `tool` — имя бинаря (до переименования было `ctxkit`); другую версию не разбираем, а честно сообщаем
+  if (!isObj(v) || (v['tool'] !== 'context-toolkit' && v['tool'] !== 'ctxkit') || v['schema'] !== 1) {
+    throw new Error(t(`context-toolkit ${what}: неподдерживаемая версия контракта (нужна schema 1)`, `context-toolkit ${what}: unsupported contract version (schema 1 required)`))
+  }
   return v
 }
 
-/** `ctxkit doctor --json`: находки пересобираются по полям, лишнее отбрасывается. */
+/** `context-toolkit doctor --json`: находки пересобираются по полям, лишнее отбрасывается. */
 export function parseDoctor(text: string): CtxkitDoctor {
   const v = parseJson(text, 'doctor')
   const list = v['findings']
-  if (!Array.isArray(list) || list.length > 200) throw new Error(t('ctxkit doctor: неожиданная форма', 'ctxkit doctor: unexpected shape'))
+  if (!Array.isArray(list) || list.length > 200) throw new Error(t('context-toolkit doctor: неожиданная форма', 'context-toolkit doctor: unexpected shape'))
   const findings: DoctorFinding[] = list.map((f: unknown) => {
     if (!isObj(f) || typeof f['id'] !== 'string' || typeof f['message'] !== 'string' || typeof f['severity'] !== 'string' || !SEVERITIES.includes(f['severity'])) {
-      throw new Error(t('ctxkit doctor: неожиданная находка', 'ctxkit doctor: unexpected finding'))
+      throw new Error(t('context-toolkit doctor: неожиданная находка', 'context-toolkit doctor: unexpected finding'))
     }
     const s = (x: unknown): string | null => (typeof x === 'string' ? x.slice(0, 500) : null)
     return { id: f['id'].slice(0, 60), severity: f['severity'] as FindingSeverity, message: f['message'].slice(0, 300), detail: s(f['detail']), fix: s(f['fix']) }
@@ -188,14 +196,14 @@ export function parseDoctor(text: string): CtxkitDoctor {
   return { findings, version: typeof v['version'] === 'string' ? v['version'].slice(0, 30) : '' }
 }
 
-/** `ctxkit report --json`: счётчики по дням. Ключи агентов, написанные моделью, режутся по длине и виду. */
+/** `context-toolkit report --json`: счётчики по дням. Ключи агентов, написанные моделью, режутся по длине и виду. */
 export function parseReport(text: string): CtxkitReport {
   const v = parseJson(text, 'report')
   const days = v['days']
-  if (!isObj(days) || Object.keys(days).length > 400) throw new Error(t('ctxkit report: неожиданная форма', 'ctxkit report: unexpected shape'))
+  if (!isObj(days) || Object.keys(days).length > 400) throw new Error(t('context-toolkit report: неожиданная форма', 'context-toolkit report: unexpected shape'))
   const out: Record<string, DayStats> = {}
   for (const [day, raw] of Object.entries(days)) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !isObj(raw)) throw new Error(t('ctxkit report: неожиданный день', 'ctxkit report: unexpected day'))
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !isObj(raw)) throw new Error(t('context-toolkit report: неожиданный день', 'context-toolkit report: unexpected day'))
     const mt = isObj(raw['main_turns']) ? raw['main_turns'] : {}
     const calls: Record<string, number> = {}
     if (isObj(raw['agent_calls'])) {

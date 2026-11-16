@@ -1,0 +1,99 @@
+# Token Usage, Subscription Limits, and Agent Efficiency Research
+
+<p><strong>English</strong> | <a href="RESEARCH.ru.md">Русский</a></p>
+
+This note combines three inputs: the routing setup shared on X (`@0xCodila`, Nov 10-11, 2026) alongside Anthropic docs, a technical critique of the "Rust AST-MCP + PostToolUse daemon" pattern discussed with Gemini, and an empirical audit of 30 real Claude Code sessions (`26,256` assistant turns measured with [`scripts/audit-sessions.mjs`](../scripts/audit-sessions.mjs)).
+
+## Scope: Why Savings Apply Beyond Rust
+
+Context Toolkit (formerly ctxkit) is written in Rust solely for single-binary distribution and `9-14 ms` cold starts without spawning Node or Python per hook call. The savings target any repository stack, including TypeScript/JS, Python, Go, and Rust. In the 30 measured sessions, most bloat came from `2,793` shell file inspections and `1,363` full-file `Read` calls (up to `66.6 KB` each), plus `2,197` runs of `tsc`, `npm test`, `node --test`, `pytest`, and project builds.
+
+## Findings from X (`@0xCodila`) and Anthropic Docs
+
+Posts by `@0xCodila` describe a 4-model team and claim token burn drops by up to `~3.4x` compared to running a flagship model on every turn. The roles match Anthropic documentation (`advisor`, `advisor-tool`, `sub-agents`, `model-config`), but the `~3.4x` figure is not on any of those pages (checked 2026-11-15): treat it as the author's claim, not a measurement. The docs say only that a faster main model with a stronger advisor "typically costs less" than the stronger model throughout.
+
+| Role | Model | Scope | Purpose |
+|---|---|---|---|
+| Main session | `Sonnet` (`sonnet`) | Edits code, writes tests, runs checks | Handles routine turns on a fast mid-tier model |
+| Advisor | `Fable` (`advisorModel: fable`) | Consultation only, writes no files | Consulted ~3 times per task: plan lock, repeated error, final check |
+| Search and reading | `Haiku` (`Explore`) | `Read, Grep, Glob` (read-only) | Keeps broad search output out of the main prompt cache |
+| Final reviewer | `Opus` (`checker`) | `Read, Grep, Glob, Bash` (read-only) | Reviews `git diff`, runs tests, and checks edge cases before handoff |
+
+Four implementation details decide whether this routing holds in practice:
+
+1. The author claims that without explicit triggers in `CLAUDE.md` (consult the advisor before locking a non-trivial plan, when the same error repeats twice, and before declaring work done) Sonnet called the advisor `0 out of 198` times in Anthropic tests. That number is not on the Anthropic pages (checked 2026-11-15). What the advisor-tool page does say is that without system-prompt steering the executor "tends to under-call the advisor", particularly on coding tasks, and the advisor timing is model-driven: there is no setting to force or cap calls. Hence the `CLAUDE.md` block and the Stop gate.
+2. The author claims that lowering `effortLevel` sharply reduces advisor calls. The docs do not confirm this. They say Sonnet 5.5 defaults to `medium`, that Sonnet at `medium` plus an advisor is comparable to Sonnet at default effort at lower cost, and that for maximum intelligence the executor should stay at default effort. `effortLevel: high` in `context-toolkit setup` is therefore our choice, not a documented requirement (since 16 Nov setup writes `model`, `advisorModel` and the effort only when `--main-model`, `--advisor` or `--effort` is passed; without them the user's values stay): compare `medium` and `high` with `context-toolkit report` (advisor calls per day, share of Sonnet turns). Worse, per settings-reference a top-level `effortLevel` in user `~/.claude/settings.json` is ignored by Opus 5.5 and "models released after it"; the page does not name Sonnet 5.5, but a live check (2026-11-15, Claude Code 2.1.325, isolated `CLAUDE_CONFIG_DIR`, `--setting-sources user`, `claude -p` through a local proxy that logs `output_config.effort` from the API request body; `/effort` and the stream-json init message do not show the level) confirmed it: a top-level `effortLevel` in user settings has **no effect** on `sonnet` (`claude-sonnet-5-5`; `low` and `high` both send the same `medium` as no setting at all), while `modelSettings["claude-sonnet-5-5"].effortLevel` works (`low` sends `low`, `high` sends `high`) and wins over the top-level key when both are set. The same method showed that `CLAUDE_CODE_EFFORT_LEVEL`, `--effort` and a top-level `effortLevel` in a `--settings` file do take effect. The documented ways are `modelSettings` (`claude-sonnet-5-5`, v2.1.251+), `/effort`, and `CLAUDE_CODE_EFFORT_LEVEL`; `context-toolkit setup` now writes `modelSettings` for the main model (the top-level key stays for older models), and no longer writes `CLAUDE_CODE_SUBAGENT_MODEL` unless `--subagent` is passed (`doctor` warns about a leftover `haiku`).
+3. Built-in `Explore` ignores `CLAUDE_CODE_SUBAGENT_MODEL` and stays on the main model unless overridden by an explicit `Explore.md` agent file (`name: Explore`, `model: haiku`) under `~/.claude/agents/`.
+4. Keep the root `CLAUDE.md` under ~200 lines (~4-6 KB) and scope directory rules into `.claude/rules/*.md` using `paths:`. Placing exceptions in the same sentence as a prohibition raised rule compliance from `~1/10` to `~9/10` (a claim from the same write-ups; the source was not checked).
+
+Session versus subagent effort (sub-agents page, read verbatim 2026-11-15): a subagent has its own `effort` frontmatter field and an invocation-time `effort` parameter (v2.1.292+); precedence is `CLAUDE_CODE_EFFORT_LEVEL`, then the invocation parameter, then the field. With neither, a subagent on the same model as the session runs at the session level, and on another model the session level does not apply, so set the field (our `checker.md` has `effort: high`, `Explore.md` has none and runs at haiku's default). There is no per-subagent thinking setting, and no separate effort setting for the advisor. `modelSettings` and the top-level `effortLevel` concern sessions only. The X posts mix the two: "Sonnet on medium" is the session, `effort medium` in `checker.md` is a subagent.
+
+Checked against the full text of the pages (2026-11-15): the advisor reads the whole transcript and its own read is not cached, so its cost grows with transcript length; typical advisor output is 400-700 text tokens (1,400-1,800 with thinking) and is the largest cost driver; two to three calls per coding task are expected; each model has its own prompt cache, so `/model` mid-task rereads the conversation uncached, while toggling `/advisor` or changing effort on Sonnet 5.5 keeps the cache; on Sonnet executors a plain-text nudge had no measurable effect and on Opus it slightly lowered pass rates. API-only knobs: advisor `caching` breaks even at roughly three calls; `max_tokens: 2048` cut advisor output about 7x (n = 40, accuracy differences within noise).
+
+To justify advisor cost, the `@0xCodila` write-up cited `Fable 5.2` benchmarks: `Remote Labor Index` `41.3%` vs `21.3%` (`Opus 5.5`), `20.8%` (`GPT-6 Astra`), and `17.9%` (`Fable 5.1`); `BenchCAD 2.1` `83.5` vs `65.3`; `OSWorld 2.1` `89.3%`. The benchmarks and the `$8` / `$40` per 1M input/output tokens price come from that write-up and were not checked against Anthropic pages. At that price, running that tier for grep and config reads wastes budget, whereas three targeted consultations per task pay back cleanly.
+
+## Critique of the "Rust MCP + PostToolUse Daemon" Proposal
+
+The Gemini discussion proposed three measures: (1) replacing native `Read`/`Bash` tools with a custom `tree-sitter`/`syn` AST-MCP server, (2) triggering a `PostToolUse` daemon running `cargo check`, `clippy --fix`, and a local LLM after every write, and (3) banning ordinary text responses in `CLAUDE.md`. Testing against real workflows sorted those ideas out:
+
+| Proposal | Verdict | Evidence |
+|---|---|---|
+| Compact `cargo check --message-format=json` and test logs | Adopted (`context-toolkit check`) | Targets `11.2%` of `tool_result` chars (~6-10% overall on mixed repos, up to 12-15% during heavy compile/typecheck loops) |
+| Static prompt prefix for Prompt Caching | Adopted | `/advisor` keeps the cached prefix intact, whereas switching models mid-session invalidates it |
+| `rendered.lines().take(4)` snippet from the Gemini draft | Fixed | `expected A, found B` diagnostics often start below line 4 of `rendered`; `check.rs` reads `message.message` and the primary `span` directly from JSON |
+| Replace native `Read`/`Bash`/`Edit` with an AST-MCP server | Rejected | Coding models are heavily trained on native `Read`/`Grep`/`Edit`/`Bash`; LSP servers already cover AST navigation, while custom AST tools break on logs, configs, and `git` |
+| Heavy `PostToolUse` build/autofix daemon on every file write | Rejected | While editing N coupled files, files 1..N-1 fail to compile temporarily and emit false errors; background auto-edits desync subsequent `Edit` calls |
+| Ban normal assistant prose in `CLAUDE.md` | Disproven by telemetry | Plain chat text accounts for only ~1% of output tokens |
+
+## Audit of 30 Recent Claude Code Sessions
+
+Measured across local JSONL transcripts under `~/.claude/projects` using [`scripts/audit-sessions.mjs`](../scripts/audit-sessions.mjs):
+
+| Metric | 30-Session Total | Notes |
+|---|---:|---|
+| Assistant turns | `26,256` | Average `875` turns per session |
+| `cache_read_input_tokens` | `12,243,065,484` (~`12.24B`) | Every turn replays the accumulated session history |
+| `cache_creation_input_tokens` | `92,662,314` (~`92.66M`) | `cache_read / cache_create` ratio = `132 : 1` |
+| `input_tokens` (uncached) | `52,582` | |
+| `output_tokens` | `29,915,599` (~`29.92M`) | |
+
+### Model Distribution
+
+| Model | Turns | Share | `output_tokens` | `cache_read` |
+|---|---:|---:|---:|---:|
+| Opus (5.5 + 4.8) | `16,271` | `62.0%` | `16,837,184` | `7,202,472,858` |
+| Fable (5.2) | `8,736` | `33.3%` | `11,518,515` | `4,624,328,102` |
+| Sonnet (5.5) | `1,243` | `4.7%` | `1,559,900` | `416,264,524` |
+| Haiku | `0` | `0%` | `0` | `0` |
+
+`95.3%` of all turns executed on flagship tiers, while `Haiku` handled zero turns.
+
+### Output Breakdown (`29.92M` Tokens)
+
+Plain chat responses (`textChars`) totaled `1,279,337` chars (~`320K` tokens, roughly `1%` of `output_tokens`). Tool invocation arguments (`toolUseChars`) used `10,399,201` chars, and visible thinking blocks (`thinkingChars`) added `3,184,254` chars on top of internal reasoning tokens. Session length (`875` turns average with 132x cache replay) on expensive models drove quota consumption.
+
+### Incoming `tool_result` Bloat (`14,331,527` Chars)
+
+| Source | Calls | Chars | Share of `tool_result` |
+|---|---:|---:|---:|
+| `Bash` + `PowerShell` | `6,788` | `7,976,419` | `55.7%` |
+| file read/search via shell (`sed`/`cat`/`grep`/`rg`/`ls`/`tail`) | `2,793` | `4,657,398` | `32.5%` (`58.4%` of shell output) |
+| build, test, lint, and check scripts | `2,197` | `1,605,014` | `11.2%` |
+| `git` commands | `897` | `1,141,943` | `8.0%` |
+| Native `Read` (single reads up to `66,559` chars) | `1,363` | `4,007,302` | `28.0%` |
+| `Edit` | `3,853` | `478,297` | `3.3%` |
+| `Grep` | `362` | `477,412` | `3.3%` |
+
+Full-file reads and shell file inspection combined (`4.66M + 4.01M` chars) made up `60.5%` of all `tool_result` data. Single unfiltered third-party MCP responses routinely injected `45+ KB` of nested UI state and long histories in a single call.
+
+## Five Hidden Config and Harness Leaks
+
+An infrastructure audit uncovered five additional drains outside application code:
+
+1. **Claude Desktop presets (`ccd-session-presets.json`) override `settings.json`**. Desktop stores per-project model and effort defaults separately, often pinning new sessions to `Opus` or `Fable` even after CLI `settings.json` switches to `Sonnet`.
+2. **Four overlapping check layers**. Global wildcard telemetry hooks (`PreToolUse *` / `PostToolUse *`), regex `Stop` hooks scanning assistant prose ("said not tested"), heavy test commands on every `Stop`, and repo `.githooks`. Regex `Stop` hooks do not inspect code at all, yet force up to three full cache replays just to rephrase an answer. Keep deterministic `< 20 ms` guards in `PreToolUse`/`PostToolUse` and run suites before commit or final review. The `context-toolkit setup` Stop gate is the narrow exception: it reads only transcript facts (code files edited this turn, `checker` or advisor called after the last edit), runs no commands, never inspects the answer text, and blocks once per turn (`stop_hook_active` lets the retry through). It exists because rules alone are ignored: the post's own figure is `0` advisor calls in `198` Sonnet runs without an explicit instruction.
+3. **20+ global plugins and OpenAPI MCP servers**. Tool schemas from every enabled plugin and OpenAPI endpoint load into the system prompt on every turn. Keep 5-8 core plugins global and enable project-specific ones in `.claude/settings.json`.
+4. **Stale git worktrees (`.claude/worktrees/`)**. Leftover worktrees slow down search and indexing; prune them with `git worktree prune`.
+5. **Unfiltered MCP payloads without `toMcp` projection**. Returning raw REST objects with indentation, icon metadata, and 40+ history items wastes context; project responses with `toMcp` into compact JSON and summary counts.
+
+Across Claude Code, Antigravity, and custom agent harnesses, the practical stack has five layers: configure models, presets, and a concise `CLAUDE.md` (`context-toolkit setup`); block unbounded reads and raw grep via `PreToolUse`; compress build logs (`context-toolkit check`) and MCP payloads (`toMcp`); reset finished tasks early with `/clear` while batching reads/edits/browser actions (`browser_batch`, `browser_snapshot` with `interactive_only: true` and `viewport_only: true`); and, in custom harnesses, apply Context Folding to collapse `tool_result` entries older than 6-8 turns into `[cmd #N -> OK / err]`.

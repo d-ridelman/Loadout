@@ -70,7 +70,7 @@ footer > #notice { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow
 footer > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 td.nw { white-space: nowrap; }
 td.vcell { max-width: 260px; text-align: left; word-break: normal; overflow-wrap: break-word; }
-/* таблицы с текстом (журнал, дни ctxkit): и заголовки, и ячейки по левому краю, чтобы колонки читались */
+/* таблицы с текстом (журнал, дни Инструментов контекста): и заголовки, и ячейки по левому краю, чтобы колонки читались */
 table.left th, table.left td { text-align: left; }
 table.left td.name { word-break: normal; overflow-wrap: break-word; }
 /* без инспектора (разделы кроме матрицы): страница на всю ширину, строки текста не растягиваются */

@@ -29,7 +29,7 @@ npx vitest run
 npm run e2e          # builds the core and the window, drives the real app on fixtures
 ```
 
-`crates/ctxkit` also has `node crates/ctxkit/tests/guard.test.mjs` (needs `cargo build --release` first).
+`crates/context-toolkit` also has `node crates/context-toolkit/tests/guard.test.mjs` (needs `cargo build --release` first).
 
 ## Rules that matter
 

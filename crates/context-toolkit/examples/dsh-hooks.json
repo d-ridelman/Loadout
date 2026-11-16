@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "read|write|bash|pwsh",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/.claude/hooks/context-toolkit --dsh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write|edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/.claude/hooks/context-toolkit --dsh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-/// Версия протокола JSON-RPC: растёт при несовместимых изменениях методов и форм ответов. Окно, `ctxkit` и другие
+/// Версия протокола JSON-RPC: растёт при несовместимых изменениях методов и форм ответов. Окно, `context-toolkit` и другие
 /// оболочки сверяют её по `ready` и `status` (см. CONCEPT.md §13).
 const PROTOCOL: u32 = 1;
 

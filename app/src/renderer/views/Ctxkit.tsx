@@ -28,18 +28,18 @@ const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'va
 /** Язык хуков по умолчанию — язык интерфейса (потом настройка независима); функция, а не константа: язык выбирается после импорта. */
 const defaults = (): SetupOptions => ({
   withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: getLang(), advisor: 'keep', mainModel: 'keep', effort: 'keep',
-  // «Защиты»: по умолчанию ctxkit.json не трогается; отмеченное считается, только если выбрать «Включить выбранные»
+  // «Защиты»: по умолчанию context-toolkit.json не трогается; отмеченное считается, только если выбрать «Включить выбранные»
   policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2,
 })
 
-/** Что сейчас делает ctxkit: определяет, какая кнопка занята. */
+/** Что сейчас делают Инструменты контекста: определяет, какая кнопка занята. */
 type Busy = 'preview' | 'apply' | 'undoPreview' | 'undo'
 
 const BUSY_TEXT: Record<Busy, () => string> = {
   preview: () => t('Считаю предпросмотр: ничего не пишу…', 'Working out the preview: writing nothing…'),
-  apply: () => t('Применяю: ctxkit пишет хуки и настройки…', 'Applying: ctxkit is writing hooks and settings…'),
+  apply: () => t('Применяю: Инструменты контекста пишут хуки и настройки…', 'Applying: Context Toolkit is writing hooks and settings…'),
   undoPreview: () => t('Считаю предпросмотр отката: ничего не пишу…', 'Working out the rollback preview: writing nothing…'),
-  undo: () => t('Откатываю: ctxkit убирает хуки, блок правил и бинарь…', 'Rolling back: ctxkit is removing hooks, the rules block and the binary…'),
+  undo: () => t('Откатываю: Инструменты контекста убирают хуки, блок правил и бинарь…', 'Rolling back: Context Toolkit is removing hooks, the rules block and the binary…'),
 }
 
 type Loaded<T> = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; data: T }
@@ -82,7 +82,7 @@ interface Props {
   onNotice: (message: string) => void
 }
 
-/** Встроенный ctxkit (CONCEPT.md §13): установить и применить, диагностика, эффективность по счётчикам транскриптов. */
+/** Встроенные Инструменты контекста (CONCEPT.md §13): установить и применить, диагностика, эффективность по счётчикам транскриптов. */
 export function Ctxkit({ level, onNotice }: Props) {
   const [status, reloadStatus] = useLoaded<CtxkitStatus>(() => window.loadout.ctxkitStatus(), [])
   const [doctor, reloadDoctor, doctorBusy] = useLoaded<CtxkitDoctor>(() => window.loadout.ctxkitDoctor(), [])
@@ -134,13 +134,13 @@ export function Ctxkit({ level, onNotice }: Props) {
         reloadStatus()
         reloadDoctor()
       }
-      if (r.data.code !== 0) return setError(t(`ctxkit вышел с кодом ${r.data.code}: подробности в выводе ниже`, `ctxkit exited with code ${r.data.code}: see the output below`))
+      if (r.data.code !== 0) return setError(t(`Инструменты контекста завершились с кодом ${r.data.code}: подробности в выводе ниже`, `Context Toolkit exited with code ${r.data.code}: see the output below`))
       if (dryRun) setPreviewKey(kind === 'setup' ? key : undoKey)
       else {
         onNotice(
           kind === 'setup'
-            ? t('ctxkit применён: хуки и настройки записаны, бэкапы ctxkit лежат в ~/.claude/backups', 'ctxkit applied: hooks and settings written, ctxkit backups are in ~/.claude/backups')
-            : t('Откат ctxkit выполнен: хуки и блок правил убраны, бинарь смотрите в блоке «Установка»; модель, советник, effort, пресеты и агенты оставлены (список и бэкап в выводе)', 'ctxkit rollback done: hooks and rules block removed, see “Installation” for the binary; model, advisor, effort, presets and agents left as is (list and backup in the output)'),
+            ? t('Инструменты контекста применены: хуки и настройки записаны, бэкапы лежат в ~/.claude/backups', 'Context Toolkit applied: hooks and settings written, backups are in ~/.claude/backups')
+            : t('Откат Инструментов контекста выполнен: хуки и блок правил убраны, бинарь смотрите в блоке «Установка»; модель, советник, effort, пресеты и агенты оставлены (список и бэкап в выводе)', 'Context Toolkit rollback done: hooks and rules block removed, see “Installation” for the binary; model, advisor, effort, presets and agents left as is (list and backup in the output)'),
         )
         // красная кнопка исчезает вместе с фокусом: возвращаем его на кнопку предпросмотра отката
         if (kind === 'uninstall') setRefocus(true)
@@ -156,7 +156,7 @@ export function Ctxkit({ level, onNotice }: Props) {
 
   return (
     <div className="page">
-      <h2>ctxkit</h2>
+      <h2>{t('Инструменты контекста', 'Context Toolkit')}</h2>
       <p className="mute small">
         {t(
           'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и подсказывает агентам дешёвый поиск и независимую проверку. Основную модель Claude Code, effort и модель советника окно меняет, только если выбрать их в форме ниже (по умолчанию «Не менять»); пресеты Claude Desktop правятся только по галочке ниже. Хуки пишутся в настройки клиентов, поэтому применение и откат требуют уровня R2.',
@@ -171,14 +171,39 @@ export function Ctxkit({ level, onNotice }: Props) {
         ) : status.status === 'error' ? (
           <p className="s-broken" role="alert">{status.error}</p>
         ) : !status.data.available ? (
-          <p className="s-broken">{t('ctxkit не входит в эту сборку приложения.', 'ctxkit is not included in this build of the app.')}</p>
+          <p className="s-broken">{t('Инструменты контекста не входят в эту сборку приложения.', 'Context Toolkit is not included in this build of the app.')}</p>
         ) : (
           <dl className="kv">
-            <dt>{t('встроенный', 'bundled')}</dt><dd>ctxkit {status.data.version ?? '?'}</dd>
-            <dt>{t('хуки', 'hooks')}</dt><dd className={status.data.hook === 'same' ? 's-on' : status.data.hook === 'different' ? 's-stale' : 's-broken'}>~/.claude/hooks/ctxkit.exe: {copyText(status.data.hook)}</dd>
-            <dt>{t('в PATH', 'in PATH')}</dt><dd className={status.data.bin === 'same' ? 's-on' : 's-stale'}>~/.local/bin/ctxkit.exe: {copyText(status.data.bin)}</dd>
+            <dt>{t('встроенный', 'bundled')}</dt><dd>context-toolkit {status.data.version ?? '?'}</dd>
+            <dt>{t('хуки', 'hooks')}</dt><dd className={status.data.hook === 'same' ? 's-on' : status.data.hook === 'different' ? 's-stale' : 's-broken'}>~/.claude/hooks/context-toolkit.exe: {copyText(status.data.hook)}</dd>
+            <dt>{t('в PATH', 'in PATH')}</dt><dd className={status.data.bin === 'same' ? 's-on' : 's-stale'}>~/.local/bin/context-toolkit.exe: {copyText(status.data.bin)}</dd>
           </dl>
         )}
+        {status.status === 'ready' && status.data.available && status.data.legacy ? (
+          status.data.hook === 'same' ? (
+            <p className="s-stale small">
+              {t(
+                'Остался бинарь прежней версии ~/.claude/hooks/ctxkit.exe: его ещё запускают хуки другого клиента или его не дал удалить запущенный процесс (причина — в выводе «Применить»). Повторное «Применить» уберёт его, когда он станет не нужен.',
+                'A binary of the earlier version is left: ~/.claude/hooks/ctxkit.exe. Hooks of another client still run it, or a running process kept it from being deleted (the reason is in the output of “Apply”). Applying again removes it once nothing needs it.',
+              )}
+            </p>
+          ) : (
+            <div className="legacy-note" role="note">
+              <p className="s-stale">
+                {t('Установлена прежняя версия (ctxkit): нажмите «Применить», чтобы перейти на «Инструменты контекста»', 'An earlier version (ctxkit) is installed: press Apply to switch to Context Toolkit')}
+              </p>
+              <p className="mute small">
+                {t(
+                  'Хуки, блок правил, файл политик и язык переедут на новое имя, а старый ctxkit.exe удалится, если его больше ничто не запускает; чужие хуки и ваши файлы останутся. Сначала предпросмотр, затем «Применить».',
+                  'Hooks, the rules block, the policy file and the language move to the new name, and the old ctxkit.exe is deleted once nothing runs it any more; foreign hooks and your own files stay. Preview first, then “Apply”.',
+                )}
+              </p>
+              <button type="button" disabled={!!busy} aria-busy={busy === 'preview'} onClick={() => void run('setup', true)}>
+                {spin('preview', t('Считаю…', 'Working…')) ?? t('Предпросмотр перехода', 'Preview the switch')}
+              </button>
+            </div>
+          )
+        ) : null}
       </section>
 
       <section className="hud card" aria-label={t('Применение', 'Apply')}>
@@ -200,7 +225,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             <label><input type="checkbox" checked={opts.dsh} onChange={(e) => change({ dsh: e.target.checked })} /> DeepSeek Harness</label>
           </fieldset>
           <fieldset className="choices" aria-describedby="ctx-policy-hint">
-            <legend className="mute small">{t('Защиты (ctxkit.json)', 'Safeguards (ctxkit.json)')}</legend>
+            <legend className="mute small">{t('Защиты (context-toolkit.json)', 'Safeguards (context-toolkit.json)')}</legend>
             <div className="field">
               <label htmlFor="ctx-policy">{t('Политики', 'Policies')}</label>
               <select id="ctx-policy" value={opts.policyMode} onChange={(e) => change({ policyMode: e.target.value as SetupOptions['policyMode'] })}>
@@ -210,12 +235,12 @@ export function Ctxkit({ level, onNotice }: Props) {
               </select>
               <span id="ctx-policy-hint" className="mute small">
                 {t(
-                  'Хуки сами ничего из этого не включают: политики живут в ctxkit.json профиля. «Включить выбранные» оставляет включёнными ровно отмеченные ниже, остальные выключает; ключи файла, написанные вами, сохраняются. Предпросмотр покажет по строке на каждую политику (выкл -> вкл) на языке, выбранном ниже.',
-                  'Hooks turn none of this on by themselves: the policies live in the profile ctxkit.json. “Turn on the selected” leaves exactly the ticked ones below on and turns the rest off; keys of the file you wrote yourself are kept. The preview shows one line per policy (off -> on) in the language chosen below.',
+                  'Хуки сами ничего из этого не включают: политики живут в context-toolkit.json профиля. «Включить выбранные» оставляет включёнными ровно отмеченные ниже, остальные выключает; ключи файла, написанные вами, сохраняются. Предпросмотр покажет по строке на каждую политику (выкл -> вкл) на языке, выбранном ниже.',
+                  'Hooks turn none of this on by themselves: the policies live in the profile context-toolkit.json. “Turn on the selected” leaves exactly the ticked ones below on and turns the rest off; keys of the file you wrote yourself are kept. The preview shows one line per policy (off -> on) in the language chosen below.',
                 )}
                 {(() => {
                   const now = doctor.status === 'ready' ? policiesNow(doctor.data) : null
-                  if (!now) return doctor.status === 'ready' ? ` ${t('Сейчас: ctxkit.json нет, все политики выключены.', 'Now: there is no ctxkit.json, every policy is off.')}` : ''
+                  if (!now) return doctor.status === 'ready' ? ` ${t('Сейчас: файла политик нет, все политики выключены.', 'Now: there is no policy file, every policy is off.')}` : ''
                   return now.broken ? ` ${t('Сейчас:', 'Now:')} ${now.text}` : ` ${t('Сейчас включены:', 'Currently on:')} ${now.text}`
                 })()}
               </span>
@@ -224,7 +249,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.confirmIrreversible} onChange={(e) => change({ confirmIrreversible: e.target.checked })} /> {t('Подтверждение необратимого: хук спрашивает перед git push, reset --hard, rm -rf и подобным', 'Confirm irreversible commands: the hook asks before git push, reset --hard, rm -rf and the like')}</label>
             <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.strayFiles} onChange={(e) => change({ strayFiles: e.target.checked })} /> {t('Неожиданные файлы-отчёты: хук спрашивает перед записью report*.md, summary*.md и подобных в корень проекта', 'Stray report files: the hook asks before a report*.md, summary*.md or similar is written at the project root')}</label>
             <div className="inline-row">
-              <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.buildSlots} onChange={(e) => change({ buildSlots: e.target.checked })} /> {t('Лимит параллельных сборок: ctxkit check запускает не больше N сборок и тестов одновременно', 'Parallel build limit: ctxkit check runs at most N builds and tests at once')}</label>
+              <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.buildSlots} onChange={(e) => change({ buildSlots: e.target.checked })} /> {t('Лимит параллельных сборок: context-toolkit check запускает не больше N сборок и тестов одновременно', 'Parallel build limit: context-toolkit check runs at most N builds and tests at once')}</label>
               <input
                 type="number"
                 min={1}
@@ -241,7 +266,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             </div>
           </fieldset>
           <div className="field">
-            <label htmlFor="ctx-lang">{t('Язык подсказок, хуков и вывода ctxkit', 'Language of prompts, hooks and ctxkit output')}</label>
+            <label htmlFor="ctx-lang">{t('Язык подсказок, хуков и вывода Инструментов контекста', 'Language of prompts, hooks and Context Toolkit output')}</label>
             <select id="ctx-lang" value={opts.lang} onChange={(e) => change({ lang: e.target.value as SetupOptions['lang'] })}>
               <option value="ru">{t('русский', 'Russian')}</option>
               <option value="en">{t('английский', 'English')}</option>
@@ -255,7 +280,7 @@ export function Ctxkit({ level, onNotice }: Props) {
               <option value="opus">Opus</option>
               <option value="haiku">Haiku</option>
             </select>
-            <span id="ctx-main-hint" className="mute small">{t('Пишет model в settings.json профиля Claude Code; прежнее значение ctxkit покажет в предпросмотре строкой «было -> стало».', 'Writes model into the Claude Code profile settings.json; ctxkit shows the previous value in the preview as a “was -> became” line.')}</span>
+            <span id="ctx-main-hint" className="mute small">{t('Пишет model в settings.json профиля Claude Code; прежнее значение предпросмотр покажет строкой «было -> стало».', 'Writes model into the Claude Code profile settings.json; the preview shows the previous value as a “was -> became” line.')}</span>
           </div>
           <div className="field">
             <label htmlFor="ctx-effort">Effort</label>
@@ -266,7 +291,7 @@ export function Ctxkit({ level, onNotice }: Props) {
               <option value="high">high</option>
               <option value="xhigh">xhigh</option>
             </select>
-            <span id="ctx-effort-hint" className="mute small">{t('Effort пишется для основной модели: modelSettings.<модель>.effortLevel (модель берётся из выбора выше или из уже стоящей model; нужен Claude Code 2.1.251 или новее) и верхний effortLevel. Без известной модели ctxkit пишет только верхний effortLevel. С галочкой Claude Desktop effort пишется и в его пресеты.', 'Effort is written for the main model: modelSettings.<model>.effortLevel (the model comes from the choice above or from the model already set; needs Claude Code 2.1.251 or newer) and the top-level effortLevel. Without a known model ctxkit writes only the top-level effortLevel. With the Claude Desktop checkbox effort is written into its presets too.')}</span>
+            <span id="ctx-effort-hint" className="mute small">{t('Effort пишется для основной модели: modelSettings.<модель>.effortLevel (модель берётся из выбора выше или из уже стоящей model; нужен Claude Code 2.1.251 или новее) и верхний effortLevel. Без известной модели пишется только верхний effortLevel. С галочкой Claude Desktop effort пишется и в его пресеты.', 'Effort is written for the main model: modelSettings.<model>.effortLevel (the model comes from the choice above or from the model already set; needs Claude Code 2.1.251 or newer) and the top-level effortLevel. Without a known model only the top-level effortLevel. With the Claude Desktop checkbox effort is written into its presets too.')}</span>
           </div>
           <div className="field">
             <label htmlFor="ctx-advisor">{t('Модель-советник', 'Advisor model')}</label>
@@ -292,7 +317,7 @@ export function Ctxkit({ level, onNotice }: Props) {
               {spin('apply', t('Применяю…', 'Applying…')) ?? t('Применить: установить или обновить', 'Apply: install or update')}
             </button>
             <button type="button" ref={undoPreviewRef} disabled={!!busy} aria-busy={busy === 'undoPreview'} title={t('Показать, что уберёт откат (ничего не пишет)', 'Show what the rollback would remove (writes nothing)')} onClick={() => void run('uninstall', true)}>
-              {spin('undoPreview', t('Считаю…', 'Working…')) ?? t('Откатить ctxkit', 'Roll back ctxkit')}
+              {spin('undoPreview', t('Считаю…', 'Working…')) ?? t('Откатить Инструменты контекста', 'Roll back Context Toolkit')}
             </button>
             {previewKey === undoKey || busy === 'undo' ? (
               <button
@@ -300,7 +325,7 @@ export function Ctxkit({ level, onNotice }: Props) {
                 className="danger"
                 disabled={!canUndo}
                 aria-busy={busy === 'undo'}
-                title={level !== 'R2' ? t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header') : t('Убрать хуки ctxkit, блок правил в CLAUDE.md и бинарь хуков', 'Remove the ctxkit hooks, the CLAUDE.md rules block and the hooks binary')}
+                title={level !== 'R2' ? t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header') : t('Убрать хуки Инструментов контекста, блок правил в CLAUDE.md и бинарь хуков', 'Remove the Context Toolkit hooks, the CLAUDE.md rules block and the hooks binary')}
                 onClick={() => void run('uninstall', false)}
               >
                 {spin('undo', t('Откатываю…', 'Rolling back…')) ?? t('Откатить: убрать хуки, блок правил и бинарь', 'Roll back: remove hooks, rules block and binary')}
@@ -316,19 +341,19 @@ export function Ctxkit({ level, onNotice }: Props) {
               {result.kind === 'uninstall'
                 ? result.dryRun ? t('Предпросмотр отката: файлы не менялись.', 'Rollback preview: no files were changed.') : t('Откат выполнен.', 'Rolled back.')
                 : result.dryRun ? t('Предпросмотр: файлы не менялись.', 'Preview: no files were changed.') : t('Применено.', 'Applied.')}{' '}
-              {t('Вывод ctxkit:', 'ctxkit output:')}
+              {t('Вывод Инструментов контекста:', 'Context Toolkit output:')}
             </p>
-            <pre className="out" aria-label={t('Вывод ctxkit', 'ctxkit output')} tabIndex={0}>{result.output || t('(пусто)', '(empty)')}</pre>
+            <pre className="out" aria-label={t('Вывод Инструментов контекста', 'Context Toolkit output')} tabIndex={0}>{result.output || t('(пусто)', '(empty)')}</pre>
           </>
         ) : null}
-        <p className="mute small">{t('Перед записью ctxkit сам делает копии изменяемых файлов в каталог backups рядом с ними. Применение повторяемо: уже настроенное он не трогает.', 'Before writing, ctxkit copies the files it changes into a backups folder next to them. Applying is repeatable: anything already configured is left alone.')}</p>
-        <p className="mute small">{t('Откат убирает только то, что поставил «Применить»: хуки ctxkit (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; Antigravity и DeepSeek Harness, если они отмечены выше. Модель, советник, effort, пресеты Claude Desktop и агентов Explore и checker он не трогает: в выводе виден список «оставлено» и путь к копии settings.json.', 'Rolling back removes only what “Apply” installed: the ctxkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; Antigravity and DeepSeek Harness if they are ticked above. It does not touch the model, advisor, effort, Claude Desktop presets or the Explore and checker agents: the output lists what was left as is and the path to the settings.json backup.')}</p>
+        <p className="mute small">{t('Перед записью Инструменты контекста сами делают копии изменяемых файлов в каталог backups рядом с ними. Применение повторяемо: уже настроенное они не трогают.', 'Before writing, Context Toolkit copies the files it changes into a backups folder next to them. Applying is repeatable: anything already configured is left alone.')}</p>
+        <p className="mute small">{t('Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; Antigravity и DeepSeek Harness, если они отмечены выше. Модель, советник, effort, пресеты Claude Desktop и агентов Explore и checker он не трогает: в выводе виден список «оставлено» и путь к копии settings.json.', 'Rolling back removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; Antigravity and DeepSeek Harness if they are ticked above. It does not touch the model, advisor, effort, Claude Desktop presets or the Explore and checker agents: the output lists what was left as is and the path to the settings.json backup.')}</p>
       </section>
 
       <section className="hud card" aria-label={t('Диагностика', 'Diagnostics')}>
         <h3>{t('Диагностика', 'Diagnostics')}</h3>
         {doctor.status === 'loading' ? (
-          <p className="mute" role="status">{t('Спрашиваю ctxkit…', 'Asking ctxkit…')}</p>
+          <p className="mute" role="status">{t('Спрашиваю Инструменты контекста…', 'Asking Context Toolkit…')}</p>
         ) : doctor.status === 'error' ? (
           <p className="s-broken" role="alert">{doctor.error}</p>
         ) : (
@@ -421,8 +446,8 @@ export function Ctxkit({ level, onNotice }: Props) {
             </table>
             <p className="mute small">
               {t(
-                'Это счётчики из транскриптов Claude Code (только числа, без текста и путей; дни по UTC). Базовой линии «до ctxkit» у отчёта нет, поэтому «сэкономлено» не считается: смотрите, как доля дешёвых моделей и остановленных чтений меняется по дням после применения.',
-                'These are counters from Claude Code transcripts (numbers only, no text or paths; days are in UTC). The report has no “before ctxkit” baseline, so “saved” is not computed: watch how the share of cheap models and blocked reads changes day by day after applying.',
+                'Это счётчики из транскриптов Claude Code (только числа, без текста и путей; дни по UTC). Базовой линии «до Инструментов контекста» у отчёта нет, поэтому «сэкономлено» не считается: смотрите, как доля дешёвых моделей и остановленных чтений меняется по дням после применения.',
+                'These are counters from Claude Code transcripts (numbers only, no text or paths; days are in UTC). The report has no “before Context Toolkit” baseline, so “saved” is not computed: watch how the share of cheap models and blocked reads changes day by day after applying.',
               )}
             </p>
           </div>
