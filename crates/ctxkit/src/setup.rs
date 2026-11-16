@@ -1960,6 +1960,24 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
     }
 }
 
+/// The full rules block as `setup --with-rules` writes it with every policy on (`build_slots` 2), main
+/// model `sonnet` and advisor `fable`: the block side of the duplicate-rule corpus in `dupes.rs`.
+#[cfg(test)]
+pub(crate) fn sample_block(lang: Lang) -> String {
+    let opts = SetupOpts {
+        config: policy::parse(
+            r#"{"policies":{"commit_hygiene":true,"confirm_irreversible":true,"stray_files":true,"build_slots":2}}"#,
+        )
+        .unwrap(),
+        lang,
+        ..SetupOpts::default()
+    };
+    rules_snippet(
+        &opts,
+        &serde_json::json!({"model": "sonnet", "advisorModel": "fable"}),
+    )
+}
+
 fn print_diagnostics(
     profile: &Path,
     settings: &mut Value,
