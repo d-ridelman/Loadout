@@ -171,8 +171,9 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
                 .quarantineProfiles()
                 .catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('операция не удалась', 'operation failed') }))
                 .then((r) => {
-                  if (r.ok) onNotice(t(`Повреждённый файл отложен: ${r.data}`, `The damaged file was set aside: ${r.data}`))
-                  else setError(r.error)
+                  // при отказе причина остаётся на экране: повторное чтение затёрло бы её прежней ошибкой
+                  if (!r.ok) return setError(r.error)
+                  onNotice(t(`Повреждённый файл отложен: ${r.data}`, `The damaged file was set aside: ${r.data}`))
                   return load()
                 })
             }
@@ -182,7 +183,7 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
         </div>
       ) : null}
       {profiles === null ? (
-        <p className="mute" role="status">{t('Читаю профили…', 'Reading profiles…')}</p>
+        error ? null : <p className="mute" role="status">{t('Читаю профили…', 'Reading profiles…')}</p>
       ) : profiles.length === 0 ? (
         <div className="hud card"><p>{t('Профилей пока нет.', 'No profiles yet.')}</p></div>
       ) : (
