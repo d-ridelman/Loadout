@@ -1196,7 +1196,25 @@ const cases = [
     if (/context-toolkit|ctxkit/i.test(JSON.stringify(after))) return `ours left in settings.json: ${JSON.stringify(after)}`;
     const mdAfter = readFileSync(join(p, 'CLAUDE.md'), 'utf8');
     if (!mdAfter.includes('added before') || !mdAfter.includes('added after') || !mdAfter.startsWith('# Mine\nkeep\n') || /(context-toolkit|ctxkit):/.test(mdAfter)) return `CLAUDE.md: ${JSON.stringify(mdAfter)}`;
-    return true;
+
+    // An edit of form only (CRLF line breaks, blank lines at the end, another indent) is an edit too: the backup bytes
+    // come back only for a file untouched since setup, otherwise only our parts are cut out
+    const q = join(dir, 'form-edits-test');
+    mkdirSync(q, { recursive: true });
+    const runQ = (...a) => spawnSync(exe, ['setup', '--profile', q, '--claude-json', cj, '--skip-version-check', ...a], { encoding: 'utf8' });
+    writeFileSync(join(q, 'settings.json'), '{"model":"opus"}');
+    writeFileSync(join(q, 'CLAUDE.md'), '# Mine\nkeep\n');
+    if (runQ('--with-rules').status !== 0) return 'setup (form) failed';
+    const sq = JSON.parse(readFileSync(join(q, 'settings.json'), 'utf8'));
+    writeFileSync(join(q, 'settings.json'), JSON.stringify(sq, null, 4));
+    writeFileSync(join(q, 'CLAUDE.md'), `${readFileSync(join(q, 'CLAUDE.md'), 'utf8').replace(/\n/g, '\r\n')}\r\n\r\n`);
+    const uq = runQ('--uninstall');
+    if (uq.status !== 0) return `uninstall (form): ${uq.stderr}`;
+    if (/byte for byte/.test(uq.stdout)) return `a file edited after setup was restored from the backup: ${uq.stdout}`;
+    const mdQ = readFileSync(join(q, 'CLAUDE.md'), 'utf8');
+    if (!mdQ.startsWith('# Mine\r\nkeep\r\n') || /(context-toolkit|ctxkit):/.test(mdQ)) return `CLAUDE.md (form): ${JSON.stringify(mdQ)}`;
+    const sQ = JSON.parse(readFileSync(join(q, 'settings.json'), 'utf8'));
+    return (sQ.model === 'opus' && !/context-toolkit|ctxkit/i.test(JSON.stringify(sQ))) || `settings.json (form): ${JSON.stringify(sQ)}`;
   }],
 
   // Safe failure: broken or odd hook input is a silent pass (exit 0, empty stdout), never a block or a crash

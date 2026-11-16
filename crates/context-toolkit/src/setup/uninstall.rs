@@ -116,23 +116,18 @@ fn read_backups(dir: &Path, name: &str) -> Vec<Saved> {
         .collect()
 }
 
-/// What "the same text" means when a backup is compared with the rolled-back file: line breaks unified,
-/// trailing whitespace dropped (setup trims the end of the file before it appends its block).
-fn text_key(s: &str) -> String {
-    s.replace("\r\n", "\n").trim_end().to_string()
-}
-
-/// The latest backup that is the text as it was before setup (no rules block of ours in it, `clean`) and equals
-/// the rolled-back `result` apart from line breaks and trailing whitespace: restoring its bytes gives the
-/// user's file back byte for byte (CRLF, a missing final newline, extra blank lines at the end).
+/// The latest backup that is the text as it was before setup (no rules block of ours in it, `clean`) and that the
+/// rolled-back `result` is exactly what setup made of it: setup trims the end of the text and appends its block, so a
+/// file untouched since then comes out of the block cut as `join_cut(backup, "")`. Restoring that backup's bytes gives
+/// the user's file back byte for byte (a missing final newline, extra blank lines at the end). Any edit after setup,
+/// of form too (line breaks, blank lines), makes it no match: then only our block is cut out.
 fn exact_text_backup<'a>(
     result: &str,
     backups: &'a [Saved],
     clean: impl Fn(&str) -> bool,
 ) -> Option<&'a Saved> {
     backups.iter().rev().find(|(_, bytes)| {
-        std::str::from_utf8(bytes)
-            .is_ok_and(|text| clean(text) && text_key(text) == text_key(result))
+        std::str::from_utf8(bytes).is_ok_and(|text| clean(text) && join_cut(text, "") == result)
     })
 }
 
@@ -252,6 +247,12 @@ fn canon_settings(v: &Value) -> Value {
     v
 }
 
+/// The bytes are exactly what setup writes for this content (`write_json_if_changed`: pretty JSON and a newline):
+/// nobody has touched the file since, not even its form.
+fn as_setup_writes(bytes: &[u8], v: &Value) -> bool {
+    serde_json::to_string_pretty(v).is_ok_and(|s| bytes == format!("{s}\n").as_bytes())
+}
+
 fn parse_settings(bytes: &[u8]) -> Option<Value> {
     let text = std::str::from_utf8(bytes).ok()?;
     let v: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
@@ -269,13 +270,20 @@ enum SettingsOutcome {
     Delete,
 }
 
-fn settings_outcome(next: &Value, backups: &[Saved], hook_cmd: &str) -> SettingsOutcome {
+/// `untouched`: the file is still in the form setup writes it (see [`as_setup_writes`]); an edit of form only
+/// after setup keeps it from a byte restore.
+fn settings_outcome(
+    next: &Value,
+    backups: &[Saved],
+    hook_cmd: &str,
+    untouched: bool,
+) -> SettingsOutcome {
     let ours = |v: &Value| remove_from_settings(v, hook_cmd) != *v;
     let exact = backups.iter().rev().find(|(_, bytes)| {
         parse_settings(bytes)
             .is_some_and(|v| !ours(&v) && canon_settings(&v) == canon_settings(next))
     });
-    if let Some((path, bytes)) = exact {
+    if let (Some((path, bytes)), true) = (exact, untouched) {
         return SettingsOutcome::Restore(path.clone(), bytes.clone());
     }
     // Every earlier backup is a file of ours only (or there is none): the user's settings never existed.
@@ -736,7 +744,8 @@ pub(super) fn run(
         let outcome = if orig == next {
             SettingsOutcome::Write // nothing to remove: write_json_if_changed reports "unchanged"
         } else {
-            settings_outcome(&next, &saved, hook_cmd)
+            let untouched = fs::read(&settings_path).is_ok_and(|b| as_setup_writes(&b, &orig));
+            settings_outcome(&next, &saved, hook_cmd, untouched)
         };
         match outcome {
             SettingsOutcome::Write => write_json_if_changed(
@@ -1009,16 +1018,33 @@ mod tests {
             saved("CLAUDE.md.1", original),
             saved("CLAUDE.md.2", &append_block(original, &block)),
         ];
-        // the one with the block in it is never a restore source; the clean one matches modulo CRLF / trailing blanks
-        let hit = exact_text_backup("# Mine\nkeep", &backups, clean).unwrap();
+        // the one with the block in it is never a restore source; the clean one matches what setup made of it
+        let cut = |t: &str| strip_rules_blocks(&append_block(t, &block));
+        let hit = exact_text_backup(&cut(original), &backups, clean).unwrap();
         assert_eq!(hit.1, original.as_bytes());
-        assert!(exact_text_backup("# Mine\nchanged", &backups, clean).is_none());
+        assert!(exact_text_backup("# Mine\r\nchanged\r\n", &backups, clean).is_none());
         assert!(exact_text_backup("anything", &backups[1..], clean).is_none());
-        // an empty original file matches an empty result
-        assert!(exact_text_backup("", &[saved("a.1", "")], clean).is_some());
+        // an edit of form only after setup (LF instead of CRLF, more blank lines) is an edit: no byte restore
+        assert!(exact_text_backup("# Mine\nkeep\n", &backups, clean).is_none());
+        assert!(exact_text_backup("# Mine\r\nkeep\r\n\r\n", &backups, clean).is_none());
+        // trailing blank lines and a missing final newline of the original come back
+        for t in [
+            "two blank\r\n\r\n\r\n",
+            "no final newline",
+            "",
+            "\u{feff}# bom\r\nx\r\n",
+        ] {
+            let one = [saved("a.1", t)];
+            assert_eq!(
+                exact_text_backup(&cut(t), &one, clean).unwrap().1,
+                t.as_bytes(),
+                "{t:?}"
+            );
+        }
         // the latest of several matching backups wins
         let two = [saved("a.1", "x\n"), saved("a.2", "x\r\n")];
-        assert_eq!(exact_text_backup("x", &two, clean).unwrap().1, b"x\r\n");
+        assert_eq!(exact_text_backup("x\r\n", &two, clean).unwrap().1, b"x\r\n");
+        assert_eq!(exact_text_backup("x\n", &two, clean).unwrap().1, b"x\n");
     }
 
     #[test]
@@ -1030,40 +1056,50 @@ mod tests {
         // the user's file, nothing else changed since: its bytes come back (the empty "hooks" included)
         let next = json!({"zeta": 1});
         assert_eq!(
-            settings_outcome(&next, &[b(users)], ours),
+            settings_outcome(&next, &[b(users)], ours, true),
             SettingsOutcome::Restore(
                 PathBuf::from("/b/settings.json.1.bak"),
                 users.as_bytes().to_vec()
             )
         );
+        // the same content, but the file was reformatted after setup: a plain write, not the backup bytes
+        assert_eq!(
+            settings_outcome(&next, &[b(users)], ours, false),
+            SettingsOutcome::Write
+        );
         // the user changed a value since: a plain write
         assert_eq!(
-            settings_outcome(&json!({"zeta": 2}), &[b(users)], ours),
+            settings_outcome(&json!({"zeta": 2}), &[b(users)], ours, true),
             SettingsOutcome::Write
         );
         // no backup, or only backups of files made by setup: the empty result means the file goes
         assert_eq!(
-            settings_outcome(&json!({}), &[], ours),
+            settings_outcome(&json!({}), &[], ours, true),
             SettingsOutcome::Delete
         );
         assert_eq!(
-            settings_outcome(&json!({}), &[b(setup_made)], ours),
+            settings_outcome(&json!({}), &[b(setup_made)], ours, false),
             SettingsOutcome::Delete
         );
         // a user's own `{}` is restored, not deleted; a result with content is never deleted
         assert!(matches!(
-            settings_outcome(&json!({}), &[b("{}")], ours),
+            settings_outcome(&json!({}), &[b("{}")], ours, true),
             SettingsOutcome::Restore(..)
         ));
         assert_eq!(
-            settings_outcome(&json!({"a": 1}), &[], ours),
+            settings_outcome(&json!({"a": 1}), &[], ours, true),
             SettingsOutcome::Write
         );
         // a backup that already holds our hook is no restore source
         assert_eq!(
-            settings_outcome(&json!({}), &[b(setup_made), b(users)], ours),
+            settings_outcome(&json!({}), &[b(setup_made), b(users)], ours, true),
             SettingsOutcome::Write
         );
+        // the form setup writes: pretty JSON and a newline, nothing else
+        let v = json!({"a": 1});
+        assert!(as_setup_writes(b"{\n  \"a\": 1\n}\n", &v));
+        assert!(!as_setup_writes(b"{\n    \"a\": 1\n}\n", &v));
+        assert!(!as_setup_writes(b"{\"a\":1}", &v));
     }
 
     #[test]
