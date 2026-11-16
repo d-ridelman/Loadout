@@ -8,9 +8,9 @@
 use crate::Lang;
 use serde_json::Value;
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Transcripts reach hundreds of MB; a turn that does not fit in the tail is judged by its visible part.
 const TAIL_BYTES: u64 = 4 << 20;
@@ -32,11 +32,68 @@ pub fn stop_reason(call: &Value, lang: Lang) -> Option<String> {
     if call["stop_hook_active"].as_bool() == Some(true) {
         return None;
     }
-    if std::env::var("CTXKIT_GATE").is_ok_and(|v| v == "0" || v.eq_ignore_ascii_case("off")) {
+    if crate::env_off("CTXKIT_GATE") {
         return None;
     }
     let text = read_tail(Path::new(call["transcript_path"].as_str()?))?;
-    block_reason(&analyze(text.lines()), lang)
+    let turn = analyze(text.lines());
+    // Looked up only when the turn would be blocked: the common pass needs no disk reads beyond the transcript.
+    block_reason(&turn, Helpers::ALL, lang)?;
+    let cwd = call["cwd"].as_str().map(Path::new);
+    block_reason(&turn, Helpers::find(&profile_dir(), cwd), lang)
+}
+
+/// What the model can be sent back to. A gate that names an agent or an advisor that does not exist
+/// sends the model chasing it, so the message follows what is configured (and with neither, stays silent).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Helpers {
+    pub(crate) checker: bool,
+    pub(crate) advisor: bool,
+}
+
+impl Helpers {
+    const ALL: Helpers = Helpers {
+        checker: true,
+        advisor: true,
+    };
+
+    /// `agents/checker.md` and `advisorModel` of the profile, or of the project the call comes from.
+    pub(crate) fn find(profile: &Path, cwd: Option<&Path>) -> Helpers {
+        let project = cwd.map(|c| c.join(".claude"));
+        let dirs = [Some(profile.to_path_buf()), project];
+        let has_advisor = |dir: &Path, file: &str| {
+            fs::read_to_string(dir.join(file))
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(s.trim_start_matches('\u{feff}')).ok())
+                .is_some_and(|v| v["advisorModel"].as_str().is_some_and(|m| !m.is_empty()))
+        };
+        Helpers {
+            checker: dirs
+                .iter()
+                .flatten()
+                .any(|d| d.join("agents").join("checker.md").is_file()),
+            advisor: dirs
+                .iter()
+                .flatten()
+                .any(|d| has_advisor(d, "settings.json") || has_advisor(d, "settings.local.json")),
+        }
+    }
+}
+
+/// The profile this binary serves: the parent of the `hooks/` folder it runs from (where `ctxkit setup`
+/// puts it), else `CLAUDE_CONFIG_DIR`, else `~/.claude`.
+fn profile_dir() -> PathBuf {
+    let exe = std::env::current_exe().ok();
+    let beside_hooks = exe
+        .as_deref()
+        .and_then(Path::parent)
+        .filter(|d| d.file_name().is_some_and(|n| n == "hooks"))
+        .and_then(Path::parent)
+        .map(Path::to_path_buf);
+    beside_hooks
+        .or_else(|| std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from))
+        .or_else(|| crate::setup::home_dir().map(|h| h.join(".claude")))
+        .unwrap_or_default()
 }
 
 fn read_tail(path: &Path) -> Option<String> {
@@ -127,21 +184,57 @@ fn counts_as_code(path: &str) -> bool {
         && (!p.contains("/.claude/") || p.contains("/.claude/worktrees/"))
 }
 
-fn block_reason(turn: &Turn, lang: Lang) -> Option<String> {
+fn block_reason(turn: &Turn, helpers: Helpers, lang: Lang) -> Option<String> {
     if turn.verified || (turn.files.len() < MIN_FILES && turn.edits < MIN_EDITS) {
         return None;
     }
     let (n, e) = (turn.files.len(), turn.edits);
+    // (what did not run, what to do about it), per language
+    let (en, ru) = match (helpers.checker, helpers.advisor) {
+        (false, false) => return None,
+        (true, true) => (
+            (
+                "neither `checker` nor the advisor ran",
+                "call the `checker` agent (Agent, subagent_type=checker) and fix what it reports, or consult the advisor",
+            ),
+            (
+                "не вызван ни `checker`, ни advisor",
+                "вызови агента `checker` (Agent, subagent_type=checker) и исправь то, что он найдёт, либо посоветуйся с advisor",
+            ),
+        ),
+        (true, false) => (
+            (
+                "`checker` did not run",
+                "call the `checker` agent (Agent, subagent_type=checker) and fix what it reports",
+            ),
+            (
+                "не вызван `checker`",
+                "вызови агента `checker` (Agent, subagent_type=checker) и исправь то, что он найдёт",
+            ),
+        ),
+        (false, true) => (
+            (
+                "the advisor was not consulted",
+                "consult the advisor and fix what it points out",
+            ),
+            (
+                "не вызван advisor",
+                "посоветуйся с advisor и исправь то, на что он укажет",
+            ),
+        ),
+    };
     Some(match lang {
         Lang::En => format!(
-            "This turn edited code ({n} file(s), {e} edit(s)) and neither `checker` nor the advisor ran after the last edit. \
-Before finishing, call the `checker` agent (Agent, subagent_type=checker) and fix what it reports, or consult the advisor. \
-If you are not reporting the work as done (asking a question, waiting for an answer), just end the turn again: this hook fires only once."
+            "This turn edited code ({n} file(s), {e} edit(s)) and {} after the last edit. \
+Before finishing, {}. \
+If you are not reporting the work as done (asking a question, waiting for an answer), just end the turn again: this hook fires only once.",
+            en.0, en.1
         ),
         Lang::Ru => format!(
-            "В этом ходу правился код ({n} файл(ов), {e} правок), а после последней правки не вызван ни `checker`, ни advisor. \
-Перед завершением вызови агента `checker` (Agent, subagent_type=checker) и исправь то, что он найдёт, либо посоветуйся с advisor. \
-Если ты не заявляешь о готовности (задаёшь вопрос или ждёшь ответа), просто заверши ход ещё раз: хук срабатывает только один раз."
+            "В этом ходу правился код ({n} файл(ов), {e} правок), а после последней правки {}. \
+Перед завершением {}. \
+Если ты не заявляешь о готовности (задаёшь вопрос или ждёшь ответа), просто заверши ход ещё раз: хук срабатывает только один раз.",
+            ru.0, ru.1
         ),
     })
 }
@@ -167,7 +260,86 @@ mod tests {
         json!({"type": "assistant", "message": {"content": [{"type": "server_tool_use", "name": "advisor", "input": {}}]}}).to_string()
     }
     fn reason(rows: &[String]) -> Option<String> {
-        block_reason(&analyze(rows.iter().map(String::as_str)), Lang::En)
+        block_reason(
+            &analyze(rows.iter().map(String::as_str)),
+            Helpers::ALL,
+            Lang::En,
+        )
+    }
+
+    #[test]
+    fn message_names_only_what_exists_and_is_silent_with_nothing() {
+        let turn = analyze(
+            [user("go"), edit("/p/a.rs"), edit("/p/b.rs")]
+                .iter()
+                .map(String::as_str),
+        );
+        let msg = |checker, advisor, lang| block_reason(&turn, Helpers { checker, advisor }, lang);
+        let both = msg(true, true, Lang::En).unwrap();
+        assert!(
+            both.contains("neither `checker` nor the advisor")
+                && both.contains("or consult the advisor")
+        );
+        let only_checker = msg(true, false, Lang::En).unwrap();
+        assert!(
+            only_checker.contains("`checker` did not run") && !only_checker.contains("advisor")
+        );
+        let only_advisor = msg(false, true, Lang::En).unwrap();
+        assert!(only_advisor.contains("consult the advisor") && !only_advisor.contains("checker"));
+        assert_eq!(msg(false, false, Lang::En), None);
+        assert_eq!(msg(false, false, Lang::Ru), None);
+        let ru = msg(true, false, Lang::Ru).unwrap();
+        assert!(ru.contains("не вызван `checker`") && !ru.contains("advisor"));
+        assert!(msg(false, true, Lang::Ru)
+            .unwrap()
+            .contains("посоветуйся с advisor"));
+    }
+
+    #[test]
+    fn helpers_come_from_the_profile_and_the_project() {
+        let root = std::env::temp_dir().join(format!("ctxkit-gate-helpers-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (profile, project) = (root.join("profile"), root.join("proj"));
+        fs::create_dir_all(profile.join("agents")).unwrap();
+        fs::create_dir_all(project.join(".claude").join("agents")).unwrap();
+        let none = Helpers {
+            checker: false,
+            advisor: false,
+        };
+        assert_eq!(Helpers::find(&profile, Some(&project)), none);
+        fs::write(
+            profile.join("settings.json"),
+            "{\"advisorModel\": \"fable\"}",
+        )
+        .unwrap();
+        assert_eq!(
+            Helpers::find(&profile, None),
+            Helpers {
+                checker: false,
+                advisor: true
+            }
+        );
+        fs::write(profile.join("settings.json"), "{\"advisorModel\": \"\"}").unwrap();
+        assert!(
+            !Helpers::find(&profile, None).advisor,
+            "an empty advisorModel is none"
+        );
+        fs::write(profile.join("agents").join("checker.md"), "x").unwrap();
+        assert_eq!(
+            Helpers::find(&profile, None),
+            Helpers {
+                checker: true,
+                advisor: false
+            }
+        );
+        fs::remove_file(profile.join("agents").join("checker.md")).unwrap();
+        fs::write(
+            project.join(".claude").join("agents").join("checker.md"),
+            "x",
+        )
+        .unwrap();
+        assert!(Helpers::find(&profile, Some(&project)).checker);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -1,10 +1,11 @@
 use serde_json::Value;
 use std::collections::HashSet;
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 const MAX_ERRORS: usize = 3;
 const MAX_LINES: usize = 30;
@@ -27,15 +28,9 @@ pub fn run_check(args: &[String]) -> i32 {
         }
     }
 
-    let output = if cfg!(windows) && !is_direct_exe(&final_args[0]) {
-        Command::new("cmd.exe")
-            .arg("/d")
-            .arg("/c")
-            .args(&final_args)
-            .output()
-    } else {
-        Command::new(&final_args[0]).args(&final_args[1..]).output()
-    };
+    let path_var = env::var_os("PATH").unwrap_or_default();
+    let pathext = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    let output = build_command(&final_args, &path_var, &pathext).output();
 
     let out = match output {
         Ok(o) => o,
@@ -110,8 +105,87 @@ pub fn run_check(args: &[String]) -> i32 {
     code
 }
 
-fn is_direct_exe(bin: &str) -> bool {
-    matches!(bin, "cargo" | "rustc" | "node" | "python" | "git")
+#[cfg_attr(not(windows), allow(dead_code))]
+/// The program as Windows would find it: a path with a directory or an extension as given, a bare name
+/// in the current directory and along `PATH`, trying each `PATHEXT` extension (`npm` -> `npm.cmd`).
+fn find_program(bin: &str, path_var: &OsStr, pathext: &str) -> Option<PathBuf> {
+    let has_ext = Path::new(bin).extension().is_some();
+    let dirs: Vec<PathBuf> = if bin.contains(['/', '\\']) {
+        vec![PathBuf::new()]
+    } else {
+        // The current folder first, as cmd does; as an absolute path, because `Command` looks a bare
+        // relative name up on PATH only.
+        env::current_dir()
+            .into_iter()
+            .chain(env::split_paths(path_var))
+            .collect()
+    };
+    for dir in dirs {
+        let base = dir.join(bin);
+        if has_ext && base.is_file() {
+            return Some(base);
+        }
+        for ext in pathext.split(';').filter(|e| !e.is_empty()) {
+            let mut cand = base.clone().into_os_string();
+            cand.push(ext);
+            let cand = PathBuf::from(cand);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    None
+}
+
+/// The commands `cmd.exe` runs itself; it prefers them to any file of the same name (Git for Windows puts a
+/// coreutils `dir.exe` and `echo.exe` on PATH, which would otherwise take over).
+fn is_cmd_builtin(name: &str) -> bool {
+    const BUILTINS: &[&str] = &[
+        "assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir",
+        "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink",
+        "move", "path", "pause", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir",
+        "set", "setlocal", "shift", "start", "time", "title", "type", "ver", "verify", "vol",
+    ];
+    BUILTINS.contains(&name.to_ascii_lowercase().as_str())
+}
+
+/// Files `CreateProcess` can start itself; any other `PATHEXT` kind (`.js`, `.vbs`, `.py`) needs the
+/// file association, which only `cmd` applies.
+fn startable_directly(program: &Path) -> bool {
+    program
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["exe", "com", "bat", "cmd"].contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// How `ctxkit check` starts the command. On Windows a program found on `PATH` (an `.exe`, or an
+/// `npm.cmd` / `.bat`, which std quotes for `cmd.exe` itself) is started directly, so `&`, `|`, `%` and
+/// `^` in its arguments reach it as they are. What only `cmd` can run (one of its built-ins such as `dir`,
+/// a name that is no file, a script run through its file association) goes through `cmd.exe /d /c`,
+/// where those characters keep their `cmd` meaning.
+fn build_command(args: &[String], path_var: &OsStr, pathext: &str) -> Command {
+    if cfg!(windows) {
+        let direct = if is_cmd_builtin(&args[0]) {
+            None
+        } else {
+            find_program(&args[0], path_var, pathext).filter(|p| startable_directly(p))
+        };
+        match direct {
+            Some(program) => {
+                let mut cmd = Command::new(program);
+                cmd.args(&args[1..]);
+                return cmd;
+            }
+            None => {
+                let mut cmd = Command::new("cmd.exe");
+                cmd.args(["/d", "/c"]).args(args);
+                return cmd;
+            }
+        }
+    }
+    let mut cmd = Command::new(&args[0]);
+    cmd.args(&args[1..]);
+    cmd
 }
 
 fn is_cargo_diagnostic(args: &[String]) -> bool {
@@ -237,23 +311,113 @@ fn compact_error_lines(lines: &[&str]) -> Vec<String> {
     picked
 }
 
+const LOG_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Deletes `last-check-*.log` files in `dir` that were last written more than a day before `now`.
+fn remove_old_logs(dir: &Path, now: SystemTime) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age > LOG_MAX_AGE));
+        if name.starts_with("last-check-") && name.ends_with(".log") && old {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+}
+
+/// Writes the full output to `last-check-<pid>.log` (one file per run, so concurrent sessions do not
+/// overwrite each other) and first sweeps logs older than a day out of the same folder.
 fn save_log(stdout: &str, stderr: &str) -> Option<PathBuf> {
     let base = env::var_os("TEMP")
         .or_else(|| env::var_os("TMP"))
         .map(PathBuf::from)
         .unwrap_or_else(env::temp_dir);
     let _ = fs::create_dir_all(&base);
+    remove_old_logs(&base, SystemTime::now());
     let pid = std::process::id();
     let path = base.join(format!("last-check-{pid}.log"));
     let body = format!("=== STDOUT ===\n{stdout}\n=== STDERR ===\n{stderr}\n");
     fs::write(&path, &body).ok()?;
-    let _ = fs::write(base.join("last-check.log"), &body);
     Some(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let d = env::temp_dir().join(format!("ctxkit-check-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn only_old_check_logs_are_swept() {
+        let d = temp_dir("logs");
+        for n in [
+            "last-check-1.log",
+            "last-check-2.log",
+            "other.log",
+            "last-check.txt",
+        ] {
+            fs::write(d.join(n), "x").unwrap();
+        }
+        remove_old_logs(&d, SystemTime::now());
+        assert!(d.join("last-check-1.log").exists(), "fresh logs stay");
+        remove_old_logs(&d, SystemTime::now() + Duration::from_secs(2 * 24 * 3600));
+        assert!(!d.join("last-check-1.log").exists() && !d.join("last-check-2.log").exists());
+        assert!(d.join("other.log").exists() && d.join("last-check.txt").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// `echoargs.cmd` prints its first two arguments quoted; the batch file is found by its bare name.
+    #[cfg(windows)]
+    #[test]
+    fn batch_and_builtins_get_special_characters_intact() {
+        let d = temp_dir("cmd");
+        fs::write(
+            d.join("echoargs.cmd"),
+            "@echo off\r\necho ARG1=\"%~1\"\r\necho ARG2=\"%~2\"\r\n",
+        )
+        .unwrap();
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (path, ext) = (d.as_os_str(), ".COM;.EXE;.BAT;.CMD");
+        for (a, b) in [("x&y", "a|b"), ("100%", "^caret"), ("two words", "(a)&(b)")] {
+            let out = build_command(&args(&["echoargs", a, b]), path, ext)
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            assert!(text.contains(&format!("ARG1=\"{a}\"")), "{a:?}: {text}");
+            assert!(text.contains(&format!("ARG2=\"{b}\"")), "{b:?}: {text}");
+        }
+        // Not a file anywhere on the path: a cmd built-in still works.
+        let out = build_command(&args(&["echo", "built-in"]), path, ext)
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out.stdout).contains("built-in"));
+        assert!(find_program("echoargs", path, ext).is_some());
+        assert!(find_program("echo", path, ext).is_none());
+        // a coreutils-style `dir.exe` on PATH does not take a cmd built-in over; a `.js` goes through cmd
+        fs::write(d.join("dir.exe"), "x").unwrap();
+        fs::write(d.join("tool.js"), "x").unwrap();
+        assert!(is_cmd_builtin("DIR") && is_cmd_builtin("echo") && !is_cmd_builtin("echoargs"));
+        assert!(find_program("dir", path, ext).is_some() && is_cmd_builtin("dir"));
+        let tool = find_program("tool", path, ".JS;.CMD").unwrap();
+        assert!(!startable_directly(&tool));
+        assert!(startable_directly(&d.join("a.CMD")) && startable_directly(Path::new("x.exe")));
+        assert!(!startable_directly(Path::new("noext")));
+        // a bare name in the current folder is found as an absolute path
+        let here = find_program("Cargo", OsStr::new(""), ".toml").unwrap();
+        assert!(here.is_absolute(), "{here:?}");
+        let _ = fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn parses_cargo_json_dedup_and_drops_aborting_noise() {

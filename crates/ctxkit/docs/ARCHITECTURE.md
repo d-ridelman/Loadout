@@ -28,12 +28,12 @@ CLI args / stdin JSON
 ### 2. `backslash.rs`: escape integrity and post-edit syntax
 
 - On `PreToolUse` (`Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit`, `apply_patch`, Antigravity `run_command`/`write_file`/`edit_file`), catches inline invocations, `sed -i`, bash heredocs, PowerShell here-strings, and throwaway patch scripts carrying `\` where shell or CLI argument parsing corrupts escape sequences. Each interpreter has its own "code follows" flags (`node -e/-p/--eval`, `python -c`, `perl -e`, `ruby -e`, `php -r`, `bash -c`, `pwsh -Command`), so `node -c file` or `bash -e script` with a Windows path is not mistaken for inline code. `printf`/`echo`/`awk` are blocked only when they write to a file: a `>` inside quotes is text, `2>` is stderr.
-- On `PostToolUse` (Claude Code `Edit|Write|MultiEdit`, DeepSeek Harness `write|edit|apply_patch`), validates `.json` via `serde_json` (exempting JSONC files such as `tsconfig*`, `jsconfig*`, `.eslintrc*`, `devcontainer.json`, `.code-workspace`, `.vscode/`, and `.devcontainer/`), `.js/.mjs/.cjs` via `node --check`, and `.py` via `python -I` running `ast.parse` (with `cwd` support). For `apply_patch`, all modified and added files in the patch are checked.
+- On `PostToolUse` (Claude Code `Edit|Write|MultiEdit`, DeepSeek Harness `write|edit|apply_patch`), validates `.json` via `serde_json` (exempting JSONC files such as `tsconfig*`, `jsconfig*`, `.eslintrc*`, `devcontainer.json`, `.code-workspace`, `.vscode/`, and `.devcontainer/`; other files that fail strict parsing are retried as JSONC, with comments and trailing commas blanked out, and blocked only if that fails too), `.js/.mjs/.cjs` via `node --check`, and `.py` via `python -I` running `ast.parse` (with `cwd` support). For `apply_patch`, all modified and added files in the patch are checked.
 
 ### 3. `check.rs`: compact build and test output (`ctxkit check <cmd>`)
 
 - For `cargo check`, `cargo clippy`, and `cargo build`, automatically injects `--message-format=json --quiet`, deduplicates diagnostics, and prints up to `3` unique root causes (`file:line:col [code] - message (label)`), dropping cascade noise.
-- For all other commands (`tsc`, `npm run typecheck`, `npm test`, `node --test`, `pytest`, `go test`), passing runs print `OK (<ms>)` plus a brief pass summary, while failing runs print up to `30` key lines and write full logs to `%TEMP%/last-check-<pid>.log` and `%TEMP%/last-check.log` (`/tmp/...` on Unix), avoiding race conditions between concurrent sessions.
+- For all other commands (`tsc`, `npm run typecheck`, `npm test`, `node --test`, `pytest`, `go test`), passing runs print `OK (<ms>)` plus a brief pass summary, while failing runs print up to `30` key lines and write the full log to `%TEMP%/last-check-<pid>.log` (`/tmp/...` on Unix; one file per run, so concurrent sessions do not overwrite each other, and logs older than a day are deleted on the next write).
 
 ### 4. `setup.rs`: idempotent setup and config audit (`ctxkit setup`)
 
@@ -53,6 +53,8 @@ CLI args / stdin JSON
 | `PostToolUse` | Syntax validation and `{"decision": "block"}` | Returns `{}` only (post-write blocking not supported) |
 
 In Antigravity's hook contract, `"decision": "allow"` auto-approves tool execution and bypasses user confirmation policies. On clean checks, `ctxkit` always emits `{"decision": "ask"}` so Antigravity enforces its own built-in security policy.
+
+Antigravity's own hook documentation (`agy-customizations/docs/hooks.md`, shipped in `~/.gemini/antigravity-cli/builtin/skills/`, read 2026-11-16) says hooks "must output their result as a JSON object on stdout" and marks `decision` of `PreToolUse` as required (`allow`, `deny`, `ask`, `force_ask`). So an empty answer is not a documented "no opinion". In `--agy` mode (the flag `ctxkit setup --antigravity` puts into the hook command) the "no decision" cases therefore print the same `{"decision": "ask"}` as a clean check: unreadable or oversized input, a panic, and `CTXKIT_GUARD=0` (for a `PostToolUse` call it is `{}`). Without `--agy` an unreadable payload cannot be told from Claude Code's, which must stay silent, so it prints nothing; an Antigravity payload that parses (it has `toolCall`) is recognised either way. Not verified live: what Antigravity itself does with an empty answer (the documentation does not say); the explicit answer avoids depending on it.
 
 ### DeepSeek Harness Desktop
 

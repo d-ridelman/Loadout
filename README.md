@@ -41,6 +41,14 @@ Loadout reads all five clients, shows everything in one matrix and changes it **
 
 plan → preview → hash lock (`base_sha`) → backup + manifest → temp file + rename → re-read and verify → journal / rollback. If a file changed after the preview, the write is refused. Details: [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §5.
 
+### Copies and secrets
+
+Operation backups and the Loadout trash keep client configs **in full and as plain text, including the `env` values of MCP servers (keys and tokens)**. They live in `%APPDATA%\loadout-app\backups` (the app's data folder is named after the package, `loadout-app`; inside the Windows profile; Loadout sets no permissions of its own, access is inherited from the user profile) and are never sent anywhere. The dialog that enables writing (R1/R2) says so too.
+
+- The last 100 operations not older than 90 days are kept. Older ones are deleted before a new write, by the “Clean up old copies” button in the journal and by the `loadout prune` command (defaults to `%APPDATA%\loadout-app\backups`, another directory: `--backups`). Rolling back an already deleted operation is refused with a clear message.
+- The trash (`backups\trash`) is not cleaned by itself: it holds the only copy of a trashed MCP entry, which returns to the client file when turned on.
+- The uninstaller leaves the data alone. To remove everything, close Loadout and delete the `%APPDATA%\loadout-app` folder (or just `%APPDATA%\loadout-app\backups`). The cleanup command sits next to the app: `& "$env:LOCALAPPDATA\Programs\Loadout\resources\loadout.exe" prune`.
+
 | Add an MCP server | Install a plugin |
 |---|---|
 | ![Add MCP](docs/screenshots/en-add-mcp.png) | ![Install plugin](docs/screenshots/en-install-plugin.png) |
@@ -51,7 +59,7 @@ plan → preview → hash lock (`base_sha`) → backup + manifest → temp file 
 
 ## ctxkit
 
-[`crates/ctxkit`](crates/ctxkit/README.md) is a toolkit of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review (model, advisor and effort change only on explicit flags or an explicit choice in the form). It is built into the app (the **ctxkit** section) and can also be installed on its own.
+[`crates/ctxkit`](crates/ctxkit/README.md) is a toolkit of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review (model, advisor and effort change only on explicit flags or an explicit choice in the form). It is built into the app (the **ctxkit** section: preview, apply, roll back) and can also be installed on its own.
 
 ![ctxkit in the app](docs/screenshots/en-ctxkit.png)
 

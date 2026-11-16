@@ -28,12 +28,12 @@ CLI args / stdin JSON
 ### 2. `backslash.rs`: экранирование и синтаксис
 
 - На `PreToolUse` (`Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit`, `apply_patch`, Antigravity `run_command`/`write_file`/`edit_file`) проверяет inline-вызовы, `sed -i`, bash heredoc, PowerShell here-string и одноразовые patch-скрипты с `\`, где shell или парсер аргументов искажает последовательности. У каждого интерпретатора свои флаги «дальше идёт код» (`node -e/-p/--eval`, `python -c`, `perl -e`, `ruby -e`, `php -r`, `bash -c`, `pwsh -Command`), поэтому `node -c file` или `bash -e script` с путём Windows за inline-код не принимаются. `printf`/`echo`/`awk` блокируются, только когда пишут в файл: `>` внутри кавычек — текст, `2>` — stderr.
-- На `PostToolUse` (Claude Code `Edit|Write|MultiEdit`, DeepSeek Harness `write|edit|apply_patch`) проверяет `.json` через `serde_json` (пропуская JSONC в `tsconfig*`, `jsconfig*`, `.eslintrc*`, `devcontainer.json`, `.code-workspace`, `.vscode/` и `.devcontainer/`), `.js/.mjs/.cjs` через `node --check` и `.py` через `python -I` с `ast.parse` (с учётом рабочего каталога `cwd`). Для `apply_patch` проверяются все изменённые или добавленные патчем файлы.
+- На `PostToolUse` (Claude Code `Edit|Write|MultiEdit`, DeepSeek Harness `write|edit|apply_patch`) проверяет `.json` через `serde_json` (пропуская JSONC в `tsconfig*`, `jsconfig*`, `.eslintrc*`, `devcontainer.json`, `.code-workspace`, `.vscode/` и `.devcontainer/`; остальные файлы, не разобравшиеся строго, разбираются ещё раз как JSONC, где комментарии и хвостовые запятые заменены пробелами, и блокируются, только если не разобрались и так), `.js/.mjs/.cjs` через `node --check` и `.py` через `python -I` с `ast.parse` (с учётом рабочего каталога `cwd`). Для `apply_patch` проверяются все изменённые или добавленные патчем файлы.
 
 ### 3. `check.rs`: сжатый вывод проверок (`ctxkit check <cmd>`)
 
 - Для `cargo check`, `cargo clippy` и `cargo build` добавляет `--message-format=json --quiet`, убирает дубликаты и каскад, оставляя до `3` уникальных первопричин (`file:line:col [code] - message (label)`).
-- Для остальных команд (`tsc`, `npm run typecheck`, `npm test`, `node --test`, `pytest`, `go test`) при успехе печатает `OK (<ms>)` с краткой сводкой числа тестов, а при ошибке выводит до `30` ключевых строк и сохраняет полный вывод в `%TEMP%/last-check-<pid>.log` и `%TEMP%/last-check.log` (`/tmp/...` на Unix), исключая гонки между процессами.
+- Для остальных команд (`tsc`, `npm run typecheck`, `npm test`, `node --test`, `pytest`, `go test`) при успехе печатает `OK (<ms>)` с краткой сводкой числа тестов, а при ошибке выводит до `30` ключевых строк и сохраняет полный вывод в `%TEMP%/last-check-<pid>.log` (`/tmp/...` на Unix; по файлу на запуск, поэтому параллельные сессии не затирают друг друга, а логи старше суток удаляются при следующей записи).
 
 ### 4. `setup.rs`: автонастройка и диагностика (`ctxkit setup`)
 
@@ -53,6 +53,8 @@ CLI args / stdin JSON
 | `PostToolUse` | Проверка синтаксиса и `{"decision": "block"}` | Только `{}` (блокировка после записи не поддерживается) |
 
 В контракте Antigravity значение `"decision": "allow"` автоматически одобряет вызов инструмента в обход политики подтверждений пользователя. Поэтому при успешной проверке `ctxkit` всегда возвращает `{"decision": "ask"}`, передавая финальное решение встроенной политике безопасности.
+
+Собственная документация хуков Antigravity (`agy-customizations/docs/hooks.md`, лежит в `~/.gemini/antigravity-cli/builtin/skills/`, прочитана 2026-11-16) говорит, что хук «должен вывести результат JSON-объектом в stdout», а `decision` у `PreToolUse` обязателен (`allow`, `deny`, `ask`, `force_ask`). Пустой ответ как «нет мнения» в ней не описан. Поэтому в режиме `--agy` (флаг, который `ctxkit setup --antigravity` кладёт в команду хука) случаи «решения нет» печатают тот же `{"decision": "ask"}`, что и чистая проверка: нечитаемый или слишком большой ввод, паника и `CTXKIT_GUARD=0` (для вызова `PostToolUse` это `{}`). Без `--agy` нечитаемый ввод нельзя отличить от ввода Claude Code, которому нужна тишина, поэтому ничего не печатается; разобранный ввод Antigravity (в нём есть `toolCall`) узнаётся и без флага. Вживую не проверено: что сам Antigravity делает с пустым ответом (документация молчит); явный ответ от этого не зависит.
 
 ### DeepSeek Harness Desktop
 

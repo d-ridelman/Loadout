@@ -51,13 +51,23 @@ const postClaude = (name, content) => {
 };
 
 // Stop gate: a transcript whose last turn edits two code files, optionally followed by checker
-const stopGate = ({ checker = false, active = false, env = {} } = {}) => {
+// ...in a profile that has the checker agent and an advisor, only one of them, or neither
+const gateProfile = (kind) => {
+  const p = join(dir, `gate-profile-${kind}`);
+  if (!existsSync(p)) {
+    mkdirSync(join(p, 'agents'), { recursive: true });
+    if (kind === 'both' || kind === 'checker') writeFileSync(join(p, 'agents', 'checker.md'), 'x');
+    writeFileSync(join(p, 'settings.json'), JSON.stringify(kind === 'both' || kind === 'advisor' ? { advisorModel: 'fable' } : {}));
+  }
+  return p;
+};
+const stopGate = ({ checker = false, active = false, env = {}, profile = 'both' } = {}) => {
   const edit = (p) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: p } }] } });
   const rows = [{ type: 'user', message: { content: 'go' } }, edit('/p/a.rs'), edit('/p/b.rs')];
   if (checker) rows.push({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', input: { subagent_type: 'checker' } }] } });
   const transcript_path = join(dir, 'turn.jsonl');
   writeFileSync(transcript_path, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
-  return runHook({ hook_event_name: 'Stop', transcript_path, stop_hook_active: active }, [], env);
+  return runHook({ hook_event_name: 'Stop', transcript_path, stop_hook_active: active }, [], { CLAUDE_CONFIG_DIR: gateProfile(profile), ...env });
 };
 
 const TMP = `C:${B}Users${B}u${B}AppData${B}Local${B}Temp${B}agents${B}x${B}`;
@@ -278,6 +288,11 @@ const cases = [
   [false, () => postClaude('ok.json', `{"a": "C:${B}${B}x"}`)],
   [false, () => postClaude('ok.py', `s = "a${B}${B}"\n`)],
   [false, () => postClaude('tsconfig.json', `{ // comment\n "a": 1 }`)],
+  // any other .json is tried as JSONC (comments, trailing commas) before it is blocked
+  [false, () => postClaude('turbo.json', `{\n  // tasks\n  "tasks": { "build": {}, },\n  /* end */\n}\n`)],
+  [false, () => postClaude('biome.json', `{ "a": [1, 2,], // trailing\n}`)],
+  [true, () => postClaude('broken-comments.json', `{ // c\n  "a": 1\n  "b": 2 }`)],
+  [true, () => postClaude('bad-escape.json', `{"a": "C:${B}x" // c\n}`)],
   [false, () => postClaude('App.js', `export default () => <div>hi</div>;\n`)],
   [false, () => postClaude('readme.md', `a${B}`)],
 
@@ -461,7 +476,7 @@ const cases = [
     if (desk1.byAccount.acct1.builtIns.local.settings.modelId !== 'claude-sonnet-5-5') return false;
 
     const agy1 = JSON.parse(readFileSync(agyFile, 'utf8'));
-    if (!agy1['other-hook'] || agy1['claude-guard'] || agy1['ctxkit']?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'test-ctxkit') return false;
+    if (!agy1['other-hook'] || agy1['claude-guard'] || agy1['ctxkit']?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'test-ctxkit --agy') return false; // a custom --hook-cmd gets --agy appended
 
     if (!run1.stdout.includes('3 global MCP servers')) return false;
     if (!run1.stdout.includes('Antigravity Diagnostics:')) return false;
@@ -611,6 +626,8 @@ const cases = [
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, 'c.json'), '{}');
     const hash =(f) => (existsSync(f) ? readFileSync(f).toString('hex') : 'none');
+    // a refused setup leaves no copied binary, no settings.json and no backup in the profile
+    const untouched = (profile) => !existsSync(join(profile, 'hooks')) && !existsSync(join(profile, 'settings.json')) && !existsSync(join(profile, 'backups'));
 
     // markers mentioned inside the user's own sentences
     const p1 = mk('prose');
@@ -651,12 +668,23 @@ const cases = [
     writeFileSync(join(p7, 'settings.json'), '{"modelSettings":{"claude-sonnet-5-5":"x"}}');
     if (run(p7, '--effort', 'high').status !== 1 || existsSync(join(p7, 'hooks'))) return false;
 
-    // a lone start marker line of the user's own does not make setup eat the lines after it, and a BOM does not hide our block
+    // a start marker without an end (or a doubled block, left by an older setup): setup refuses with the file path,
+    // before anything is copied or written, instead of adding a second block; the rollback still removes whole blocks
     const p8 = mk('lonemarker');
-    writeFileSync(join(p8, 'CLAUDE.md'), 'keep1\n<!-- ctxkit:start -->\nkeep2 no end\n');
-    if (run(p8, '--with-rules').status !== 0) return false;
-    const lone1 = readFileSync(join(p8, 'CLAUDE.md'), 'utf8');
-    if (run(p8, '--with-rules').status !== 0 || readFileSync(join(p8, 'CLAUDE.md'), 'utf8') !== lone1 || !lone1.includes('keep2 no end')) return false;
+    const loneText = 'keep1\n<!-- ctxkit:start -->\nkeep2 no end\n';
+    writeFileSync(join(p8, 'CLAUDE.md'), loneText);
+    const r8 = run(p8, '--with-rules');
+    if (r8.status !== 1 || !untouched(p8) || readFileSync(join(p8, 'CLAUDE.md'), 'utf8') !== loneText || !r8.stderr.includes(join(p8, 'CLAUDE.md'))) return `lone marker: ${r8.status} ${r8.stderr}`;
+    const p8b = mk('doubledblock');
+    const blockText = '<!-- ctxkit:start -->\nrules\n<!-- ctxkit:end -->\n';
+    const doubled = `# Mine\n\n${blockText}\n${blockText}`;
+    writeFileSync(join(p8b, 'CLAUDE.md'), doubled);
+    const r8b = run(p8b, '--with-rules');
+    if (r8b.status !== 1 || !untouched(p8b) || readFileSync(join(p8b, 'CLAUDE.md'), 'utf8') !== doubled) return `doubled block: ${r8b.status} ${r8b.stderr}`;
+    const u8b = run(p8b, '--uninstall');
+    if (u8b.status !== 0 || readFileSync(join(p8b, 'CLAUDE.md'), 'utf8').includes('ctxkit:')) return `uninstall of a doubled block: ${u8b.status} ${u8b.stdout}`;
+    const doctor8 = spawnSync(exe, ['doctor', '--profile', p8, '--lang', 'en'], { encoding: 'utf8' });
+    if (!doctor8.stdout.includes('rules_markers') || !doctor8.stdout.includes(join(p8, 'CLAUDE.md'))) return `doctor: ${doctor8.stdout}`;
     const p9 = mk('bom');
     run(p9, '--with-rules');
     const withBlock = readFileSync(join(p9, 'CLAUDE.md'), 'utf8');
@@ -665,6 +693,44 @@ const cases = [
     const bomText = readFileSync(join(p9, 'CLAUDE.md'), 'utf8');
     if (bomText.split('<!-- ctxkit:start -->').length !== 2 || !bomText.includes('user tail')) return false;
 
+    // the preflight covers the Desktop presets file and the DeepSeek Harness files too: a refusal happens
+    // before the binary is copied, settings.json is written or any backup is made
+    const p11 = mk('badpresets');
+    const badPresets = join(root, 'presets-bad.json');
+    writeFileSync(badPresets, '{ broken');
+    const r11 = run(p11, '--desktop', '--desktop-file', badPresets);
+    if (r11.status !== 1 || !untouched(p11) || readFileSync(badPresets, 'utf8') !== '{ broken') return `presets: ${r11.status} ${r11.stderr}`;
+    const dshCase = (name, patch, hooksJson) => {
+      const home = join(root, `dsh-${name}`);
+      mkdirSync(join(home, 'profiles', 'desktop'), { recursive: true });
+      if (patch !== null) writeFileSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml'), patch);
+      if (hooksJson !== null) writeFileSync(join(home, 'ctxkit-hooks.json'), hooksJson);
+      const profile = mk(`dsh-${name}-profile`);
+      const r = run(profile, '--dsh', '--dsh-home', home);
+      const patchAfter = existsSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml')) ? readFileSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8') : null;
+      return { r, profile, patchAfter, hooksAfter: existsSync(join(home, 'ctxkit-hooks.json')) ? readFileSync(join(home, 'ctxkit-hooks.json'), 'utf8') : null };
+    };
+    const half = dshCase('half', '- keep: 1\n# >>> ctxkit (managed by `ctxkit setup --dsh`; do not edit) >>>\n- insert: x\n', null);
+    if (half.r.status !== 1 || !untouched(half.profile) || half.hooksAfter !== null || !half.r.stderr.includes('no end marker')) return `half block: ${half.r.status} ${half.r.stderr}`;
+    const mapping = dshCase('mapping', 'key: value\n', null);
+    if (mapping.r.status !== 1 || !untouched(mapping.profile) || mapping.hooksAfter !== null || mapping.patchAfter !== 'key: value\n') return `mapping: ${mapping.r.status} ${mapping.r.stderr}`;
+    const badHooks = dshCase('badhooks', '- keep: 1\n', '[1]');
+    if (badHooks.r.status !== 1 || !untouched(badHooks.profile) || badHooks.hooksAfter !== '[1]' || badHooks.patchAfter !== '- keep: 1\n') return `hooks json: ${badHooks.r.status} ${badHooks.r.stderr}`;
+    // no patch file yet: setup creates it; a dry run of the same is a preview, not an error
+    const fresh = dshCase('fresh', null, null);
+    if (fresh.r.status !== 0 || !existsSync(join(fresh.profile, 'hooks')) || fresh.patchAfter === null || !fresh.patchAfter.includes('ctxkit-hooks')) return `fresh dsh: ${fresh.r.status} ${fresh.r.stderr}`;
+    const dryHome = join(root, 'dsh-dry');
+    mkdirSync(join(dryHome, 'profiles', 'desktop'), { recursive: true });
+    const dryRun = run(mk('dsh-dry-profile'), '--dsh', '--dsh-home', dryHome, '--dry-run');
+    if (dryRun.status !== 0 || existsSync(join(dryHome, 'ctxkit-hooks.json'))) return `dsh dry run: ${dryRun.status} ${dryRun.stderr}`;
+
+    // a rollback that makes the only backup does not also claim there are none
+    const p10 = mk('nobackups');
+    writeFileSync(join(p10, 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: '"C:/x/ctxkit.exe"' }] }] } }));
+    const r10 = run(p10, '--uninstall');
+    if (r10.status !== 0 || !r10.stdout.includes('backup ->') || r10.stdout.includes('no settings.json backups found')) return `uninstall output contradicts itself: ${r10.stdout}`;
+    if (!r10.stdout.includes('latest:') || !r10.stdout.includes('made by this run')) return `no latest backup line: ${r10.stdout}`;
+
     // a CLAUDE.md that is not UTF-8 stops the rollback before settings.json is rewritten
     const p4 = mk('nonutf8');
     if (run(p4, '--with-rules').status !== 0) return false;
@@ -672,6 +738,72 @@ const cases = [
     const sBefore = hash(join(p4, 'settings.json'));
     const r4 = run(p4, '--uninstall');
     return r4.status === 1 && hash(join(p4, 'settings.json')) === sBefore && existsSync(join(p4, 'hooks', BIN_NAME));
+  }],
+
+  // The rollback gives the user's files back byte for byte (CRLF, a missing final newline, an empty "hooks": {},
+  // the key order), and removes the files setup created instead of leaving an empty CLAUDE.md or a `{}`
+  [true, () => {
+    const root = join(dir, 'bytes-test');
+    mkdirSync(root, { recursive: true });
+    const cj = join(root, 'c.json');
+    writeFileSync(cj, '{}');
+    let n = 0;
+    const mk = () => {
+      const p = join(root, `p${n++}`);
+      mkdirSync(p, { recursive: true });
+      return p;
+    };
+    const run = (p, ...a) => spawnSync(exe, ['setup', '--profile', p, '--claude-json', cj, '--skip-version-check', ...a], { encoding: 'utf8' });
+    const hex = (f) => (existsSync(f) ? readFileSync(f).toString('hex') : null);
+    const hexOf = (s) => Buffer.from(s).toString('hex');
+
+    // 1) odd user files survive a setup and the rollback unchanged
+    const settingsOdd = '{\r\n    "zeta": 1,\r\n    "model": "opus",\r\n  "hooks": {}\r\n}';
+    for (const md of ['# Mine\r\nkeep\r\n', 'no final newline', 'two blank\r\n\r\n\r\n', '# LF only\n', '', '﻿# bom\r\nx\r\n']) {
+      const p = mk();
+      writeFileSync(join(p, 'CLAUDE.md'), md);
+      writeFileSync(join(p, 'settings.json'), settingsOdd);
+      if (run(p, '--with-rules').status !== 0 || readFileSync(join(p, 'CLAUDE.md'), 'utf8') === md) return `setup on ${JSON.stringify(md)}`;
+      const u = run(p, '--uninstall');
+      if (u.status !== 0) return `uninstall on ${JSON.stringify(md)}: ${u.stderr}`;
+      if (hex(join(p, 'CLAUDE.md')) !== hexOf(md)) return `CLAUDE.md not restored byte for byte: ${JSON.stringify(md)} -> ${JSON.stringify(readFileSync(join(p, 'CLAUDE.md'), 'utf8'))}`;
+      if (hex(join(p, 'settings.json')) !== hexOf(settingsOdd)) return `settings.json not restored byte for byte: ${JSON.stringify(readFileSync(join(p, 'settings.json'), 'utf8'))}`;
+    }
+    // a user's own `{}` stays a file with `{}`
+    const pe = mk();
+    writeFileSync(join(pe, 'settings.json'), '{}');
+    run(pe);
+    run(pe, '--uninstall');
+    if (hex(join(pe, 'settings.json')) !== hexOf('{}')) return 'a user {} was not kept';
+
+    // 2) files setup created are deleted, also when a second setup run backed them up in between
+    const pc = mk();
+    if (run(pc, '--with-rules').status !== 0 || !existsSync(join(pc, 'settings.json')) || !existsSync(join(pc, 'CLAUDE.md'))) return 'setup made no files';
+    if (run(pc, '--with-rules', '--lang', 'ru').status !== 0) return 'second setup';
+    const uc = run(pc, '--uninstall');
+    if (uc.status !== 0 || existsSync(join(pc, 'settings.json')) || existsSync(join(pc, 'CLAUDE.md'))) return `created files are left: ${uc.stdout}`;
+    if (run(pc, '--uninstall').status !== 0) return 'a second rollback failed';
+
+    // 3) when the user changed the file after setup there is nothing exact to restore: what they changed stays
+    const pm = mk();
+    writeFileSync(join(pm, 'settings.json'), '{"model":"opus"}');
+    run(pm);
+    const edited = JSON.parse(readFileSync(join(pm, 'settings.json'), 'utf8'));
+    edited.model = 'sonnet';
+    writeFileSync(join(pm, 'settings.json'), JSON.stringify(edited, null, 2));
+    run(pm, '--uninstall');
+    const kept = JSON.parse(readFileSync(join(pm, 'settings.json'), 'utf8'));
+    if (kept.model !== 'sonnet' || kept.hooks !== undefined) return `edited settings: ${JSON.stringify(kept)}`;
+    // ...and a CRLF CLAUDE.md keeps its line breaks all the way
+    const pl = mk();
+    writeFileSync(join(pl, 'CLAUDE.md'), '# Mine\r\nkeep\r\n');
+    run(pl, '--with-rules');
+    const withBlock = readFileSync(join(pl, 'CLAUDE.md'), 'utf8');
+    if (/(^|[^\r])\n/.test(withBlock)) return `setup wrote a bare LF into a CRLF file: ${JSON.stringify(withBlock)}`;
+    writeFileSync(join(pl, 'CLAUDE.md'), withBlock + 'extra\r\n');
+    run(pl, '--uninstall');
+    const crlf = readFileSync(join(pl, 'CLAUDE.md'), 'utf8');
+    return !/(^|[^\r])\n/.test(crlf) && crlf.includes('extra') && !crlf.includes('ctxkit:') || `CRLF lost: ${JSON.stringify(crlf)}`;
   }],
 
   // Safe failure: broken or odd hook input is a silent pass (exit 0, empty stdout), never a block or a crash
@@ -712,6 +844,73 @@ const cases = [
     }
     return true;
   }],
+  // Antigravity wants a JSON answer every time (`decision` is required): in --agy mode a failure or the off switch
+  // answers {"decision":"ask"} (PostToolUse: {}), never an empty stdout; Claude Code and DSH stay silent
+  [true, () => {
+    const raw = (input, args = [], env = {}) => {
+      const r = spawnSync(exe, args, { input, env: { ...process.env, ...env }, maxBuffer: 1 << 20 });
+      return { status: r.status, out: r.stdout?.toString() ?? '' };
+    };
+    const ASK = '{"decision":"ask"}';
+    for (const input of ['', ' ', '{', 'null', '[]', Buffer.from([0xff, 0xfe, 0x00, 0x7b, 0x80]), '{"toolCall":5}', '{"toolCall":{"name":7}}']) {
+      const r = raw(input, ['--agy']);
+      if (r.status !== 0 || r.out !== ASK) return `--agy ${JSON.stringify(String(input).slice(0, 20))}: ${r.status} ${JSON.stringify(r.out)}`;
+      const lang = raw(input, ['--agy', '--lang', 'ru']);
+      if (lang.out !== ASK) return `--agy --lang ru ${JSON.stringify(String(input).slice(0, 20))}: ${JSON.stringify(lang.out)}`;
+    }
+    for (const input of ['', '{', Buffer.from([0xff, 0x80])]) {
+      const r = raw(input, ['--agy', '--post']);
+      if (r.out !== '{}') return `--agy --post ${JSON.stringify(String(input).slice(0, 20))}: ${JSON.stringify(r.out)}`;
+      const plain = raw(input);
+      if (plain.status !== 0 || plain.out !== '') return `no client flag must stay silent: ${JSON.stringify(plain.out)}`;
+    }
+    // the off switch: a read the guard would deny becomes "ask", with and without the flag (the payload names Antigravity)
+    const read = JSON.stringify({ toolCall: { name: 'read_file', args: { Path: bigFile } }, stepIdx: 1 });
+    if (!raw(read).out.includes('"deny"')) return 'the guard does not deny without the switch';
+    for (const args of [[], ['--agy']]) {
+      const off = raw(read, args, { CTXKIT_GUARD: 'off' });
+      if (off.out !== ASK) return `CTXKIT_GUARD=off ${args}: ${JSON.stringify(off.out)}`;
+    }
+    const post = JSON.stringify({ toolCall: { name: 'run_command', args: {} }, error: 'exit status 1' });
+    if (raw(post, [], { CTXKIT_GUARD: '0' }).out !== '{}') return 'post answer with the switch';
+    // Claude Code stays silent with the switch
+    const claude = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } });
+    return raw(claude, [], { CTXKIT_GUARD: '0' }).out === '';
+  }],
+  // "onFailure": "continue" on our PreToolUse / PostToolUse hooks (a failing ctxkit never stops the work), not on Stop
+  // (the docs: no effect there); the rollback still takes the hooks out, and a second setup does not stack them
+  [true, () => {
+    const root = join(dir, 'onfailure-test');
+    mkdirSync(join(root, 'p'), { recursive: true });
+    const cj = join(root, 'c.json');
+    writeFileSync(cj, '{}');
+    const profile = join(root, 'p');
+    const run = (...a) => spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--skip-version-check', '--no-agents', ...a], { encoding: 'utf8' });
+    if (run().status !== 0 || run().status !== 0) return 'setup failed';
+    const s = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+    const ours = (ev) => (s.hooks?.[ev] ?? []).flatMap((g) => g.hooks).filter((h) => h.command.includes('ctxkit'));
+    for (const ev of ['PreToolUse', 'PostToolUse']) {
+      if (ours(ev).length !== 1 || ours(ev)[0].onFailure !== 'continue') return `${ev}: ${JSON.stringify(ours(ev))}`;
+    }
+    if (ours('Stop').length !== 1 || 'onFailure' in ours('Stop')[0]) return `Stop: ${JSON.stringify(ours('Stop'))}`;
+    const u = spawnSync(exe, ['setup', '--uninstall', '--profile', profile, '--claude-json', cj], { encoding: 'utf8' });
+    // settings.json was created by setup, so the rollback deletes it; either way no hooks are left
+    const after = existsSync(join(profile, 'settings.json')) ? JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')) : {};
+    return u.status === 0 && after.hooks === undefined || `uninstall left hooks: ${JSON.stringify(after)}`;
+  }],
+  // The command setup writes for Antigravity carries the flag
+  [true, () => {
+    const root = join(dir, 'agy-cmd-test');
+    mkdirSync(root, { recursive: true });
+    const agyFile = join(root, 'hooks.json');
+    const cj = join(root, 'c.json');
+    writeFileSync(cj, '{}');
+    const profile = join(root, 'p');
+    mkdirSync(profile);
+    const r = spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--skip-version-check', '--no-agents', '--antigravity', '--agy-file', agyFile], { encoding: 'utf8' });
+    const cmd = JSON.parse(readFileSync(agyFile, 'utf8')).ctxkit?.PreToolUse?.[0]?.hooks?.[0]?.command ?? '';
+    return r.status === 0 && cmd.endsWith(' --agy') || `command: ${cmd} ${r.stderr}`;
+  }],
   // CTXKIT_GUARD=0 mutes PreToolUse/PostToolUse (and only them)
   [true, () => {
     const bad = join(dir, 'guard-off.json');
@@ -722,6 +921,20 @@ const cases = [
     return withGuard(read, {}).includes('"deny"') && withGuard(post, {}).includes('"block"')
       && withGuard(read, { CTXKIT_GUARD: '0' }) === '' && withGuard(post, { CTXKIT_GUARD: '0' }) === ''
       && JSON.parse(stopGate({ env: { CTXKIT_GUARD: '0' } })).decision === 'block';
+  }],
+
+  // CTXKIT_GUARD and CTXKIT_GATE share one rule: trimmed, case-insensitive 0/off/false/no turn the hook off
+  [true, () => {
+    const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } };
+    for (const v of ['0', ' 0 ', 'off', ' Off ', 'FALSE', 'No']) {
+      if (runHook(read, [], { CTXKIT_GUARD: v }) !== '') return `GUARD=${JSON.stringify(v)} did not mute`;
+      if (stopGate({ env: { CTXKIT_GATE: v } }) !== '') return `GATE=${JSON.stringify(v)} did not mute`;
+    }
+    for (const v of ['', '1', 'on', 'yes', 'of']) {
+      if (!runHook(read, [], { CTXKIT_GUARD: v }).includes('"deny"')) return `GUARD=${JSON.stringify(v)} muted`;
+      if (JSON.parse(stopGate({ env: { CTXKIT_GATE: v } })).decision !== 'block') return `GATE=${JSON.stringify(v)} muted`;
+    }
+    return true;
   }],
 
   // Localization (default en vs CTXKIT_LANG=ru / --lang ru)
@@ -735,6 +948,16 @@ const cases = [
   [true, () => stopGate({ active: true }) === ''],
   [true, () => stopGate({ checker: true }) === ''],
   [true, () => stopGate({ env: { CTXKIT_GATE: '0' } }) === ''],
+  // ...the message follows what is configured (--advisor none, no checker.md): never names a missing helper
+  [true, () => {
+    const only = (profile) => JSON.parse(stopGate({ profile })).reason;
+    const c = only('checker');
+    const a = only('advisor');
+    if (!c.includes('`checker`') || c.includes('advisor')) return `checker-only: ${c}`;
+    if (!a.includes('advisor') || a.includes('checker')) return `advisor-only: ${a}`;
+    if (!only('both').includes('neither `checker` nor the advisor')) return 'both';
+    return stopGate({ profile: 'none' }) === '' || 'nothing configured must not block';
+  }],
 ];
 
 let failed = 0;

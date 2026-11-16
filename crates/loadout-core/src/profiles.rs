@@ -32,12 +32,50 @@ fn path(store: &Path) -> PathBuf {
     store.join("profiles.json")
 }
 
-pub fn list(store: &Path) -> Vec<Profile> {
-    std::fs::read_to_string(path(store))
-        .ok()
-        .and_then(|t| serde_json::from_str::<File>(&t).ok())
+/// Читает `profiles.json`. Нет файла — профилей нет. Файл есть, но не читается или не разбирается — ошибка: молча
+/// считать это «профилей нет» нельзя, следующее сохранение затёрло бы то, что в нём было (см. [`quarantine`]).
+fn read_file(store: &Path) -> Result<Vec<Profile>, String> {
+    let text = match std::fs::read_to_string(path(store)) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(broken(&e.to_string())),
+    };
+    serde_json::from_str::<File>(&text)
         .map(|f| f.profiles)
-        .unwrap_or_default()
+        .map_err(|e| broken(&e.to_string()))
+}
+
+fn broken(why: &str) -> String {
+    crate::tr!(
+        "файл профилей profiles.json повреждён или не читается ({why}): профили не загружены и не перезаписываются. Отложите файл (он будет переименован в profiles.json.broken-<время>) и создайте профили заново",
+        "the profiles file profiles.json is damaged or unreadable ({why}): profiles are not loaded and will not be overwritten. Set the file aside (it is renamed to profiles.json.broken-<time>) and create the profiles again"
+    )
+}
+
+pub fn list(store: &Path) -> Result<Vec<Profile>, String> {
+    read_file(store)
+}
+
+/// Явное действие владельца: повреждённый `profiles.json` переименовывается в `profiles.json.broken-<время>`
+/// (ничего не удаляется), после чего профили снова можно сохранять. Читающийся файл не трогаем.
+pub fn quarantine(store: &Path) -> Result<String, String> {
+    if read_file(store).is_ok() {
+        return Err(crate::tr!(
+            "profiles.json в порядке: откладывать нечего",
+            "profiles.json is fine: nothing to set aside"
+        ));
+    }
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let name = format!("profiles.json.broken-{ms}");
+    std::fs::rename(path(store), store.join(&name)).map_err(|e| {
+        crate::tr!(
+            "файл профилей не переименован: {e}",
+            "the profiles file was not renamed: {e}"
+        )
+    })?;
+    Ok(name)
 }
 
 pub fn valid_name(n: &str) -> bool {
@@ -83,7 +121,7 @@ pub fn save(store: &Path, p: Profile) -> Result<(), String> {
             "the profile has too many entries or they contain invalid strings"
         ));
     }
-    let mut all = list(store);
+    let mut all = list(store)?;
     match all.iter_mut().find(|x| x.name == p.name) {
         Some(x) => *x = p,
         None => all.push(p),
@@ -92,7 +130,7 @@ pub fn save(store: &Path, p: Profile) -> Result<(), String> {
 }
 
 pub fn delete(store: &Path, name: &str) -> Result<(), String> {
-    let mut all = list(store);
+    let mut all = list(store)?;
     let before = all.len();
     all.retain(|p| p.name != name);
     if all.len() == before {
@@ -136,7 +174,7 @@ pub fn intents(
     store: &Path,
     name: &str,
 ) -> Result<(Vec<Intent>, Vec<String>), String> {
-    let p = list(store)
+    let p = list(store)?
         .into_iter()
         .find(|p| p.name == name)
         .ok_or_else(|| crate::tr!("профиль не найден", "profile not found"))?;

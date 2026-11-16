@@ -1,6 +1,7 @@
 mod backslash;
 mod check;
 mod doctor;
+mod fsx;
 mod gate;
 mod guard;
 mod report;
@@ -65,6 +66,19 @@ fn detect_lang(args: &[String]) -> Lang {
         .unwrap_or(Lang::En)
 }
 
+/// The one rule of the emergency switches `CTXKIT_GUARD` and `CTXKIT_GATE`: the value, trimmed and
+/// without regard to case, is `0`, `off`, `false` or `no`. Anything else (or unset) leaves the hook on.
+fn is_off_value(v: &str) -> bool {
+    matches!(
+        v.trim().to_ascii_lowercase().as_str(),
+        "0" | "off" | "false" | "no"
+    )
+}
+
+pub fn env_off(name: &str) -> bool {
+    env::var(name).is_ok_and(|v| is_off_value(&v))
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -91,10 +105,21 @@ fn main() {
         }
     }
 
-    // A hook must never break the user's work: any failure below (bad input, a panic) is a silent pass,
-    // exit 0 and empty stdout. Only a deliberate rule match prints a block/deny.
+    // A hook must never break the user's work: any failure below (bad input, a panic) is a pass,
+    // exit 0 and (for Claude Code and DSH) empty stdout. Only a deliberate rule match prints a block/deny.
+    // Antigravity wants a JSON answer every time (`decision` is required in its PreToolUse contract, see
+    // docs/ARCHITECTURE.md), so in `--agy` mode a pass is spelled out: `agy_pass`.
     std::panic::set_hook(Box::new(|_| {}));
-    let _ = std::panic::catch_unwind(|| run_hook(&args, forced_client, forced_post));
+    let done = std::panic::catch_unwind(|| run_hook(&args, forced_client, forced_post));
+    if done.is_err() && forced_client == Some(Client::Antigravity) {
+        agy_pass(forced_post);
+    }
+}
+
+/// Antigravity's "no opinion": `ask` leaves the decision to its own confirmation policy (never `allow`, which
+/// would auto-approve); a PostToolUse answer is an empty object.
+fn agy_pass(post: bool) {
+    print!("{}", if post { "{}" } else { r#"{"decision":"ask"}"# });
 }
 
 /// Largest hook payload we parse; a bigger one is passed unchecked rather than held in memory.
@@ -102,6 +127,12 @@ const MAX_STDIN: u64 = 64 * 1024 * 1024;
 
 fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
     let lang = detect_lang(args);
+    // Without a readable payload only the `--agy` flag tells which client is waiting for the answer.
+    let unreadable = || {
+        if forced_client == Some(Client::Antigravity) {
+            agy_pass(forced_post);
+        }
+    };
 
     let mut buf = Vec::new();
     if io::stdin()
@@ -111,21 +142,15 @@ fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
         .is_err()
         || buf.len() as u64 > MAX_STDIN
     {
-        return;
+        return unreadable();
     }
     let Ok(raw) = String::from_utf8(buf) else {
-        return;
+        return unreadable();
     };
     // A BOM before the payload must not turn the hook into a silent pass.
     let Ok(call) = serde_json::from_str::<Value>(raw.trim_start_matches('\u{feff}')) else {
-        return;
+        return unreadable();
     };
-    // Emergency switch for PreToolUse/PostToolUse (the Stop gate has its own CTXKIT_GATE=0).
-    if call["hook_event_name"].as_str() != Some("Stop")
-        && env::var("CTXKIT_GUARD").is_ok_and(|v| v.trim() == "0")
-    {
-        return;
-    }
 
     let client = forced_client.unwrap_or_else(|| {
         if call.get("toolCall").is_some() {
@@ -139,6 +164,13 @@ fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
             Client::Claude
         }
     });
+    // Emergency switch for PreToolUse/PostToolUse (the Stop gate has its own CTXKIT_GATE=0).
+    if call["hook_event_name"].as_str() != Some("Stop") && env_off("CTXKIT_GUARD") {
+        if client == Client::Antigravity {
+            agy_pass(forced_post || call.get("error").is_some());
+        }
+        return;
+    }
 
     match client {
         Client::Antigravity => handle_antigravity(&call, forced_post, lang),
@@ -148,7 +180,7 @@ fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
 
 fn handle_antigravity(call: &Value, forced_post: bool, lang: Lang) {
     if forced_post || call.get("error").is_some() {
-        print!("{{}}");
+        agy_pass(true);
         return;
     }
 
@@ -227,7 +259,7 @@ fn handle_antigravity(call: &Value, forced_post: bool, lang: Lang) {
         print!("{out}");
     } else {
         // Delegate to Antigravity's built-in confirmation policy rather than auto-allowing.
-        print!(r#"{{"decision":"ask"}}"#);
+        agy_pass(false);
     }
 }
 
@@ -381,4 +413,19 @@ fn deny_claude(reason: String) {
         }
     });
     print!("{out}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switch_values_are_trimmed_and_case_blind() {
+        for v in ["0", " 0 ", "off", " OFF", "False", "no", "No\t"] {
+            assert!(is_off_value(v), "{v:?}");
+        }
+        for v in ["", "1", "on", "yes", "of", "00", "true"] {
+            assert!(!is_off_value(v), "{v:?}");
+        }
+    }
 }

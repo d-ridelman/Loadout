@@ -139,6 +139,12 @@ export interface Applied {
   to: string
 }
 
+/** Итог очистки старых копий операций. */
+export interface Pruned {
+  removed: number
+  kept: number
+}
+
 export interface JournalEntry {
   id: string
   time: number
@@ -212,6 +218,16 @@ export interface SetupOptions {
   lang: 'en' | 'ru'
   /** 'keep' — `--advisor` не передаётся: advisorModel остаётся как есть (значение по умолчанию не выбор пользователя) */
   advisor: 'keep' | 'fable' | 'opus' | 'none'
+  /** 'keep' — `--main-model` не передаётся: `model` остаётся как есть */
+  mainModel: 'keep' | 'sonnet' | 'opus' | 'haiku'
+  /** 'keep' — `--effort` не передаётся: effort остаётся как есть */
+  effort: 'keep' | 'low' | 'medium' | 'high' | 'xhigh'
+}
+
+/** Что окно просит убрать вместе с настройками Claude Code: интеграции, которые `setup` поставил по галочкам. */
+export interface UninstallOptions {
+  antigravity: boolean
+  dsh: boolean
 }
 
 export interface SetupResult {
@@ -276,12 +292,16 @@ export interface LoadoutApi {
   plan: (intent: Intent) => Promise<PlanResponse>
   apply: (intent: Intent, baseSha: string) => Promise<Result<Applied>>
   journal: () => Promise<Result<JournalEntry[]>>
+  /** Удалить старые копии операций (последние 100 и не старше 90 дней остаются); main спрашивает подтверждение системным окном. */
+  pruneBackups: () => Promise<Result<Pruned>>
   rollback: (op: string) => Promise<Result<Applied>>
   rollbackBatch: (batch: string) => Promise<Result<Applied[]>>
   profiles: () => Promise<Result<Profile[]>>
   /** Без `items` профиль снимается с текущего состояния. */
   saveProfile: (name: string, items?: ProfileItem[]) => Promise<Result<Profile[]>>
   deleteProfile: (name: string) => Promise<Result<Profile[]>>
+  /** Повреждённый `profiles.json` откладывается в `profiles.json.broken-<время>`; возвращает имя файла. Только по явному действию. */
+  quarantineProfiles: () => Promise<Result<string>>
   planProfile: (name: string) => Promise<Result<BatchPlan & { running: string[] }>>
   applyProfile: (name: string, batchSha: string) => Promise<Result<BatchApplied>>
   ctxkitStatus: () => Promise<Result<CtxkitStatus>>
@@ -289,6 +309,8 @@ export interface LoadoutApi {
   ctxkitReport: (days: 7 | 14 | 30) => Promise<Result<CtxkitReport>>
   /** `dryRun` — предпросмотр (любой уровень); применение требует R2 и совпадающего предпросмотра. */
   ctxkitSetup: (options: SetupOptions, dryRun: boolean) => Promise<Result<SetupResult>>
+  /** Откат `ctxkit setup --uninstall`: `dryRun` — предпросмотр; откат требует R2 и такого же предпросмотра. */
+  ctxkitUninstall: (options: UninstallOptions, dryRun: boolean) => Promise<Result<SetupResult>>
   /** Установка плагина Claude Code через его CLI (`имя@маркетплейс`). `dryRun` — показать команду; установка требует R2 и такого же предпросмотра. */
   pluginInstall: (spec: string, dryRun: boolean) => Promise<Result<SetupResult>>
   /** Добавление маркетплейса Claude Code (`owner/repo`, https-адрес, локальный путь): тот же порядок, что у установки. */

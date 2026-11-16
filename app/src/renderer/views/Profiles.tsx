@@ -163,8 +163,27 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
         <p className="mute small">{t('Профиль хранит, что должно быть включено. Применение пишет в конфиги клиентов, поэтому нужен уровень R2; сами профили можно создавать и менять на любом уровне.', 'A profile stores what should be enabled. Applying writes to client configs, so level R2 is required; profiles themselves can be created and edited at any level.')}</p>
       </div>
       {error ? <p className="s-broken" role="alert">{error}</p> : null}
+      {error?.includes('profiles.json') ? (
+        <div className="actions">
+          <button
+            onClick={() =>
+              void window.loadout
+                .quarantineProfiles()
+                .catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('операция не удалась', 'operation failed') }))
+                .then((r) => {
+                  // при отказе причина остаётся на экране: повторное чтение затёрло бы её прежней ошибкой
+                  if (!r.ok) return setError(r.error)
+                  onNotice(t(`Повреждённый файл отложен: ${r.data}`, `The damaged file was set aside: ${r.data}`))
+                  return load()
+                })
+            }
+          >
+            {t('Отложить повреждённый profiles.json', 'Set the damaged profiles.json aside')}
+          </button>
+        </div>
+      ) : null}
       {profiles === null ? (
-        <p className="mute" role="status">{t('Читаю профили…', 'Reading profiles…')}</p>
+        error ? null : <p className="mute" role="status">{t('Читаю профили…', 'Reading profiles…')}</p>
       ) : profiles.length === 0 ? (
         <div className="hud card"><p>{t('Профилей пока нет.', 'No profiles yet.')}</p></div>
       ) : (

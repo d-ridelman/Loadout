@@ -1,4 +1,4 @@
-use crate::setup::{home_dir, marker_span, read_json_object};
+use crate::setup::{home_dir, marker_problem, marker_span, read_json_object};
 use crate::{detect_lang, parse_lang, t, Lang};
 use serde_json::{json, Value};
 use std::env;
@@ -118,7 +118,20 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
     let has_gate = settings["hooks"]["Stop"]
         .as_array()
         .is_some_and(|a| a.iter().any(|g| crate::setup::is_our_hook_group(g, None)));
-    out.push(if has_gate {
+    let helpers = crate::gate::Helpers::find(profile, None);
+    out.push(if has_gate && !helpers.checker && !helpers.advisor {
+        f(
+            "stop_gate",
+            "info",
+            t(
+                lang,
+                "Stop gate installed, but there is neither a checker agent nor an advisorModel: it stays silent",
+                "шлюз Stop установлен, но нет ни агента checker, ни advisorModel: он молчит",
+            ),
+            None,
+            Some("ctxkit setup"),
+        )
+    } else if has_gate {
         f("stop_gate", "ok", t(lang, "Stop gate installed", "шлюз Stop установлен"), None, None)
     } else {
         f(
@@ -159,6 +172,29 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             model,
             None,
         ));
+    }
+
+    // The effort of a model lives in `modelSettings.<model id>`; setup writes it only for a model it can name.
+    if let Some((model, id)) = settings["model"]
+        .as_str()
+        .and_then(|m| crate::setup::canonical_model_id(m).map(|id| (m, id)))
+    {
+        if !settings["modelSettings"][&id].is_object() {
+            out.push(f(
+                "model_settings",
+                "warn",
+                t(
+                    lang,
+                    "no modelSettings entry for the main model: its effort is not set (an alias such as `sonnet` may also now mean a newer model than this table knows)",
+                    "для основной модели нет записи в modelSettings: её effort не задан (алиас вроде `sonnet` мог уже сместиться на более новую модель, чем знает таблица)",
+                ),
+                Some(format!(
+                    "model {model}, expected modelSettings.{id}; ctxkit's alias table is from {}",
+                    crate::setup::MODEL_ALIASES_AS_OF
+                )),
+                Some("ctxkit setup --main-model <model> --effort <level>"),
+            ));
+        }
     }
 
     out.push(f(
@@ -218,6 +254,19 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
     }
 
     let md = fs::read(profile.join("CLAUDE.md")).map(|b| String::from_utf8_lossy(&b).into_owned());
+    if let Some(problem) = md.as_ref().ok().and_then(|m| marker_problem(m)) {
+        out.push(f(
+            "rules_markers",
+            "warn",
+            t(
+                lang,
+                "the ctxkit markers in CLAUDE.md are unbalanced or the block is doubled (an older setup could leave this): setup refuses to touch the file and the rollback removes only part of it. Keep one block between the markers, or delete the markers and the old block by hand, then rerun setup --with-rules",
+                "маркеры ctxkit в CLAUDE.md не сбалансированы или блок задвоен (так могла оставить прежняя версия setup): setup такой файл не трогает, а откат убирает только часть. Оставь один блок между маркерами или удали маркеры и старый блок вручную, затем снова запусти setup --with-rules",
+            ),
+            Some(format!("{}: {problem}", profile.join("CLAUDE.md").display())),
+            None,
+        ));
+    }
     match md {
         Ok(md) if marker_span(&md).is_some() => {
             out.push(f("rules_block", "ok", t(lang, "ctxkit rules block present", "блок правил ctxkit есть"), None, None));
@@ -356,6 +405,7 @@ mod tests {
         let cmd = format!("\"{}\"", exe.to_string_lossy().replace('\\', "/"));
         let settings = json!({
             "model": "sonnet",
+            "modelSettings": {"claude-sonnet-5-5": {"effortLevel": "high"}},
             "env": {"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"},
             "hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": cmd}]}]}
         });
@@ -420,6 +470,79 @@ mod tests {
         assert_eq!(lang_arg(&a(&["--lang", "--json"]), 0), None);
         assert_eq!(lang_arg(&a(&["--lang"]), 0), None);
         assert_eq!(lang_arg(&a(&["--lang", "xx"]), 0), None);
+    }
+
+    #[test]
+    fn missing_model_settings_for_a_known_model_warns() {
+        let d = temp("ctxkit_doctor_model_settings");
+        let has = |s: Value| {
+            fs::write(d.join("settings.json"), s.to_string()).unwrap();
+            diagnose(&d, Lang::En)
+                .into_iter()
+                .find(|x| x.id == "model_settings")
+        };
+        let w = has(json!({"model": "sonnet"})).unwrap();
+        assert_eq!(w.severity, "warn");
+        assert_eq!(
+            w.fix,
+            Some("ctxkit setup --main-model <model> --effort <level>")
+        );
+        let detail = w.detail.unwrap();
+        assert!(
+            detail.contains("modelSettings.claude-sonnet-5-5")
+                && detail.contains(crate::setup::MODEL_ALIASES_AS_OF)
+        );
+        // a full id is a known model as well; an entry for it (even an empty one) is enough
+        assert!(has(json!({"model": "claude-opus-5-5"})).is_some());
+        assert!(
+            has(json!({"model": "claude-opus-5-5", "modelSettings": {"claude-opus-5-5": {}}}))
+                .is_none()
+        );
+        assert!(
+            has(json!({"model": "opus", "modelSettings": {"claude-sonnet-5-5": {}}})).is_some()
+        );
+        // an unnamed model (no key, an id setup cannot map) gives no such finding
+        assert!(has(json!({})).is_none());
+        assert!(has(json!({"model": "sonnet[1m]"})).is_none());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn doubled_or_unbalanced_markers_warn_with_the_path() {
+        let d = temp("ctxkit_doctor_markers");
+        let block = "<!-- ctxkit:start -->\nr\n<!-- ctxkit:end -->\n";
+        let find = |text: &str| {
+            fs::write(d.join("CLAUDE.md"), text).unwrap();
+            diagnose(&d, Lang::En)
+                .into_iter()
+                .find(|x| x.id == "rules_markers")
+        };
+        assert!(find(block).is_none());
+        assert!(
+            find("see <!-- ctxkit:start --> in text\n").is_none(),
+            "a mention in a sentence is not a marker"
+        );
+        let doubled = find(&format!("{block}\n{block}")).unwrap();
+        assert_eq!(doubled.severity, "warn");
+        assert!(doubled.detail.unwrap().contains("CLAUDE.md"));
+        assert!(find("a\n<!-- ctxkit:start -->\nno end\n").is_some());
+        assert!(find("<!-- ctxkit:end -->\n").is_some());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn stop_gate_without_checker_and_advisor_is_called_silent() {
+        let d = temp("ctxkit_doctor_gate");
+        let stop = json!({"hooks": {"Stop": [{"hooks": [{"command": "C:/x/ctxkit.exe"}]}]}});
+        fs::write(d.join("settings.json"), stop.to_string()).unwrap();
+        let msg = |d: &Path| {
+            let v = diagnose(d, Lang::En);
+            v.iter().find(|x| x.id == "stop_gate").unwrap().message
+        };
+        assert!(msg(&d).contains("stays silent"));
+        fs::write(d.join("agents").join("checker.md"), "x").unwrap();
+        assert_eq!(msg(&d), "Stop gate installed");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

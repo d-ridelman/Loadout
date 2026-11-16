@@ -1,3 +1,4 @@
+use crate::fsx::write_atomic;
 use crate::{parse_lang, Lang};
 use serde_json::{json, Map, Value};
 use std::env;
@@ -12,6 +13,8 @@ const MARKER_START: &str = "<!-- ctxkit:start -->";
 const MARKER_END: &str = "<!-- ctxkit:end -->";
 const LEGACY_MARKER_START: &str = "<!-- claude-guard:start -->";
 const LEGACY_MARKER_END: &str = "<!-- claude-guard:end -->";
+/// Claude Code version that introduced the hook field `onFailure` (hooks reference).
+const ONFAILURE_SINCE: (u64, u64, u64) = (2, 1, 295);
 
 struct SetupOpts {
     dry_run: bool,
@@ -39,6 +42,9 @@ struct SetupOpts {
     claude_json: Option<PathBuf>,
     skip_version_check: bool,
     no_stop_gate: bool,
+    /// Write `"onFailure": "continue"` into the PreToolUse / PostToolUse hooks. Off only when the installed
+    /// `claude` is older than 2.1.295, which does not know the field.
+    on_failure: bool,
     /// `--uninstall`: take out what setup added (see `uninstall.rs`).
     uninstall: bool,
     lang: Lang,
@@ -68,6 +74,7 @@ impl Default for SetupOpts {
             claude_json: None,
             skip_version_check: false,
             no_stop_gate: false,
+            on_failure: true,
             uninstall: false,
             lang: Lang::En,
         }
@@ -181,6 +188,13 @@ pub fn run_setup(args: &[String]) -> i32 {
     } else {
         println!("Setting up profile: {}", profile.display());
     }
+    // An unknown version (no `claude` on PATH: Desktop bundles its own, or --skip-version-check) gets the field.
+    if !opts.skip_version_check && check_claude_version().is_some_and(|v| v < ONFAILURE_SINCE) {
+        opts.on_failure = false;
+        println!(
+            "  [note] claude CLI is older than 2.1.295, which does not know \"onFailure\": the hooks are written without it (run `claude update` and setup again)"
+        );
+    }
 
     // Before anything is copied or written: input that setup cannot handle is refused as it is,
     // so a refusal leaves neither a copied binary nor a rewritten settings.json behind.
@@ -193,9 +207,9 @@ pub fn run_setup(args: &[String]) -> i32 {
     let preflight = || -> Result<(), String> {
         preflight_settings(&profile.join("settings.json"), true)?;
         if opts.with_rules {
-            readable_utf8(&profile.join("CLAUDE.md"))?;
+            preflight_rules_file(&profile.join("CLAUDE.md"))?;
             if opts.dsh {
-                readable_utf8(&dsh_home_dir().join("AGENTS.md"))?;
+                preflight_rules_file(&dsh_home_dir().join("AGENTS.md"))?;
             }
         }
         if opts.antigravity {
@@ -206,6 +220,18 @@ pub fn run_setup(args: &[String]) -> i32 {
             if p.exists() {
                 read_json_object(&p)?;
             }
+        }
+        if opts.desktop {
+            let presets = opts
+                .desktop_file
+                .clone()
+                .or_else(|| default_desktop_presets_path(&home));
+            if let Some(p) = presets.filter(|p| p.exists()) {
+                read_json_object(&p)?;
+            }
+        }
+        if opts.dsh {
+            preflight_dsh(&dsh_home_dir())?;
         }
         Ok(())
     };
@@ -325,10 +351,12 @@ pub fn run_setup(args: &[String]) -> i32 {
             .agy_file
             .clone()
             .unwrap_or_else(|| home.join(".gemini").join("config").join("hooks.json"));
-        let agy_cmd = opts
-            .hook_cmd
-            .clone()
-            .unwrap_or_else(|| format_antigravity_command(&hook_bin_path, opts.lang));
+        // A custom --hook-cmd gets the `--agy` flag too (like `--dsh` for DeepSeek Harness), unless it has it.
+        let agy_cmd = match opts.hook_cmd.clone() {
+            Some(cmd) if cmd.split_whitespace().any(|w| w == "--agy") => cmd,
+            Some(cmd) => format!("{} --agy", cmd.trim()),
+            None => format_antigravity_command(&hook_bin_path, opts.lang),
+        };
         if let Err(e) = update_antigravity_hooks(&apath, &agy_cmd, opts.dry_run) {
             eprintln!("ERR: {e}");
             return 1;
@@ -501,7 +529,7 @@ fn write_json_if_changed(
     }
     let pretty =
         serde_json::to_string_pretty(updated).map_err(|e| format!("serialize {label}: {e}"))?;
-    fs::write(path, format!("{pretty}\n")).map_err(|e| format!("write {}: {e}", path.display()))?;
+    write_atomic(path, format!("{pretty}\n").as_bytes())?;
     println!("  updated {label}: {}", path.display());
     Ok(())
 }
@@ -636,22 +664,43 @@ fn update_claude_settings(
         "PreToolUse",
         Some("Bash|PowerShell|Write|Read|Edit|MultiEdit"),
         hook_cmd,
+        opts.on_failure,
     );
     upsert_claude_hook_event(
         hooks_obj,
         "PostToolUse",
         Some("Edit|Write|MultiEdit"),
         hook_cmd,
+        opts.on_failure,
     );
     // Stop takes no matcher. The gate fires once per turn (see gate.rs); --no-stop-gate removes our group.
     if opts.no_stop_gate {
         remove_our_hook_event(hooks_obj, "Stop", Some(hook_cmd));
         println!("  Stop gate: off (--no-stop-gate); our Stop hook is removed if present");
     } else {
-        upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd);
-        println!(
-            "  Stop gate: on, hook Stop sends the model back once per turn if code edits lack checker/advisor; remove with --no-stop-gate"
-        );
+        upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd, false);
+        let advisor_set = root
+            .get("advisorModel")
+            .and_then(Value::as_str)
+            .is_some_and(|m| !m.is_empty());
+        let checker = !opts.no_agents
+            || path
+                .parent()
+                .is_some_and(|p| p.join("agents").join("checker.md").is_file());
+        if advisor_set || checker {
+            println!(
+                "  Stop gate: on, hook Stop sends the model back once per turn if code edits lack {}; remove with --no-stop-gate",
+                match (checker, advisor_set) {
+                    (true, true) => "checker/advisor",
+                    (true, false) => "checker",
+                    _ => "advisor",
+                }
+            );
+        } else {
+            println!(
+                "  Stop gate: on, but there is no `checker` agent and no advisor, so it stays silent until one exists (--advisor <model>, or setup without --no-agents)"
+            );
+        }
     }
 
     write_json_if_changed(
@@ -683,17 +732,23 @@ fn kept_line(label: &str, current: Option<&str>, hint: &str) -> String {
     )
 }
 
-/// Canonical id for the `modelSettings` key. shortcut: alias table of 2026-11-15 (docs: `sonnet` is Sonnet 5.5,
-/// `opus` Opus 5.5, `haiku` Haiku 5.5, `fable` Fable 5.2); refresh when the aliases move to new releases.
-fn canonical_model_id(model: &str) -> Option<String> {
-    match model {
-        "sonnet" => Some("claude-sonnet-5-5".to_string()),
-        "opus" => Some("claude-opus-5-5".to_string()),
-        "haiku" => Some("claude-haiku-5-5".to_string()),
-        "fable" => Some("claude-fable-5-2".to_string()),
-        m if m.starts_with("claude-") => Some(m.to_string()),
-        _ => None,
+/// The one place of the model alias table: which model id each alias meant on `MODEL_ALIASES_AS_OF` (docs:
+/// `sonnet` is Sonnet 5.5, `opus` Opus 5.5, `haiku` Haiku 5.5, `fable` Fable 5.2). Aliases move to new
+/// releases, so the table goes stale; `doctor` names its date when a `modelSettings` entry is missing.
+pub(crate) const MODEL_ALIASES_AS_OF: &str = "2026-11-15";
+pub(crate) const MODEL_ALIASES: [(&str, &str); 4] = [
+    ("sonnet", "claude-sonnet-5-5"),
+    ("opus", "claude-opus-5-5"),
+    ("haiku", "claude-haiku-5-5"),
+    ("fable", "claude-fable-5-2"),
+];
+
+/// Canonical id for the `modelSettings` key: an alias from the table, or a full `claude-...` id as it is.
+pub(crate) fn canonical_model_id(model: &str) -> Option<String> {
+    if let Some((_, id)) = MODEL_ALIASES.iter().find(|(alias, _)| *alias == model) {
+        return Some((*id).to_string());
     }
+    model.starts_with("claude-").then(|| model.to_string())
 }
 
 fn ensure_object<'a>(
@@ -800,11 +855,16 @@ fn strip_our_hooks(list: Vec<Value>, current: Option<&str>) -> Vec<Value> {
         .collect()
 }
 
+/// `on_failure`: add `"onFailure": "continue"` (Claude Code 2.1.295+). Without Git Bash on Windows a hook that
+/// fails with `onFailure` unset can block the tool call; "continue" makes a crashing or missing ctxkit never
+/// stop the work (exit code 2, a deliberate block, still blocks). The docs say the field has no effect on
+/// `Stop` hooks, so the Stop group does not get it.
 fn upsert_claude_hook_event(
     hooks: &mut Map<String, Value>,
     event: &str,
     matcher: Option<&str>,
     command: &str,
+    on_failure: bool,
 ) {
     let list = hooks
         .get(event)
@@ -819,6 +879,9 @@ fn upsert_claude_hook_event(
             "timeout": 10
         }]
     });
+    if on_failure {
+        group["hooks"][0]["onFailure"] = Value::String("continue".to_string());
+    }
     if let Some(m) = matcher {
         group["matcher"] = Value::String(m.to_string());
     }
@@ -864,7 +927,7 @@ fn write_agent_file(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    write_atomic(path, content.as_bytes())?;
     println!("  wrote agent: {}", path.display());
     Ok(())
 }
@@ -880,8 +943,10 @@ fn upsert_claude_md(
     } else {
         String::new()
     };
+    check_rules_markers(path, &existing)?;
 
     let updated = if let Some((s, end_idx)) = marker_span(&existing) {
+        let block = block.replace('\n', eol_of(&existing));
         format!("{}{}{}", &existing[..s], block, &existing[end_idx..])
     } else {
         append_block(&existing, block)
@@ -901,7 +966,7 @@ fn upsert_claude_md(
     } else if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    fs::write(path, updated).map_err(|e| format!("write {}: {e}", path.display()))?;
+    write_atomic(path, updated.as_bytes())?;
     println!("  updated CLAUDE.md rules: {}", path.display());
     Ok(())
 }
@@ -932,13 +997,58 @@ pub(crate) fn marker_span(text: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// Whether `m` stands alone on some line (how `marker_span` recognises a marker).
-pub(crate) fn has_marker_line(text: &str, m: &str) -> bool {
-    text.lines().any(|l| {
-        l.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-            .trim_end()
-            == m
-    })
+/// How many lines are `m` alone on the line (how `marker_span` recognises a marker).
+fn marker_lines(text: &str, m: &str) -> usize {
+    text.lines()
+        .filter(|l| {
+            l.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+                .trim_end()
+                == m
+        })
+        .count()
+}
+
+/// What is wrong with the rules markers in `text`, or `None` when there is one block, none, or one old
+/// `claude-guard` block that setup migrates. Wrong: a start without an end (or the reverse), more than one block,
+/// or an old and a new block together. Older versions of setup could leave such a file behind (they cut from a
+/// marker named inside a sentence); setup then adds a second block and the rollback removes only one.
+pub(crate) fn marker_problem(text: &str) -> Option<String> {
+    let new = (
+        marker_lines(text, MARKER_START),
+        marker_lines(text, MARKER_END),
+    );
+    let old = (
+        marker_lines(text, LEGACY_MARKER_START),
+        marker_lines(text, LEGACY_MARKER_END),
+    );
+    let broken = |(s, e): (usize, usize)| s != e || s > 1;
+    if !(broken(new) || broken(old) || (new.0 >= 1 && old.0 >= 1)) {
+        return None;
+    }
+    Some(format!(
+        "ctxkit markers: {} start / {} end lines, old claude-guard markers: {} start / {} end",
+        new.0, new.1, old.0, old.1
+    ))
+}
+
+/// `Err` when a rules file has the broken marker picture of `marker_problem`: setup must not add a second block.
+pub(crate) fn check_rules_markers(path: &Path, text: &str) -> Result<(), String> {
+    match marker_problem(text) {
+        Some(p) => Err(format!(
+            "{}: {p}; keep one block (the lines `{MARKER_START}` ... `{MARKER_END}`) or delete the markers and the old block by hand, then rerun",
+            path.display()
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The preflight of a rules file (`CLAUDE.md`, `AGENTS.md`): readable as UTF-8 and with sane markers.
+fn preflight_rules_file(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    check_rules_markers(path, &text)
 }
 
 /// `Ok` when the file is missing or readable as UTF-8: checked before a write that would read it later.
@@ -987,11 +1097,22 @@ pub(crate) fn preflight_settings(path: &Path, for_setup: bool) -> Result<(), Str
     Ok(())
 }
 
-fn append_block(existing: &str, block: &str) -> String {
-    if existing.trim().is_empty() {
-        format!("{block}\n")
+/// The line break of a text: CRLF when it has any, else LF (the blocks below are written in the file's own).
+pub(crate) fn eol_of(text: &str) -> &'static str {
+    if text.contains("\r\n") {
+        "\r\n"
     } else {
-        format!("{}\n\n{block}\n", existing.trim_end())
+        "\n"
+    }
+}
+
+fn append_block(existing: &str, block: &str) -> String {
+    let eol = eol_of(existing);
+    let block = block.replace('\n', eol);
+    if existing.trim().is_empty() {
+        format!("{block}{eol}")
+    } else {
+        format!("{}{eol}{eol}{block}{eol}", existing.trim_end())
     }
 }
 
@@ -1098,9 +1219,11 @@ fn format_antigravity_command(hook_bin_path: &Path, lang: Lang) -> String {
     } else {
         raw.replace('\\', "/")
     };
+    // `--agy`: when the payload cannot be read (or the off switch is set) only this flag tells the hook that
+    // Antigravity is waiting, and that it wants `{"decision":"ask"}` and not an empty answer.
     match lang {
-        Lang::Ru => format!("{base} --lang ru"),
-        Lang::En => base,
+        Lang::Ru => format!("{base} --agy --lang ru"),
+        Lang::En => format!("{base} --agy"),
     }
 }
 
@@ -1164,6 +1287,46 @@ fn format_custom_dsh_command(cmd: &str, lang: Lang) -> String {
     res
 }
 
+/// Refuses a `cordis.patch.yml` that setup could only break further. The start marker is paired only with an
+/// end marker after it (guessing the span of a half-deleted block would eat the user's own entries), and the
+/// block is a sequence item, so appending it to a flow list or a mapping would break the YAML.
+fn dsh_patch_check(existing: &str, path: &Path) -> Result<(), String> {
+    match existing.find(DSH_MARKER_START) {
+        Some(s) if !existing[s..].contains(DSH_MARKER_END) => Err(format!(
+            "{}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand and rerun",
+            path.display()
+        )),
+        Some(_) => Ok(()),
+        None => {
+            let first = existing
+                .lines()
+                .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
+            if first.is_some_and(|l| l.trim_end() != "-" && !l.starts_with("- ")) {
+                return Err(format!(
+                    "{}: top level is not a block list (`- ...`); add the entry from examples/dsh-cordis.patch.yml by hand",
+                    path.display()
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
+/// What `update_dsh_hooks` will read: the patch of the `desktop` profile and our hooks file.
+fn preflight_dsh(dsh_home: &Path) -> Result<(), String> {
+    let profile = dsh_home.join("profiles").join("desktop");
+    if !profile.exists() {
+        return Ok(()); // setup skips DeepSeek Harness then
+    }
+    let patch = profile.join("cordis.patch.yml");
+    if patch.exists() {
+        let text =
+            fs::read_to_string(&patch).map_err(|e| format!("read {}: {e}", patch.display()))?;
+        dsh_patch_check(&text, &patch)?;
+    }
+    read_json_object(&dsh_home.join("ctxkit-hooks.json")).map(|_| ())
+}
+
 /// Writes `<dsh_home>/ctxkit-hooks.json` and mounts the official Claude Code hook
 /// bridge on it from the desktop profile's `cordis.patch.yml`.
 fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(), String> {
@@ -1180,8 +1343,7 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
                 patch_path.display()
             );
         } else {
-            fs::write(&patch_path, "# DeepSeek Harness profile patch\n")
-                .map_err(|e| format!("write {}: {e}", patch_path.display()))?;
+            write_atomic(&patch_path, b"# DeepSeek Harness profile patch\n")?;
             println!(
                 "  created DeepSeek Harness profile patch: {}",
                 patch_path.display()
@@ -1221,33 +1383,25 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     let block = format!(
         "{DSH_MARKER_START}\n- insert:\n    - id: ctxkit-hooks\n      name: '{DSH_HOOKS_PLUGIN}'\n      config:\n        configPath: '{config_path}'\n{DSH_MARKER_END}"
     );
-    let existing = fs::read_to_string(&patch_path)
-        .map_err(|e| format!("read {}: {e}", patch_path.display()))?;
+    // A dry run does not create the patch file, so it may not exist yet.
+    let existing = if patch_path.exists() {
+        fs::read_to_string(&patch_path)
+            .map_err(|e| format!("read {}: {e}", patch_path.display()))?
+    } else {
+        String::new()
+    };
+    // Already refused by the preflight; checked again so this function stands on its own.
+    dsh_patch_check(&existing, &patch_path)?;
     let updated = match existing.find(DSH_MARKER_START) {
-        // Pair the start marker only with an end marker after it; guessing the span of a
-        // half-deleted block would eat the user's own entries.
-        Some(s) => match existing[s..].find(DSH_MARKER_END) {
-            Some(len) => {
-                format!("{}{block}{}", &existing[..s], &existing[s + len + DSH_MARKER_END.len()..])
-            }
-            None => {
-                return Err(format!(
-                    "{}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand and rerun",
-                    patch_path.display()
-                ))
-            }
-        },
-        None => {
-            // The block is a sequence item: appending it to a flow list or a mapping breaks the YAML.
-            let first = existing.lines().find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
-            if first.is_some_and(|l| l.trim_end() != "-" && !l.starts_with("- ")) {
-                return Err(format!(
-                    "{}: top level is not a block list (`- ...`); add the entry from examples/dsh-cordis.patch.yml by hand",
-                    patch_path.display()
-                ));
-            }
-            append_block(&existing, &block)
+        Some(s) => {
+            let len = existing[s..].find(DSH_MARKER_END).unwrap_or_default();
+            format!(
+                "{}{block}{}",
+                &existing[..s],
+                &existing[s + len + DSH_MARKER_END.len()..]
+            )
         }
+        None => append_block(&existing, &block),
     };
     if existing == updated {
         println!(
@@ -1262,8 +1416,7 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     } else {
         let b = backup_file(&patch_path, &profile)?;
         println!("  backup -> {}", b.display());
-        fs::write(&patch_path, updated)
-            .map_err(|e| format!("write {}: {e}", patch_path.display()))?;
+        write_atomic(&patch_path, updated.as_bytes())?;
         println!(
             "  updated DeepSeek Harness profile patch: {}",
             patch_path.display()
@@ -1899,7 +2052,8 @@ fn print_help() {
          Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness:\n\
          - Backs up existing configs before writing\n\
          - Creates the Explore (haiku) and checker (opus) agents; model, advisor and effort are NOT changed unless you pass --main-model / --advisor / --effort (the previous scheme: --main-model sonnet --advisor fable --effort high). Changes are printed as \"was -> became\"; custom env/hooks/plugins are preserved\n\
-         - Wires ctxkit PreToolUse/PostToolUse hooks (replacing legacy claude-guard / no-inline-backslash entries)\n\
+         - Wires ctxkit PreToolUse/PostToolUse hooks with \"onFailure\": \"continue\" (a failing hook never blocks the call; claude 2.1.295+) replacing legacy claude-guard / no-inline-backslash entries\n\
+         - Refuses, before copying or writing anything, a file it cannot handle (odd settings.json, broken presets/hooks/YAML, a CLAUDE.md with a doubled or unpaired ctxkit marker); files are written atomically\n\
          - Wires a once-per-turn Stop gate: a turn that edited code without checker/advisor afterwards is sent back once\n\
          - Audits enabled plugins, CLAUDE.md size, global MCPs, Claude CLI version, and Antigravity configs\n\n\
          Options:\n\
@@ -1922,7 +2076,7 @@ fn print_help() {
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --hook-cmd <cmd>       Override hook command path\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
-           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries) and the hooks/ctxkit binary. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
+           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries) and the hooks/ctxkit binary; a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
     );
 }
 
@@ -2063,6 +2217,86 @@ mod tests {
     }
 
     #[test]
+    fn marker_problem_finds_doubled_and_unpaired_blocks_only() {
+        let new = format!("{MARKER_START}\nr\n{MARKER_END}\n");
+        let old = format!("{LEGACY_MARKER_START}\nr\n{LEGACY_MARKER_END}\n");
+        for fine in [
+            String::new(),
+            "# mine\n".to_string(),
+            new.clone(),
+            old.clone(),
+            format!("a\r\n{MARKER_START}\r\nx\r\n{MARKER_END}\r\n"),
+            format!("see {MARKER_START} and {MARKER_END} here\n{new}"),
+            format!("\u{feff}{new}"),
+        ] {
+            assert_eq!(marker_problem(&fine), None, "{fine:?}");
+        }
+        for broken in [
+            format!("{new}\n{new}"),
+            format!("{new}{old}"),
+            format!("{MARKER_START}\nno end\n"),
+            format!("{MARKER_END}\n"),
+            format!("{MARKER_START}\n{new}"),
+            format!("{old}{old}"),
+        ] {
+            assert!(marker_problem(&broken).is_some(), "{broken:?}");
+        }
+        let err =
+            check_rules_markers(Path::new("/p/CLAUDE.md"), &format!("{new}{new}")).unwrap_err();
+        assert!(
+            err.contains("/p/CLAUDE.md") && err.contains("2 start / 2 end"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn dsh_patch_check_refuses_what_setup_would_break() {
+        let p = Path::new("cordis.patch.yml");
+        for ok in [
+            "",
+            "# only a comment\n",
+            "- keep: 1\n",
+            "-\n  a: 1\n",
+            &format!("a: 1\n{DSH_MARKER_START}\nx\n{DSH_MARKER_END}\n"),
+        ] {
+            assert!(dsh_patch_check(ok, p).is_ok(), "{ok:?}");
+        }
+        let half = format!("- a\n{DSH_MARKER_START}\nx\n");
+        assert!(dsh_patch_check(&half, p)
+            .unwrap_err()
+            .contains("no end marker"));
+        let end_first = format!("{DSH_MARKER_END}\n{DSH_MARKER_START}\n");
+        assert!(dsh_patch_check(&end_first, p).is_err());
+        assert!(dsh_patch_check("key: v\n", p)
+            .unwrap_err()
+            .contains("not a block list"));
+        assert!(dsh_patch_check("[a, b]\n", p).is_err());
+    }
+
+    #[test]
+    fn alias_table_is_dated_and_maps_aliases_and_full_ids() {
+        assert_eq!(MODEL_ALIASES_AS_OF.len(), 10, "a YYYY-MM-DD date");
+        for (alias, id) in MODEL_ALIASES {
+            assert!(
+                !alias.starts_with("claude-") && id.starts_with("claude-"),
+                "{alias}"
+            );
+            assert_eq!(canonical_model_id(alias).as_deref(), Some(id));
+            assert_eq!(
+                canonical_model_id(id).as_deref(),
+                Some(id),
+                "a full id maps to itself"
+            );
+        }
+        assert_eq!(
+            canonical_model_id("sonnet").as_deref(),
+            Some("claude-sonnet-5-5")
+        );
+        assert_eq!(canonical_model_id("sonnet[1m]"), None);
+        assert_eq!(canonical_model_id("gpt"), None);
+    }
+
+    #[test]
     fn parses_semver_strings() {
         assert_eq!(parse_semver("2.1.325 (Claude Code)"), Some((2, 1, 325)));
         assert_eq!(parse_semver("claude v2.1.319"), Some((2, 1, 319)));
@@ -2094,9 +2328,11 @@ mod tests {
             "PreToolUse",
             Some("Bash|PowerShell|Write|Read"),
             "\"C:/h/ctxkit.exe\"",
+            true,
         );
         let arr = hooks["PreToolUse"].as_array().unwrap();
         assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["hooks"][0]["onFailure"], "continue");
         assert!(arr[0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
@@ -2206,7 +2442,7 @@ mod tests {
             json!([{ "hooks": [{ "type": "command", "command": "notify-me.exe" }] }]),
         );
         for _ in 0..2 {
-            upsert_claude_hook_event(&mut hooks, "Stop", None, "\"C:/h/ctxkit.exe\"");
+            upsert_claude_hook_event(&mut hooks, "Stop", None, "\"C:/h/ctxkit.exe\"", false);
         }
         let ours = hooks["Stop"][0].clone();
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 2);
@@ -2268,7 +2504,7 @@ mod tests {
             ]),
         );
         for _ in 0..2 {
-            upsert_claude_hook_event(&mut hooks, "Stop", None, ours);
+            upsert_claude_hook_event(&mut hooks, "Stop", None, ours, false);
         }
         let list = hooks["Stop"].as_array().unwrap();
         assert_eq!(list.len(), 3, "ours + two foreign groups");
@@ -2315,15 +2551,16 @@ mod tests {
         let plain = Path::new(r"C:\Users\alice\.claude\hooks\ctxkit.exe");
         assert_eq!(
             format_antigravity_command(plain, Lang::En),
-            "C:/Users/alice/.claude/hooks/ctxkit.exe"
+            "C:/Users/alice/.claude/hooks/ctxkit.exe --agy"
         );
         assert_eq!(
             format_antigravity_command(plain, Lang::Ru),
-            "C:/Users/alice/.claude/hooks/ctxkit.exe --lang ru"
+            "C:/Users/alice/.claude/hooks/ctxkit.exe --agy --lang ru"
         );
         let spaced = Path::new("/Users/Alice Smith/.claude/hooks/ctxkit");
         let cmd_ru = format_antigravity_command(spaced, Lang::Ru);
-        assert!(cmd_ru.starts_with('"') && cmd_ru.ends_with(" --lang ru"));
+        assert!(cmd_ru.starts_with('"') && cmd_ru.ends_with(" --agy --lang ru"));
+        assert!(format_antigravity_command(spaced, Lang::En).ends_with("\" --agy"));
     }
 
     #[test]

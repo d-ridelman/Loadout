@@ -387,6 +387,55 @@ fn re_dir_init(cell: &OnceLock<Regex>) -> &Regex {
     cell.get_or_init(|| Regex::new(r#"(?i)[\\/](?:te?mp|scratchpad)[\\/]"#).unwrap())
 }
 
+/// JSONC as plain JSON: `//` and `/* */` comments and commas before `}` / `]` become spaces
+/// (newlines stay), strings are left alone. An unterminated block comment is kept, so it still fails.
+fn blank_jsonc(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let blank = |c: char| if c == '\n' || c == '\r' { c } else { ' ' };
+    let (mut i, mut in_str, mut esc) = (0, false, false);
+    while i < chars.len() {
+        let c = chars[i];
+        if in_str {
+            in_str = !(c == '"' && !esc);
+            esc = c == '\\' && !esc;
+            out.push(c);
+            i += 1;
+        } else if c == '"' {
+            in_str = true;
+            out.push(c);
+            i += 1;
+        } else if c == '/' && chars.get(i + 1) == Some(&'/') {
+            while i < chars.len() && chars[i] != '\n' {
+                out.push(blank(chars[i]));
+                i += 1;
+            }
+        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
+            let end = (i + 2..chars.len().saturating_sub(1))
+                .find(|&j| chars[j] == '*' && chars[j + 1] == '/');
+            let Some(end) = end else {
+                out.extend(&chars[i..]);
+                break;
+            };
+            out.extend(chars[i..end + 2].iter().map(|&c| blank(c)));
+            i = end + 2;
+        } else {
+            if c == '}' || c == ']' {
+                // A comma after a value is a trailing one; `[,]`, `{,}` and `,,` stay errors.
+                let mut kept = out.iter_mut().rev().filter(|p| !p.is_whitespace());
+                if let (Some(comma), Some(before)) = (kept.next(), kept.next()) {
+                    if *comma == ',' && !matches!(*before, '[' | '{' | ',') {
+                        *comma = ' ';
+                    }
+                }
+            }
+            out.push(c);
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
+}
+
 pub fn post_syntax_error(path: &str, cwd: Option<&Path>) -> Option<String> {
     let p = if let Some(base) = cwd {
         let p_rel = Path::new(path);
@@ -424,7 +473,12 @@ pub fn post_syntax_error(path: &str, cwd: Option<&Path>) -> Option<String> {
         }
         let raw = fs::read_to_string(&p).ok()?;
         let clean = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
-        return match serde_json::from_str::<serde_json::Value>(clean) {
+        if serde_json::from_str::<serde_json::Value>(clean).is_ok() {
+            return None;
+        }
+        // turbo.json, biome.json and others are JSONC: comments and trailing commas are legal there.
+        // Blanking keeps every offset, so a real error still points at the right line.
+        return match serde_json::from_str::<serde_json::Value>(&blank_jsonc(clean)) {
             Ok(_) => None,
             Err(e) => Some(e.to_string()),
         };
@@ -485,6 +539,48 @@ pub fn post_syntax_error(path: &str, cwd: Option<&Path>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn json_error(name: &str, body: &str) -> Option<String> {
+        let dir = std::env::temp_dir().join(format!("ctxkit-jsonc-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        fs::write(&p, body).unwrap();
+        let r = post_syntax_error(p.to_str().unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
+        r
+    }
+
+    #[test]
+    fn json_with_comments_and_trailing_commas_passes_but_broken_json_does_not() {
+        let jsonc =
+            "{\n  // pipeline\n  \"a\": [1, 2,], /* why */\n  \"url\": \"http://x/*y*/,]\",\n}\n";
+        assert_eq!(json_error("turbo.json", jsonc), None);
+        assert_eq!(
+            json_error("biome.json", "\u{feff}{ \"a\": 1, // c\n}"),
+            None
+        );
+        assert_eq!(json_error("ok.json", "{\"a\": 1}"), None);
+        // still broken once comments and trailing commas are ignored
+        assert!(json_error("a.json", "{\n  // c\n  \"a\": 1\n  \"b\": 2\n}").is_some());
+        assert!(json_error("b.json", "{ \"a\": 1 /* open").is_some());
+        assert!(json_error("c.json", "{ \"a\": 1,, }").is_some());
+        assert!(json_error("d1.json", "[,]").is_some());
+        assert!(json_error("d2.json", "{,}").is_some());
+        assert!(json_error("d3.json", "[1, /* c */ ,]").is_some());
+        assert_eq!(json_error("d4.json", "[1, // c\n]"), None);
+        // the error still names the right line (offsets are kept)
+        let e = json_error("d.json", "{\n  // one\n  /* two\n  three */\n  \"a\" 1\n}").unwrap();
+        assert!(e.contains("line 5"), "{e}");
+    }
+
+    #[test]
+    fn blanking_leaves_strings_and_text_offsets_alone() {
+        let src = "{\"a\":\"// not a comment, \\\" /* nor this */\"}";
+        assert_eq!(blank_jsonc(src), src);
+        let s = "[1,/* x */ 2,\n]";
+        assert_eq!(blank_jsonc(s).len(), s.len());
+        assert!(serde_json::from_str::<serde_json::Value>(&blank_jsonc(s)).is_ok());
+    }
 
     #[test]
     fn blocks_inline_and_herestring_for_agy() {

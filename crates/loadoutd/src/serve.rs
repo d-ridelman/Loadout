@@ -221,6 +221,8 @@ impl Server {
                 &intent()?,
             )?)?,
             "journal" => json(&write::journal(&self.home, &store()?))?,
+            // очистка старых копий (последние 100 операций и не старше 90 дней); окно просит её явной кнопкой
+            "pruneBackups" => json(&write::prune_backups(&store()?))?,
             "apply" => json(&write::apply(
                 &self.home,
                 &store()?,
@@ -240,7 +242,7 @@ impl Server {
                 str_of("batch")?,
                 max_level()?,
             )?)?,
-            "profiles" => json(&loadout_core::profiles::list(&store()?))?,
+            "profiles" => json(&loadout_core::profiles::list(&store()?)?)?,
             "profileSave" => {
                 let name = profile_name()?;
                 let profile = match p.get("items") {
@@ -256,12 +258,14 @@ impl Server {
                     },
                 };
                 loadout_core::profiles::save(&store()?, profile)?;
-                json(&loadout_core::profiles::list(&store()?))?
+                json(&loadout_core::profiles::list(&store()?)?)?
             }
             "profileDelete" => {
                 loadout_core::profiles::delete(&store()?, &profile_name()?)?;
-                json(&loadout_core::profiles::list(&store()?))?
+                json(&loadout_core::profiles::list(&store()?)?)?
             }
+            // явное действие владельца (кнопка в окне): повреждённый profiles.json откладывается, а не затирается
+            "profilesQuarantine" => json(&loadout_core::profiles::quarantine(&store()?)?)?,
             "planProfile" => {
                 let st = store()?;
                 let (items, missing) =
@@ -310,7 +314,8 @@ impl Server {
             }
             Some(
                 m @ ("plan" | "apply" | "journal" | "rollback" | "rollbackBatch" | "profiles"
-                | "profileSave" | "profileDelete" | "planProfile" | "applyProfile"),
+                | "profileSave" | "profileDelete" | "planProfile" | "applyProfile"
+                | "profilesQuarantine" | "pruneBackups"),
             ) => match self.write_method(m, req.get("params").unwrap_or(&Value::Null)) {
                 Ok(v) => json!({ "result": v }),
                 Err(e) => json!({ "error": { "message": e } }),

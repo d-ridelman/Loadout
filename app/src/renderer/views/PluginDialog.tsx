@@ -127,7 +127,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
                   setSource(e.target.value)
                   reset()
                 }}
-                placeholder={t('owner/repo, https://… или D:\\путь\\к\\папке', 'owner/repo, https://… or D:\\path\\to\\folder')}
+                placeholder={t('owner/repo[#ветка], https://…, git@хост:путь или D:\\путь\\к\\папке', 'owner/repo[#branch], https://…, git@host:path or D:\\path\\to\\folder')}
                 maxLength={400}
                 spellCheck={false}
               />
@@ -204,7 +204,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
           )
         ) : null}
         {error ? <p className="s-broken" role="alert">{error}</p> : null}
-        {output ? <pre className="wrap mono small">{output}</pre> : null}
+        {output ? <pre className="out" aria-label={t('Вывод claude', 'claude output')} tabIndex={0}>{output}</pre> : null}
         <div className="actions">
           {command?.kind === 'install' ? (
             <button type="button" disabled={busy} onClick={() => void run('install', false, spec)}>{busy ? t('Устанавливаю…', 'Installing…') : t('Установить', 'Install')}</button>

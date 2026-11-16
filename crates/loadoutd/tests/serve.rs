@@ -750,6 +750,92 @@ fn profiles_save_plan_apply_and_roll_back_over_jsonrpc() {
     assert_eq!(del["result"].as_array().unwrap().len(), 0);
 }
 
+/// Каталоги «операций» с давними ID: чистка по сроку удаляет их все, корзина и прочее остаются.
+#[test]
+fn old_backups_are_pruned_by_the_rpc_method_and_by_the_prune_command() {
+    let mut s = Server::start_writable();
+    let store = s.home.with_extension("backups");
+    for dir in ["trash", "0000000000001-00", "0000000000002-00"] {
+        fs::create_dir_all(store.join(dir)).unwrap();
+    }
+    fs::write(store.join("0000000000001-00").join("before"), "секрет").unwrap();
+    let r = s.call("pruneBackups");
+    assert_eq!(r["result"], json!({ "removed": 2, "kept": 0 }), "{r}");
+    assert!(store.join("trash").is_dir() && !store.join("0000000000001-00").exists());
+
+    fs::create_dir_all(store.join("0000000000003-00")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_loadout"))
+        .args(["prune", "--backups"])
+        .arg(&store)
+        .output()
+        .expect("loadout prune запускается");
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("удалено операций: 1"));
+    assert!(!store.join("0000000000003-00").exists());
+    // без каталога копий команда отказывает, а не создаёт его
+    let missing = Command::new(env!("CARGO_BIN_EXE_loadout"))
+        .args(["prune", "--backups"])
+        .arg(store.join("нет"))
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+}
+
+/// Без `--backups` команда берёт `%APPDATA%\<name из app/package.json>\backups`: так Electron называет `userData`.
+#[test]
+fn prune_defaults_to_the_electron_user_data_dir_named_after_the_package() {
+    let pkg: Value = serde_json::from_str(
+        &fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/package.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let name = pkg["name"].as_str().unwrap();
+    assert!(
+        pkg.get("productName").is_none(),
+        "с productName в package.json имя каталога данных другое: поправьте APP_DATA_DIR и тексты"
+    );
+    let appdata = std::env::temp_dir().join(format!("loadout-appdata-{}", std::process::id()));
+    let dir = appdata.join(name).join("backups").join("0000000000001-00");
+    fs::create_dir_all(&dir).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_loadout"))
+        .arg("prune")
+        .env("APPDATA", &appdata)
+        .output()
+        .unwrap();
+    let _ = fs::remove_dir_all(&appdata);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("удалено операций: 1"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn broken_profiles_file_is_an_error_over_jsonrpc_and_is_set_aside_on_request() {
+    let mut s = Server::start_writable();
+    s.call_with("profileSave", json!({ "name": "рабочий" }));
+    let file = s.home.with_extension("backups").join("profiles.json");
+    fs::write(&file, "{ битый").unwrap();
+    for call in [
+        s.call("profiles"),
+        s.call_with("profileSave", json!({ "name": "новый" })),
+        s.call_with("profileDelete", json!({ "name": "рабочий" })),
+    ] {
+        assert!(
+            call["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("profiles.json")),
+            "{call}"
+        );
+    }
+    assert_eq!(fs::read_to_string(&file).unwrap(), "{ битый");
+    let q = s.call("profilesQuarantine");
+    let name = q["result"].as_str().expect("имя отложенного файла");
+    assert!(name.starts_with("profiles.json.broken-"), "{q}");
+    assert!(!file.exists());
+    assert_eq!(s.call("profiles")["result"].as_array().unwrap().len(), 0);
+    assert!(s.call("profilesQuarantine")["error"].is_object());
+}
+
 #[test]
 fn claude_json_rewrites_are_scanned_at_most_every_ten_seconds_but_other_files_are_not_delayed() {
     let mut s = Server::start();
