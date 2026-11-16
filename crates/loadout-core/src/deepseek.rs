@@ -1,9 +1,9 @@
-//! Адаптер DeepSeek harness (`dsh`). Формы сняты с этой машины, см. §2 CONCEPT.md.
+//! DeepSeek harness (`dsh`) adapter. Shapes were taken from this machine, see CONCEPT.md §2.
 //!
-//! `~/.dsh/cordis.patch.yml` — YAML-список операций; сейчас встречается только `insert`. Каждая вставка — экземпляр
-//! плагина `{id, name: "@deepseek-ai/<плагин>", config}`. MCP — плагин `dsh-mcp-client`, хуки — `dsh-hooks-*` с
-//! `config.configPath` на JSON в формате хуков Claude Code. Файл содержит нестандартный тег `!!js process.cwd()`:
-//! тег не исполняется, значение читается как обычная строка.
+//! `~/.dsh/cordis.patch.yml` is a YAML list of operations; only `insert` occurs so far. Each insert is an instance
+//! of the plugin `{id, name: "@deepseek-ai/<plugin>", config}`. MCP is the plugin `dsh-mcp-client`, hooks are `dsh-hooks-*` with
+//! `config.configPath` pointing to JSON in the Claude Code hooks format. The file contains the non-standard tag `!!js process.cwd()`:
+//! the tag is not executed, the value is read as a plain string.
 
 use crate::mask::{self, mcp_detail};
 use crate::model::{Client, Entity, Format, Kind, State, Target, TargetKind};
@@ -19,7 +19,7 @@ const HOOKS_PREFIX: &str = "@deepseek-ai/dsh-hooks-";
 pub fn scan(c: &mut Ctx) {
     let root = c.home.join(".dsh");
     patch(c, &root.join("cordis.patch.yml"), "user");
-    // Профили (`default`, `desktop`, …) держат свои патчи; `node_modules` внутри `profiles` пропускаем.
+    // Profiles (`default`, `desktop`, …) keep their own patches; `node_modules` inside `profiles` is skipped.
     if let Ok(rd) = std::fs::read_dir(root.join("profiles")) {
         let mut names: Vec<String> = rd
             .flatten()
@@ -69,7 +69,7 @@ fn patch(c: &mut Ctx, path: &Path, scope: &str) {
         let Some(entries) = op["insert"].as_vec() else {
             continue;
         };
-        // `id` записи годится для стабильного указателя, только если он простой и не повторяется в операции
+        // the entry's `id` is good for a stable pointer only if it is simple and not repeated within the operation
         let stable = |e: &Yaml| {
             e["id"]
                 .as_str()
@@ -89,9 +89,9 @@ fn patch(c: &mut Ctx, path: &Path, scope: &str) {
                     .count()
                     == 1
             });
-            // В указателе (а с ним и в id записи) стоит `id` записи, а не её номер: после выноса соседней записи номера
-            // сдвигаются, и позиционный id менялся бы посреди пакета. Записи без простого уникального `id` остаются
-            // позиционными и не получают цели записи: вынести их по строкам нельзя без риска промахнуться.
+            // The pointer (and with it the entry id) holds the entry's `id`, not its number: after a neighbouring entry is cut out the numbers
+            // shift, and a positional id would change in the middle of a batch. Entries without a simple unique `id` stay
+            // positional and get no write target: cutting them out by lines is impossible without the risk of missing.
             let key = sid
                 .clone()
                 .filter(|_| unique)
@@ -108,9 +108,9 @@ fn insert_entry(
     ptr: &str,
     scope: &str,
     entry: &Yaml,
-    // файл, номер операции и номер записи в её списке `insert`: по ним запись выносится в корзину
+    // file, operation number and entry number in its `insert` list: they are what the entry is cut into the trash by
     loc: (&Path, usize, usize),
-    // у записи есть простой уникальный `id`: только тогда её можно выносить в корзину
+    // the entry has a simple unique `id`: only then can it be cut into the trash
     writable: bool,
 ) {
     let plugin = entry["name"].as_str().unwrap_or("");
@@ -128,8 +128,8 @@ fn insert_entry(
             .unwrap_or(id)
             .to_owned();
         let mut cfg = config;
-        // у dsh транспорт называется `transport`, у остальных клиентов `type`
-        // Схема пакета `@deepseek-ai/dsh-mcp-client` (npm 0.0.1-rc.1): transport = `stdio` | `streamable-http`.
+        // in dsh the transport is called `transport`, in other clients `type`
+        // Schema of the `@deepseek-ai/dsh-mcp-client` package (npm 0.0.1-rc.1): transport = `stdio` | `streamable-http`.
         if let Some(t) = cfg.get("transport").and_then(Value::as_str) {
             cfg["type"] = Value::from(if t == "streamable-http" { "http" } else { t });
         }
@@ -171,7 +171,7 @@ fn insert_entry(
     }
 }
 
-/// Описание вынесенной в корзину записи (строки YAML) в том же виде, что у живой: команда, аргументы, ключи env.
+/// Description of an entry cut into the trash (YAML lines) in the same shape as a live one: command, arguments, env keys.
 pub(crate) fn trashed_detail(raw: &str) -> Value {
     let Ok(docs) = YamlLoader::load_from_str(raw) else {
         return json!({});
@@ -190,16 +190,16 @@ pub(crate) fn trashed_detail(raw: &str) -> Value {
     mcp_detail(&cfg)
 }
 
-/// Файл хуков, на который указывает запись `dsh-hooks-*`. Читаем только внутри домашнего каталога.
+/// The hooks file that a `dsh-hooks-*` entry points to. Read only inside the home directory.
 fn hooks_file(c: &mut Ctx, _flavor: &str, scope: &str, config_path: Option<&str>) {
     let Some(raw) = config_path else { return };
     let path = PathBuf::from(raw);
     let shown = c.tilde(&path);
-    // Только абсолютный путь без `..`, лежащий в домашнем каталоге, причём и после раскрытия ссылок и junction'ов.
+    // Only an absolute path without `..` that lies in the home directory, also after resolving links and junctions.
     let escapes = path.components().any(|p| matches!(p, Component::ParentDir));
     let outside_real = match (std::fs::canonicalize(&path), std::fs::canonicalize(&c.home)) {
         (Ok(real), Ok(home)) => !real.starts_with(home),
-        _ => false, // файла нет: читать нечего
+        _ => false, // no file: nothing to read
     };
     if !path.is_absolute() || !shown.starts_with('~') || escapes || outside_real {
         c.warnings.push(crate::tr!(
@@ -214,8 +214,8 @@ fn hooks_file(c: &mut Ctx, _flavor: &str, scope: &str, config_path: Option<&str>
     }
 }
 
-/// Защита разбора YAML: якоря и алиасы (`&x`, `*x`, `<<:`) растут экспоненциально при разворачивании, очень глубокая
-/// вложенность валит стек. Файл конфигурации dsh ничего из этого не использует, поэтому такой файл не читаем.
+/// YAML parsing guard: anchors and aliases (`&x`, `*x`, `<<:`) grow exponentially when expanded, very deep
+/// nesting blows the stack. The dsh config file uses none of this, so such a file is not read.
 pub(crate) fn yaml_guard(text: &str) -> Option<String> {
     let (mut depth, mut max_depth) = (0usize, 0usize);
     for c in text.chars() {
@@ -242,7 +242,7 @@ pub(crate) fn yaml_guard(text: &str) -> Option<String> {
                 "nesting is too deep"
             ));
         }
-        // значение: после `- ` и после `ключ: `; якорь `&имя` или алиас `*имя` стоит в самом начале значения
+        // value: after `- ` and after `key: `; an anchor `&name` or alias `*name` stands at the very start of the value
         let t = line.trim_start().trim_start_matches("- ").trim_start();
         let value = t.split_once(": ").map_or(t, |(_, v)| v.trim_start());
         let marked = |s: &str| {

@@ -1,13 +1,13 @@
-//! Сверка на настоящих конфигах владельца. Тест `#[ignore]`: он читает реальные файлы (значения секретов
-//! остаются в памяти теста и не печатаются) и запускается вручную:
+//! Check against the owner's real configs. The test is `#[ignore]`: it reads real files (secret values
+//! stay in the test's memory and are never printed) and is run manually:
 //!
 //! ```text
 //! cargo test -p loadout-core --test real_machine -- --ignored --nocapture
 //! ```
 //!
-//! Критерий выхода из M1: ни одно значение секретно названного ключа (`token`, `secret`, `password`, `*key`, …) и ни
-//! одно значение из `env` и заголовков MCP не встречается в выводе сканера. Исключение одно и намеренное: адрес
-//! без учётных данных (`https://host:port`) показывается, он не секрет.
+//! M1 exit criterion: no value of a secret-named key (`token`, `secret`, `password`, `*key`, …) and no
+//! value from `env` and MCP headers appears in the scanner output. There is one deliberate exception: an address
+//! without credentials (`https://host:port`) is shown, it is not a secret.
 
 use loadout_core::mask::is_secret_key;
 use serde_json::Value;
@@ -20,14 +20,14 @@ fn home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Значение, которое ядро показывает намеренно: адрес без пользователя, пароля, query и пути.
+/// A value the core shows deliberately: an address without user, password, query and path.
 fn harmless_address(v: &str) -> bool {
     v.split_once("://").is_some_and(|(scheme, rest)| {
         matches!(scheme, "http" | "https") && !rest.contains(['@', '?', '#', '/'])
     })
 }
 
-/// Значение → имя ключа, под которым оно лежит (имя ключа не секрет и нужно для разбора совпадений).
+/// Value → name of the key it sits under (the key name is not a secret and is needed to analyse matches).
 type Secrets = BTreeMap<String, String>;
 
 fn collect(node: &Value, out: &mut Secrets) {
@@ -56,7 +56,7 @@ fn collect(node: &Value, out: &mut Secrets) {
             }
         }
         Value::Array(a) => {
-            // значение после секретного флага: ["--token", "…"]
+            // value after a secret flag: ["--token", "…"]
             for pair in a.windows(2) {
                 if let (Some(flag), Some(val)) = (pair[0].as_str(), pair[1].as_str()) {
                     if flag.starts_with('-') && is_secret_key(flag.trim_start_matches('-')) {
@@ -72,7 +72,7 @@ fn collect(node: &Value, out: &mut Secrets) {
 }
 
 #[test]
-#[ignore = "читает реальные конфиги владельца; запускать вручную"]
+#[ignore = "reads the owner's real configs; run manually"]
 fn no_secret_value_reaches_the_scan_output() {
     let Some(home) = home() else { return };
     let mut secrets = Secrets::new();
@@ -97,8 +97,8 @@ fn no_secret_value_reaches_the_scan_output() {
             }
         }
     }
-    // Значения, которые совпадают с именами клиентов (`claude-code` в `env.GLIDEHAND_OVERLAY_NAME`), встречаются в
-    // выводе в каждой записи как поле `client`: это совпадение слов, а не утечка.
+    // Values that coincide with client names (`claude-code` in `env.GLIDEHAND_OVERLAY_NAME`) appear in the
+    // output in every entry as the `client` field: that is a word match, not a leak.
     let slugs: Vec<&str> = loadout_core::model::Client::ALL
         .iter()
         .map(|c| c.slug())
@@ -108,13 +108,13 @@ fn no_secret_value_reaches_the_scan_output() {
     });
 
     let result = loadout_core::scan(&home);
-    let out = serde_json::to_string(&result).expect("вывод сериализуется");
+    let out = serde_json::to_string(&result).expect("output serialises");
 
-    // Нижняя граница: «ноль утечек» не должен получаться оттого, что сканер молча ничего не нашёл
-    // (отвергнутый файл, скрытые имена, склеенные записи).
+    // Lower bound: "zero leaks" must not come from the scanner silently finding nothing
+    // (a rejected file, hidden names, merged entries).
     assert!(
         result.warnings.is_empty(),
-        "предупреждения скана: {:?}",
+        "scan warnings: {:?}",
         result.warnings
     );
     for (dir, client) in [
@@ -129,7 +129,10 @@ fn no_secret_value_reaches_the_scan_output() {
                 .iter()
                 .filter(|e| e.client.slug() == client)
                 .count();
-            assert!(n > 0, "каталог {dir} есть, а записей {client} нет");
+            assert!(
+                n > 0,
+                "directory {dir} exists but there are no {client} entries"
+            );
         }
     }
     if home.join(".dsh/cordis.patch.yml").is_file() {
@@ -140,14 +143,14 @@ fn no_secret_value_reaches_the_scan_output() {
             .count();
         assert!(
             mcp > 0,
-            "cordis.patch.yml есть, а MCP dsh не найдено: файл отвергнут?"
+            "cordis.patch.yml exists but no dsh MCP found: file rejected?"
         );
     }
     let hidden: Vec<_> = result
         .entities
         .iter()
-        // указатель с путём проекта может быть частично скрыт (сегмент похож на токен): строки от этого не сливаются,
-        // а id считается до скрытия
+        // a pointer with a project path may be partly hidden (a segment looks like a token): rows do not merge because of that,
+        // and the id is computed before hiding
         .filter(|e| {
             [&e.name, &e.logical_key, &e.scope]
                 .iter()
@@ -155,17 +158,14 @@ fn no_secret_value_reaches_the_scan_output() {
         })
         .map(|e| format!("{}/{:?}/{}", e.client.slug(), e.kind, e.logical_key))
         .collect();
-    assert!(
-        hidden.is_empty(),
-        "скрытые имена склеивают записи: {hidden:?}"
-    );
+    assert!(hidden.is_empty(), "hidden names merge entries: {hidden:?}");
     let hits: Vec<(&String, &String)> = secrets
         .iter()
         .filter(|(value, _)| out.contains(value.as_str()))
         .collect();
     let leaked = hits.len();
     println!(
-        "проверено секретных значений: {}, найдено в выводе: {leaked}",
+        "secret values checked: {}, found in the output: {leaked}",
         secrets.len()
     );
     for (value, key) in &hits {
@@ -176,17 +176,17 @@ fn no_secret_value_reaches_the_scan_output() {
             .take(3)
             .map(|e| format!("{}/{:?}/{}", e.client.slug(), e.kind, e.name))
             .collect();
-        println!("  где: {where_found:?}");
-        // имя ключа-источника и форма совпадения; само значение не печатаем
+        println!("  where: {where_found:?}");
+        // name of the source key and the shape of the match; the value itself is not printed
         println!(
-            "  совпадение: ключ «{key}», длина {}, есть ://: {}, есть пробел: {}, есть путь: {}",
+            "  match: key '{key}', length {}, has ://: {}, has space: {}, has path: {}",
             value.len(),
             value.contains("://"),
             value.contains(' '),
             value.contains('/'),
         );
     }
-    assert_eq!(leaked, 0, "значения секретов попали в вывод сканера");
+    assert_eq!(leaked, 0, "secret values leaked into the scanner output");
 
     let user = home
         .file_name()
@@ -201,5 +201,5 @@ fn no_secret_value_reaches_the_scan_output() {
             .to_lowercase()
             .matches(&format!("\\\\users\\\\{user}"))
             .count();
-    assert_eq!(path_hits, 0, "путь домашнего каталога попал в вывод");
+    assert_eq!(path_hits, 0, "home directory path leaked into the output");
 }

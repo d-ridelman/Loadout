@@ -1,24 +1,24 @@
-//! Что слушать сторожу файлов и какие события считать значимыми. Сам `notify` подключён в `loadoutd`: ядро знает
-//! только пути и правила, поэтому проверяется без файловой системы.
+//! What the file watcher should listen to and which events count as significant. `notify` itself is wired up in `loadoutd`: the core knows
+//! only paths and rules, so it can be tested without a file system.
 //!
-//! Правила (CONCEPT.md §7): только известные конфиги и каталоги скилов; `plugins/cache`, `sessions`, `projects` и
-//! подобные огромные каталоги не слушаем. Каталоги слушаются нерекурсивно с фильтром по имени файла: замена файла
-//! через переименование рвёт наблюдение за самим файлом, а за каталогом — нет.
+//! Rules (CONCEPT.md §7): only known configs and skill directories; `plugins/cache`, `sessions`, `projects` and
+//! similar huge directories are not watched. Directories are watched non-recursively with a file-name filter: replacing a file
+//! via rename breaks watching of the file itself, but not of its directory.
 
 use crate::facts::{is_backup_name, BACKUP_DIRS};
 use crate::model::ScanResult;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// Один слушаемый каталог.
+/// One watched directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub recursive: bool,
-    /// Значимо любое событие прямого потомка (каталоги, где записи — это подкаталоги), а не только известные имена.
+    /// Any event of a direct child is significant (directories where entries are subdirectories), not only known names.
     pub any_child: bool,
 }
 
-/// Имена файлов, изменение которых меняет результат скана.
+/// File names whose change alters the scan result.
 const KNOWN_NAMES: [&str; 12] = [
     ".claude.json",
     "settings.json",
@@ -34,9 +34,9 @@ const KNOWN_NAMES: [&str; 12] = [
     "skill.md",
 ];
 
-/// (каталог относительно дома, рекурсивно, значим любой потомок)
+/// (directory relative to home, recursive, any descendant is significant)
 const FIXED: [(&str, bool, bool); 19] = [
-    (".", false, false), // `.claude.json` лежит в корне дома: события отфильтрует имя файла
+    (".", false, false), // `.claude.json` lives in the home root: events are filtered by file name
     (".claude", false, false),
     (".claude/plugins", false, false),
     (".claude/skills", true, false),
@@ -60,11 +60,11 @@ const FIXED: [(&str, bool, bool); 19] = [
 #[derive(Debug, Clone, Default)]
 pub struct Targets {
     pub dirs: BTreeMap<PathBuf, Target>,
-    /// Файлы, из которых собраны записи (в том числе динамические: `configPath` хуков dsh), в нормальном виде.
+    /// Files the entries are built from (including dynamic ones: `configPath` of dsh hooks), in normalized form.
     files: HashSet<String>,
-    /// Постоянные каталоги (даже ещё не созданные) и родители файлов-источников: их появление и исчезновение значимо.
+    /// Permanent directories (even ones not yet created) and parents of source files: their appearance and disappearance is significant.
     fixed: HashSet<String>,
-    /// Каталоги клиентов, где считаются резервные копии (факты): появление `*.bak*` рядом с конфигом значимо.
+    /// Client directories where backups are counted (facts): a `*.bak*` appearing next to a config is significant.
     backup_dirs: HashSet<String>,
 }
 
@@ -72,11 +72,11 @@ fn norm(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").to_ascii_lowercase()
 }
 
-/// Имена, события по которым никогда не значимы: копии, временные файлы, базы, чужие репозитории.
+/// Names whose events are never significant: copies, temporary files, databases, foreign repositories.
 fn is_noise(n: &str) -> bool {
     n.contains("/node_modules/")
         || n.contains("/.git/")
-        // кеш плагинов огромен, кроме удалённого каталога Codex: там записи — это подкаталоги
+        // the plugin cache is huge, except for Codex's remote directory: there entries are subdirectories
         || (n.contains("/plugins/cache/") && !n.contains("/plugins/cache/openai-curated-remote"))
         || n.contains(".bak")
         || n.ends_with(".tmp")
@@ -87,8 +87,8 @@ fn is_noise(n: &str) -> bool {
         || n.ends_with(".jsonl")
 }
 
-/// Ближайший существующий предок отсутствующего каталога; несуществующие промежуточные предки кладёт в `fixed`,
-/// чтобы их создание считалось значимым. Выше домашнего каталога не поднимается.
+/// The nearest existing ancestor of a missing directory; nonexistent intermediate ancestors are put into `fixed`,
+/// so that their creation counts as significant. It does not climb above the home directory.
 fn nearest_existing_ancestor(
     home: &Path,
     dir: &Path,
@@ -103,7 +103,7 @@ fn nearest_existing_ancestor(
 }
 
 impl Targets {
-    /// Каталоги и файлы по результату скана: постоянный набор плюс родители всех файлов, из которых собраны записи.
+    /// Directories and files from a scan result: the permanent set plus parents of all files the entries are built from.
     pub fn from_scan(home: &Path, scan: &ScanResult) -> Self {
         let mut t = Targets::default();
         for (_, rel) in BACKUP_DIRS {
@@ -127,14 +127,14 @@ impl Targets {
                     },
                 );
             } else if let Some(ancestor) = nearest_existing_ancestor(home, &dir, &mut t.fixed) {
-                // каталога ещё нет (клиент поставят позже): его появление увидит только ближайший существующий предок
+                // the directory does not exist yet (the client will be installed later): only the nearest existing ancestor will see it appear
                 t.dirs.entry(ancestor).or_insert(Target {
                     recursive: false,
                     any_child: false,
                 });
             }
         }
-        // профили dsh: свои патчи в `profiles/<имя>/`
+        // dsh profiles: their own patches in `profiles/<name>/`
         if let Ok(rd) = std::fs::read_dir(home.join(".dsh/profiles")) {
             for e in rd.flatten().filter(|e| e.path().is_dir()) {
                 if e.file_name() != "node_modules" {
@@ -167,16 +167,16 @@ impl Targets {
         t
     }
 
-    /// Это сам постоянный или слушаемый каталог: его создание, удаление и переименование значимы
-    /// (создание — новый клиент или каталог скилов, удаление — подписка на каталог умерла).
+    /// This is a permanent or watched directory itself: its creation, removal and renaming are significant
+    /// (creation: a new client or skills directory; removal: the subscription to the directory died).
     pub fn is_fixed(&self, path: &Path) -> bool {
         self.fixed.contains(&norm(path))
     }
 
-    /// Значимо ли событие по этому пути.
+    /// Whether an event on this path is significant.
     pub fn is_relevant(&self, path: &Path) -> bool {
         let n = norm(path);
-        // резервные копии не шум, а факт для Доктора, но только прямые потомки каталогов клиентов
+        // backups are not noise but a fact for the Doctor, but only direct children of client directories
         if path
             .file_name()
             .is_some_and(|f| is_backup_name(&f.to_string_lossy()))
@@ -196,12 +196,12 @@ impl Targets {
         if KNOWN_NAMES.contains(&name) {
             return true;
         }
-        // потомок каталога, где значима любая запись (`plugins/<имя>/`, `profiles/<имя>/`, `agents/*.md`)
+        // a descendant of a directory where any entry is significant (`plugins/<name>/`, `profiles/<name>/`, `agents/*.md`)
         let parent = path.parent();
         self.dirs
             .iter()
             .any(|(d, t)| t.any_child && parent.is_some_and(|p| norm(p) == norm(d)))
-            // рекурсивные каталоги скилов: значимо появление и удаление скила и правка его `.md`
+            // recursive skill directories: the appearance and removal of a skill and edits to its `.md` are significant
             || self.dirs.iter().any(|(d, t)| t.recursive && n.starts_with(&norm(d)) && (name.ends_with(".md") || path.extension().is_none()))
     }
 }
@@ -213,7 +213,7 @@ mod tests {
     use std::fs;
 
     fn home() -> PathBuf {
-        // свой каталог у каждого теста: они идут параллельно и стирают каталог при подготовке
+        // each test gets its own directory: they run in parallel and wipe the directory during setup
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let h = std::env::temp_dir().join(format!(
             "loadout-watch-{}-{}",
@@ -277,19 +277,19 @@ mod tests {
         let t = Targets::from_scan(&h, &scan);
         assert!(
             t.dirs.contains_key(&h.join("extra")),
-            "родитель файла хуков слушается"
+            "the parent of the hooks file is watched"
         );
         assert!(t.is_relevant(&h.join("extra/my-hooks.json")));
         assert!(
             !t.is_relevant(&h.join("extra/other.json")),
-            "чужие файлы в том же каталоге не значимы"
+            "other files in the same directory are not significant"
         );
         let _ = fs::remove_dir_all(&h);
     }
 
     #[test]
     fn fixed_dirs_missing_at_start_are_relevant_when_they_appear() {
-        let h = home(); // `.gemini/config` и `.claude/agents` не созданы
+        let h = home(); // `.gemini/config` and `.claude/agents` are not created
         let t = Targets::from_scan(&h, &ScanResult::default());
         for rel in [
             ".gemini/config",
@@ -302,7 +302,7 @@ mod tests {
         assert!(!t.is_fixed(&h.join(".claude/history")));
         assert!(
             !t.is_fixed(&h.join(".claude/skills/new-skill")),
-            "потомок — не постоянный каталог"
+            "a descendant is not a permanent directory"
         );
         let _ = fs::remove_dir_all(&h);
     }
@@ -310,14 +310,17 @@ mod tests {
     #[test]
     fn missing_dir_is_watched_through_its_nearest_existing_ancestor() {
         let h = home();
-        fs::create_dir_all(h.join(".gemini")).unwrap(); // `.gemini/config` ещё нет
+        fs::create_dir_all(h.join(".gemini")).unwrap(); // `.gemini/config` does not exist yet
         let t = Targets::from_scan(&h, &ScanResult::default());
-        assert!(t.dirs.contains_key(&h.join(".gemini")), "предок слушается");
+        assert!(
+            t.dirs.contains_key(&h.join(".gemini")),
+            "the ancestor is watched"
+        );
         assert!(
             t.is_fixed(&h.join(".gemini/config")),
-            "появление config значимо"
+            "the appearance of config is significant"
         );
-        // `AppData/Roaming` нет совсем: промежуточные каталоги значимы, слушается дом
+        // `AppData/Roaming` is missing entirely: intermediate directories are significant, the home is watched
         assert!(t.is_fixed(&h.join("AppData")) && t.is_fixed(&h.join("AppData/Roaming")));
         assert!(t.dirs.contains_key(&h));
         let _ = fs::remove_dir_all(&h);
@@ -340,7 +343,7 @@ mod tests {
         assert!(t.is_relevant(&h.join(".claude/settings.json.backup")));
         assert!(
             !t.is_relevant(&h.join(".claude/plugins/foo.json.bak")),
-            "не прямой потомок каталога клиента"
+            "not a direct child of the client directory"
         );
         assert!(!t.is_relevant(&h.join("extra/x.bak")));
         let _ = fs::remove_dir_all(&h);
@@ -352,12 +355,12 @@ mod tests {
         let t = Targets::from_scan(&h, &ScanResult::default());
         assert!(
             t.is_relevant(&h.join(".claude/skills/new-skill")),
-            "каталог скила"
+            "skill directory"
         );
         assert!(t.is_relevant(&h.join(".claude/skills/new-skill/SKILL.md")));
         assert!(
             !t.is_relevant(&h.join(".claude/skills/new-skill/scripts/run.py")),
-            "скрипты внутри скила не значимы"
+            "scripts inside a skill are not significant"
         );
         let _ = fs::remove_dir_all(&h);
     }

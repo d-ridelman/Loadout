@@ -1,8 +1,8 @@
-//! Корзина Loadout (CONCEPT.md §5, шаг 8: «удаление = перенос в корзину, не `rm`»).
-//! Запись, у которой нет флага «выключено» (MCP в JSON-конфигах клиентов), вырезается из файла клиента, а её текст
-//! лежит здесь, в каталоге бэкапов приложения. В скане такая запись видна как `off` с прежними файлом и указателем,
-//! поэтому её id, выбор в окне, журнал и профили не меняются. Клиентам в файле ничего чужого не оставляем: незнакомые
-//! ключи они могли бы выбросить при перезаписи.
+//! The Loadout trash (CONCEPT.md §5, step 8: "deletion = move to the trash, not `rm`").
+//! An entry that has no "disabled" flag (MCP in clients' JSON configs) is cut out of the client's file, and its text
+//! lies here, in the app's backups directory. In a scan such an entry is visible as `off` with the same file and pointer,
+//! so its id, selection in the window, journal and profiles do not change. We leave nothing foreign in the client's file: unfamiliar
+//! keys could be dropped by the client when it rewrites the file.
 
 use crate::mask::mcp_detail;
 use crate::model::{Client, Entity, Format, Kind, Source, State, Target, TargetKind};
@@ -10,30 +10,30 @@ use crate::Ctx;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Запись корзины. Хранит значения как есть (с `env`): файл лежит в профиле пользователя и наружу не отдаётся.
+/// A trash entry. Stores values as they are (with `env`): the file lies in the user's profile and is not given out.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Item {
-    /// id записи в скане на момент выноса: он же имя файла.
+    /// The entry's id in the scan at the time of cutting out: also the file name.
     pub id: String,
-    /// `json` (значение записи) или `yaml` (её строки в `cordis.patch.yml`, `parent`/`key` — номера операции и записи).
+    /// `json` (the entry's value) or `yaml` (its lines in `cordis.patch.yml`, `parent`/`key` are the operation and entry numbers).
     #[serde(default = "json_format")]
     pub format: String,
-    /// Только `yaml`: `id` соседней записи операции, по которому возврат убеждается, что место прежнее.
+    /// `yaml` only: the `id` of the operation's neighbouring entry, which the return uses to make sure the place is the same.
     #[serde(default)]
     pub anchor: Option<String>,
     pub client: String,
     pub scope: String,
-    /// Имя и указатель для показа (уже очищенные сканом).
+    /// The name and pointer for display (already sanitized by the scan).
     pub name: String,
     pub file: String,
     pub pointer: String,
-    /// Настоящий файл клиента, куда возвращать.
+    /// The real client file to return to.
     pub path: String,
-    /// Ключи до объекта, в котором лежала запись (`["mcpServers"]`), и сам ключ.
+    /// Keys down to the object the entry lay in (`["mcpServers"]`), and the key itself.
     pub parent: Vec<String>,
     pub key: String,
-    /// Текст значения (JSON), как он стоял в файле, без отступа.
+    /// The value text (JSON) as it stood in the file, without indentation.
     pub value: String,
     pub time: u64,
 }
@@ -42,7 +42,7 @@ fn json_format() -> String {
     "json".to_owned()
 }
 
-/// id идёт в имя файла: только то, что делает ядро (`16 hex` и необязательный `-N`).
+/// The id goes into the file name: only what the core produces (`16 hex` and an optional `-N`).
 pub fn valid_id(id: &str) -> bool {
     let (head, tail) = id.split_once('-').map_or((id, None), |(h, t)| (h, Some(t)));
     head.len() == 16
@@ -94,7 +94,7 @@ fn list(store: &Path) -> Vec<Item> {
     items
 }
 
-/// Записи корзины как выключенные сущности. Если такая запись уже вернулась в файл другим путём, корзинная пропускается.
+/// Trash entries as disabled entities. If such an entry has already returned to the file another way, the trash one is skipped.
 pub fn inject(c: &mut Ctx, store: &Path) {
     for it in list(store) {
         let (Some(client), true) = (
@@ -104,7 +104,7 @@ pub fn inject(c: &mut Ctx, store: &Path) {
             continue;
         };
         let yaml = it.format == "yaml";
-        // у DeepSeek запись — строки YAML: для показа разбираем их так же, как скан разбирает файл
+        // for DeepSeek an entry is YAML lines: for display we parse them the same way the scan parses the file
         let detail = if yaml {
             crate::deepseek::trashed_detail(&it.value)
         } else {

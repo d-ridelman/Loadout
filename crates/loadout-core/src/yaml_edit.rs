@@ -1,10 +1,10 @@
-//! Точечный вынос и возврат записи в `cordis.patch.yml` DeepSeek (CONCEPT.md §11): файл правят многие инструменты и в нём
-//! есть тег `!!js`, поэтому его нельзя разбирать и собирать заново. Запись вырезается и возвращается по строкам, а
-//! положение берётся из событий разбора `yaml-rust2` (строка начала каждой записи). После каждой правки результат
-//! разбирается заново и сверяется: остальные записи равны прежним, у этой записи — ровно ожидаемое содержимое. Не
-//! сошлось — отказ, файл не меняется.
+//! Targeted removal and restoration of an entry in DeepSeek's `cordis.patch.yml` (CONCEPT.md §11): many tools edit the file and it
+//! contains the `!!js` tag, so it cannot be parsed and rebuilt. The entry is cut out and put back line by line, and its
+//! position is taken from `yaml-rust2` parse events (the start line of each entry). After each edit the result is
+//! parsed again and checked: the other entries equal the previous ones, and this entry has exactly the expected content. If it
+//! does not match, it is refused and the file is not changed.
 //!
-//! Поддерживается только блочный стиль `- insert:` → `- id: …` с пробелами. Якоря, алиасы, потоковый стиль и табы — отказ.
+//! Only block style `- insert:` → `- id: …` with spaces is supported. Anchors, aliases, flow style and tabs are refused.
 
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust2::scanner::Marker;
@@ -18,13 +18,13 @@ impl MarkedEventReceiver for Collect {
     }
 }
 
-/// Где в файле лежит список `insert` одной операции.
+/// Where the `insert` list of one operation lies in the file.
 struct Seq {
-    /// Строка (с 1) ключа `insert:`.
+    /// Line (1-based) of the `insert:` key.
     key_line: usize,
-    /// Строки (с 1), с которых начинаются записи.
+    /// Lines (1-based) where entries start.
     entries: Vec<usize>,
-    /// Строка (с 1), на которой список закончился (первая строка после него).
+    /// Line (1-based) where the list ended (the first line after it).
     end_line: usize,
 }
 
@@ -36,7 +36,7 @@ fn events(text: &str) -> Result<Vec<(Event, Marker)>, String> {
     Ok(c.0)
 }
 
-/// Индекс события после узла, который начинается в `i`.
+/// Index of the event after the node that starts at `i`.
 fn skip(ev: &[(Event, Marker)], i: usize) -> usize {
     let mut depth = 0usize;
     for (j, (e, _)) in ev.iter().enumerate().skip(i) {
@@ -55,7 +55,7 @@ fn skip(ev: &[(Event, Marker)], i: usize) -> usize {
     ev.len()
 }
 
-/// По одному `Option<Seq>` на операцию верхнего списка; `None` — у операции нет списка `insert`.
+/// One `Option<Seq>` per operation of the top-level list; `None` means the operation has no `insert` list.
 fn locate(text: &str) -> Result<Vec<Option<Seq>>, String> {
     let ev = events(text)?;
     let Some(root) = ev
@@ -105,7 +105,7 @@ fn locate(text: &str) -> Result<Vec<Option<Seq>>, String> {
     Ok(ops)
 }
 
-/// Записи `insert` каждой операции как значения YAML: для сверки до и после правки.
+/// The `insert` entries of each operation as YAML values: for comparing before and after an edit.
 fn entries_of(text: &str) -> Result<Vec<Vec<Yaml>>, String> {
     let docs = YamlLoader::load_from_str(text).map_err(|_| crate::tr!("не YAML", "not YAML"))?;
     let ops = docs
@@ -122,7 +122,7 @@ fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start_matches(' ').len()
 }
 
-/// Границы записи `ei` операции `oi` в строках (с 0, конец не включён) и отступ тире.
+/// Bounds of entry `ei` of operation `oi` in lines (0-based, end exclusive) and the dash indent.
 fn span(lines: &[&str], seq: &Seq, ei: usize) -> Result<(usize, usize, usize), String> {
     let start = *seq
         .entries
@@ -148,12 +148,12 @@ fn span(lines: &[&str], seq: &Seq, ei: usize) -> Result<(usize, usize, usize), S
         .map_or(seq.end_line.saturating_sub(1), |n| n - 1)
         .min(lines.len());
     end = end.max(start + 1);
-    // Хвост из пустых строк и строк-комментариев (маркеры установщиков между операциями) к записи не относится.
+    // A tail of blank lines and comment lines (installer markers between operations) does not belong to the entry.
     let tail = |l: &str| l.trim().is_empty() || l.trim_start().starts_with('#');
     while end > start + 1 && tail(lines[end - 1]) {
         end -= 1;
     }
-    // всё внутри записи глубже тире: иначе положение посчитано неверно
+    // everything inside an entry is deeper than the dash: otherwise the position was computed wrongly
     if lines[start + 1..end]
         .iter()
         .any(|l| !l.trim().is_empty() && indent_of(l) <= indent)
@@ -163,7 +163,7 @@ fn span(lines: &[&str], seq: &Seq, ei: usize) -> Result<(usize, usize, usize), S
             "entry boundaries could not be determined: edit refused"
         ));
     }
-    // Пустые строки перед записью принадлежат ей (уйдут и вернутся вместе с ней), но не глубже ключа `insert:`.
+    // Blank lines before an entry belong to it (they leave and return with it), but not beyond the `insert:` key.
     let mut head = start;
     while head > seq.key_line && lines[head - 1].trim().is_empty() {
         head -= 1;
@@ -184,9 +184,9 @@ fn guard(text: &str) -> Result<(), String> {
     }
 }
 
-/// Опора для возврата: `id` соседней записи той же операции (следующей, а у последней предыдущей); `None`, если запись
-/// в операции была единственной. Номера записей и операций в файле сдвигаются (установщики добавляют и убирают операции),
-/// а соседа по `id` можно найти снова.
+/// Anchor for putting back: the `id` of a neighboring entry in the same operation (the next one, or the previous for the last one); `None` if the entry
+/// was the only one in the operation. Entry and operation numbers in the file shift (installers add and remove operations),
+/// but the neighbor can be found again by `id`.
 pub fn anchor_of(text: &str, oi: usize, ei: usize) -> Result<Option<String>, String> {
     let ents = entries_of(text)?;
     let list = ents
@@ -206,8 +206,8 @@ pub fn anchor_of(text: &str, oi: usize, ei: usize) -> Result<Option<String>, Str
     })
 }
 
-/// Перед возвратом: в операции `oi` всё ещё стоит опорная запись (или операция пуста, если опоры не было).
-/// Иначе файл изменился так, что прежнее место неизвестно, и запись молча встала бы в чужую операцию.
+/// Before putting back: operation `oi` still contains the anchor entry (or the operation is empty if there was no anchor).
+/// Otherwise the file changed so that the former place is unknown, and the entry would silently land in another operation.
 pub fn check_anchor(text: &str, oi: usize, anchor: Option<&str>) -> Result<(), String> {
     let ents = entries_of(text)?;
     let list = ents.get(oi).ok_or_else(|| {
@@ -230,7 +230,7 @@ pub fn check_anchor(text: &str, oi: usize, anchor: Option<&str>) -> Result<(), S
     }
 }
 
-/// Вырезает запись `ei` операции `oi`. Возвращает новый текст и вырезанные строки как есть.
+/// Cuts entry `ei` of operation `oi`. Returns the new text and the cut lines as they are.
 pub fn cut(text: &str, oi: usize, ei: usize) -> Result<(String, String), String> {
     guard(text)?;
     let ops = locate(text)?;
@@ -246,9 +246,9 @@ pub fn cut(text: &str, oi: usize, ei: usize) -> Result<(String, String), String>
         .chain(&lines[end..])
         .copied()
         .collect();
-    // сверка: остальное то же, этой записи нет
+    // check: everything else is the same, this entry is gone
     let (before, after) = (entries_of(text)?, entries_of(&new)?);
-    // сама вырезанная запись тоже должна разобраться в то же значение (строка блочного скаляра на `#` иначе осиротела бы)
+    // the cut entry itself must also parse into the same value (a block scalar line starting with `#` would otherwise be orphaned)
     let cut_entry = YamlLoader::load_from_str(&raw).ok().and_then(|d| {
         d.first()
             .and_then(Yaml::as_vec)
@@ -271,7 +271,7 @@ pub fn cut(text: &str, oi: usize, ei: usize) -> Result<(String, String), String>
     Ok((new, raw))
 }
 
-/// Возвращает вырезанные строки на место `ei` операции `oi` (в конец, если записей меньше).
+/// Puts the cut lines back at position `ei` of operation `oi` (at the end if there are fewer entries).
 pub fn put(text: &str, oi: usize, ei: usize, raw: &str) -> Result<String, String> {
     guard(text)?;
     let ops = locate(text)?;
@@ -280,16 +280,16 @@ pub fn put(text: &str, oi: usize, ei: usize, raw: &str) -> Result<String, String
         .and_then(Option::as_ref)
         .ok_or_else(|| crate::tr!("нет такой операции", "no such operation"))?;
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    // переводы строк как в файле: добавленная строка не должна делать CRLF-файл смешанным
+    // line endings as in the file: an added line must not make a CRLF file mixed
     let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let mut chunk = raw.to_owned();
     if !chunk.ends_with('\n') {
         chunk.push_str(nl);
     }
     let at = if seq.entries.is_empty() {
-        seq.key_line // сразу под `insert:`
+        seq.key_line // right under `insert:`
     } else if ei < seq.entries.len() {
-        span(&lines, seq, ei)?.0 // перед пустыми строками, которые стоят перед этой записью
+        span(&lines, seq, ei)?.0 // before the blank lines that precede this entry
     } else {
         let (_, end, _) = span(&lines, seq, seq.entries.len() - 1)?;
         end
@@ -298,7 +298,7 @@ pub fn put(text: &str, oi: usize, ei: usize, raw: &str) -> Result<String, String
     let mut new = String::new();
     for (i, l) in lines.iter().enumerate() {
         new.push_str(l);
-        // последняя строка файла могла быть без перевода строки
+        // the last line of the file may have had no line ending
         if i + 1 == at && !l.ends_with('\n') {
             new.push_str(nl);
         }
@@ -309,7 +309,7 @@ pub fn put(text: &str, oi: usize, ei: usize, raw: &str) -> Result<String, String
     if at == 0 {
         new = format!("{chunk}{new}");
     }
-    // сверка: остальные записи те же, вернувшаяся равна разобранным строкам
+    // check: the other entries are the same, the restored one equals the parsed lines
     let one = YamlLoader::load_from_str(raw)
         .map_err(|_| crate::tr!("строки записи не YAML", "entry lines are not YAML"))?;
     let entry = one
@@ -342,11 +342,14 @@ mod tests {
             let (cut, raw) = cut(Y, oi, ei).unwrap_or_else(|e| panic!("{oi}/{ei}: {e}"));
             assert!(cut.len() < Y.len() && !cut.contains(&raw), "{oi}/{ei}");
             let back = put(&cut, oi, ei, &raw).unwrap_or_else(|e| panic!("{oi}/{ei}: {e}"));
-            assert_eq!(back, Y, "{oi}/{ei}: после возврата побайтово как было");
+            assert_eq!(
+                back, Y,
+                "{oi}/{ei}: byte-identical to the original after putting back"
+            );
         }
     }
 
-    /// Так выглядит настоящий файл: между операциями строки-комментарии установщиков на нулевом отступе.
+    /// This is what a real file looks like: between operations there are installer comment lines at zero indent.
     #[test]
     fn installer_comments_between_operations_stay_in_place() {
         let t = "# BEGIN x\n- insert:\n    - id: a\n      name: p\n      config:\n        k: 1\n# END x\n\n# BEGIN y\n- insert:\n    - id: b\n      name: q\n# END y\n";
@@ -365,7 +368,7 @@ mod tests {
         let t = "- insert:\n    - id: a\n      script: |\n        echo hi\n        # end\n";
         assert!(
             cut(t, 0, 0).is_err(),
-            "строка `# end` — часть значения: вырезать нельзя"
+            "the `# end` line is part of the value: it cannot be cut out"
         );
     }
 

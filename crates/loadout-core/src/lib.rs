@@ -1,4 +1,4 @@
-//! Ядро Loadout: только чтение (R0). Сканер пяти клиентов: Claude Code, Claude Desktop, Codex, Antigravity, DeepSeek.
+//! Loadout core: read-only (R0). A scanner for five clients: Claude Code, Claude Desktop, Codex, Antigravity, DeepSeek.
 
 pub mod antigravity;
 pub mod claude_code;
@@ -29,16 +29,16 @@ pub struct Ctx {
     pub warnings: Vec<String>,
 }
 
-/// Предел размера читаемого файла.
+/// Size limit for a file being read.
 const MAX_FILE_BYTES: u64 = 16 << 20;
 
 fn norm(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
-/// Путь для показа без имени пользователя: `~/…` с прямыми слэшами. Граница по символу и по `/`, регистр букв не важен
-/// (Windows: путь проекта в `.claude.json` может быть записан иначе, чем `USERPROFILE`). Единственная реализация:
-/// ею же пользуются запись и скил.
+/// Path for display without the user name: `~/…` with forward slashes. The boundary is by character and by `/`, letter case does not matter
+/// (Windows: a project path in `.claude.json` may be written differently from `USERPROFILE`). The only implementation:
+/// writing and the skill use it too.
 pub(crate) fn tilde(home: &Path, p: &Path) -> String {
     let (s, h) = (norm(p), norm(home));
     let h = h.trim_end_matches('/');
@@ -54,14 +54,14 @@ pub(crate) fn tilde(home: &Path, p: &Path) -> String {
 }
 
 impl Ctx {
-    /// Путь для вывода, см. [`tilde`].
+    /// Path for output, see [`tilde`].
     pub fn tilde(&self, p: &Path) -> String {
         tilde(&self.home, p)
     }
 
-    /// Отсутствие файла — норма (клиент не установлен), остальное — предупреждение.
+    /// A missing file is normal (the client is not installed); anything else is a warning.
     pub fn read_text(&mut self, p: &Path) -> Option<String> {
-        // Файлы клиентов бывают большими (`.claude.json` с кешами), но не гигабайтными: лимит защищает от зависания.
+        // Client files can be large (`.claude.json` with caches), but not gigabytes: the limit protects against hangs.
         if std::fs::metadata(p).is_ok_and(|m| m.len() > MAX_FILE_BYTES) {
             let w = crate::tr!(
                 "{}: файл больше {} МБ, пропущен",
@@ -100,12 +100,12 @@ impl Ctx {
     }
 }
 
-/// Имя ключа в JSON Pointer (RFC 6901): `~` → `~0`, `/` → `~1`.
+/// Key name in a JSON Pointer (RFC 6901): `~` → `~0`, `/` → `~1`.
 pub(crate) fn esc_ptr(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
 }
 
-/// Объект `mcpServers` в формате `{имя: {command, args, env?, url?}}` (Antigravity, Claude Desktop, плагины Antigravity).
+/// The `mcpServers` object in the format `{name: {command, args, env?, url?}}` (Antigravity, Claude Desktop, Antigravity plugins).
 pub(crate) fn scan_mcp_servers(
     c: &mut Ctx,
     client: Client,
@@ -113,7 +113,7 @@ pub(crate) fn scan_mcp_servers(
     root_ptr: &str,
     scope: &str,
     servers: Option<&Value>,
-    // Файл клиента, в который Loadout может писать (R1/R2); у записей плагинов и чужих каталогов `None`.
+    // A client file Loadout may write to (R1/R2); `None` for plugin entries and entries from foreign directories.
     writable: Option<&Path>,
 ) {
     for (name, cfg) in servers.and_then(Value::as_object).into_iter().flatten() {
@@ -135,7 +135,7 @@ pub(crate) fn scan_mcp_servers(
         )
         .detail(mask::mcp_detail(cfg));
         if let Some(file_path) = writable {
-            // у записи нет флага «выключено»: выключение вырезает её в корзину (trash.rs)
+            // the entry has no "disabled" flag: disabling cuts it out into the trash (trash.rs)
             let mut path: Vec<String> = root_ptr
                 .split('/')
                 .filter(|s| !s.is_empty())
@@ -160,7 +160,7 @@ pub(crate) fn scan_mcp_servers(
     }
 }
 
-/// Каталоги `<корень>/<имя>/SKILL.md`. Каталоги без `SKILL.md` (служебные вроде `synced/`) пропускаем.
+/// Directories `<root>/<name>/SKILL.md`. Directories without `SKILL.md` (service ones like `synced/`) are skipped.
 pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str) {
     let Ok(rd) = std::fs::read_dir(root) else {
         return;
@@ -173,7 +173,7 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
         let Some(fm) = frontmatter::read(&md) else {
             continue;
         };
-        // Имя и описание — текст из файла: проходят фильтры, чтобы секрет из описания не попал в вывод.
+        // Name and description are text from the file: they go through the filters so that a secret in the description does not reach the output.
         let name = fm
             .get("name")
             .and_then(|n| mask::safe_name(n))
@@ -192,7 +192,7 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
             "frontmatter",
         )
         .detail(json!({ "description": desc }))
-        .fs_named(); // имя уже прошло safe_name, а запасное — имя каталога
+        .fs_named(); // the name has already passed safe_name, and the fallback is the directory name
         if name != dir_name {
             e = e.note(crate::tr!(
                 "имя в frontmatter «{name}» не совпадает с каталогом «{dir_name}»",
@@ -203,7 +203,7 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
     }
 }
 
-/// Хуки в общем формате Claude Code / Codex: `{Событие: [{matcher?, hooks: [{type, command, timeout}]}]}`.
+/// Hooks in the shared Claude Code / Codex format: `{Event: [{matcher?, hooks: [{type, command, timeout}]}]}`.
 pub(crate) fn scan_hooks(
     c: &mut Ctx,
     client: Client,
@@ -233,7 +233,7 @@ pub(crate) fn scan_hooks(
                 .enumerate()
             {
                 let cmd = h.get("command").and_then(Value::as_str).unwrap_or("");
-                // И метка, и показанная команда строятся из уже замаскированных токенов.
+                // Both the label and the displayed command are built from already masked tokens.
                 let tokens = mask::mask_args(&mask::split_shell(cmd));
                 let label = hook_label(&tokens);
                 let e = Entity::new(
@@ -245,7 +245,7 @@ pub(crate) fn scan_hooks(
                     file,
                     format!("{root_ptr}/{}/{gi}/hooks/{hi}", esc_ptr(event)),
                 )
-                // Хук без опознанной метки не склеивается с такими же хуками других клиентов в одну строку.
+                // A hook without a recognized label is not merged with identical hooks of other clients into one row.
                 .logical(agent_hooks_group(&tokens).unwrap_or_else(|| {
                     if label == "hook" {
                         format!("hook:{}", client.slug())
@@ -266,10 +266,10 @@ pub(crate) fn scan_hooks(
     }
 }
 
-/// Короткое имя хука: имя исполняемого файла первой команды (`& 'C:/x/context-toolkit.exe' --lang ru` → `context-toolkit`).
-/// Токены уже замаскированы: замаскированные, `ИМЯ=значение`, флаги и ключи вида `/c` пропускаем.
+/// Short hook name: the executable name of the first command (`& 'C:/x/context-toolkit.exe' --lang ru` → `context-toolkit`).
+/// Tokens are already masked: masked ones, `NAME=value`, flags and keys like `/c` are skipped.
 fn hook_label(tokens: &[String]) -> String {
-    // Интерпретаторы и обёртки, за которыми стоит настоящая команда.
+    // Interpreters and wrappers with the real command behind them.
     const RUNNERS: [&str; 15] = [
         "node",
         "python",
@@ -298,14 +298,14 @@ fn hook_label(tokens: &[String]) -> String {
         .map(|t| t.trim_matches(|c| c == '&' || c == ';'))
         .filter(|t| {
             !t.is_empty()
-                && !t.contains('>') // перенаправления `>/dev/null`, `2>&1`
+                && !t.contains('>') // redirections `>/dev/null`, `2>&1`
                 && !t.starts_with('-')
                 && !t.contains('=')
                 && !t.contains(mask::MASK)
                 && !is_switch(t)
         })
         .map(stem)
-        // значения флагов (`--lang ru`) именем хука быть не могут, даже если путь к программе скрыт
+        // flag values (`--lang ru`) cannot be a hook name, even if the program path is hidden
         .find(|s| {
             let l = s.to_ascii_lowercase();
             !RUNNERS.contains(&l.as_str()) && !VALUE_WORDS.contains(&l.as_str())
@@ -313,15 +313,15 @@ fn hook_label(tokens: &[String]) -> String {
         .unwrap_or_else(|| "hook".to_owned())
 }
 
-/// Слова, которые бывают значениями флагов, а не именами программ.
+/// Words that occur as flag values rather than program names.
 const VALUE_WORDS: [&str; 12] = [
     "ru", "en", "true", "false", "debug", "info", "warn", "error", "trace", "latest", "main",
     "origin",
 ];
 
-/// Хуки, которые одна внешняя программа ставит сразу в несколько клиентов, лежат в каталоге `<программа>/agent-hooks`
-/// (у владельца `~/.orca/agent-hooks/codex-hook.cmd`, `dsh-hook.cmd`) и называются по клиенту. Для сопоставления между
-/// клиентами берём не имя файла, а группу: `orca-agent-hooks`.
+/// Hooks that one external program installs into several clients at once live in the `<program>/agent-hooks` directory
+/// (on the owner's machine `~/.orca/agent-hooks/codex-hook.cmd`, `dsh-hook.cmd`) and are named after the client. To match across
+/// clients we take not the file name but the group: `orca-agent-hooks`.
 fn agent_hooks_group(tokens: &[String]) -> Option<String> {
     tokens.iter().find_map(|t| {
         let norm = t.replace('\\', "/");
@@ -333,8 +333,8 @@ fn agent_hooks_group(tokens: &[String]) -> Option<String> {
     })
 }
 
-/// Вложенная командная строка (`bash -c "tool --x"`) приходит одним токеном с пробелами:
-/// для метки раскрываем её в токены. Путь с пробелами (каждое слово с разделителем) остаётся одним токеном.
+/// A nested command line (`bash -c "tool --x"`) arrives as one token with spaces:
+/// for the label we expand it into tokens. A path with spaces (every word with a separator) stays one token.
 fn expand_nested(tokens: &[String], depth: usize) -> Vec<String> {
     let mut out = Vec::new();
     for t in tokens {
@@ -351,8 +351,8 @@ fn chars_eq_ci(a: char, b: char) -> bool {
     a == b || a.to_lowercase().eq(b.to_lowercase())
 }
 
-/// Заменяет `pat` на `~` без учёта регистра (в том числе кириллицы). Работает по символам, а не по байтам:
-/// срез строки внутри многобайтной буквы невозможен.
+/// Replaces `pat` with `~` case-insensitively (including Cyrillic). Works on characters, not bytes:
+/// slicing a string inside a multibyte letter is impossible.
 fn replace_ci(s: &str, pat: &str) -> String {
     let pc: Vec<char> = pat.chars().collect();
     if pc.is_empty() {
@@ -363,7 +363,7 @@ fn replace_ci(s: &str, pat: &str) -> String {
     let mut i = 0;
     while i < sc.len() {
         let end = i + pc.len();
-        // Совпадение не должно обрывать имя: домой `C:\Users\al` не принадлежит `C:\Users\alice`.
+        // A match must not cut a name in half: `C:\Users\alice` does not belong to the home `C:\Users\al`.
         let hit = end <= sc.len()
             && sc[i..end].iter().zip(&pc).all(|(a, b)| chars_eq_ci(*a, *b))
             && !sc
@@ -384,7 +384,7 @@ fn scrub_str(s: &mut String, forms: &[String]) {
     for f in forms {
         *s = replace_ci(s, f);
     }
-    // Смешанные разделители (`C:\Users/x\y`): сверяем ещё и копию с прямыми слэшами.
+    // Mixed separators (`C:\Users/x\y`): we also check a copy with forward slashes.
     if s.contains('\\') {
         let normalized = s.replace('\\', "/");
         let mut r = normalized.clone();
@@ -406,20 +406,20 @@ fn scrub(v: &mut Value, forms: &[String]) {
     }
 }
 
-/// Путь домашнего каталога в строке (во всех формах `home_forms`) заменяется на `~`: для планов и журнала записи,
-/// куда попадают введённые пользователем команды и скопированные аргументы.
+/// The home directory path in a string (in all `home_forms` forms) is replaced with `~`: for plans and the write journal,
+/// where user-entered commands and copied arguments end up.
 pub(crate) fn scrub_home(home: &Path, s: &str) -> String {
     let mut out = s.to_owned();
     scrub_str(&mut out, &home_forms(home));
     out
 }
 
-/// Все записи домашнего каталога, как они могут встретиться в чужих файлах:
+/// All spellings of the home directory as they may appear in foreign files:
 /// `C:\Users\x`, `C:/Users/x`, Git Bash `/c/Users/x`, WSL `/mnt/c/Users/x`.
 fn home_forms(home: &Path) -> Vec<String> {
     let raw = home.to_string_lossy().into_owned();
     let fwd = raw.replace('\\', "/");
-    // `C:\\Users\\x` — так путь выглядит внутри JSON-строки и экранированных аргументов.
+    // `C:\\Users\\x` is how the path looks inside a JSON string and escaped arguments.
     let doubled = raw.replace('\\', "\\\\");
     let mut forms = vec![raw, fwd.clone(), doubled];
     let b = fwd.as_bytes();
@@ -428,12 +428,12 @@ fn home_forms(home: &Path) -> Vec<String> {
         let rest = &fwd[2..];
         forms.push(format!("/{drive}{rest}"));
         forms.push(format!("/mnt/{drive}{rest}"));
-        // административная UNC-шара: `\\localhost\c$\Users\x`
+        // administrative UNC share: `\\localhost\c$\Users\x`
         let unc = format!("\\\\localhost\\{drive}${}", rest.replace('/', "\\"));
         forms.push(unc.replace('\\', "/"));
         forms.push(unc);
     }
-    // Короткое имя 8.3 (`RIDELM~1`): первые шесть букв и цифр имени, верхний регистр.
+    // Short 8.3 name (`RIDELM~1`): the first six letters and digits of the name, upper case.
     if let (Some(user), Some(parent)) = (home.file_name().and_then(|n| n.to_str()), home.parent()) {
         let short: String = user
             .chars()
@@ -448,12 +448,12 @@ fn home_forms(home: &Path) -> Vec<String> {
             }
         }
     }
-    // Домашний каталог WSL/Linux/macOS с тем же именем пользователя (в конфигах Codex встречается `/home/<имя>/…`).
+    // WSL/Linux/macOS home directory with the same user name (Codex configs contain `/home/<name>/…`).
     if let Some(user) = home.file_name().and_then(|n| n.to_str()) {
         forms.push(format!("/home/{user}"));
         forms.push(format!("/Users/{user}"));
     }
-    // Длинные формы первыми: `/c/Users/x` входит в `/mnt/c/Users/x` и иначе оставит `/mnt~`.
+    // Long forms first: `/c/Users/x` is contained in `/mnt/c/Users/x` and would otherwise leave `/mnt~`.
     forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
     forms
 }
@@ -462,7 +462,7 @@ pub fn scan(home: &Path) -> ScanResult {
     scan_with(home, None)
 }
 
-/// Скан с корзиной Loadout (`store` — каталог бэкапов приложения): вынесенные записи видны как выключенные.
+/// A scan with the Loadout trash (`store` is the app's backup directory): removed entries show up as disabled.
 pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
     let mut c = Ctx {
         home: home.to_path_buf(),
@@ -478,7 +478,7 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
         trash::inject(&mut c, store);
     }
 
-    // Последний рубеж: путь домашнего каталога не должен остаться ни в одном строковом поле.
+    // Last line of defense: the home directory path must not remain in any string field.
     let forms = home_forms(home);
     let mut seen_ids: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for e in &mut c.entities {
@@ -503,8 +503,8 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
         ] {
             scrub_str(s, &forms);
         }
-        // Строки из файлов в именах, областях и указателях: слова, похожие на токен, скрываются.
-        // Имена из файловой системы (каталоги скилов, каталог Codex) не трогаем: они не секрет, а скрытие сливает записи.
+        // Strings from files in names, scopes and pointers: words that look like a token are hidden.
+        // Names from the file system (skill directories, the Codex directory) are left alone: they are not secrets, and hiding them merges entries.
         let fs = e.fs_named;
         let fields: [&mut String; 5] = [
             &mut e.name,
@@ -527,7 +527,7 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
             scrub_str(s, &forms);
         }
         scrub(&mut e.detail, &forms);
-        // id однозначен в пределах одного скана, даже если одна запись прочитана из двух мест (патч и профиль dsh).
+        // the id is unique within one scan, even if one entry is read from two places (a patch and a dsh profile).
         let n = seen_ids.entry(e.id.clone()).or_insert(0);
         *n += 1;
         if *n > 1 {
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn label_skips_wrappers_and_redirects() {
-        // реальная форма хука SessionStart у владельца
+        // the real shape of the owner's SessionStart hook
         assert_eq!(
             label(
                 r#""C:/Program Files/Git/usr/bin/bash.exe" -lc "nohup bash $HOME/.claude/skill-sources/pull-skills.sh >/dev/null 2>&1 & disown""#
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn label_never_carries_a_secret() {
-        // секрет перед именем скрипта: бывший `name="PreToolUse: H02"`
+        // a secret before the script name: the former `name="PreToolUse: H02"`
         assert_eq!(label("node --token H02 guard.mjs"), "guard");
         assert_eq!(label("TOKEN=H01 node a.js"), "a");
     }
@@ -631,9 +631,9 @@ mod tests {
         let forms = home_forms(Path::new("C:\\Users\\al"));
         for (input, want) in [
             ("Путь C:\\Users\\al\\проект", "Путь ~\\проект"),
-            ("C:\\Users\\alice\\x", "C:\\Users\\alice\\x"), // другой пользователь: не трогаем
+            ("C:\\Users\\alice\\x", "C:\\Users\\alice\\x"), // a different user: leave alone
             ("😀 C:/Users/al/x 日本語", "😀 ~/x 日本語"),
-            ("C:\\\\Users\\\\al\\\\x", "~\\\\x"), // путь внутри JSON-строки
+            ("C:\\\\Users\\\\al\\\\x", "~\\\\x"), // a path inside a JSON string
             ("\\\\localhost\\c$\\Users\\al\\p", "~\\p"),
         ] {
             let mut s = input.to_owned();

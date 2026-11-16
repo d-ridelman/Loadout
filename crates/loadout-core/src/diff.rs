@@ -1,4 +1,4 @@
-//! Различия между двумя сканами: только id записей (в событиях сторожа сырые пути и значения не передаются).
+//! Differences between two scans: entry ids only (watcher events carry no raw paths or values).
 
 use crate::model::ScanResult;
 use serde::Serialize;
@@ -24,7 +24,7 @@ impl Diff {
     }
 }
 
-/// Что изменилось между `old` и `new`. Запись «изменилась», если при том же id отличается хоть одно поле.
+/// What changed between `old` and `new`. An entry is "changed" if, with the same id, at least one field differs.
 pub fn diff(old: &ScanResult, new: &ScanResult) -> Diff {
     let before: HashMap<&str, _> = old.entities.iter().map(|e| (e.id.as_str(), e)).collect();
     let after: HashMap<&str, _> = new.entities.iter().map(|e| (e.id.as_str(), e)).collect();
@@ -81,7 +81,7 @@ mod tests {
         assert_eq!(
             d.changed,
             [e("a", State::On).id],
-            "то же id, другое состояние"
+            "same id, different state"
         );
         assert_eq!(d.added, [e("c", State::On).id]);
         assert_eq!(d.removed, [e("b", State::On).id]);

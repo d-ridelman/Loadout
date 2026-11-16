@@ -1,4 +1,4 @@
-//! Адаптер ChatGPT / Codex (приложение `OpenAI.Codex`, конфиг `~/.codex`). Источники — таблица §2 CONCEPT.md.
+//! ChatGPT / Codex adapter (the `OpenAI.Codex` app, config `~/.codex`). Sources: the table in CONCEPT.md §2.
 
 use crate::mask::{self, mcp_detail};
 use crate::model::{Client, Entity, Format, Kind, Src, State, Target, TargetKind};
@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 const CLIENT: Client = Client::Codex;
 const CONFIG: &str = "~/.codex/config.toml";
 
-/// Ключ TOML в указателе: голый, если состоит из `A-Za-z0-9_-`, иначе в кавычках.
+/// A TOML key in the pointer: bare if it consists of `A-Za-z0-9_-`, otherwise quoted.
 fn toml_key(name: &str) -> String {
     if !name.is_empty()
         && name
@@ -21,7 +21,7 @@ fn toml_key(name: &str) -> String {
     }
 }
 
-/// Ключ `enabled` в таблице `config.toml` (цель записи R1).
+/// The `enabled` key in the `config.toml` table (write target R1).
 fn flag(file: &std::path::Path, table: &[&str]) -> Target {
     let mut path: Vec<String> = table.iter().map(|s| (*s).to_owned()).collect();
     path.push("enabled".to_owned());
@@ -63,7 +63,7 @@ fn config(c: &mut Ctx) {
             return;
         }
     };
-    // toml::Value реализует Serialize, поэтому дальше работаем с общим serde_json::Value, как у Claude Code.
+    // toml::Value implements Serialize, so from here on we work with the common serde_json::Value, as in Claude Code.
     let root = serde_json::to_value(&table).unwrap_or(Value::Null);
 
     for (name, p) in root
@@ -142,8 +142,8 @@ fn config(c: &mut Ctx) {
         .detail(mcp_detail(m));
         c.push(e);
     }
-    // `[apps.<id>] enabled`: приложения (коннекторы) аккаунта. Ключ описан в справочнике конфигурации Codex;
-    // `apps._default` — значение по умолчанию для остальных, самостоятельной записью не считается.
+    // `[apps.<id>] enabled`: the account's apps (connectors). The key is described in the Codex configuration reference;
+    // `apps._default` is the default for the rest and does not count as an entry of its own.
     let default_on = root
         .pointer("/apps/_default/enabled")
         .and_then(Value::as_bool)
@@ -177,7 +177,7 @@ fn config(c: &mut Ctx) {
     }
 }
 
-/// Кеш каталога удалённых плагинов: это не подтверждённое подключение, а то, что приложение скачало (CONCEPT.md §5.1, C0).
+/// Cache of the remote plugin catalog: this is not a confirmed connection, just what the app has downloaded (CONCEPT.md §5.1, C0).
 fn remote_catalog(c: &mut Ctx) {
     let root = c.home.join(".codex/plugins/cache/openai-curated-remote");
     let Ok(rd) = std::fs::read_dir(&root) else {
@@ -203,7 +203,7 @@ fn remote_catalog(c: &mut Ctx) {
             "запись кеша каталога удалённых плагинов; источник правды — аккаунт",
             "an entry of the remote plugin catalog cache; the source of truth is the account"
         ))
-        .fs_named(); // имя — каталог кеша (`app-69f0dc45…`), не содержимое файла
+        .fs_named(); // the name is the cache directory (`app-69f0dc45…`), not the file content
         c.push(e);
     }
 }

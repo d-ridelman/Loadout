@@ -1,12 +1,12 @@
-//! Факты о каталогах клиентов, которые не вписываются в записи: только счётчики, без имён файлов.
-//! Выводы («свалка бэкапов», «битые ссылки») делает Доктор в одном месте, в окне (`app/src/renderer/doctor.ts`).
+//! Facts about client directories that do not fit into entries: counters only, no file names.
+//! Conclusions ("backup dump", "broken links") are drawn by the Doctor in one place, in the window (`app/src/renderer/doctor.ts`).
 
 use crate::model::Client;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
 
-/// Сколько резервных копий (`*.bak*`, `*.backup`, `*.recovery`) лежит в каталоге клиента верхнего уровня.
+/// How many backup copies (`*.bak*`, `*.backup`, `*.recovery`) lie in the top level of a client directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupFact {
@@ -15,7 +15,7 @@ pub struct BackupFact {
     pub count: usize,
 }
 
-/// Сколько ссылок (junction, symlink) указывает в никуда.
+/// How many links (junction, symlink) point nowhere.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkFact {
@@ -32,7 +32,7 @@ pub struct Facts {
     pub broken_links: Vec<LinkFact>,
 }
 
-/// Каталоги, где хозяйничают сторонние установщики и копятся резервные копии (проверено на этой машине).
+/// Directories where third-party installers run wild and backup copies pile up (checked on this machine).
 pub const BACKUP_DIRS: [(Client, &str); 4] = [
     (Client::ClaudeCode, ".claude"),
     (Client::Codex, ".codex"),
@@ -67,7 +67,7 @@ pub fn collect(home: &Path) -> Facts {
             });
         }
     }
-    // Пакеты dsh лежат в `profiles/node_modules/@deepseek-ai` как junction'ы в кеш `npx`; кеш чистится, ссылки остаются.
+    // dsh packages lie in `profiles/node_modules/@deepseek-ai` as junctions into the `npx` cache; the cache gets cleaned, the links stay.
     let pkgs = home.join(".dsh/profiles/node_modules/@deepseek-ai");
     if let Ok(rd) = fs::read_dir(&pkgs) {
         let (mut total, mut broken) = (0, 0);

@@ -1,23 +1,23 @@
-//! Хранение бэкапов операций (CONCEPT.md §5, «Копии и секреты»). Каталог операции `<мс>-<nn>` держит копию конфига клиента
-//! целиком, открытым текстом, поэтому он живёт ограниченно: последние [`KEEP_OPS`] операций и не старше [`KEEP_DAYS`] дней.
-//! Всё считается по имени каталога, манифест для этого не читается. Старые каталоги уходят перед новой записью и по команде
-//! очистки. Корзина (`trash/`) не трогается: там единственная копия вынесенной записи, это живое состояние, а не история.
+//! Storage of operation backups (CONCEPT.md §5, "Copies and secrets"). The operation directory `<ms>-<nn>` holds a copy of the client config
+//! in full, in plain text, so it lives a limited time: the last [`KEEP_OPS`] operations and not older than [`KEEP_DAYS`] days.
+//! Everything is computed from the directory name, the manifest is not read. Old directories go before a new write and on the
+//! cleanup command. Trash (`trash/`) is untouched: it holds the only copy of a moved entry, which is live state, not history.
 
 use serde::Serialize;
 use std::path::Path;
 
-/// Сколько последних операций хранить. Значение дублируется в тексте окна (`app/src/shared/backups.ts`), тест сверяет.
+/// How many of the latest operations to keep. The value is duplicated in the window text (`app/src/shared/backups.ts`), a test checks it.
 pub const KEEP_OPS: usize = 100;
-/// Сколько дней хранить операции. То же.
+/// How many days to keep operations. Same.
 pub const KEEP_DAYS: u64 = 90;
-/// Сколько последних операций разбирает журнал: остальные не читаются.
+/// How many of the latest operations the journal parses: the rest are not read.
 pub const JOURNAL_MAX: usize = 200;
 
 const DAY_MS: u64 = 86_400_000;
-/// Файл в каталоге бэкапов: наибольший id удалённой операции. По нему откат отвечает «удалена», а не «не найдена».
+/// A file in the backups directory: the largest id of a deleted operation. It makes rollback answer "deleted", not "not found".
 const MARK: &str = "pruned";
 
-/// Каталог операции: 13 цифр времени в мс, дефис, 2 цифры счётчика (так называет их `new_op_dir`).
+/// Operation directory: 13 digits of time in ms, a hyphen, 2 digits of counter (this is how `new_op_dir` names them).
 pub(super) fn is_op_id(id: &str) -> bool {
     let b = id.as_bytes();
     b.len() == 16
@@ -27,7 +27,7 @@ pub(super) fn is_op_id(id: &str) -> bool {
             .all(|(i, c)| i == 13 || c.is_ascii_digit())
 }
 
-/// Id операций, новые первыми. Читает только имена каталогов: `trash`, `staging` и файлы отбрасываются.
+/// Operation ids, newest first. Reads only directory names: `trash`, `staging` and files are discarded.
 pub(super) fn op_ids(store: &Path) -> Vec<String> {
     let Ok(rd) = std::fs::read_dir(store) else {
         return Vec::new();
@@ -46,7 +46,7 @@ fn id_ms(id: &str) -> u64 {
     id[..13].parse().unwrap_or(0)
 }
 
-/// Итог очистки: сколько каталогов операций удалено и сколько осталось.
+/// Cleanup result: how many operation directories were deleted and how many remain.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Pruned {
@@ -54,27 +54,27 @@ pub struct Pruned {
     pub kept: usize,
 }
 
-/// Пакет профиля операции (`batch` в манифесте), если он есть и читается.
+/// The profile bundle of an operation (`batch` in the manifest), if present and readable.
 fn batch_of(store: &Path, id: &str) -> Option<String> {
     let text = std::fs::read_to_string(store.join(id).join("manifest.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
     v.get("batch")?.as_str().map(str::to_owned)
 }
 
-/// Оставляет первые `keep` операций (новые первыми) не старше [`KEEP_DAYS`] на момент `now`. Остальное удаляется, кроме:
-/// - всего, что не старше самой старой из `protect` (откат операции и откат пакета новее самих операций, их строки
-///   нужны, чтобы журнал знал об откате);
-/// - хвоста пакета профиля, начало которого осталось: пакет не режется посередине, иначе его откат стал бы частичным;
-/// - полной копии скила после неполного отката (каталог без манифеста, но с `removed/`): её удаляет только срок.
+/// Keeps the first `keep` operations (newest first) not older than [`KEEP_DAYS`] at the moment `now`. The rest is deleted, except:
+/// - everything not older than the oldest of `protect` (an operation's rollback and a bundle's rollback are newer than the operations
+///   themselves, their rows are needed so the journal knows about the rollback);
+/// - the tail of a profile bundle whose beginning was kept: a bundle is not cut in the middle, otherwise its rollback would become partial;
+/// - a full skill copy after an incomplete rollback (a directory without a manifest but with `removed/`): only age deletes it.
 ///
-/// Сбой удаления одного каталога не останавливает остальные.
+/// A failure to delete one directory does not stop the others.
 pub(super) fn prune_at(store: &Path, keep: usize, now: u64, protect: &[String]) -> Pruned {
     let floor = protect.iter().min();
     let ids = op_ids(store);
     let (mut removed, mut kept, mut newest_gone) = (0, 0, String::new());
     let mut last_kept: Option<&String> = None;
-    let mut batch: Option<Option<String>> = None; // пакет последней оставленной операции, читается при первом кандидате
-    let mut cut = false; // граница пакета пройдена: дальше пакетов не склеиваем
+    let mut batch: Option<Option<String>> = None; // bundle of the last kept operation, read at the first candidate
+    let mut cut = false; // bundle boundary passed: no more joining bundles
     for (i, id) in ids.iter().enumerate() {
         let aged = now.saturating_sub(id_ms(id)) > KEEP_DAYS * DAY_MS;
         if (i < keep && !aged) || floor.is_some_and(|f| id >= f) {
@@ -106,12 +106,12 @@ pub(super) fn prune_at(store: &Path, keep: usize, now: u64, protect: &[String]) 
     Pruned { removed, kept }
 }
 
-/// Перед новой записью: после неё операций должно быть не больше [`KEEP_OPS`]. Ошибки не мешают самой записи.
+/// Before a new write: after it there must be no more than [`KEEP_OPS`] operations. Errors do not block the write itself.
 pub(super) fn before_write(store: &Path, protect: &[String]) {
     prune_at(store, KEEP_OPS - 1, super::now_ms(), protect);
 }
 
-/// Команда очистки: оставляет [`KEEP_OPS`] последних и не старше [`KEEP_DAYS`].
+/// Cleanup command: keeps the last [`KEEP_OPS`] and not older than [`KEEP_DAYS`].
 pub fn prune(store: &Path) -> Pruned {
     prune_at(store, KEEP_OPS, super::now_ms(), &[])
 }
@@ -123,7 +123,7 @@ fn pruned_mark(store: &Path) -> Option<String> {
         .filter(|s| is_op_id(s))
 }
 
-/// Операция уже была удалена очисткой (её id не новее последней удалённой).
+/// The operation was already deleted by cleanup (its id is not newer than the last deleted one).
 pub(super) fn was_pruned(store: &Path, id: &str) -> bool {
     is_op_id(id) && pruned_mark(store).is_some_and(|m| id <= m.as_str())
 }
@@ -148,7 +148,7 @@ mod tests {
         id
     }
 
-    /// Текст окна называет те же числа, что хранит ядро.
+    /// The window text names the same numbers the core keeps.
     #[test]
     fn window_text_uses_the_same_limits() {
         let ts = std::fs::read_to_string(
@@ -179,7 +179,7 @@ mod tests {
     fn keeps_the_last_n_and_drops_older_than_the_age_limit_but_not_trash_or_profiles() {
         let d = store("keep");
         let now = 200 * DAY_MS;
-        // 5 свежих, 3 из них внутри лимита N=3; ещё одна старше 90 дней при свободном месте
+        // 5 fresh, 3 of them within the limit N=3; one more older than 90 days with free space
         let ids: Vec<String> = (0..5).map(|i| op(&d, now - 1000 + i, 0)).collect();
         let r = prune_at(&d, 3, now, &[]);
         assert_eq!(
@@ -190,14 +190,14 @@ mod tests {
             }
         );
         assert!(!d.join(&ids[0]).exists() && !d.join(&ids[1]).exists() && d.join(&ids[2]).exists());
-        // метка знает самую новую из удалённых
+        // the marker knows the newest of the deleted
         assert!(was_pruned(&d, &ids[1]) && was_pruned(&d, &ids[0]) && !was_pruned(&d, &ids[2]));
-        // по возрасту: одна операция старше 90 дней уходит, даже когда лимит числа не исчерпан
+        // by age: one operation older than 90 days goes, even when the count limit is not exhausted
         let old = op(&d, now - 91 * DAY_MS, 0);
         let edge = op(&d, now - 90 * DAY_MS, 0);
         assert_eq!(prune_at(&d, 10, now, &[]).removed, 1);
         assert!(!d.join(&old).exists() && d.join(&edge).exists());
-        // корзина, подготовка и профили нетронуты
+        // trash, staging and profiles untouched
         assert!(
             d.join("trash").is_dir()
                 && d.join("staging").is_dir()
@@ -215,7 +215,7 @@ mod tests {
             op(&d, now - 20, 0),
             op(&d, now - 10, 0),
         );
-        // защищённая `b`: она и всё новее неё (её откат) остаются, старее неё удаляется
+        // protected `b`: it and everything newer than it (its rollback) stay, older than it is deleted
         let r = prune_at(&d, 1, now, std::slice::from_ref(&b));
         assert_eq!(
             r,
@@ -226,7 +226,7 @@ mod tests {
         );
         assert!(!d.join(&a).exists() && d.join(&b).exists() && d.join(&c).exists());
         assert!(was_pruned(&d, &a) && !was_pruned(&d, &b));
-        // следующий прогон без защиты метку только двигает вперёд
+        // the next run without protection only moves the marker forward
         prune_at(&d, 0, now, &[]);
         assert!(was_pruned(&d, &c));
         let _ = std::fs::remove_dir_all(&d);
@@ -240,7 +240,7 @@ mod tests {
         .unwrap();
     }
 
-    /// Пакет профиля не режется на границе: откат пакета не должен стать частичным.
+    /// A profile bundle is not cut at the boundary: a bundle rollback must not become partial.
     #[test]
     fn a_batch_is_not_cut_in_the_middle() {
         let d = store("batch");
@@ -251,7 +251,7 @@ mod tests {
             with_batch(&d, m, "1");
         }
         let newest = op(&d, now - 10, 0);
-        // лимит 3 попадает внутрь пакета (newest + два члена): остальные члены остаются, одиночная старше пакета уходит
+        // limit 3 falls inside the bundle (newest + two members): the other members stay, a single one older than the bundle goes
         let r = prune_at(&d, 3, now, &[]);
         assert_eq!(
             r,
@@ -265,14 +265,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// Полная копия скила после неполного отката (каталог без манифеста, с `removed/`) уходит только по сроку.
+    /// A full skill copy after an incomplete rollback (a directory without a manifest, with `removed/`) goes only by age.
     #[test]
     fn a_skill_copy_left_by_a_failed_rollback_goes_only_by_age() {
         let d = store("skillcopy");
         let now = 500 * DAY_MS;
         let copy = op(&d, now - 40, 0);
         std::fs::create_dir_all(d.join(&copy).join("removed")).unwrap();
-        let junk = op(&d, now - 30, 0); // сорванная операция без манифеста и без копии скила
+        let junk = op(&d, now - 30, 0); // a failed operation without a manifest and without a skill copy
         let newest = op(&d, now - 20, 0);
         let r = prune_at(&d, 1, now, &[]);
         assert_eq!(
@@ -283,7 +283,7 @@ mod tests {
             }
         );
         assert!(d.join(&copy).exists() && !d.join(&junk).exists() && d.join(&newest).exists());
-        // через 90 дней уходит и она
+        // after 90 days it goes too
         assert_eq!(prune_at(&d, 10, now + 91 * DAY_MS, &[]).removed, 2);
         assert!(!d.join(&copy).exists());
         let _ = std::fs::remove_dir_all(&d);

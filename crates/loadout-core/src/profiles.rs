@@ -1,13 +1,13 @@
-//! Профили (CONCEPT.md §4, M4): именованные наборы «что должно быть включено». Лежат в каталоге бэкапов приложения
-//! (`profiles.json`), в конфиги клиентов не попадают. Применение — пакет переключений через тот же конвейер записи
-//! (см. `write::plan_batch` и `write::apply_batch`): один предпросмотр, у каждой записи свой бэкап и строка журнала.
+//! Profiles (CONCEPT.md §4, M4): named sets of "what should be enabled". They live in the app's backups directory
+//! (`profiles.json`) and do not get into client configs. Applying one is a batch of switches through the same write pipeline
+//! (see `write::plan_batch` and `write::apply_batch`): one preview, each entry has its own backup and journal line.
 
 use crate::model::{Kind, State};
 use crate::write::Intent;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Запись профиля: сущность по тому, как её показывает скан (клиент, тип, область, имя), и нужное состояние.
+/// A profile entry: an entity by the way a scan shows it (client, kind, scope, name), and the desired state.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Item {
     pub client: String,
@@ -32,8 +32,8 @@ fn path(store: &Path) -> PathBuf {
     store.join("profiles.json")
 }
 
-/// Читает `profiles.json`. Нет файла — профилей нет. Файл есть, но не читается или не разбирается — ошибка: молча
-/// считать это «профилей нет» нельзя, следующее сохранение затёрло бы то, что в нём было (см. [`quarantine`]).
+/// Reads `profiles.json`. No file means no profiles. A file that exists but cannot be read or parsed is an error: silently
+/// treating it as "no profiles" is not allowed, the next save would wipe what was in it (see [`quarantine`]).
 fn read_file(store: &Path) -> Result<Vec<Profile>, String> {
     let text = match std::fs::read_to_string(path(store)) {
         Ok(t) => t,
@@ -56,8 +56,8 @@ pub fn list(store: &Path) -> Result<Vec<Profile>, String> {
     read_file(store)
 }
 
-/// Явное действие владельца: повреждённый `profiles.json` переименовывается в `profiles.json.broken-<время>`
-/// (ничего не удаляется), после чего профили снова можно сохранять. Читающийся файл не трогаем.
+/// An explicit owner action: a corrupt `profiles.json` is renamed to `profiles.json.broken-<time>`
+/// (nothing is deleted), after which profiles can be saved again. A readable file is left alone.
 pub fn quarantine(store: &Path) -> Result<String, String> {
     if read_file(store).is_ok() {
         return Err(crate::tr!(
@@ -101,7 +101,7 @@ fn store_all(store: &Path, profiles: Vec<Profile>) -> Result<(), String> {
         .map_err(|e| crate::tr!("профили не записаны: {e}", "profiles were not written: {e}"))
 }
 
-/// Создаёт профиль или заменяет одноимённый.
+/// Creates a profile or replaces one of the same name.
 pub fn save(store: &Path, p: Profile) -> Result<(), String> {
     if !valid_name(&p.name) {
         return Err(crate::tr!(
@@ -139,8 +139,8 @@ pub fn delete(store: &Path, name: &str) -> Result<(), String> {
     store_all(store, all)
 }
 
-/// Профиль из текущего состояния: плагины и MCP, у которых есть переключатель. Коннекторы не входят: один ключ
-/// `disableClaudeAiConnectors` гасит их все сразу, отдельное состояние у каждого в профиле было бы ложью.
+/// A profile from the current state: plugins and MCP servers that have a switch. Connectors are not included: one key
+/// `disableClaudeAiConnectors` switches them all off at once, a separate state for each in a profile would be a lie.
 pub fn from_current(home: &Path, store: &Path, name: &str) -> Profile {
     let scan = crate::scan_with(home, Some(store));
     let items = scan
@@ -151,7 +151,7 @@ pub fn from_current(home: &Path, store: &Path, name: &str) -> Profile {
             let enable = match e.state {
                 State::On | State::Stale => true,
                 State::Off => false,
-                _ => return None, // состояние неизвестно: в профиль нечего записать
+                _ => return None, // state unknown: nothing to record in the profile
             };
             Some(Item {
                 client: e.client.slug().to_owned(),
@@ -168,7 +168,7 @@ pub fn from_current(home: &Path, store: &Path, name: &str) -> Profile {
     }
 }
 
-/// Намерения профиля по свежему скану и имена записей, которых уже нет.
+/// Profile intents from a fresh scan and the names of entries that no longer exist.
 pub fn intents(
     home: &Path,
     store: &Path,

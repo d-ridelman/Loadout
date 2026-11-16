@@ -1,4 +1,4 @@
-//! Единая модель (CONCEPT.md §3), урезанная до того, что нужно сканеру M0.
+//! The unified model (CONCEPT.md §3), cut down to what the M0 scanner needs.
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -23,7 +23,7 @@ impl Client {
         Client::DeepSeek,
     ];
 
-    /// Короткое имя для CLI и JSON (совпадает с `serde`).
+    /// Short name for the CLI and JSON (matches `serde`).
     pub fn slug(self) -> &'static str {
         match self {
             Client::ClaudeCode => "claude-code",
@@ -34,7 +34,7 @@ impl Client {
         }
     }
 
-    /// Обратное к [`Client::slug`].
+    /// The inverse of [`Client::slug`].
     pub fn from_slug(s: &str) -> Option<Client> {
         Client::ALL.into_iter().find(|c| c.slug() == s)
     }
@@ -74,43 +74,43 @@ pub struct Origin {
 pub enum Format {
     Json,
     Toml,
-    /// `cordis.patch.yml` DeepSeek: правится только вынос и возврат записи по строкам (`yaml_edit`).
+    /// DeepSeek's `cordis.patch.yml`: only cutting out and returning an entry by lines is edited (`yaml_edit`).
     Yaml,
 }
 
-/// Куда писать, чтобы переключить запись (R1): булев ключ в известном файле клиента.
-/// Настоящий путь и сырые ключи; наружу не уходит (`#[serde(skip)]` у поля), в вывод идут только очищенные `origin`.
+/// Where to write to switch an entry (R1): a boolean key in a known client file.
+/// The real path and raw keys; they do not leave the core (`#[serde(skip)]` on the field), only the sanitized `origin` goes to the output.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
     pub file: std::path::PathBuf,
     pub format: Format,
-    /// Ключи от корня файла до булева значения (`Flag`) или до самой записи (`Cut`, `Restore`).
+    /// Keys from the file root to the boolean value (`Flag`) or to the entry itself (`Cut`, `Restore`).
     pub path: Vec<String>,
-    /// `true` в файле значит «выключено» (`disableClaudeAiConnectors`).
+    /// `true` in the file means "disabled" (`disableClaudeAiConnectors`).
     pub inverted: bool,
     pub kind: TargetKind,
 }
 
-/// Откуда вернуть вырезанную запись.
+/// Where to bring a cut-out entry back from.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Source {
-    /// Корзина Loadout (`<бэкапы>/trash/<id>.json`).
+    /// The Loadout trash (`<backups>/trash/<id>.json`).
     Trash(String),
-    /// Стэш владельца в том же файле (`_disabledMcpServers`): путь до объекта-стэша.
+    /// The owner's stash in the same file (`_disabledMcpServers`): the path to the stash object.
     Stash(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TargetKind {
-    /// Булев ключ.
+    /// A boolean key.
     Flag,
-    /// Включённая запись без флага: «выключить» вырезает её в корзину.
+    /// An enabled entry without a flag: "disable" cuts it into the trash.
     Cut,
-    /// Выключенная запись вне файла (корзина) или в стэше: «включить» возвращает её на место.
+    /// A disabled entry outside the file (trash) or in the stash: "enable" returns it to its place.
     Restore(Source),
 }
 
-/// Где лежит запись целиком (MCP): оттуда читается и копируется, и туда пишется правка.
+/// Where the whole entry lies (MCP): it is read and copied from there, and edits are written there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Src {
     pub file: std::path::PathBuf,
@@ -133,24 +133,24 @@ pub struct Entity {
     pub origin: Origin,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Только уже замаскированные данные: секретные значения сюда не попадают (см. mask.rs).
+    /// Already masked data only: secret values do not get here (see mask.rs).
     pub detail: Value,
-    /// Имя и указатель взяты из имени файла или каталога, а не из содержимого файла: слова-токены в них не прячем,
-    /// иначе разные записи (`app-69f0dc45…` в каталоге Codex) сольются в одну строку `<masked>`.
+    /// The name and pointer are taken from a file or directory name, not from file content: token-like words in them are not hidden,
+    /// otherwise different entries (`app-69f0dc45…` in the Codex directory) would merge into one `<masked>` string.
     #[serde(skip)]
     pub fs_named: bool,
-    /// Как переключить запись; `None` — переключатель не поддержан (см. [`crate::write::why_not`]).
+    /// How to switch the entry; `None` means the switch is not supported (see [`crate::write::why_not`]).
     #[serde(skip)]
     pub target: Option<Target>,
     #[serde(skip)]
     pub src: Option<Src>,
-    /// Запись можно править и копировать (есть `src`).
+    /// The entry can be edited and copied (has `src`).
     pub can_edit: bool,
-    /// Заполняется в конце скана из `target`: окно по нему решает, давать ли переключатель.
+    /// Filled in at the end of a scan from `target`: the window uses it to decide whether to offer a switch.
     pub can_toggle: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub toggle_why: Option<String>,
-    /// Какой уровень записи нужен для переключения: `R1` (флаг) или `R2` (корзина).
+    /// Which entry level is needed for switching: `R1` (flag) or `R2` (trash).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub toggle_level: Option<String>,
 }
@@ -159,11 +159,11 @@ pub struct Entity {
 pub struct ScanResult {
     pub entities: Vec<Entity>,
     pub warnings: Vec<String>,
-    /// Счётчики по каталогам клиентов (резервные копии, битые ссылки); выводы делает Доктор.
+    /// Counters per client directory (backup copies, broken links); conclusions are drawn by the Doctor.
     pub facts: crate::facts::Facts,
 }
 
-/// FNV-1a 64: стабильный между версиями Rust, в отличие от `DefaultHasher`.
+/// FNV-1a 64: stable across Rust versions, unlike `DefaultHasher`.
 fn fnv1a(parts: &[&str]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for p in parts {
@@ -194,14 +194,14 @@ impl Entity {
             &file,
             &pointer,
         ]);
-        // «glidehand@glidehand» и «glidehand» (MCP) — одна логическая сущность (CONCEPT.md §2).
-        // Суффикс `@маркетплейс` отбрасываем, а ведущую `@` областного пакета (`@deepseek-ai/dsh-x`) оставляем.
+        // "glidehand@glidehand" and "glidehand" (MCP) are one logical entity (CONCEPT.md §2).
+        // The `@marketplace` suffix is dropped, while the leading `@` of a scoped package (`@deepseek-ai/dsh-x`) is kept.
         let logical_key = name
             .rfind('@')
             .filter(|i| *i > 0)
             .map_or(name.as_str(), |i| &name[..i])
             .to_lowercase();
-        // пустой ключ склеил бы все такие записи в одну строку матрицы
+        // an empty key would glue all such entries into one matrix row
         let logical_key = if logical_key.is_empty() {
             "?".to_owned()
         } else {
@@ -239,7 +239,7 @@ impl Entity {
         self
     }
 
-    /// Пометка «имя из файловой системы» (см. [`Entity::fs_named`]).
+    /// Mark "name from the file system" (see [`Entity::fs_named`]).
     pub fn fs_named(mut self) -> Self {
         self.fs_named = true;
         self

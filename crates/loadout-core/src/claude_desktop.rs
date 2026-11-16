@@ -1,11 +1,11 @@
-//! Адаптер Claude Desktop (чат): `%APPDATA%\Claude\claude_desktop_config.json` → `mcpServers`.
-//! Облачные коннекторы аккаунта на диске не лежат (CONCEPT.md §5.1): здесь только локальные MCP.
+//! Claude Desktop (chat) adapter:`%APPDATA%\Claude\claude_desktop_config.json` → `mcpServers`.
+//! Account cloud connectors are not on disk (CONCEPT.md §5.1): only local MCP servers here.
 
 use crate::model::Client;
 use crate::{scan_mcp_servers, Ctx};
 
 pub fn scan(c: &mut Ctx) {
-    // shortcut: путь Windows (`<дом>/AppData/Roaming`); macOS и Linux добавятся вместе с их сборками.
+    // shortcut: Windows path (`<home>/AppData/Roaming`); macOS and Linux will be added together with their builds.
     let path = c
         .home
         .join("AppData/Roaming/Claude/claude_desktop_config.json");

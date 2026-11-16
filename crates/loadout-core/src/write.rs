@@ -1,10 +1,10 @@
-//! Запись R1 и R2 (CONCEPT.md §5): план, предпросмотр, оптимистичная блокировка, бэкап, атомарная запись, проверка, откат.
+//! R1 and R2 writes (CONCEPT.md §5): plan, preview, optimistic locking, backup, atomic write, verification, rollback.
 //!
-//! Наружу — только намерение (`Intent`: id записи и что с ней сделать): цель записи (путь и сырой ключ) берётся
-//! из свежего скана внутри ядра, путей от страницы нет. В плане и журнале нет содержимого файлов: только очищенные
-//! имя и указатель, старое и новое значение одного ключа (команды — через маскирование) и имена ключей `env`.
+//! Outward there is only an intent (`Intent`: entry id and what to do with it): the write target (path and raw key) is taken
+//! from a fresh scan inside the core, the page supplies no paths. The plan and journal hold no file contents: only the sanitized
+//! name and pointer, the old and new value of one key (commands go through masking) and the `env` key names.
 //!
-//! Уровни: R1 — булев флаг; R2 — вынос в корзину и возврат, правка команды MCP, копирование между клиентами.
+//! Levels: R1 is a boolean flag; R2 is moving to trash and restoring, editing an MCP command, copying between clients.
 
 use crate::edit;
 use crate::mask;
@@ -30,7 +30,7 @@ mod retention_tests;
 #[cfg(test)]
 mod skill_tests;
 
-/// Почему запись нельзя переключить (показывается в инспекторе).
+/// Why an entry cannot be toggled (shown in the inspector).
 pub fn why_not(e: &Entity) -> String {
     match (e.client, e.kind) {
         (Client::ClaudeCode, Kind::Plugin) if e.state == State::Broken => {
@@ -82,8 +82,8 @@ fn enabled(s: State) -> Option<bool> {
     }
 }
 
-/// Писать можно только в эти файлы клиентов, какой бы путь ни лежал в записи или в манифесте.
-/// В `antigravity/mcp/*` и в файлы плагинов Loadout не пишет никогда.
+/// Only these client files may be written, whatever path the entry or manifest holds.
+/// Loadout never writes to `antigravity/mcp/*` or plugin files.
 fn allowed(home: &Path, file: &Path) -> bool {
     let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
     let fixed = [
@@ -95,7 +95,7 @@ fn allowed(home: &Path, file: &Path) -> bool {
     ]
     .iter()
     .any(|rel| norm(&home.join(rel)) == norm(file));
-    // DeepSeek: патч пользователя и патчи профилей `~/.dsh/profiles/<имя>/cordis.patch.yml`
+    // DeepSeek: the user's patch and profile patches `~/.dsh/profiles/<name>/cordis.patch.yml`
     let dsh = norm(&home.join(".dsh"));
     let patch = norm(file)
         .strip_prefix(&format!("{dsh}/"))
@@ -116,23 +116,23 @@ pub(crate) fn sha(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Что пользователь хочет сделать. Все поля — из окна, поэтому проверяются при разборе плана.
+/// What the user wants to do. All fields come from the window, so they are validated when the plan is built.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum Intent {
-    /// Включить или выключить запись (флаг, корзина или стэш: ядро выбирает по цели).
+    /// Enable or disable an entry (flag, trash or stash: the core picks by target).
     Toggle { entity: String, enable: bool },
-    /// Заменить `command` и `args` MCP целиком. Старых значений окно не получает.
+    /// Replace the MCP `command` and `args` entirely. The window does not receive the old values.
     Edit {
         entity: String,
         command: String,
         #[serde(default)]
         args: Vec<String>,
     },
-    /// Скопировать MCP в другой клиент (`to` — короткое имя клиента).
+    /// Copy an MCP to another client (`to` is the client's short name).
     Copy { entity: String, to: String },
-    /// Добавить новый MCP-сервер клиенту: локальный (`command`, `args`, `env`) или удалённый (`url`).
-    /// Значения `env` вводит пользователь; в план и журнал они не попадают, только имена ключей.
+    /// Add a new MCP server to a client: local (`command`, `args`, `env`) or remote (`url`).
+    /// The `env` values are typed by the user; they do not reach the plan or journal, only the key names.
     Add {
         to: String,
         name: String,
@@ -145,7 +145,7 @@ pub enum Intent {
         #[serde(default)]
         env: Vec<EnvPair>,
     },
-    /// Установить скил Claude Code из каталога подготовки `<бэкапы>/staging/<stage>` (его заполняет main).
+    /// Install a Claude Code skill from the staging directory `<backups>/staging/<stage>` (filled by main).
     InstallSkill {
         stage: String,
         #[serde(default)]
@@ -174,29 +174,29 @@ impl Intent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
-    /// `toggle`, `edit` или `copy`.
+    /// `toggle`, `edit` or `copy`.
     pub op: String,
-    /// Какой уровень записи нужен: `R1` или `R2`.
+    /// Which write level is needed: `R1` or `R2`.
     pub level: String,
     pub entity: String,
-    /// Клиент, в файл которого пишем (для копирования это получатель).
+    /// The client whose file we write to (for copying, the target).
     pub client: Client,
     pub kind: Kind,
     pub name: String,
     pub file: String,
     pub pointer: String,
     pub enable: bool,
-    /// Значение до и после: `true`/`false`, «включено», «в корзине Loadout» или замаскированная команда.
+    /// Value before and after: `true`/`false`, "enabled", "in Loadout trash" or a masked command.
     pub from: String,
     pub to: String,
-    /// Запись уже в нужном состоянии, писать нечего.
+    /// The entry is already in the desired state, nothing to write.
     pub noop: bool,
-    /// Другие записи, которые меняет тот же ключ (все коннекторы `disableClaudeAiConnectors`).
+    /// Other entries changed by the same key (all `disableClaudeAiConnectors` connectors).
     pub affects: Vec<String>,
-    /// Что стоит знать до подтверждения (что не переносится, какие ключи `env` копируются).
+    /// What to know before confirming (what is not carried over, which `env` keys are copied).
     pub notes: Vec<String>,
-    /// Корзина Loadout: `out` — запись выносится в неё, `in` — возвращается из неё, пусто — не затрагивается.
-    /// Окно выбирает по этому полю название кнопки, а не по тексту `from`/`to` (он зависит от языка).
+    /// Loadout trash: `out` moves the entry into it, `in` returns it from it, empty means untouched.
+    /// The window picks the button label by this field, not by the text of `from`/`to` (it depends on the language).
     pub trash: String,
     pub base_sha: String,
 }
@@ -214,7 +214,7 @@ struct Prepared {
     old: Vec<u8>,
     new: Vec<u8>,
     trash: Option<TrashChange>,
-    /// Для вынесенных и возвращённых записей откат — обратная операция, а не возврат файла целиком.
+    /// For moved and restored entries rollback is the inverse operation, not a restore of the whole file.
     inverse_enable: Option<bool>,
 }
 
@@ -227,7 +227,7 @@ fn find<'a>(scan: &'a ScanResult, id: &str) -> Result<&'a Entity, String> {
     })
 }
 
-/// Файл клиента: из списка разрешённых и не символьная ссылка (запись заменила бы ссылку, а не файл за ней).
+/// A client file: from the allow list and not a symlink (the write would replace the link, not the file behind it).
 fn guard_file(home: &Path, file: &Path) -> Result<(), String> {
     if !allowed(home, file) {
         return Err(crate::tr!(
@@ -316,7 +316,7 @@ fn bad_yaml_path() -> String {
     crate::tr!("неверный путь записи YAML", "invalid YAML entry path")
 }
 
-/// Номер операции и номер записи из пути цели DeepSeek (`[oi, "insert", ei]`).
+/// Operation index and entry index from a DeepSeek target path (`[oi, "insert", ei]`).
 fn yaml_pos(path: &[String]) -> Result<(usize, usize), String> {
     match path {
         [oi, k, ei] if k == "insert" => Ok((
@@ -345,10 +345,10 @@ fn prep_toggle(
     match &t.kind {
         TargetKind::Flag => {
             let cur = edit::get_bool(t.format, &text, &t.path)?;
-            // `disableClaudeAiConnectors: true` значит «выключено»
+            // `disableClaudeAiConnectors: true` means "disabled"
             let want = enable != t.inverted;
             plan.noop = cur == Some(want) || (cur.is_none() && enabled(e.state) == Some(enable));
-            // Словами «включено/выключено», а не значением ключа: у `disableClaudeAiConnectors` `true` значит «выключено».
+            // Words "enabled/disabled" rather than the key value: for `disableClaudeAiConnectors`, `true` means "disabled".
             let word = |on: bool| {
                 if on {
                     crate::tr!("включено", "enabled")
@@ -398,8 +398,8 @@ fn prep_toggle(
                     }
                     _ => edit::cut_json(&text, &t.path)?,
                 };
-                // Копия с этим id в корзине, пока запись жива в файле, — след прежнего выноса (запись вернули руками).
-                // Тот же текст можно перезаписать (прежняя копия остаётся в манифесте), другой — нельзя: он пропал бы.
+                // A copy with this id in the trash while the entry is alive in the file is a trace of an earlier move (entry restored by hand).
+                // The same text can be overwritten (the earlier copy stays in the manifest), a different one cannot: it would be lost.
                 if stale.as_ref().is_some_and(|s| s.value != raw) {
                     return Err(crate::tr!(
                         "в корзине уже лежит другая запись с этим id: верните её (включите) или разберитесь вручную, иначе она потеряется",
@@ -475,7 +475,7 @@ fn prep_toggle(
                         live.push(it.key.clone());
                         let raw = it.value.clone();
                         if it.format == "yaml" {
-                            // возврат строк DeepSeek на прежнее место списка (`yaml_edit::put` сверяет результат)
+                            // put the DeepSeek lines back in their former place in the list (`yaml_edit::put` checks the result)
                             let (oi, ei) = yaml_pos(&t.path)?;
                             yaml_edit::check_anchor(&text, oi, it.anchor.as_deref())
                                 .map_err(cannot_restore)?;
@@ -596,7 +596,7 @@ fn prep_edit(
     })
 }
 
-/// Файл, формат и ключ с записями MCP у клиента-получателя.
+/// File, format and key holding MCP entries for the target client.
 fn client_target(home: &Path, c: Client) -> Option<(PathBuf, Format, &'static str)> {
     Some(match c {
         Client::ClaudeCode => (home.join(".claude.json"), Format::Json, "mcpServers"),
@@ -615,7 +615,7 @@ fn client_target(home: &Path, c: Client) -> Option<(PathBuf, Format, &'static st
     })
 }
 
-/// Запись MCP в формате получателя. Что не переносится, возвращается именами ключей.
+/// An MCP entry in the target's format. What is not carried over is returned as key names.
 fn translate(v: &Value, to: Client) -> Result<(Value, Vec<String>), String> {
     let obj = v
         .as_object()
@@ -635,7 +635,7 @@ fn translate(v: &Value, to: Client) -> Result<(Value, Vec<String>), String> {
                 };
                 out.insert(name.to_owned(), val.clone());
             }
-            "type" => {} // выводится из url
+            "type" => {} // derived from url
             other => skipped.push(mask::scrub_words(other)),
         }
     }
@@ -692,8 +692,8 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
         ));
     }
     let (value, skipped) = translate(&entry, dest)?;
-    // Запись без command и url у получателя мертва: так бывает, когда адрес лежит в другом ключе (`serverUrl`),
-    // а перевод его не знает. Лучше отказать, чем записать пустышку в чужой конфиг.
+    // An entry without command and url is dead at the target: this happens when the address lives in another key (`serverUrl`)
+    // and the translation does not know it. Better to refuse than to write a placeholder into someone else's config.
     let has = |k: &str| {
         value
             .get(k)
@@ -833,7 +833,7 @@ fn prep_add(
                     c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
                 });
             if !ok || !clean_arg(&p.value) || envm.contains_key(&p.key) {
-                // имя в сообщение не выводим: туда мог попасть вставленный секрет
+                // the name is not printed in the message: a pasted secret could have ended up there
                 return Err(crate::tr!(
                     "переменная окружения: имя из букв, цифр и `_` (до 64), значение без управляющих символов, без повторов",
                     "environment variable: name of letters, digits and `_` (up to 64), value without control characters, no duplicates"
@@ -848,8 +848,8 @@ fn prep_add(
         shown.extend(args.iter().cloned());
     } else {
         let u = url.trim();
-        // Форма удалённого сервера сверена только для Claude Code (`type: http` + `url`) и Codex (`url`);
-        // shortcut: Desktop и Antigravity — после сверки с их документацией
+        // The remote server form is verified only for Claude Code (`type: http` + `url`) and Codex (`url`);
+        // shortcut: Desktop and Antigravity, after checking against their documentation
         if !matches!(dest, Client::ClaudeCode | Client::Codex) {
             return Err(crate::tr!(
                 "удалённый сервер можно добавить только в Claude Code и Codex: форма записи у остальных клиентов не проверена",
@@ -942,7 +942,7 @@ fn prepare(
     i: &Intent,
 ) -> Result<Prepared, String> {
     let mut p = prepare_raw(home, store, scan, i)?;
-    // В план и журнал уходят введённая команда и скопированные аргументы: путь домашнего каталога в них заменяется на `~`
+    // The plan and journal receive the typed command and copied arguments: the home directory path in them becomes `~`
     for s in [&mut p.plan.from, &mut p.plan.to] {
         *s = crate::scrub_home(home, s);
     }
@@ -981,7 +981,7 @@ fn prepare_raw(
     }
 }
 
-/// Предпросмотр: ничего не пишет.
+/// Preview: writes nothing.
 pub fn plan(home: &Path, store: Option<&Path>, i: &Intent) -> Result<Plan, String> {
     if let Intent::InstallSkill { stage, sub, name } = i {
         return skill::plan(home, store, stage, sub, name);
@@ -1000,21 +1000,21 @@ struct Manifest {
     version: u32,
     id: String,
     time: u64,
-    /// `toggle`, `edit`, `copy` или `rollback`.
+    /// `toggle`, `edit`, `copy` or `rollback`.
     op: String,
     of: Option<String>,
     #[serde(default)]
     batch: Option<String>,
-    /// Какой уровень записи требовала операция (`R1`, `R2`): для отката нужен тот же.
+    /// Which write level the operation required (`R1`, `R2`): rollback needs the same one.
     #[serde(default = "level_r1")]
     level: String,
-    /// id записи, к которой относится операция (откат корзинных операций строится по нему).
+    /// Id of the entry the operation applied to (rollback of trash operations is built from it).
     #[serde(default)]
     entity: String,
-    /// Какое значение `enable` вернёт запись обратно (только у выноса и возврата из корзины).
+    /// Which `enable` value brings the entry back (only for move to and restore from trash).
     #[serde(default)]
     inverse_enable: Option<bool>,
-    /// Состояние корзины до операции: при откате файла возвращается и оно.
+    /// Trash state before the operation: on file rollback it is restored too.
     #[serde(default)]
     trash_id: Option<String>,
     #[serde(default)]
@@ -1031,7 +1031,7 @@ struct Manifest {
     to: String,
 }
 
-/// Строка журнала: манифест без настоящего пути.
+/// Journal line: the manifest without the real path.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -1071,7 +1071,7 @@ fn backup_not_written(e: std::io::Error) -> String {
     crate::tr!("бэкап не записан: {e}", "backup not written: {e}")
 }
 
-/// Новый каталог операции: имя из времени и счётчика, сортируется как строка.
+/// New operation directory: name from time and a counter, sorts as a string.
 fn new_op_dir(store: &Path) -> Result<(String, PathBuf), String> {
     let unavailable = |e: std::io::Error| {
         crate::tr!(
@@ -1095,9 +1095,9 @@ fn new_op_dir(store: &Path) -> Result<(String, PathBuf), String> {
     ))
 }
 
-/// Временные файлы убитых ядер: у каждого pid своё имя, и без уборки такой файл (копия конфига целиком, с секретами)
-/// остался бы рядом с настоящим навсегда. Удаляются `<файл>.loadout.*.tmp` старше десяти минут; свежий чужой файл —
-/// запись другого ядра в этот момент — не трогаем.
+/// Temp files of killed cores: each pid has its own name, and without cleanup such a file (a full copy of the config, with secrets)
+/// would stay next to the real one forever. `<file>.loadout.*.tmp` older than ten minutes are removed; a fresh foreign file,
+/// another core's write in progress, is left alone.
 fn clean_stale_tmp(file: &Path) {
     let (Some(dir), Some(name)) = (file.parent(), file.file_name()) else {
         return;
@@ -1118,7 +1118,7 @@ fn clean_stale_tmp(file: &Path) {
     }
 }
 
-// Шов для тестов гонок: колбэк вызывается между записью временного файла и сверкой с ожидаемым содержимым.
+// Seam for race tests: the callback is invoked between writing the temp file and checking against the expected content.
 #[cfg(test)]
 type Hook = Box<dyn Fn(&Path)>;
 #[cfg(test)]
@@ -1127,10 +1127,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Временный файл рядом: тот же том, значит `rename` атомарен. Имя `<файл>.loadout.<pid>.tmp` оканчивается на `.tmp`
-/// (сторож его не видит), а pid не даёт двум ядрам писать в один временный файл.
-/// Перед самым `rename` файл сверяется с `expect` (тем, что было при плане): если за время записи бэкапа и временного
-/// файла его успел переписать клиент, замены нет и ничего не записано.
+/// Temp file alongside: the same volume, so `rename` is atomic. The name `<file>.loadout.<pid>.tmp` ends in `.tmp`
+/// (the watcher does not see it), and the pid keeps two cores from writing to the same temp file.
+/// Right before `rename` the file is checked against `expect` (what it was at plan time): if a client managed to rewrite it
+/// while the backup and temp file were being written, there is no replacement and nothing is written.
 fn atomic_write(file: &Path, bytes: &[u8], expect: &[u8]) -> Result<(), String> {
     use std::io::Write;
     clean_stale_tmp(file);
@@ -1154,7 +1154,7 @@ fn atomic_write(file: &Path, bytes: &[u8], expect: &[u8]) -> Result<(), String> 
                 "the file changed just before the swap: another process rewrote it; nothing was written, try again"
             )));
         }
-        // клиент мог на миг открыть файл без права на замену: пробуем несколько раз
+        // a client may briefly have the file open without replace permission: retry a few times
         let mut last = Ok(());
         for _ in 0..5 {
             last = std::fs::rename(&tmp, file);
@@ -1171,7 +1171,7 @@ fn atomic_write(file: &Path, bytes: &[u8], expect: &[u8]) -> Result<(), String> 
     res.map_err(|e| crate::tr!("запись не удалась: {e}", "write failed: {e}"))
 }
 
-/// Запись с `sync_all`: бэкап и манифест должны дойти до диска раньше, чем меняется файл клиента.
+/// Write with `sync_all`: the backup and manifest must reach disk before the client file changes.
 pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::fs::File::create(path)?;
@@ -1185,7 +1185,7 @@ fn write_manifest(dir: &Path, m: &Manifest) -> Result<(), String> {
         .map_err(|e| crate::tr!("манифест не записан: {e}", "manifest not written: {e}"))
 }
 
-/// Короткое имя типа (`mcp`, `plugin`…), как в JSON.
+/// Short type name (`mcp`, `plugin`…), as in JSON.
 pub fn kind_name(k: Kind) -> String {
     serde_json::to_value(k)
         .ok()
@@ -1193,7 +1193,7 @@ pub fn kind_name(k: Kind) -> String {
         .unwrap_or_default()
 }
 
-/// Общий конвейер записи: бэкап → манифест → (корзина) → временный файл и `rename` → проверка.
+/// Common write pipeline: backup → manifest → (trash) → temp file and `rename` → verification.
 fn commit(
     store: &Path,
     p: Prepared,
@@ -1209,7 +1209,7 @@ fn commit(
     if let Err(e) = write_synced(&dir.join("before"), &p.old) {
         return fail(backup_not_written(e));
     }
-    // второй раз перед самой записью: между планом и бэкапом клиент мог переписать файл
+    // a second time right before writing: between plan and backup the client could have rewritten the file
     if std::fs::read(&p.file).ok().as_deref() != Some(p.old.as_slice()) {
         return fail(crate::tr!(
             "файл изменился во время записи бэкапа: повторите",
@@ -1242,14 +1242,14 @@ fn commit(
     if let Err(e) = write_manifest(&dir, &m) {
         return fail(e);
     }
-    // вынос: сначала текст записи в корзину, и только потом вырезаем из файла (иначе при сбое запись потеряна)
+    // move to trash: first the entry text goes to the trash, and only then is it cut from the file (otherwise a failure loses the entry)
     if let Some(item) = p.trash.as_ref().and_then(|t| t.after.as_ref()) {
         if let Err(e) = trash::write(store, item) {
             return fail(e);
         }
     }
     if let Err(e) = atomic_write(&p.file, &p.new, &p.old) {
-        // вынос не состоялся: корзина возвращается к прежнему виду (новой копии нет, устаревшая на месте)
+        // the move did not happen: the trash returns to its former state (no new copy, the stale one stays in place)
         if let Some(t) = p.trash.as_ref().filter(|t| t.after.is_some()) {
             match &t.before {
                 None => trash::remove(store, &t.id),
@@ -1260,12 +1260,12 @@ fn commit(
         }
         return fail(e);
     }
-    // возврат: запись уже на месте в файле, теперь её копию из корзины убираем
+    // restore: the entry is already back in the file, now remove its copy from the trash
     if let Some(t) = p.trash.as_ref().filter(|t| t.after.is_none()) {
         trash::remove(store, &t.id);
     }
-    // Проверка: перечитали и получили ровно «исходник + план». Несовпадение значит, что клиент записал файл сразу после нас:
-    // возвращать исходный нельзя (затёрли бы его свежую запись), поэтому операция остаётся в журнале, а бэкап цел.
+    // Verification: re-read and got exactly "source + plan". A mismatch means a client wrote the file right after us:
+    // restoring the original is not allowed (we would wipe its fresh write), so the operation stays in the journal and the backup is intact.
     if std::fs::read(&p.file).ok().as_deref() != Some(p.new.as_slice()) {
         return Err(crate::tr!(
             "файл изменён другим процессом сразу после записи: проверьте результат, бэкап и строка журнала сохранены",
@@ -1298,9 +1298,9 @@ fn rank(level: &str) -> u8 {
     }
 }
 
-/// Уровень записи проверяет и ядро: `max_level` приходит от main одним запросом вместе с самой операцией, поэтому
-/// между проверкой и записью нельзя вклинить запрос, который подменит план (проверка «спросили план, потом применили»
-/// такой гонке поддавалась).
+/// The core checks the write level too: `max_level` arrives from main in one request together with the operation itself, so
+/// no request can be wedged in between check and write to swap the plan (the "asked for the plan, then applied" check
+/// was vulnerable to such a race).
 fn need_level(need: &str, max_level: &str) -> Result<(), String> {
     if rank(need) > rank(max_level) {
         return Err(crate::tr!(
@@ -1340,7 +1340,7 @@ fn apply_one(
     commit(store, p, op_name(i), None, batch)
 }
 
-/// Выполняет намерение. `base_sha` — хеш файла из предпросмотра: если файл с тех пор изменился, отказ.
+/// Executes an intent. `base_sha` is the file hash from the preview: if the file has changed since, refuse.
 pub fn apply(
     home: &Path,
     store: &Path,
@@ -1352,15 +1352,15 @@ pub fn apply(
     apply_one(home, store, i, Some(base_sha), None, max_level)
 }
 
-/// План пакета (профиль): по каждому намерению, которое нашло запись, и список пропущенных.
+/// Bundle (profile) plan: for each intent that found an entry, plus the list of skipped ones.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchPlan {
     pub plans: Vec<Plan>,
-    /// Намерения, для которых записи уже нет (имена для показа).
+    /// Intents whose entries no longer exist (names for display).
     pub skipped: Vec<String>,
     pub level: String,
-    /// Подпись всего пакета: если за время предпросмотра что-то изменилось, она не совпадёт.
+    /// Signature of the whole bundle: if anything changed during the preview, it will not match.
     pub batch_sha: String,
 }
 
@@ -1406,8 +1406,8 @@ pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchP
     }
 }
 
-/// Применяет пакет по одному намерению, каждое со своим бэкапом и строкой журнала; общий номер пакета позволяет
-/// откатить всё сразу. При первой ошибке останавливается: сделанное остаётся в журнале.
+/// Applies a bundle intent by intent, each with its own backup and journal line; the shared bundle number allows
+/// rolling everything back at once. Stops at the first error: what was done stays in the journal.
 pub fn apply_batch(
     home: &Path,
     store: &Path,
@@ -1415,7 +1415,7 @@ pub fn apply_batch(
     batch_sha: &str,
     max_level: &str,
 ) -> Result<(String, Vec<Applied>), String> {
-    // у добавления нет записи, по которой пакет сверяет шаги: оно выполняется только по одному
+    // an addition has no entry for the bundle to match steps against: it runs only one at a time
     if items.iter().any(|i| matches!(i, Intent::Add { .. })) {
         return Err(crate::tr!(
             "добавление нового сервера не входит в пакет",
@@ -1430,18 +1430,18 @@ pub fn apply_batch(
         ));
     }
     need_level(&bp.level, max_level)?;
-    // один раз на пакет, а не по записям: пакет не должен срезать собственное начало
+    // once per bundle, not per entry: a bundle must not trim its own beginning
     retention::before_write(store, &[]);
     let batch = format!("{:013}", now_ms());
     let mut done = Vec::new();
     for (n, i) in items.iter().enumerate() {
         let scan = crate::scan_with(home, Some(store));
         match prepare(home, Some(store), &scan, i) {
-            // уже в нужном состоянии: пропускаем, это не ошибка пакета
+            // already in the desired state: skip, it is not a bundle error
             Ok(p) if p.plan.noop => continue,
             Ok(_) => {}
-            // записи не было и в предпросмотре (он её пропустил): пропускаем; а если она была и пропала посреди
-            // пакета, молча пропускать нельзя: пакет остановится с ошибкой
+            // the entry was missing in the preview too (it skipped it): skip; but if it existed and vanished in the middle
+            // of the bundle, skipping silently is not allowed: the bundle stops with an error
             Err(_) if !bp.plans.iter().any(|p| p.entity == i.entity()) => continue,
             Err(e) => {
                 return Err(crate::tr!(
@@ -1467,7 +1467,7 @@ pub fn apply_batch(
 }
 
 fn read_manifest(store: &Path, id: &str) -> Result<Manifest, String> {
-    // id — имя каталога: только цифры и дефис, иначе в него можно было бы вписать путь
+    // id is a directory name: digits and hyphen only, otherwise a path could be smuggled into it
     if id.is_empty() || id.len() > 40 || !id.bytes().all(|c| c.is_ascii_digit() || c == b'-') {
         return Err(crate::tr!(
             "неверный номер операции",
@@ -1494,7 +1494,7 @@ fn file_sha(path: &Path) -> Option<String> {
     std::fs::read(path).ok().map(|b| sha(&b))
 }
 
-/// Последние `limit` операций, новые первыми. Разбираются только они: по остальным читаются лишь имена каталогов.
+/// The last `limit` operations, newest first. Only they are parsed: for the rest only directory names are read.
 fn manifests_recent(store: &Path, limit: usize) -> Vec<Manifest> {
     retention::op_ids(store)
         .iter()
@@ -1503,7 +1503,7 @@ fn manifests_recent(store: &Path, limit: usize) -> Vec<Manifest> {
         .collect()
 }
 
-/// Операции с id не старше `min_id`, новые первыми: откат операции всегда новее неё, остальные читать незачем.
+/// Operations with id not older than `min_id`, newest first: a rollback is always newer than its operation, no need to read the rest.
 fn manifests_since(store: &Path, min_id: &str) -> Vec<Manifest> {
     retention::op_ids(store)
         .iter()
@@ -1512,12 +1512,12 @@ fn manifests_since(store: &Path, min_id: &str) -> Vec<Manifest> {
         .collect()
 }
 
-/// Запись, к которой относилась операция. Возврат из стэша владельца меняет указатель, а с ним и id
-/// (`/_disabledMcpServers/x` → `/mcpServers/x`), поэтому после поиска по id ищем по клиенту, типу и имени.
+/// The entry the operation applied to. Restoring from the owner's stash changes the pointer, and with it the id
+/// (`/_disabledMcpServers/x` → `/mcpServers/x`), so after the id lookup we search by client, type and name.
 fn resolve_entity<'a>(scan: &'a ScanResult, m: &Manifest) -> Option<&'a Entity> {
     let by_id = scan.entities.iter().find(|e| e.id == m.entity);
-    // Запись из корзины Loadout имеет стабильный id: по имени её искать нельзя, нашлась бы другая запись с тем же
-    // именем (например, живая в `mcpServers` или другая в стэше), и откат вернул бы чужое.
+    // An entry from Loadout trash has a stable id: it cannot be looked up by name, another entry with the same
+    // name would be found (e.g. a live one in `mcpServers` or another in the stash), and rollback would restore the wrong one.
     if m.trash_id.is_some() {
         return by_id;
     }
@@ -1531,8 +1531,8 @@ fn resolve_entity<'a>(scan: &'a ScanResult, m: &Manifest) -> Option<&'a Entity> 
     })
 }
 
-/// Слова, которыми ядро пишет `from`/`to` в манифест (на языке операции). Запись, сделанная до смены языка, показывается
-/// на текущем: стандартные слова и префиксы переводятся, введённая пользователем команда после префикса остаётся как есть.
+/// Words the core writes into the manifest as `from`/`to` (in the operation's language). An entry made before a language change is shown
+/// in the current one: standard words and prefixes are translated, a command typed by the user after a prefix stays as is.
 const CANNED: [(&str, &str); 7] = [
     ("установлен", "installed"),
     ("включено", "enabled"),
@@ -1568,13 +1568,13 @@ fn relang(s: &str) -> String {
     s.to_owned()
 }
 
-/// Журнал наших операций, новые первыми. Изменения клиентов извне в него не попадают.
+/// Journal of our operations, newest first. Client changes made from outside do not appear in it.
 pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
-    // откат всегда новее своей операции, поэтому «откатана» видно по тем же последним строкам; остальные не разбираются
+    // a rollback is always newer than its operation, so "rolled back" shows in the same latest lines; the rest are not parsed
     let all = manifests_recent(store, retention::JOURNAL_MAX);
     let undone: std::collections::HashSet<&str> =
         all.iter().filter_map(|m| m.of.as_deref()).collect();
-    // состояние записей нужно только для откатов вынесенных в корзину: один скан на весь журнал
+    // entry state is needed only for rollbacks of trash moves: one scan for the whole journal
     let scan: Option<ScanResult> = all
         .iter()
         .any(|m| m.inverse_enable.is_some())
@@ -1586,7 +1586,7 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
                 && !rolled_back
                 && match m.inverse_enable {
                     None if m.op == "installSkill" => skill::can_rollback(home, m),
-                    // вынос и возврат откатываются обратной операцией, пока запись в том состоянии, которое оставила операция
+                    // move and restore are rolled back by the inverse operation while the entry is in the state the operation left
                     Some(inv) => scan
                         .as_ref()
                         .and_then(|s| resolve_entity(s, m))
@@ -1617,9 +1617,9 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
         .collect()
 }
 
-/// Откат операции. Флаги, правки и копии возвращают файл из бэкапа, только если после операции его никто не менял.
-/// Вынос в корзину и возврат откатываются обратной операцией над текущим файлом: `~/.claude.json` клиент переписывает
-/// постоянно, и сверка хеша там почти всегда отказывала бы.
+/// Rollback of an operation. Flags, edits and copies restore the file from backup, only if nobody changed it after the operation.
+/// Move to trash and restore are rolled back by the inverse operation on the current file: a client rewrites `~/.claude.json`
+/// constantly, and the hash check there would almost always refuse.
 pub fn rollback(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<Applied, String> {
     retention::before_write(store, &[op.to_owned()]);
     rollback_one(home, store, op, max_level)
@@ -1646,8 +1646,8 @@ fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     if m.op == "installSkill" {
         return skill::rollback(home, store, op, &m);
     }
-    // Обратная операция — когда в деле корзина или файл с тех пор менялся. Возврат из стэша владельца при неизменном
-    // файле откатывается возвратом файла из бэкапа: запись снова оказывается в стэше, а не в корзине Loadout.
+    // The inverse operation when trash is involved or the file has changed since. Restoring from the owner's stash with an unchanged
+    // file is rolled back by restoring the file from backup: the entry is back in the stash, not in Loadout trash.
     let inverse = m.inverse_enable.filter(|_| {
         m.trash_id.is_some()
             || file_sha(Path::new(&m.path)).as_deref() != Some(m.sha_after.as_str())
@@ -1673,7 +1673,7 @@ fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
         return commit(store, p, "rollback", Some(op.to_owned()), None);
     }
     let file = PathBuf::from(&m.path);
-    // манифест лежит в каталоге пользователя: его путь не доверенный, проверяем по списку так же, как при записи
+    // the manifest lives in the user's directory: its path is untrusted, check against the list the same way as on write
     guard_file(home, &file)?;
     let current = std::fs::read(&file)
         .map_err(|_| crate::tr!("файл клиента не прочитан", "could not read the client file"))?;
@@ -1713,7 +1713,7 @@ fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     if let Err(e) = atomic_write(&file, &before, &current) {
         return fail(e);
     }
-    // как и после записи: чужую свежую запись не затираем, запись об откате остаётся
+    // as after a write: do not wipe a client's fresh write, the rollback record stays
     if file_sha(&file).as_deref() != Some(m.sha_before.as_str()) {
         return Err(crate::tr!(
             "файл изменён другим процессом сразу после отката: проверьте результат",
@@ -1728,26 +1728,26 @@ fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     })
 }
 
-/// Откатывает пакет целиком, начиная с последней операции. Останавливается на первой ошибке.
+/// Rolls back a bundle as a whole, starting from the last operation. Stops at the first error.
 pub fn rollback_batch(
     home: &Path,
     store: &Path,
     batch: &str,
     max_level: &str,
 ) -> Result<Vec<Applied>, String> {
-    // операции пакета не старше его номера (мс начала пакета): остальные не читаются
+    // operations of the bundle not older than its number (ms of bundle start): the rest are not read
     let all = manifests_since(store, batch);
     let members: Vec<&Manifest> = all
         .iter()
         .filter(|m| m.batch.as_deref() == Some(batch) && m.op != "rollback")
         .collect();
-    // уровень всех операций пакета проверяется до первого отката: пакет не должен откатиться наполовину
+    // the level of all bundle operations is checked before the first rollback: a bundle must not roll back halfway
     for m in &members {
         need_level(&m.level, max_level)?;
     }
-    // новые первыми: нужный порядок отката
+    // newest first: the required rollback order
     let ops: Vec<String> = members.iter().map(|m| m.id.clone()).collect();
-    // операции пакета не должны уйти под очистку посреди отката
+    // bundle operations must not fall under cleanup in the middle of a rollback
     retention::before_write(store, &ops);
     let mut done = Vec::new();
     for id in ops {
@@ -1769,8 +1769,8 @@ pub fn rollback_batch(
 mod relang_tests {
     use super::relang;
 
-    /// Язык процесса в тестах русский: английские слова из манифеста, записанного при `--lang en`, показываются по-русски,
-    /// а введённая команда после префикса и неизвестный текст не меняются.
+    /// The process language in tests is Russian: English words from a manifest written with `--lang en` are shown in Russian,
+    /// while a typed command after a prefix and unknown text are unchanged.
     #[test]
     fn manifest_words_follow_the_process_language() {
         assert_eq!(relang("enabled"), "включено");

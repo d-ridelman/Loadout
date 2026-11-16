@@ -1,4 +1,4 @@
-//! Хранение бэкапов через настоящий конвейер: очистка перед записью, отказ отката удалённой операции, ленивый журнал.
+//! Backup storage through the real pipeline: cleanup before a write, refusal to roll back a deleted operation, lazy journal.
 
 use super::race_tests::{env, toggle, Env};
 use super::retention::{JOURNAL_MAX, KEEP_OPS};
@@ -17,7 +17,7 @@ fn op_dirs(e: &Env) -> Vec<String> {
     v
 }
 
-/// `n` каталогов операций «чуть раньше сейчас»; у каждого копия манифеста `template` с их id.
+/// `n` operation directories "just before now"; each has a copy of the `template` manifest with their ids.
 fn fake_ops(e: &Env, n: u64, template: Option<&str>) -> Vec<String> {
     let base = now_ms() - 60_000;
     (0..n)
@@ -42,17 +42,17 @@ fn a_write_prunes_old_operations_first_and_rolling_back_a_pruned_one_is_refused_
     let i = toggle(&e, false);
     let p = plan(&e.home, Some(&e.store), &i).unwrap();
     let done = apply(&e.home, &e.store, &i, &p.base_sha, "R2").unwrap();
-    // после записи операций ровно KEEP_OPS: самые старые ушли, новая на месте
+    // after writing the operations exactly KEEP_OPS remain: the oldest are gone, the new one is in place
     let left = op_dirs(&e);
     assert_eq!(left.len(), KEEP_OPS, "{}", left.len());
     assert!(left.contains(&done.op) && !left.contains(&fakes[0]) && left.contains(&fakes[119]));
-    // откат удалённой: понятный отказ, а не «не найдена»
+    // rollback of a deleted one: a clear refusal, not "not found"
     let err = rollback(&e.home, &e.store, &fakes[0], "R2").unwrap_err();
     assert!(err.contains("удалена очисткой"), "{err}");
-    // не существовавшая никогда операция новее метки: прежний отказ
+    // an operation that never existed is newer than the marker: the former refusal
     let err = rollback(&e.home, &e.store, "9999999999999-00", "R2").unwrap_err();
     assert!(err.contains("не найдена"), "{err}");
-    // а своя операция откатывается как раньше
+    // and our own operation rolls back as before
     rollback(&e.home, &e.store, &done.op, "R2").unwrap();
 }
 
@@ -67,7 +67,7 @@ fn the_cleanup_command_keeps_the_last_n_and_reports_counts() {
     assert_eq!(op_dirs(&e).len(), KEEP_OPS);
     assert!(
         e.store.join("trash").join("x.json").is_file(),
-        "корзина не чистится"
+        "the trash is not cleaned"
     );
     assert_eq!(prune_backups(&e.store).removed, 0);
 }
@@ -81,11 +81,14 @@ fn the_journal_shows_the_newest_200_and_ignores_other_directories() {
     let template = fs::read_to_string(e.store.join(&done.op).join("manifest.json")).unwrap();
     fake_ops(&e, 250, Some(&template));
     fs::create_dir_all(e.store.join("staging").join("a")).unwrap();
-    // каталог, чьё имя похоже на операцию, но не по форме, не входит ни в журнал, ни в счёт
+    // a directory whose name looks like an operation but not in form is in neither the journal nor the count
     fs::create_dir_all(e.store.join("1731700000000")).unwrap();
     let j = journal(&e.home, &e.store);
     assert_eq!(j.len(), JOURNAL_MAX);
-    assert!(j.windows(2).all(|w| w[0].id > w[1].id), "новые первыми");
-    assert_eq!(j[0].id, done.op, "настоящая операция новее подделанных");
+    assert!(j.windows(2).all(|w| w[0].id > w[1].id), "newest first");
+    assert_eq!(
+        j[0].id, done.op,
+        "the real operation is newer than the forged ones"
+    );
     assert!(j.iter().all(|r| r.id.len() == 16));
 }

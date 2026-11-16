@@ -1,10 +1,10 @@
-//! Адаптер Antigravity. Формы файлов сняты с этой машины (имена ключей), см. таблицу §2 CONCEPT.md.
+//! Antigravity adapter. File shapes were taken from this machine (key names), see the table in CONCEPT.md §2.
 //!
-//! - `~/.gemini/config/mcp_config.json` — `{mcpServers: {имя: {command, args, env?}}}`; флага «выключено» не видно.
-//! - `~/.gemini/config/hooks.json` — `{группа: {Событие: [{matcher?, hooks: [...]}]}}`, то есть формат Claude Code
-//!   на уровень глубже.
-//! - `~/.gemini/config/plugins/<каталог>/{plugin.json, mcp_config.json, skills/}` — плагины.
-//! - скилы: `~/.gemini/config/skills`, встроенные в `~/.gemini/antigravity/builtin/skills` и `antigravity-cli/builtin/skills`.
+//! - `~/.gemini/config/mcp_config.json`: `{mcpServers: {name: {command, args, env?}}}`; no "disabled" flag is visible.
+//! - `~/.gemini/config/hooks.json`: `{group: {Event: [{matcher?, hooks: [...]}]}}`, i.e. the Claude Code format
+//!   one level deeper.
+//! - `~/.gemini/config/plugins/<dir>/{plugin.json, mcp_config.json, skills/}`: plugins.
+//! - skills: `~/.gemini/config/skills`, built-in ones in `~/.gemini/antigravity/builtin/skills` and `antigravity-cli/builtin/skills`.
 
 use crate::mask;
 use crate::model::{Client, Entity, Kind, State};
@@ -92,12 +92,12 @@ fn plugins(c: &mut Ctx) {
         }));
         c.push(e);
 
-        // MCP и скилы, которые приносит плагин
+        // MCP servers and skills that the plugin brings
         let scope = format!("plugin:{name}");
         let mcp = d.path().join("mcp_config.json");
         if let Some(v) = c.read_json(&mcp) {
             let file = c.tilde(&mcp);
-            // файлы плагинов принадлежат плагину: Loadout в них не пишет
+            // plugin files belong to the plugin: Loadout does not write to them
             scan_mcp_servers(
                 c,
                 CLIENT,

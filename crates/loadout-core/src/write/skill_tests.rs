@@ -1,5 +1,5 @@
-//! Скил: запасная копия, когда `rename` каталога невозможен (`~/.claude/skills` на другом томе), скил под ссылкой,
-//! точки повторной обработки в дереве и ветки неполного возврата при откате.
+//! Skill: fallback copy when a directory `rename` is impossible (`~/.claude/skills` on another volume), a skill under a link,
+//! reparse points in the tree and the branches of an incomplete restore on rollback.
 
 use super::skill::{self, AFTER_BACKUP, NO_RENAME};
 use super::{journal, rollback};
@@ -22,7 +22,7 @@ impl Drop for Env {
     }
 }
 
-/// Дом и каталог бэкапов; источник скила `demo` (два файла) лежит в `staging/<id>`, как его кладёт main.
+/// Home and backups directory; the source of skill `demo` (two files) sits in `staging/<id>`, as main places it.
 fn env(tag: &str) -> Env {
     let top = std::env::temp_dir().join(format!("loadout-skt-{}-{tag}", std::process::id()));
     let _ = fs::remove_dir_all(&top);
@@ -48,10 +48,10 @@ fn no_leftovers(e: &Env) {
         .unwrap()
         .flatten()
         .any(|f| f.file_name().to_string_lossy().contains("loadout"));
-    assert!(!left, "временные каталоги не остались");
+    assert!(!left, "no temp directories left");
 }
 
-/// Папка-ссылка (junction) `link` → `to`; прав администратора не требует.
+/// Junction folder `link` → `to`; does not need administrator rights.
 #[cfg(windows)]
 fn junction(link: &Path, to: &Path) {
     let st = std::process::Command::new("cmd")
@@ -61,10 +61,10 @@ fn junction(link: &Path, to: &Path) {
         .stdout(std::process::Stdio::null())
         .status()
         .unwrap();
-    assert!(st.success(), "mklink /J не удался");
+    assert!(st.success(), "mklink /J failed");
 }
 
-/// Файл, занятый как чужим процессом: `share` — что он разрешает другим (0 — ничего, 1 — только читать).
+/// A file held as if by a foreign process: `share` is what it allows others (0 is nothing, 1 is read only).
 #[cfg(windows)]
 fn lock(path: &Path, share: u32) -> std::fs::File {
     use std::os::windows::fs::OpenOptionsExt;
@@ -75,7 +75,7 @@ fn lock(path: &Path, share: u32) -> std::fs::File {
         .unwrap()
 }
 
-/// `skills/` на другом томе: `rename` каталога невозможен, скил ставится копией, а откат уносит его без `rename`.
+/// `skills/` on another volume: directory `rename` is impossible, the skill is installed by copying, and rollback removes it without `rename`.
 #[test]
 fn install_and_rollback_work_by_copying_when_rename_is_impossible() {
     let e = env("copy");
@@ -90,16 +90,16 @@ fn install_and_rollback_work_by_copying_when_rename_is_impossible() {
     assert!(journal(&e.home, &e.store)[0].can_rollback);
 
     let back = rollback(&e.home, &e.store, &done.op, "R2").unwrap();
-    assert!(!target(&e).exists(), "скил убран без rename");
+    assert!(!target(&e).exists(), "the skill was removed without rename");
     no_leftovers(&e);
-    // копия удалённого лежит в каталоге операции отката
+    // the copy of the deleted skill is in the rollback operation's directory
     assert_eq!(
         fs::read_to_string(e.store.join(&back.op).join("removed").join("a.txt")).unwrap(),
         "один"
     );
 }
 
-/// Каталог `skills` — ссылка (junction) в другое место: скил встаёт по ссылке и откатывается.
+/// The `skills` directory is a link (junction) elsewhere: the skill is installed through the link and rolled back.
 #[cfg(windows)]
 #[test]
 fn skills_dir_that_is_a_junction_is_supported() {
@@ -113,7 +113,7 @@ fn skills_dir_that_is_a_junction_is_supported() {
     assert!(!elsewhere.join("demo").exists());
 }
 
-/// Junction внутри дерева скила отвергается так же, как символьная ссылка: иначе копия утащила бы чужие файлы.
+/// A junction inside the skill tree is refused like a symlink: otherwise the copy would drag in foreign files.
 #[cfg(windows)]
 #[test]
 fn junction_inside_the_skill_tree_is_refused() {
@@ -127,7 +127,7 @@ fn junction_inside_the_skill_tree_is_refused() {
     assert!(err.contains("ссылка"), "{err}");
     assert!(install(&e).is_err());
     assert!(!target(&e).exists());
-    // и в уже установленном дереве: откат отказывает, а не уносит содержимое ссылки
+    // and in an already installed tree: rollback refuses rather than removing the link's contents
     let e2 = env("junction-installed");
     let done = install(&e2).unwrap();
     let outside = e2.top.join("outside");
@@ -137,14 +137,14 @@ fn junction_inside_the_skill_tree_is_refused() {
     assert!(outside.is_dir() && target(&e2).join("a.txt").is_file());
 }
 
-/// Файл скила занят без права удаления: удалить дерево целиком нельзя, откат возвращает всё, что убрал, и говорит об этом.
+/// A skill file is held without delete rights: the whole tree cannot be deleted, rollback restores everything it removed and says so.
 #[cfg(windows)]
 #[test]
 fn rollback_puts_the_skill_back_when_a_file_cannot_be_deleted() {
     let e = env("locked");
     let done = install(&e).unwrap();
     let a = target(&e).join("a.txt");
-    // занятие файла после копии в бэкап: читать его можно, удалять нет
+    // file held after the copy to backup: it can be read, not deleted
     let held = std::rc::Rc::new(std::cell::RefCell::new(None));
     let slot = held.clone();
     AFTER_BACKUP
@@ -158,16 +158,16 @@ fn rollback_puts_the_skill_back_when_a_file_cannot_be_deleted() {
     );
     assert!(
         target(&e).join("SKILL.md").is_file(),
-        "удалённое вернулось из копии"
+        "the deleted files came back from the copy"
     );
-    // откатом это не стало: в журнале одна установка, она всё ещё откатываема
+    // this did not count as a rollback: the journal has one install, still rollbackable
     let j = journal(&e.home, &e.store);
     assert_eq!(j.len(), 1);
     assert!(!j[0].rolled_back);
     drop(held.borrow_mut().take());
 }
 
-/// Файл занят полностью: вернуть его нельзя. Откат не выдаёт себя за выполненный и называет путь полной копии.
+/// A file is held completely: it cannot be restored. Rollback does not pose as done and names the path of the full copy.
 #[cfg(windows)]
 #[test]
 fn rollback_names_the_full_copy_when_the_skill_cannot_be_restored() {
@@ -184,7 +184,7 @@ fn rollback_names_the_full_copy_when_the_skill_cannot_be_restored() {
         err.contains("не полностью") && err.contains("полная копия"),
         "{err}"
     );
-    // полная копия на месте, и по тому же пути её называет ошибка
+    // the full copy is in place, and the error names it by the same path
     let copies: Vec<PathBuf> = fs::read_dir(&e.store)
         .unwrap()
         .flatten()
@@ -194,7 +194,7 @@ fn rollback_names_the_full_copy_when_the_skill_cannot_be_restored() {
     assert_eq!(copies.len(), 1);
     assert_eq!(fs::read_to_string(copies[0].join("a.txt")).unwrap(), "один");
     assert!(copies[0].join("SKILL.md").is_file());
-    // строки отката в журнале нет: недоделанное удаление не выглядит откатом
+    // there is no rollback line in the journal: an unfinished deletion does not look like a rollback
     let j = journal(&e.home, &e.store);
     assert_eq!(j.len(), 1);
     assert!(!j[0].rolled_back && j[0].op == "installSkill");

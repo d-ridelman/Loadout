@@ -1,14 +1,14 @@
-//! Язык сообщений ядра (ошибки, примечания плана, слова «включено/выключено», находки).
+//! Language of the core's messages (errors, plan notes, the words "enabled/disabled", findings).
 //!
-//! Язык один на процесс и задаётся один раз при запуске (`loadout serve --lang ru|en`, по умолчанию `ru`);
-//! в тестах он не переключается: тесты делят процесс. Строка пишется парой на месте её появления:
-//! `tr!("русский", "english")` или с подстановками `tr!("нет {x}", "no {x}")` (захват из окружения, как в `format!`).
+//! There is one language per process, set once at startup (`loadout serve --lang ru|en`, `ru` by default);
+//! it is not switched in tests: tests share the process. A string is written as a pair at the place where it appears:
+//! `tr!("<ru text>", "<en text>")` or with substitutions `tr!("<ru {x}>", "<en {x}>")` (captured from the environment, as in `format!`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static EN: AtomicBool = AtomicBool::new(false);
 
-/// Выбор языка сообщений: `en` — английский, всё остальное — русский.
+/// Message language choice: `en` is English, anything else is Russian.
 pub fn set_lang(lang: &str) {
     EN.store(lang == "en", Ordering::Relaxed);
 }
@@ -17,7 +17,7 @@ pub fn is_en() -> bool {
     EN.load(Ordering::Relaxed)
 }
 
-/// Сообщение на языке процесса. Возвращает `String`; плейсхолдеры `{имя}` берутся из окружения, как в `format!`.
+/// A message in the process language. Returns `String`; the `{name}` placeholders are taken from the environment, as in `format!`.
 #[macro_export]
 macro_rules! tr {
     ($ru:literal, $en:literal $(, $arg:expr)* $(,)?) => {{

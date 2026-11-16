@@ -1,9 +1,9 @@
-//! Установка скила Claude Code в `~/.claude/skills/<имя>` (R2) с журналом и откатом.
+//! Installing a Claude Code skill into `~/.claude/skills/<name>` (R2) with a journal and rollback.
 //!
-//! Источник main кладёт заранее в `<бэкапы>/staging/<id>` (клон GitHub или копия папки): от окна приходят только
-//! `id` этого каталога (hex), путь внутри него и имя. Ядро само проверяет дерево (без ссылок, `.git` и лишнего размера),
-//! пишет его копию в каталог операции, ставит через временный каталог рядом с целью и сверяет хеш дерева.
-//! Откат: если скил с тех пор не меняли, каталог уходит в бэкап операции отката, а не удаляется насовсем.
+//! main stages the source in advance in `<backups>/staging/<id>` (a GitHub clone or a folder copy): the window sends only
+//! the `id` of that directory (hex), a path inside it and a name. The core checks the tree itself (no links, no `.git`, no excess size),
+//! writes its copy into the operation directory, installs via a temp directory next to the target and verifies the tree hash.
+//! Rollback: if the skill has not changed since, the directory goes to the rollback operation's backup rather than being deleted for good.
 
 use super::{need_level, new_op_dir, now_ms, sha, tilde, write_manifest, Applied, Manifest, Plan};
 use crate::model::{Client, Kind};
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 const MAX_FILES: usize = 1000;
 const MAX_BYTES: u64 = 50 << 20;
 
-/// Имя каталога скила: буквы, цифры, `.`, `_`, `-`; без `..`. `synced` и `anthropic-skills` Claude Code занял сам.
+/// Skill directory name: letters, digits, `.`, `_`, `-`; no `..`. `synced` and `anthropic-skills` are taken by Claude Code itself.
 pub fn valid_name(n: &str) -> bool {
     let b = n.as_bytes();
     !b.is_empty()
@@ -25,12 +25,12 @@ pub fn valid_name(n: &str) -> bool {
         && !n.to_ascii_lowercase().starts_with("anthropic-skills")
 }
 
-/// `id` каталога подготовки: 32 hex, его выбирает main.
+/// `id` of the staging directory: 32 hex, chosen by main.
 fn valid_stage(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Путь внутри клона: пусто или сегменты из безопасных знаков через `/`.
+/// Path inside the clone: empty or segments of safe characters joined by `/`.
 fn valid_sub(sub: &str) -> bool {
     sub.is_empty()
         || (sub.len() <= 200
@@ -52,7 +52,7 @@ pub(super) fn target(home: &Path, name: &str) -> Option<PathBuf> {
     valid_name(name).then(|| home.join(".claude").join("skills").join(name))
 }
 
-/// Файлы дерева по порядку: `(путь через /, полный путь, размер)`. Ссылки и точки повторной обработки — отказ, `.git` пропускается.
+/// Tree files in order: `(path with /, full path, size)`. Links and reparse points are refused, `.git` is skipped.
 fn walk(root: &Path) -> Result<Vec<(String, PathBuf, u64)>, String> {
     let mut out = Vec::new();
     let mut total = 0u64;
@@ -70,8 +70,8 @@ fn walk(root: &Path) -> Result<Vec<(String, PathBuf, u64)>, String> {
             let ft = std::fs::symlink_metadata(e.path())
                 .map_err(|e| e.to_string())?
                 .file_type();
-            // На Windows `is_symlink` истинно и для junction (точка повторной обработки с битом name-surrogate): проверено
-            // тестом `junction_inside_the_skill_tree_is_refused`. Прочие точки (облачные заглушки) не ссылки и идут как файлы.
+            // On Windows `is_symlink` is also true for a junction (a reparse point with the name-surrogate bit): checked
+            // by the test `junction_inside_the_skill_tree_is_refused`. Other reparse points (cloud placeholders) are not links and go as files.
             if ft.is_symlink() {
                 return Err(bad(
                     &format!("в скиле есть символьная ссылка: {rel}{name}"),
@@ -100,7 +100,7 @@ fn walk(root: &Path) -> Result<Vec<(String, PathBuf, u64)>, String> {
     Ok(out)
 }
 
-/// Хеш дерева: пути и содержимое по порядку. `digest` даёт хеш одного файла (путь, размер).
+/// Tree hash: paths and content in order. `digest` gives the hash of one file (path, size).
 fn tree_sha_by(
     files: &[(String, PathBuf, u64)],
     digest: impl Fn(&Path, u64) -> Result<String, String>,
@@ -123,15 +123,15 @@ fn tree_sha(files: &[(String, PathBuf, u64)]) -> Result<String, String> {
     })
 }
 
-/// Хеши файлов, уже посчитанные этим процессом: ключ — путь, значение — (время изменения, размер, хеш).
-/// Нужен только показу журнала (`can_rollback` на каждой из 200 строк); установка и откат хешируют заново.
-/// shortcut: правка файла с тем же размером в пределах точности mtime журнал не заметит, а откат всё равно пересчитает.
+/// File hashes already computed by this process: key is the path, value is (mtime, size, hash).
+/// Needed only to display the journal (`can_rollback` on each of 200 rows); install and rollback hash anew.
+/// shortcut: the journal will not notice an edit that keeps the size within mtime precision, but rollback recomputes anyway.
 static FILE_SHA: std::sync::Mutex<Option<ShaCache>> = std::sync::Mutex::new(None);
 type ShaCache = std::collections::HashMap<PathBuf, (std::time::SystemTime, u64, String)>;
 
 #[cfg(test)]
 thread_local! {
-    /// Сколько файлов `cached_digest` реально прочитал в этом потоке (тест «второй показ не читает файлы»).
+    /// How many files `cached_digest` actually read on this thread (test "the second display reads no files").
     pub(super) static DISK_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -160,8 +160,8 @@ pub(super) fn dir_sha(dir: &Path) -> Option<String> {
     walk(dir).ok().and_then(|f| tree_sha(&f).ok())
 }
 
-// Швы для тестов: `NO_RENAME` имитирует `skills/` на другом томе (`rename` каталога не проходит), а `AFTER_BACKUP`
-// вызывается в откате после копии скила в бэкап и до удаления (там тест занимает файл, как это сделал бы чужой процесс).
+// Test seams: `NO_RENAME` imitates `skills/` on another volume (directory `rename` fails), and `AFTER_BACKUP`
+// is called in rollback after the skill is copied to backup and before deletion (the test locks a file there, as a foreign process would).
 #[cfg(test)]
 type Hook = Box<dyn Fn()>;
 #[cfg(test)]
@@ -174,7 +174,7 @@ thread_local! {
 fn rename_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     if NO_RENAME.with(std::cell::Cell::get) {
-        return Err(std::io::Error::other("rename отключён тестом"));
+        return Err(std::io::Error::other("rename disabled by the test"));
     }
     std::fs::rename(from, to)
 }
@@ -243,16 +243,16 @@ fn check(home: &Path, store: &Path, stage: &str, sub: &str, name: &str) -> Resul
             total.div_ceil(1024)
         ),
     )];
-    // текст — только по расширению имени файла; без расширения (скрипт с шебангом) считается кодом
+    // text only by file name extension; no extension (a script with a shebang) counts as code
     let text = |r: &str| {
         let l = r.rsplit('/').next().unwrap_or(r).to_ascii_lowercase();
         [".md", ".txt", ".json", ".yaml", ".yml", ".csv"]
             .iter()
             .any(|x| l.ends_with(x))
     };
-    // SKILL.md сам может запускать команды (`` !`…` ``) и снимать запросы разрешений (`allowed-tools`)
+    // SKILL.md can run commands itself (`` !`…` ``) and suppress permission prompts (`allowed-tools`)
     let md = std::fs::read_to_string(src.join("SKILL.md")).unwrap_or_default();
-    // по документации skills: строка `` !`команда` `` и блок ```` ```! ```` выполняются при вызове скила без запроса
+    // per the skills docs: a `` !`command` `` line and a ```` ```! ```` block run when the skill is invoked, without a prompt
     if md.contains("!`") || md.contains("```!") || md.contains("allowed-tools") {
         notes.push(bad(
             "SKILL.md запускает команды или разрешает инструменты без запроса (!`…`, allowed-tools): прочитайте его до установки",
@@ -338,7 +338,7 @@ pub fn apply(
         let _ = std::fs::remove_dir_all(&dir);
         Err(e)
     };
-    // копия того, что ставим: журнал показывает, что именно было установлено, даже после отката
+    // a copy of what we install: the journal shows what exactly was installed, even after rollback
     if let Err(e) = copy_files(&c.files, &dir.join("skill")) {
         return fail(e);
     }
@@ -369,7 +369,7 @@ pub fn apply(
     if let Err(e) = write_manifest(&dir, &m) {
         return fail(e);
     }
-    // временный каталог рядом с `skills/` (тот же том, `rename` атомарен), но не внутри: за `skills/` следит Claude Code
+    // temp directory next to `skills/` (same volume, `rename` is atomic), but not inside: Claude Code watches `skills/`
     let claude = home.join(".claude");
     let tmp = claude.join(format!(".{name}.loadout.tmp"));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -385,8 +385,8 @@ pub fn apply(
             if rename_dir(&tmp, &c.target).is_ok() {
                 return Ok(());
             }
-            // `skills` — ссылка на другой том: `rename` не пройдёт, копируем на место. `create_dir` откажет, если каталог
-            // успел появиться: чужое не перезаписываем и не удаляем; созданный нами при сбое убираем
+            // `skills` is a link to another volume: `rename` will not work, copy into place. `create_dir` refuses if the directory
+            // has already appeared: we neither overwrite nor delete foreign data; one we created is removed on failure
             std::fs::create_dir(&c.target).map_err(|e| e.to_string())?;
             copy_files(&c.files, &c.target).inspect_err(|_| {
                 let _ = std::fs::remove_dir_all(&c.target);
@@ -414,7 +414,7 @@ pub fn apply(
     })
 }
 
-/// Можно ли откатить установку: скил на месте и не менялся. Путь берётся из имени, а не из манифеста.
+/// Whether the install can be rolled back: the skill is in place and unchanged. The path comes from the name, not from the manifest.
 pub(super) fn can_rollback(home: &Path, m: &Manifest) -> bool {
     target(home, &m.name)
         .and_then(|t| walk(&t).ok())
@@ -429,7 +429,7 @@ pub(super) fn rollback(
     op: &str,
     m: &Manifest,
 ) -> Result<Applied, String> {
-    // манифест лежит в каталоге пользователя: цель пересчитываем из проверенного имени
+    // the manifest lives in the user's directory: recompute the target from the verified name
     let target = target(home, &m.name)
         .ok_or_else(|| bad("манифест повреждён", "the manifest is corrupted"))?;
     let files = walk(&target).map_err(|_| {
@@ -449,7 +449,7 @@ pub(super) fn rollback(
         let _ = std::fs::remove_dir_all(&dir);
         Err(e)
     };
-    // удаление = перенос в бэкап: сначала копия, потом каталог убирается
+    // delete = move to backup: first a copy, then the directory is removed
     if let Err(e) = copy_files(&files, &dir.join("removed")) {
         return fail(e);
     }
@@ -459,15 +459,15 @@ pub(super) fn rollback(
             hook();
         }
     });
-    // Сначала каталог уходит с места (одним `rename`, если тот же том), и только потом пишется строка журнала:
-    // недоделанное удаление не должно выглядеть откатом. Сорвалось удаление — возвращаем удалённое из копии.
+    // First the directory leaves its place (one `rename` if on the same volume), and only then is the journal line written:
+    // an unfinished deletion must not look like a rollback. If deletion failed, restore what was deleted from the copy.
     let gone = home
         .join(".claude")
         .join(format!(".{}.loadout.removed", m.name));
     let _ = std::fs::remove_dir_all(&gone);
     let moved = rename_dir(&target, &gone).is_ok();
-    // Возврат после сорванного отката. Копирует всё, что может, не останавливаясь на занятом файле. Если вернуть целиком
-    // не вышло, копия в каталоге операции остаётся, и ошибка называет её путь (строки журнала у неё нет).
+    // Restore after a failed rollback. Copies everything it can, not stopping at a busy file. If it cannot restore everything,
+    // the copy stays in the operation directory, and the error names its path (it has no journal line).
     let restore = |why: String| -> Result<Applied, String> {
         let whole = if moved {
             std::fs::rename(&gone, &target).is_ok()
@@ -475,7 +475,7 @@ pub(super) fn rollback(
             walk(&dir.join("removed")).is_ok_and(|back| {
                 back.iter().fold(true, |ok, (rel, path, _)| {
                     let dest = target.join(rel);
-                    // совпавшим считается только файл, который прочитался с обеих сторон
+                    // a file counts as matching only if it was read on both sides
                     let same = matches!(
                         (std::fs::read(&dest), std::fs::read(path)),
                         (Ok(a), Ok(b)) if a == b
@@ -495,7 +495,7 @@ pub(super) fn rollback(
                 &format!("the rollback did not happen: {why}; the skill is in place"),
             ));
         }
-        // манифест мог успеть записаться: без него операция не выглядит откатом в журнале, копия остаётся
+        // the manifest may have been written: without it the operation does not look like a rollback in the journal, the copy stays
         let _ = std::fs::remove_file(dir.join("manifest.json"));
         let copy = tilde(home, &dir.join("removed"));
         Err(bad(
@@ -523,7 +523,7 @@ pub(super) fn rollback(
     if let Err(e) = write_manifest(&dir, &r) {
         return restore(e);
     }
-    // копия уже в бэкапе операции: не удалившийся до конца временный каталог ничего не портит
+    // the copy is already in the operation's backup: a temp directory that was not fully removed does no harm
     let _ = std::fs::remove_dir_all(&gone);
     Ok(Applied {
         op: id,
@@ -544,7 +544,7 @@ mod tests {
         d
     }
 
-    /// Манифест установленного скила: нужны только имя и хеш «после».
+    /// Manifest of an installed skill: only the name and the "after" hash are needed.
     pub(super) fn manifest(name: &str, sha_after: String) -> Manifest {
         Manifest {
             version: 2,
@@ -571,7 +571,7 @@ mod tests {
         }
     }
 
-    /// Дом со скилом `demo` из двух файлов.
+    /// A home with skill `demo` made of two files.
     pub(super) fn home_with_skill(tag: &str) -> (PathBuf, PathBuf) {
         let home = tmp(tag);
         let dir = home.join(".claude").join("skills").join("demo");
@@ -587,12 +587,12 @@ mod tests {
         let m = manifest("demo", dir_sha(&dir).unwrap());
         let reads = || DISK_READS.with(std::cell::Cell::get);
         assert!(can_rollback(&home, &m));
-        assert_eq!(reads(), 2, "первый показ читает оба файла");
+        assert_eq!(reads(), 2, "the first display reads both files");
         for _ in 0..3 {
             assert!(can_rollback(&home, &m));
         }
-        assert_eq!(reads(), 2, "повторный показ файлы не читает");
-        // правка одного файла (другой размер и время): показ замечает и перечитывает только его
+        assert_eq!(reads(), 2, "a repeated display does not read the files");
+        // editing one file (different size and time): the display notices it and rereads only that file
         std::fs::write(dir.join("a.txt"), "изменён").unwrap();
         assert!(!can_rollback(&home, &m));
         assert_eq!(reads(), 3);

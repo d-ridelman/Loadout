@@ -1,19 +1,19 @@
-//! Маскирование (CONCEPT.md §5): секретные значения не покидают ядро.
+//! Masking (CONCEPT.md §5): secret values never leave the core.
 //!
-//! Подход — белый список. Аргументы и команды хуков — свободный текст, и чёрный список слов давал бы новый
-//! обход при каждом аудите. Поэтому всё, что не опознано как безвредное, скрывается (`<masked>`):
-//! показываются имена флагов, числа, пути (укоренённые или с именем файла известного типа), URL без секретных
-//! частей, имена пакетов, имена файлов, исполняемые файлы и небольшой набор типичных слов. Значение после
-//! секретно названного флага или ключа скрывается всегда, даже если выглядит безвредным.
+//! The approach is an allow list. Arguments and hook commands are free text, and a deny list of words would give a new
+//! bypass with every audit. So everything not recognised as harmless is hidden (`<masked>`):
+//! what is shown: flag names, numbers, paths (rooted or with a file name of a known type), URLs without secret
+//! parts, package names, file names, executables and a small set of common words. The value after
+//! a flag or key with a secret-looking name is always hidden, even if it looks harmless.
 //!
-//! Цена: часть полезного текста (позиционные слова, значения флагов) в выводе заменена на `<masked>`.
-//! В M3 UI покажет полную команду по явному действию «показать» (удержание), а не по умолчанию.
+//! Cost: part of the useful text (positional words, flag values) is replaced with `<masked>` in the output.
+//! In M3 the UI will show the full command on an explicit "show" action (press and hold), not by default.
 
 use serde_json::{json, Value};
 
 pub const MASK: &str = "<masked>";
 
-/// Подстроки, которых достаточно где угодно в имени.
+/// Substrings that are enough anywhere in a name.
 const SECRET_PARTS: [&str; 12] = [
     "token",
     "secret",
@@ -28,13 +28,13 @@ const SECRET_PARTS: [&str; 12] = [
     "bearer",
     "oauth",
 ];
-/// Слова, которые считаем только целыми (`pat` в `GH_PAT`, но не в `path`).
+/// Words counted only as whole words (`pat` in `GH_PAT`, but not in `path`).
 const SECRET_WORDS: [&str; 14] = [
     "pat", "auth", "pass", "pwd", "pw", "sid", "jwt", "cred", "session", "private", "pin", "otp",
     "passcode", "code",
 ];
 
-/// Слова, которые можно показать без опаски: интерпретаторы, обёртки, типичные подкоманды и значения.
+/// Words that are safe to show: interpreters, wrappers, common subcommands and values.
 const SAFE_WORDS: &[&str] = &[
     "node",
     "npx",
@@ -100,13 +100,13 @@ const SAFE_WORDS: &[&str] = &[
     "ru",
     "en",
 ];
-/// Расширения файлов, имя которых можно показывать.
+/// File extensions whose file names may be shown.
 const SAFE_EXT: &[&str] = &[
     "js", "mjs", "cjs", "ts", "py", "sh", "ps1", "cmd", "bat", "exe", "json", "yaml", "yml",
     "toml", "md", "txt", "sql", "db", "ini", "cfg", "conf", "log", "jar", "dll", "so", "rs", "go",
     "rb", "php", "html", "css", "lock", "pid", "sock",
 ];
-/// Параметры PowerShell, у которых имя безвредно.
+/// PowerShell parameters whose name is harmless.
 const PS_FLAGS: &[&str] = &[
     "NoProfile",
     "File",
@@ -117,9 +117,9 @@ const PS_FLAGS: &[&str] = &[
     "NoLogo",
     "Version",
 ];
-/// Программы, которые запускают пакет по имени: следующее слово без флага — имя пакета.
+/// Programs that run a package by name: the next word without a flag is the package name.
 const LAUNCHERS: &[&str] = &["npx", "uvx", "pipx", "bunx", "dlx"];
-/// Схемы URL, которые считаем URL.
+/// URL schemes that we treat as URLs.
 const SCHEMES: &[&str] = &[
     "http",
     "https",
@@ -142,7 +142,7 @@ pub fn is_secret_key(key: &str) -> bool {
             .any(|w| w == "key" || SECRET_WORDS.contains(&w))
 }
 
-/// Длинная строка из букв и цифр (допускаем `_`, `-`, `:`): похоже на токен (`ghp_…`, UUID без дефисов, `bot123:AAH…`).
+/// A long string of letters and digits (allowing `_`, `-`, `:`): looks like a token (`ghp_…`, UUID without hyphens, `bot123:AAH…`).
 fn looks_like_token(s: &str) -> bool {
     s.len() >= 24
         && s.chars()
@@ -151,7 +151,7 @@ fn looks_like_token(s: &str) -> bool {
         && s.chars().any(|c| c.is_ascii_alphabetic())
 }
 
-/// Смесь заглавных, строчных и цифр от 16 символов: base64 и случайные ключи, а не слово.
+/// A mix of upper case, lower case and digits of 16+ characters: base64 and random keys, not a word.
 fn high_entropy(s: &str) -> bool {
     s.chars().count() >= 16
         && s.chars().any(|c| c.is_ascii_digit())
@@ -159,10 +159,10 @@ fn high_entropy(s: &str) -> bool {
         && s.chars().any(|c| c.is_ascii_lowercase())
 }
 
-/// Фрагмент пути или слово, в котором, скорее всего, лежит секрет.
+/// A path fragment or word that most likely holds a secret.
 fn seg_secret(seg: &str) -> bool {
     let stem = seg.rsplit_once('.').map_or(seg, |(s, _)| s);
-    // шестнадцатеричная строка от 20 знаков (ключи API, хеши) и длинное слово из одних букв и цифр от 32 знаков
+    // a hex string of 20+ characters (API keys, hashes) and a long word of only letters and digits of 32+ characters
     let hex = |s: &str| s.len() >= 20 && s.chars().all(|c| c.is_ascii_hexdigit());
     let long_plain = |s: &str| s.len() >= 32 && s.chars().all(|c| c.is_ascii_alphanumeric());
     looks_like_token(seg)
@@ -176,8 +176,8 @@ fn seg_secret(seg: &str) -> bool {
         || long_plain(stem)
 }
 
-/// Версия пакета: `1.2`, `6.8.0`, `1.0.0-rc.1` или тег выпуска. Короткие числа без точки (`123`) и случайные
-/// строки версией не считаются: так `admin@123` и `имя@токен` не сойдут за `пакет@версия`.
+/// Package version: `1.2`, `6.8.0`, `1.0.0-rc.1` or a release tag. Short numbers without a dot (`123`) and random
+/// strings do not count as a version: so `admin@123` and `name@token` do not pass for `package@version`.
 fn is_version(v: &str) -> bool {
     if matches!(
         v,
@@ -204,12 +204,12 @@ fn is_identifier(s: &str) -> bool {
         && !s.starts_with(|c: char| c.is_ascii_digit())
 }
 
-/// Операторы, после которых начинается новая команда.
+/// Operators after which a new command starts.
 fn is_control_op(s: &str) -> bool {
     matches!(s, "&" | "&&" | "|" | "||" | ";")
 }
 
-/// Перенаправления без файла-значения; после них команда не начинается.
+/// Redirections without a file value; no command starts after them.
 fn is_redirect(s: &str) -> bool {
     matches!(
         s,
@@ -237,9 +237,9 @@ fn is_file_name(s: &str) -> bool {
     }
 }
 
-/// Путь: укоренённый (`/`, `\`, `~`, `.`, `$`, `%`, `C:`) или оканчивающийся именем файла известного типа;
-/// без символов, в которых прячутся секреты; двоеточие только в имени диска; ни один сегмент не похож на секрет.
-/// Строка base64 со слэшами сюда не попадает: она не укоренена и не оканчивается именем файла.
+/// Path: rooted (`/`, `\`, `~`, `.`, `$`, `%`, `C:`) or ending with a file name of a known type;
+/// without characters that hide secrets; a colon only in a drive name; no segment looks like a secret.
+/// A base64 string with slashes does not qualify: it is not rooted and does not end with a file name.
 fn is_path_like(s: &str) -> bool {
     let segs: Vec<&str> = s.split(['/', '\\']).collect();
     if segs.len() < 2 {
@@ -262,14 +262,14 @@ fn is_path_like(s: &str) -> bool {
         && !scrambled(s)
 }
 
-/// Путь целиком похож на base64, разрезанный слэшами (`/K7MDENG/bPxRfiCYEXAMPLEKEY`): смесь регистров и цифр,
-/// длинный, без точек. Настоящие пути с точкой в имени файла сюда не попадают.
+/// The whole path looks like base64 cut by slashes (`/K7MDENG/bPxRfiCYEXAMPLEKEY`): a mix of cases and digits,
+/// long, without dots. Real paths with a dot in the file name do not match.
 fn scrambled(s: &str) -> bool {
     let flat: String = s.chars().filter(|c| !matches!(c, '/' | '\\')).collect();
     !s.contains('.') && high_entropy(&flat) && flat.chars().count() >= 20
 }
 
-/// Имя пакета с версией: `rea-agents@6.8.0`, `@scope/name@1.2`.
+/// Package name with a version: `rea-agents@6.8.0`, `@scope/name@1.2`.
 fn is_pkg_version(s: &str) -> bool {
     let Some((name, ver)) = s.rsplit_once('@').filter(|(n, _)| !n.is_empty()) else {
         return false;
@@ -282,7 +282,7 @@ fn is_pkg_version(s: &str) -> bool {
         && is_version(ver)
 }
 
-/// Имя пакета после `npx`/`uvx`: `firecrawl-mcp`, `@upstash/context7-mcp@latest`, `mcp-server-fetch`.
+/// Package name after `npx`/`uvx`: `firecrawl-mcp`, `@upstash/context7-mcp@latest`, `mcp-server-fetch`.
 fn is_package_name(s: &str) -> bool {
     let body = s.strip_prefix('@').unwrap_or(s);
     let (path, version) = body
@@ -298,7 +298,7 @@ fn is_package_name(s: &str) -> bool {
         && version.is_none_or(is_version)
 }
 
-/// Значение (не флаг): показываем, только если опознали как безвредное.
+/// A value (not a flag): shown only if recognised as harmless.
 fn safe_value(v: &str) -> String {
     if v.contains("://") {
         return mask_url(v);
@@ -316,23 +316,23 @@ fn safe_value(v: &str) -> String {
     }
 }
 
-/// Состояние разбора командной строки.
+/// Command-line parsing state.
 #[derive(Clone, Copy)]
 struct Pos {
-    /// Ожидается исполняемый файл.
+    /// An executable is expected.
     cmd: bool,
-    /// Ожидается имя пакета (после `npx`, `uvx`).
+    /// A package name is expected (after `npx`, `uvx`).
     pkg: bool,
 }
 
-/// Один токен командной строки. `next` — следующий токен (для коротких флагов с отдельным значением).
-/// Возвращает показываемый токен и признак «следующее значение скрыть».
+/// One command-line token. `next` is the next token (for short flags with a separate value).
+/// Returns the token to show and a "hide the next value" flag.
 fn mask_token(a: &str, pos: Pos, next: Option<&str>) -> (String, bool) {
     if a.is_empty() || is_control_op(a) || is_redirect(a) {
         return (a.to_owned(), false);
     }
     if a.starts_with(['{', '[']) || a.starts_with("@{") {
-        return (MASK.to_owned(), false); // JSON и хеш-таблицы PowerShell: ключи неизвестны, прячем целиком
+        return (MASK.to_owned(), false); // JSON and PowerShell hash tables: keys are unknown, hide the whole thing
     }
     if let Some(long) = a.strip_prefix("--") {
         let (name, val) = long
@@ -353,34 +353,34 @@ fn mask_token(a: &str, pos: Pos, next: Option<&str>) -> (String, bool) {
     if let Some(short) = a.strip_prefix('-') {
         let letters = !short.is_empty() && short.chars().all(|c| c.is_ascii_alphabetic());
         if letters && (short.len() <= 2 || PS_FLAGS.contains(&short)) {
-            // `-p значение`, `-a значение`: однобуквенные флаги паролей и ключей; значение прячем, если оно не флаг и не URL
+            // `-p value`, `-a value`: one-letter password and key flags; hide the value unless it is a flag or a URL
             let secret_letter =
                 (short.len() == 1 && "pPaAwWkK".contains(short)) || is_secret_key(short);
             let hide =
                 secret_letter && next.is_some_and(|n| !n.starts_with('-') && !n.contains("://"));
             return (a.to_owned(), hide);
         }
-        // `-pПАРОЛЬ`, `-ubob:pw`, `-pw значение`, `-Password значение`: имя флага неизвестно, значит и значение после него
+        // `-pPASSWORD`, `-ubob:pw`, `-pw value`, `-Password value`: the flag name is unknown, so the value after it
         return (MASK.to_owned(), true);
     }
-    // `X-Token:` — имя заголовка отдельным токеном: значение следующим
+    // `X-Token:` is a header name as a separate token: the value comes next
     if a.len() > 2 && a.ends_with(':') {
         return (MASK.to_owned(), true);
     }
     if let Some((name, _)) = a.split_once('=') {
         if is_identifier(name) {
-            return (format!("{name}={MASK}"), false); // `ИМЯ=значение`: значение всегда скрыто
+            return (format!("{name}={MASK}"), false); // `NAME=value`: the value is always hidden
         }
         return (MASK.to_owned(), false);
     }
     if a.len() == 2 && a.starts_with('/') && a.as_bytes()[1].is_ascii_alphabetic() {
-        return (a.to_owned(), false); // ключ cmd: `/c`
+        return (a.to_owned(), false); // cmd key: `/c`
     }
     let shown = safe_value(a);
     if shown != MASK {
         return (shown, false);
     }
-    // Имя пакета после npx/uvx и имя исполняемого файла в позиции команды: только строчные буквы.
+    // Package name after npx/uvx and executable name in the command position: lower-case letters only.
     if pos.pkg && is_package_name(a) && !seg_secret(a) {
         return (a.to_owned(), false);
     }
@@ -396,7 +396,7 @@ fn mask_token(a: &str, pos: Pos, next: Option<&str>) -> (String, bool) {
     (shown, false)
 }
 
-/// Аргументы командной строки, где первый токен — исполняемый файл (хуки).
+/// Command-line arguments where the first token is the executable (hooks).
 pub fn mask_args(args: &[String]) -> Vec<String> {
     mask_args_ex(
         args,
@@ -408,10 +408,10 @@ pub fn mask_args(args: &[String]) -> Vec<String> {
     )
 }
 
-/// Глубже этого вложенность (`sh -c "bash -c '…'"`) не разбираем, а прячем целиком.
+/// Nesting deeper than this (`sh -c "bash -c '…'"`) is not parsed but hidden whole.
 const MAX_DEPTH: usize = 3;
 
-/// Аргумент с пробелом, который не похож на путь с пробелами, — вложенная командная строка.
+/// An argument with a space that does not look like a path with spaces is a nested command line.
 pub(crate) fn is_nested_command(a: &str) -> bool {
     a.contains(char::is_whitespace) && !a.split_whitespace().all(|w| w.contains(['/', '\\']))
 }
@@ -428,7 +428,7 @@ fn mask_nested(arg: &str, depth: usize) -> String {
             pkg: false,
         },
     ));
-    // подряд идущие скрытые слова сворачиваем в одно
+    // collapse consecutive hidden words into one
     let mut out: Vec<&str> = Vec::new();
     for w in masked.split(' ') {
         if !(w == MASK && out.last() == Some(&MASK)) {
@@ -463,7 +463,7 @@ fn mask_args_ex(args: &[String], depth: usize, start: Pos) -> Vec<String> {
                 pkg: false,
             };
         } else if a.contains(char::is_whitespace) {
-            // путь с пробелами
+            // path with spaces
             out.push(if is_path_like(a) {
                 a.clone()
             } else {
@@ -477,11 +477,11 @@ fn mask_args_ex(args: &[String], depth: usize, start: Pos) -> Vec<String> {
             let (shown, hide) = mask_token(a, pos, args.get(i + 1).map(String::as_str));
             let launcher = LAUNCHERS.contains(&stem_of(a).as_str());
             let is_flag = a.starts_with('-');
-            // команда ожидается после управляющего оператора; имя пакета — после npx/uvx, флаги его не сбрасывают
+            // a command is expected after a control operator; the package name after npx/uvx, flags do not reset it
             pos = Pos {
                 cmd: is_control_op(a),
-                // имя пакета возможно сразу после npx/uvx и после флагов без значения (`-y`); флаг со значением
-                // (`--header секрет`) сбивает счёт, и следующее слово пакетом не считается
+                // the package name may come right after npx/uvx and after value-less flags (`-y`); a flag with a value
+                // (`--header secret`) breaks the count, and the next word is not taken as a package
                 pkg: launcher
                     || (pos.pkg
                         && is_flag
@@ -497,8 +497,8 @@ fn mask_args_ex(args: &[String], depth: usize, start: Pos) -> Vec<String> {
     out
 }
 
-/// Делит командную строку по пробелам с учётом кавычек. Обратный слэш не считаем экранированием
-/// (на Windows это разделитель пути), кроме `\"` и `\'` внутри кавычек.
+/// Splits the command line on spaces, honouring quotes. A backslash is not treated as an escape
+/// (on Windows it is a path separator), except `\"` and `\'` inside quotes.
 pub fn split_shell(line: &str) -> Vec<String> {
     let (mut out, mut cur, mut quote, mut any) = (Vec::new(), String::new(), None::<char>, false);
     let mut chars = line.chars().peekable();
@@ -529,12 +529,12 @@ pub fn split_shell(line: &str) -> Vec<String> {
     out
 }
 
-/// Командная строка целиком (хуки, `command` MCP).
+/// A whole command line (hooks, MCP `command`).
 pub fn mask_line(line: &str) -> String {
     join_line(&mask_args(&split_shell(line)))
 }
 
-/// Собирает токены обратно в строку: токены с пробелами берутся в двойные кавычки.
+/// Joins tokens back into a line: tokens with spaces are put in double quotes.
 pub fn join_line(tokens: &[String]) -> String {
     tokens
         .iter()
@@ -549,7 +549,7 @@ pub fn join_line(tokens: &[String]) -> String {
         .join(" ")
 }
 
-/// Хост с портом: имя из букв, цифр, `.` и `-` (или IPv6 в скобках), порт только цифрами.
+/// Host with port: a name of letters, digits, `.` and `-` (or IPv6 in brackets), the port digits only.
 fn host_ok(h: &str) -> bool {
     let (name, port) = match h.strip_prefix('[') {
         Some(r) => match r.split_once(']') {
@@ -565,8 +565,8 @@ fn host_ok(h: &str) -> bool {
     name_ok && port.is_none_or(|p| p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit()))
 }
 
-/// URL: без userinfo (`user:pass@`, `токен@`), query, fragment и `;параметров`; хост и порт проверены;
-/// токеноподобные, JWT и %-закодированные сегменты пути скрыты. Строка с неизвестной схемой скрывается целиком.
+/// URL: without userinfo (`user:pass@`, `token@`), query, fragment and `;params`; host and port are checked;
+/// token-like, JWT and %-encoded path segments are hidden. A string with an unknown scheme is hidden whole.
 pub fn mask_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return MASK.to_owned();
@@ -574,8 +574,8 @@ pub fn mask_url(url: &str) -> String {
     if !SCHEMES.contains(&scheme.to_ascii_lowercase().as_str()) {
         return MASK.to_owned();
     }
-    // Userinfo: всё до первой `@`, если перед ней нет слэша. Слэш перед `@` значит либо путь (`/@scope/pkg`),
-    // либо пароль со слэшем (`u:pa/ss@host`): отличаем по тому, пусто ли слово между последним слэшем и `@`.
+    // Userinfo: everything up to the first `@` if there is no slash before it. A slash before `@` means either a path (`/@scope/pkg`),
+    // or a password with a slash (`u:pa/ss@host`): we tell them apart by whether the word between the last slash and `@` is empty.
     let rest = match rest.find('@') {
         Some(i) => match rest[..i].rfind('/') {
             None => &rest[i + 1..],
@@ -606,7 +606,7 @@ pub fn mask_url(url: &str) -> String {
     format!("{scheme}://{host}/{}", path.join("/"))
 }
 
-/// Версия, хеш коммита, тип, имя схемы: только безобидные символы и разумная длина, иначе ничего.
+/// Version, commit hash, type, scheme name: only harmless characters and a sensible length, otherwise nothing.
 pub fn safe_version(s: &str) -> Option<&str> {
     let hex = (7..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit());
     let plain = !s.is_empty()
@@ -618,7 +618,7 @@ pub fn safe_version(s: &str) -> Option<&str> {
     (hex || plain).then_some(s)
 }
 
-/// Matcher хука (`Bash`, `Write|Edit`, `mcp__x__.*`): только символы регулярного выражения над именами инструментов.
+/// Hook matcher (`Bash`, `Write|Edit`, `mcp__x__.*`): only regular-expression characters over tool names.
 pub fn safe_matcher(s: &str) -> Option<&str> {
     (!s.is_empty()
         && s.len() <= 120
@@ -630,8 +630,8 @@ pub fn safe_matcher(s: &str) -> Option<&str> {
     .then_some(s)
 }
 
-/// Имя сущности из файла (скил, агент, событие хука): буквы любого алфавита, цифры и `._-:@/` с пробелом, до 80 символов,
-/// без слов, похожих на секрет.
+/// Name of an entity from a file (skill, agent, hook event): letters of any alphabet, digits and `._-:@/` with a space, up to 80 characters,
+/// without words that look like a secret.
 pub fn safe_name(s: &str) -> Option<&str> {
     (!s.is_empty()
         && s.chars().count() <= 80
@@ -641,8 +641,8 @@ pub fn safe_name(s: &str) -> Option<&str> {
     .then_some(s)
 }
 
-/// Строка из файла в поле, где секретов быть не должно (имя, область, указатель, примечание): куски между
-/// разделителями (`/ \ : @ , = ;` и пробел), похожие на токен, заменяются. Разделители сохраняются.
+/// A string from a file in a field where there should be no secrets (name, scope, pointer, note): pieces between
+/// separators (`/ \ : @ , = ;` and space) that look like a token are replaced. Separators are kept.
 pub fn scrub_words(s: &str) -> String {
     let is_delim =
         |c: char| c.is_whitespace() || matches!(c, '/' | '\\' | ':' | '@' | ',' | '=' | ';' | '~');
@@ -666,7 +666,7 @@ pub fn scrub_words(s: &str) -> String {
     out
 }
 
-/// Свободный текст (описание скила): слова, похожие на токен или ключ известного вида, заменяются.
+/// Free text (skill description): words that look like a token or a key of a known kind are replaced.
 pub fn mask_prose(s: &str) -> String {
     const PREFIXES: [&str; 8] = ["sk-", "sk_", "ghp_", "gho_", "xox", "AKIA", "eyJ", "glpat"];
     s.split(' ')
@@ -694,7 +694,7 @@ fn keys_of(cfg: &Value, names: &[&str]) -> Vec<String> {
     keys
 }
 
-/// Описание MCP-сервера без значений env и заголовков: только имена ключей.
+/// MCP server description without env and header values: key names only.
 pub fn mcp_detail(cfg: &Value) -> Value {
     let command = cfg.get("command").and_then(Value::as_str);
     let url = cfg.get("url").and_then(Value::as_str);
@@ -714,7 +714,7 @@ pub fn mcp_detail(cfg: &Value) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    // `args` не начинаются с исполняемого файла: он в `command`. Если это npx/uvx, первое слово без флага — пакет.
+    // `args` do not start with the executable: it is in `command`. If it is npx/uvx, the first word without a flag is the package.
     let launcher = command.is_some_and(|c| LAUNCHERS.contains(&stem_of(c).as_str()));
     json!({
         "transport": transport,
@@ -770,7 +770,7 @@ mod tests {
         }
     }
 
-    /// Находки итогового аудита M1: ни одно значение не должно пройти.
+    /// Findings of the final M1 audit: no value may get through.
     #[test]
     fn m1_audit_forms_do_not_leak() {
         let cases: Vec<(&str, &str)> = vec![
@@ -798,12 +798,12 @@ mod tests {
             let out = mask_line(line);
             assert!(!out.contains(secret), "{line} -> {out}");
         }
-        // и безвредное по-прежнему видно
+        // and the harmless part is still visible
         assert_eq!(
             mask_line("npx -y firecrawl-mcp@1.2.3"),
             "npx -y firecrawl-mcp@1.2.3"
         );
-        // пользователь@адрес не секрет и по виду совпадает с пакет@версия: показываем сознательно
+        // user@address is not a secret and looks like package@version: we show it deliberately
         assert_eq!(mask_line("ssh admin@10.0.0.5"), "ssh admin@10.0.0.5");
     }
 
@@ -858,7 +858,7 @@ mod tests {
         );
     }
 
-    /// Формы трёх аудитов: ни одно значение не должно пройти.
+    /// Forms from the three audits: no value may get through.
     #[test]
     fn audit_forms_do_not_leak() {
         let cases: Vec<(Vec<&str>, &str)> = vec![
@@ -890,7 +890,7 @@ mod tests {
             (vec!["tool", "hunter2"], "hunter2"),
             (vec!["--token=my secret"], "secret"),
             (vec!["PASSWORD=correct horse"], "horse"),
-            // третий аудит
+            // third audit
             (vec!["uvx", "--from", "git+https://ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1@github.com/org/repo@main", "tool"], "ghp_"),
             (vec!["aws", "configure", "set", "aws_secret_access_key", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"], "wJalr"),
             (vec!["-EncodedCommand", "SQBFAFgAIAAoAE4AZQB3AC0ATwBi/+AAA"], "SQBF"),
@@ -932,7 +932,7 @@ mod tests {
             ("cat <<EOF | tool\nHD1\nEOF", "HD1"),
             ("mysql -pPW3 db", "PW3"),
             ("sshpass -p PW6 ssh host", "PW6"),
-            // третий аудит: вложенная строка с первым словом-путём
+            // third audit: a nested string whose first word is a path
             (
                 r#"bash -c "/usr/bin/tool sk_live_51HabcdefghijklmnopqrSTUV""#,
                 "sk_live",
@@ -992,10 +992,10 @@ mod tests {
         let cfg = json!({"command":"node","args":["a.js","--token","S4","--user=bob:M1","-pM2","correcthorsebatterystaple"],"url":"user:M3@h","env":{"API_KEY":"S5","ghp_AbCdEfGhIjKlMnOpQrStUvWx0123":"x"},"headers":{"Authorization":"Bearer S6"}});
         let s = mcp_detail(&cfg).to_string();
         for secret in ["S4", "S5", "S6", "M1", "M2", "M3", "correcthorse", "ghp_"] {
-            assert!(!s.contains(secret), "{secret} утёк: {s}");
+            assert!(!s.contains(secret), "{secret} leaked: {s}");
         }
         assert!(s.contains("API_KEY") && s.contains("Authorization"));
-        // имя пакета у npx остаётся
+        // the npx package name stays
         let npx = mcp_detail(&json!({"command":"npx","args":["-y","firecrawl-mcp"]})).to_string();
         assert!(npx.contains("firecrawl-mcp"), "{npx}");
     }

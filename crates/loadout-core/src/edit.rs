@@ -1,6 +1,6 @@
-//! Точечная правка булева ключа в тексте JSON и TOML (R1, CONCEPT.md §5, шаг 6).
-//! Файл не разбирается и не собирается заново: меняются только байты самого значения (или добавляется одна запись),
-//! поэтому порядок ключей, комментарии, отступы, BOM и CRLF остаются как были.
+//! Targeted edit of a boolean key in JSON and TOML text (R1, CONCEPT.md §5, step 6).
+//! The file is neither parsed nor rebuilt: only the bytes of the value itself change (or one entry is added),
+//! so key order, comments, indentation, BOM and CRLF stay as they were.
 
 use crate::model::Format;
 use jsonc_parser::ast::{Object, ObjectProp, ObjectPropName, Value};
@@ -10,7 +10,7 @@ use toml_edit::{DocumentMut, Item, TableLike};
 
 const BOM: char = '\u{feff}';
 
-/// Текущее значение ключа: `Ok(None)` — ключа нет.
+/// Current value of the key: `Ok(None)` means the key is absent.
 pub fn get_bool(format: Format, text: &str, path: &[String]) -> Result<Option<bool>, String> {
     let text = text.strip_prefix(BOM).unwrap_or(text);
     match format {
@@ -41,7 +41,7 @@ pub fn get_bool(format: Format, text: &str, path: &[String]) -> Result<Option<bo
     }
 }
 
-/// Текст с ключом `path`, равным `value`. Остальные байты те же.
+/// Text with key `path` set to `value`. All other bytes are the same.
 pub fn set_bool(
     format: Format,
     text: &str,
@@ -78,7 +78,7 @@ pub fn set_bool(
     Ok(format!("{bom}{out}"))
 }
 
-/// Что записать по ключу в TOML.
+/// What to write at the key in TOML.
 enum Leaf<'a> {
     Bool(bool),
     Json(&'a serde_json::Value),
@@ -91,7 +91,7 @@ fn split_bom(text: &str) -> (&'static str, &str) {
     }
 }
 
-/// Значение по пути как JSON (для копирования между клиентами). `Ok(None)` — ключа нет.
+/// Value at the path as JSON (for copying between clients). `Ok(None)` means the key is absent.
 pub fn get_value(
     format: Format,
     text: &str,
@@ -118,7 +118,7 @@ pub fn get_value(
     }
 }
 
-/// Записывает значение любого типа по пути. `replace == false`: существующий ключ — отказ (копирование не затирает).
+/// Writes a value of any type at the path. `replace == false`: an existing key is a refusal (copying does not overwrite).
 pub fn put_value(
     format: Format,
     text: &str,
@@ -155,9 +155,9 @@ fn put_json_text(body: &str, path: &[String], raw: &str, replace: bool) -> Resul
         Found::Value(_) if !replace => Err(crate::tr!("такой ключ уже есть", "key already exists")),
         Found::Value(v) => {
             let r = v.range();
-            // многострочное значение встаёт с отступом строки, на которой начинается заменяемое
+            // a multi-line value takes the indentation of the line where the replaced value starts
             let ind = line_indent(t, r.start);
-            // переводы строк как в файле: многострочный `args` не должен сделать CRLF-файл смешанным
+            // line endings as in the file: a multi-line `args` must not make a CRLF file mixed
             let nl = if t.contains("\r\n") { "\r\n" } else { "\n" };
             Ok(format!(
                 "{}{}{}",
@@ -170,7 +170,7 @@ fn put_json_text(body: &str, path: &[String], raw: &str, replace: bool) -> Resul
     })
 }
 
-/// Вставляет в JSON значение, уже записанное текстом (из [`cut_json`]): порядок ключей и форма сохраняются.
+/// Inserts into JSON a value already written as text (from [`cut_json`]): key order and form are preserved.
 pub fn put_raw_json(
     text: &str,
     path: &[String],
@@ -183,8 +183,8 @@ pub fn put_raw_json(
     Ok(format!("{bom}{}", put_json_text(body, path, raw, replace)?))
 }
 
-/// Вырезает свойство из JSON и возвращает новый текст и значение (текст как в файле, отступы приведены к нулю).
-/// Запятые соседей, остальные байты и CRLF не трогаются. Комментарии между свойствами и повтор ключа — отказ.
+/// Cuts a property out of JSON and returns the new text and the value (text as in the file, indentation reset to zero).
+/// Neighbours' commas, other bytes and CRLF are left alone. Comments between properties and a repeated key are a refusal.
 pub fn cut_json(text: &str, path: &[String]) -> Result<(String, String), String> {
     let (bom, body) = split_bom(text);
     let (key, parents) = path
@@ -261,7 +261,7 @@ pub fn cut_json(text: &str, path: &[String]) -> Result<(String, String), String>
     Ok((format!("{bom}{}{}", &body[..from], &body[to..]), raw))
 }
 
-/// Строки значения без общего отступа и с `\n` вместо `\r\n`.
+/// Value lines without the common indentation and with `\n` instead of `\r\n`.
 fn dedent(raw: &str, indent: &str) -> String {
     raw.replace("\r\n", "\n")
         .split('\n')
@@ -277,7 +277,7 @@ fn dedent(raw: &str, indent: &str) -> String {
         .join("\n")
 }
 
-/// Обратное к [`dedent`]: продолжение значения получает отступ строки, на которой оно стоит.
+/// The inverse of [`dedent`]: a continuation of the value takes the indentation of the line it sits on.
 fn reindent(raw: &str, indent: &str, nl: &str) -> String {
     raw.split('\n')
         .enumerate()
@@ -293,9 +293,9 @@ fn reindent(raw: &str, indent: &str, nl: &str) -> String {
 }
 
 enum Found<'a, 'b> {
-    /// Ключ есть, значение любого типа.
+    /// The key exists, the value is of any type.
     Value(&'b Value<'a>),
-    /// Ключа нет: `obj` — самый глубокий существующий объект, `depth` — сколько ключей пути в нём уже есть.
+    /// The key is absent: `obj` is the deepest existing object, `depth` is how many path keys it already has.
     Missing { obj: &'b Object<'a>, depth: usize },
 }
 
@@ -306,7 +306,7 @@ fn name_of<'a>(n: &'a ObjectPropName<'_>) -> &'a str {
     }
 }
 
-/// Последнее свойство с таким именем: `serde_json` при повторе ключа берёт последний.
+/// The last property with this name: `serde_json` takes the last one when a key repeats.
 fn find<'a, 'b>(obj: &'b Object<'a>, key: &str) -> Option<&'b ObjectProp<'a>> {
     obj.properties
         .iter()
@@ -347,10 +347,10 @@ fn with_json<T>(
             },
         }
     }
-    unreachable!("путь не пуст, последний ключ возвращает результат")
+    unreachable!("the path is non-empty, the last key returns the result")
 }
 
-/// Значение для новых ключей: `"k0": {"k1": <leaf>}` одной строкой или в несколько с отступом.
+/// Value for new keys: `"k0": {"k1": <leaf>}` on one line or on several with indentation.
 fn render(keys: &[String], leaf: &str, multiline: bool, indent: &str, nl: &str) -> String {
     let key = serde_json::to_string(&keys[0]).unwrap_or_default();
     if keys.len() == 1 {
@@ -401,7 +401,7 @@ fn insert_json(
             Ok(format!("{}{sep}{prop}{}", &text[..at], &text[at..]))
         }
         None => {
-            // `{}` или `{ }`: комментарий внутри потерять нельзя, такой файл не трогаем
+            // `{}` or `{ }`: a comment inside must not be lost, so we leave such a file alone
             let inner = &text[start + 1..end - 1];
             if !inner.trim().is_empty() {
                 return Err(crate::tr!(
@@ -421,7 +421,7 @@ fn insert_json(
     }
 }
 
-/// JSON → элемент TOML. Таблицы получают собственные заголовки; `null` и таблицы внутри массивов TOML не знает.
+/// JSON → TOML item. Tables get their own headers; TOML knows neither `null` nor tables inside arrays.
 fn to_item(v: &serde_json::Value) -> Result<Item, String> {
     use serde_json::Value as J;
     Ok(match v {
@@ -475,7 +475,7 @@ fn set_toml(text: &str, path: &[String], leaf: Leaf<'_>) -> Result<String, Strin
     let crlf = text.contains("\r\n");
     let only_crlf = crlf && !text.replace("\r\n", "").contains('\n');
     if crlf && !only_crlf {
-        // toml_edit пишет новые и перенесённые строки через `\n`: в смешанном файле поменялись бы байты вне правки
+        // toml_edit writes new and moved lines with `\n`: in a mixed file bytes outside the edit would change
         return Err(crate::tr!(
             "в файле смешанные переводы строк (CRLF и LF): правка отказана",
             "the file has mixed line endings (CRLF and LF): edit refused"
@@ -488,7 +488,7 @@ fn set_toml(text: &str, path: &[String], leaf: Leaf<'_>) -> Result<String, Strin
     for (i, k) in parents.iter().enumerate() {
         if !t.contains_key(k) {
             let mut nt = toml_edit::Table::new();
-            // промежуточные таблицы без собственного заголовка; заголовок получает только самая глубокая
+            // intermediate tables have no header of their own; only the deepest one gets a header
             nt.set_implicit(i + 1 != parents.len());
             t.insert(k, Item::Table(nt));
         }
@@ -505,7 +505,7 @@ fn set_toml(text: &str, path: &[String], leaf: Leaf<'_>) -> Result<String, Strin
                 .as_value_mut()
                 .filter(|v| v.is_bool())
                 .ok_or_else(|| crate::tr!("значение не булево", "value is not a boolean"))?;
-            let decor = v.decor().clone(); // пробелы и комментарий в конце строки
+            let decor = v.decor().clone(); // whitespace and trailing comment of the line
             *v = toml_edit::Value::from(b);
             *v.decor_mut() = decor;
         }
@@ -513,7 +513,7 @@ fn set_toml(text: &str, path: &[String], leaf: Leaf<'_>) -> Result<String, Strin
             t.insert(last, toml_edit::value(b));
         }
         (Some(item), Leaf::Json(j)) => {
-            // Заменяем только значение (скаляр или массив) с его пробелами; таблицу целиком не перезаписываем.
+            // Replace only the value (scalar or array) with its whitespace; do not overwrite a whole table.
             let new = to_item(j)?;
             match (item.as_value_mut(), new) {
                 (Some(v), Item::Value(nv)) => {
@@ -534,7 +534,7 @@ fn set_toml(text: &str, path: &[String], leaf: Leaf<'_>) -> Result<String, Strin
         }
     }
     let out = doc.to_string();
-    // новые строки toml_edit пишет через `\n`: в файле с одними CRLF приводим всё к CRLF
+    // toml_edit writes new lines with `\n`: in a file with CRLF only we convert everything to CRLF
     if only_crlf {
         return Ok(out.replace("\r\n", "\n").replace('\n', "\r\n"));
     }
@@ -549,7 +549,7 @@ mod tests {
         s.iter().map(|x| (*x).to_owned()).collect()
     }
 
-    /// Разница в байтах: общий префикс и суффикс отброшены, остаётся только изменённая середина.
+    /// Byte difference: the common prefix and suffix are dropped, leaving only the changed middle.
     fn middle(a: &str, b: &str) -> (String, String) {
         let pre = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
         let suf = a
@@ -565,18 +565,18 @@ mod tests {
         )
     }
 
-    /// Разбирается как JSON с комментариями (в фикстуре `J` есть `//`, строгий `serde_json` его не примет).
+    /// Parsed as JSON with comments (fixture `J` has `//`, which strict `serde_json` rejects).
     fn valid(s: &str) -> bool {
         parse_to_ast(s, &CollectOptions::default(), &ParseOptions::default()).is_ok()
     }
 
     fn sem(s: &str) -> serde_json::Value {
-        serde_json::from_str(s).unwrap_or_else(|e| panic!("не JSON: {e}\n{s}"))
+        serde_json::from_str(s).unwrap_or_else(|e| panic!("not JSON: {e}\n{s}"))
     }
 
     const S: &str = "{\n  \"keep\": 1,\n  \"mcpServers\": {\n    \"a\": {\n      \"command\": \"x\",\n      \"args\": [\"-y\", \"p\"]\n    },\n    \"b\": {\"command\": \"y\"},\n    \"c\": {\"command\": \"z\", \"env\": {\"K\": \"FAKE-SECRET\"}}\n  }\n}\n";
 
-    /// Убрал и вернул: значение равно исходному, остальной файл семантически тот же. Первая, средняя, последняя и единственная.
+    /// Cut and put back: the value equals the original, the rest of the file is semantically the same. First, middle, last and only entry.
     #[test]
     fn json_cut_and_put_back_round_trips_for_every_position() {
         for name in ["a", "b", "c"] {
@@ -584,7 +584,7 @@ mod tests {
             let (cut, raw) = cut_json(S, &path).unwrap();
             assert!(valid(&cut), "{name}: {cut}");
             assert_eq!(get_value(Format::Json, &cut, &path).unwrap(), None);
-            // остальные записи не тронуты
+            // the other entries are untouched
             for other in ["a", "b", "c"].iter().filter(|o| **o != name) {
                 let q = p(&["mcpServers", other]);
                 assert_eq!(
@@ -594,9 +594,13 @@ mod tests {
             }
             let back = put_value(Format::Json, &cut, &path, &sem(&raw), false).unwrap();
             assert!(valid(&back), "{name}: {back}");
-            assert_eq!(sem(&back), sem(S), "{name}: после возврата значение то же");
+            assert_eq!(
+                sem(&back),
+                sem(S),
+                "{name}: the value is the same after the put-back"
+            );
         }
-        // единственная запись
+        // the only entry
         let one = "{\n  \"mcpServers\": {\n    \"only\": {\"command\": \"q\"}\n  }\n}\n";
         let path = p(&["mcpServers", "only"]);
         let (cut, raw) = cut_json(one, &path).unwrap();
@@ -611,12 +615,12 @@ mod tests {
         let (cut, _) = cut_json(&crlf, &p(&["mcpServers", "b"])).unwrap();
         assert!(
             !cut.replace("\r\n", "").contains('\n'),
-            "переводы строк остались CRLF"
+            "line endings stayed CRLF"
         );
         assert_eq!(
             middle(&crlf, &cut).1,
             "",
-            "вырезано целиком, ничего не дописано"
+            "cut out entirely, nothing appended"
         );
         assert!(cut.starts_with("{\r\n  \"keep\": 1"));
     }
@@ -795,7 +799,7 @@ mod tests {
         assert!(set_bool(Format::Toml, "a = 1", &p(&["a"]), true).is_err());
         assert!(set_bool(Format::Toml, "a = 1", &p(&["a", "b"]), true).is_err());
         assert!(set_bool(Format::Toml, "a = [", &p(&["a"]), true).is_err());
-        // смешанные переводы строк: отказ, а не молчаливая порча байтов вне правки
+        // mixed line endings: a refusal, not silent corruption of bytes outside the edit
         let mixed = "[a]\r\nx = 1\n[b]\r\ny = 2\r\n";
         assert!(set_bool(Format::Toml, mixed, &p(&["a", "enabled"]), true)
             .unwrap_err()

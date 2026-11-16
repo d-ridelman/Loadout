@@ -1,4 +1,4 @@
-//! Адаптер Claude Code (CLI и вкладка Code в Claude Desktop). Источники — таблица §2 CONCEPT.md.
+//! Claude Code adapter (the CLI and the Code tab in Claude Desktop). Sources: the table in CONCEPT.md §2.
 
 use crate::mask::{self, mcp_detail};
 use crate::model::{Client, Entity, Format, Kind, Source, Src, State, Target, TargetKind};
@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 const CLIENT: Client = Client::ClaudeCode;
-/// Ключи верхнего уровня `~/.claude.json`, где лежат «выключенные» MCP (стэш владельца, не штатный механизм Claude Code).
+/// Top-level keys of `~/.claude.json` that hold "disabled" MCP servers (the owner's stash, not an official Claude Code mechanism).
 const STASH_KEYS: [&str; 2] = ["_disabledMcpServers", "_mcpServersDisabled"];
 
 pub fn scan(c: &mut Ctx) {
@@ -20,9 +20,9 @@ pub fn scan(c: &mut Ctx) {
         .and_then(|s| s.get("disableClaudeAiConnectors"))
         .and_then(Value::as_bool)
         == Some(true);
-    // `deniedMcpServers`: `[{serverName | serverCommand | serverUrl: …}]`, действует из любого файла настроек
-    // (документация Claude Code, managed-mcp.md). Сопоставляем только по `serverName`: так же называются
-    // коннекторы claude.ai (`claude.ai Slack`). По команде и URL M1 не сопоставляет.
+    // `deniedMcpServers`: `[{serverName | serverCommand | serverUrl: …}]`, applies from any settings file
+    // (Claude Code docs, managed-mcp.md). We match by `serverName` only: claude.ai connectors
+    // are named the same way (`claude.ai Slack`). M1 does not match by command or URL.
     let denied: HashSet<String> = settings
         .as_ref()
         .and_then(|s| s.get("deniedMcpServers"))
@@ -42,7 +42,7 @@ pub fn scan(c: &mut Ctx) {
     }
 }
 
-/// Булев ключ в `~/.claude/settings.json` (цель записи R1).
+/// A boolean key in `~/.claude/settings.json` (write target R1).
 fn settings_flag(c: &Ctx, path: &[&str]) -> Target {
     Target {
         file: c.home.join(".claude/settings.json"),
@@ -76,7 +76,7 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
         fn version_of(r: &Value) -> Option<&str> {
             r.get("version").and_then(Value::as_str)
         }
-        // Разные версии в одной области — расхождение (stale). В разных областях это норма, только пометка.
+        // Different versions in one scope are a discrepancy (stale). In different scopes this is normal, just a mark.
         let user_versions: HashSet<&str> = recs
             .iter()
             .filter(|r| is_user_rec(r))
@@ -92,7 +92,7 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                     ))
                 ),
                 Some(s @ ("user" | "local" | "managed" | "enterprise")) => s.to_owned(),
-                Some(_) => "other".to_owned(), // неизвестное значение из файла в вывод не пускаем
+                Some(_) => "other".to_owned(), // an unknown value from the file is not let into the output
                 None => "user".to_owned(),
             };
             let is_user = scope == "user";
@@ -229,8 +229,8 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
     let file = "~/.claude.json";
     let mut found = Vec::new();
 
-    // Облачные коннекторы claude.ai (CONCEPT.md §5.1, C0/C1): на диске только имена «когда-либо подключались»,
-    // источник правды — аккаунт. Локально их гасит один ключ `disableClaudeAiConnectors`.
+    // claude.ai cloud connectors (CONCEPT.md §5.1, C0/C1): on disk there are only the names of those "ever connected",
+    // the source of truth is the account. Locally they are switched off by the single key `disableClaudeAiConnectors`.
     for (i, name) in v
         .get("claudeAiMcpEverConnected")
         .and_then(Value::as_array)
@@ -257,7 +257,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
             )
         };
         let mut t = settings_flag(c, &["disableClaudeAiConnectors"]);
-        t.inverted = true; // `true` в файле — коннекторы выключены, и это касается всех сразу
+        t.inverted = true; // `true` in the file means the connectors are off, all of them at once
         found.push(
             Entity::new(
                 CLIENT,
@@ -291,7 +291,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
                 format!("/mcpServers/{}", esc_ptr(name)),
             )
             .detail(mcp_detail(cfg))
-            // выключение вырезает запись в корзину Loadout (у MCP нет флага «выключено»)
+            // switching off cuts the entry into the Loadout trash (MCP has no "disabled" flag)
             .target(Target {
                 file: claude_json.clone(),
                 format: Format::Json,
@@ -309,7 +309,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
     for key in STASH_KEYS {
         for (name, cfg) in v.get(key).and_then(Value::as_object).into_iter().flatten() {
             if name.starts_with('_') {
-                continue; // `_note` и подобное — не серверы
+                continue; // `_note` and the like are not servers
             }
             found.push(
                 Entity::new(
@@ -326,7 +326,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
                     "lies outside mcpServers, Claude Code does not launch it (owner's stash, not a standard key)"
                 ))
                 .detail(mcp_detail(cfg))
-                // включение переносит запись обратно в mcpServers внутри того же файла
+                // switching on moves the entry back into mcpServers within the same file
                 .target(Target {
                     file: claude_json.clone(),
                     format: Format::Json,
@@ -349,7 +349,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
             .into_iter()
             .flatten()
         {
-            // `shown` — путь для показа (с `~`), а не настоящий ключ `projects`; для записи в M3 ключ ищется по `scope`.
+            // `shown` is the display path (with `~`), not the real `projects` key; M3 looks the key up by `scope` for writing.
             let shown = c.tilde(Path::new(path));
             found.push(
                 Entity::new(
@@ -367,7 +367,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
     }
     for mut e in found {
         if denied.contains(&e.name) {
-            // ключ `disableClaudeAiConnectors` запрет по имени не снимает, и когда коннектор уже выключен этим ключом
+            // the `disableClaudeAiConnectors` key does not lift a by-name denial, even when the connector is already off through that key
             e.target = None;
             if e.state != State::Off || e.kind == Kind::Connector {
                 e.state = State::Off;
@@ -398,7 +398,7 @@ fn md_dir(c: &mut Ctx, dir: &str, kind: Kind) {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let fm = frontmatter::read(&p).unwrap_or_default();
-        // имя из frontmatter проходит тот же фильтр, что у скилов
+        // the name from frontmatter goes through the same filter as skill names
         let name = fm
             .get("name")
             .and_then(|n| mask::safe_name(n))

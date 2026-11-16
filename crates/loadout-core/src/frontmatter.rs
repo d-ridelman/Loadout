@@ -1,4 +1,4 @@
-//! Frontmatter `SKILL.md` и агентов: читаем только голову файла (CONCEPT.md §7).
+//! Frontmatter of `SKILL.md` and agents: only the head of the file is read (CONCEPT.md §7).
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -16,7 +16,7 @@ pub fn read(path: &Path) -> Option<HashMap<String, String>> {
     Some(parse(&String::from_utf8_lossy(&buf)))
 }
 
-/// Плоские `ключ: значение`. Многострочные значения (`|`, `>`) не разворачиваем: для M0 хватает имени и описания.
+/// Flat `key: value`. Multi-line values (`|`, `>`) are not unfolded: M0 only needs the name and description.
 pub fn parse(text: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut lines = text.lines();

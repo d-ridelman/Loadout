@@ -1,5 +1,5 @@
-//! Гонка с клиентом: файл меняют между записью временного файла и `rename`. Колбэк `BEFORE_SWAP` есть только в тестах
-//! крейта, поэтому тесты здесь, а не в `tests/`.
+//! Race with a client: the file is changed between writing the temp file and `rename`. The `BEFORE_SWAP` callback exists only in the crate's
+//! tests, so the tests are here and not in `tests/`.
 
 use super::{apply, journal, rollback, Intent, BEFORE_SWAP};
 use crate::model::{Client, Kind};
@@ -52,7 +52,7 @@ pub(super) fn toggle(e: &Env, enable: bool) -> Intent {
     Intent::Toggle { entity: id, enable }
 }
 
-/// Колбэк: перед заменой клиент дописывает свою строку.
+/// Callback: before the swap the client appends its own line.
 fn client_writes(text: &'static str) {
     BEFORE_SWAP.with(|h| {
         *h.borrow_mut() = Some(Box::new(move |p: &Path| {
@@ -68,10 +68,10 @@ fn no_tmp(e: &Env) {
         .unwrap()
         .flatten()
         .any(|f| f.file_name().to_string_lossy().contains("loadout"));
-    assert!(!left, "временный файл не остался");
+    assert!(!left, "the temp file did not remain");
 }
 
-/// Временные файлы убитых ядер (другие pid) старше десяти минут убираются при следующей записи, свежие остаются.
+/// Temp files of killed cores (other pids) older than ten minutes are removed on the next write, fresh ones stay.
 #[test]
 fn stale_temp_files_of_dead_cores_are_cleaned_but_fresh_ones_stay() {
     let e = env("stale-tmp");
@@ -94,9 +94,15 @@ fn stale_temp_files_of_dead_cores_are_cleaned_but_fresh_ones_stay() {
     let i = toggle(&e, false);
     let p = super::plan(&e.home, Some(&e.store), &i).unwrap();
     apply(&e.home, &e.store, &i, &p.base_sha, "R2").unwrap();
-    assert!(!stale.exists(), "старый временный файл убран");
-    assert!(fresh.exists(), "свежий (запись другого ядра) не тронут");
-    assert!(other.exists(), "чужие файлы с другим именем не трогаем");
+    assert!(!stale.exists(), "the old temp file was removed");
+    assert!(
+        fresh.exists(),
+        "the fresh one (another core's write) is untouched"
+    );
+    assert!(
+        other.exists(),
+        "foreign files with a different name are not touched"
+    );
 }
 
 #[test]
@@ -107,7 +113,7 @@ fn commit_refuses_when_the_file_changes_right_before_the_swap() {
     client_writes("# клиент успел\n");
     let err = apply(&e.home, &e.store, &i, &plan.base_sha, "R2").unwrap_err();
     assert!(err.contains("перед заменой"), "{err}");
-    // клиентская запись цела, наша не пришла, строки журнала и каталога операции нет
+    // the client's write is intact, ours did not land, no journal line and no operation directory
     let text = fs::read_to_string(cfg(&e)).unwrap();
     assert!(text.ends_with("# клиент успел\n") && text.contains("enabled = true"));
     assert!(journal(&e.home, &e.store).is_empty());
@@ -125,7 +131,7 @@ fn rollback_refuses_when_the_file_changes_right_before_the_swap() {
     assert!(err.contains("перед заменой"), "{err}");
     let text = fs::read_to_string(cfg(&e)).unwrap();
     assert!(text.ends_with("# клиент успел\n") && text.contains("enabled = false"));
-    // откатом это не стало: исходная операция по-прежнему одна и числится не откатанной
+    // this did not count as a rollback: the original operation is still one and is listed as not rolled back
     let j = journal(&e.home, &e.store);
     assert_eq!(j.len(), 1);
     assert!(!j[0].rolled_back);

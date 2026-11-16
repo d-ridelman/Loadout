@@ -1,4 +1,4 @@
-//! Запись R1 на копии фикстур во временном каталоге: настоящий дом и `fixtures/` не трогаются никогда.
+//! R1 writes on a copy of the fixtures in a temporary directory: the real home and `fixtures/` are never touched.
 
 use loadout_core::model::{Client, Kind, ScanResult, State};
 use loadout_core::write::{self, journal, Applied, Intent, Plan};
@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 static N: AtomicU32 = AtomicU32::new(0);
 
-/// Тесты работают на уровне R2: ядро проверяет `max_level`, который в приложении приходит от main.
+/// Tests work at level R2: the core checks `max_level`, which in the app comes from main.
 const ML: &str = "R2";
 
 fn wapply(home: &Path, store: &Path, i: &Intent, sha: &str) -> Result<Applied, String> {
@@ -39,7 +39,7 @@ fn tog(id: &str, enable: bool) -> Intent {
     }
 }
 
-/// Переключение флага без корзины (R1): так же звало окно в M3.
+/// Flag toggle without the trash (R1): the window called it the same way in M3.
 fn plan(home: &Path, id: &str, enable: bool) -> Result<Plan, String> {
     write::plan(home, None, &tog(id, enable))
 }
@@ -95,7 +95,7 @@ fn id_of(r: &ScanResult, client: Client, kind: Kind, name: &str) -> String {
     r.entities
         .iter()
         .find(|e| e.client == client && e.kind == kind && e.name == name)
-        .unwrap_or_else(|| panic!("нет записи {name}"))
+        .unwrap_or_else(|| panic!("no entry {name}"))
         .id
         .clone()
 }
@@ -112,7 +112,7 @@ fn codex_cfg(e: &Env) -> PathBuf {
     e.home.join(".codex/config.toml")
 }
 
-/// Единственное место, где два текста различаются: общий префикс и суффикс отброшены.
+/// The only place where the two texts differ: the common prefix and suffix are dropped.
 fn middle(a: &str, b: &str) -> (String, String) {
     let pre = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
     let suf = a
@@ -145,7 +145,7 @@ fn toggle_roundtrip_changes_one_value_and_rolls_back_to_identical_bytes() {
     let after = fs::read_to_string(codex_cfg(&e)).unwrap();
     assert_eq!(middle(&original, &after), ("tru".into(), "fals".into()));
     assert_eq!(state_of(&e.home, &id), Some(State::Off));
-    // бэкап — точная копия файла до записи
+    // the backup is an exact copy of the file before the write
     assert_eq!(
         fs::read_to_string(e.store.join(&done.op).join("before")).unwrap(),
         original
@@ -163,14 +163,14 @@ fn toggle_roundtrip_changes_one_value_and_rolls_back_to_identical_bytes() {
     assert!(j[1].rolled_back && !j[1].can_rollback && j[0].op == "rollback");
     assert!(
         rollback(&e.home, &e.store, &done.op).is_err(),
-        "дважды откатить нельзя"
+        "cannot roll back twice"
     );
     assert!(
         !fs::read_dir(codex_cfg(&e).parent().unwrap())
             .unwrap()
             .flatten()
             .any(|f| f.file_name().to_string_lossy().contains("loadout")),
-        "временный файл не остался"
+        "no temporary file is left"
     );
 }
 
@@ -215,7 +215,7 @@ fn rollback_refuses_when_the_file_changed_after_the_operation() {
 #[test]
 fn missing_key_is_inserted_and_rolled_back() {
     let e = env();
-    // у p3@bundled таблица есть, а ключа `enabled` нет: состояние неизвестно
+    // p3@bundled has a table but no `enabled` key: the state is unknown
     let id = id_of(
         &loadout_core::scan(&e.home),
         Client::Codex,
@@ -234,7 +234,7 @@ fn missing_key_is_inserted_and_rolled_back() {
 #[test]
 fn connectors_share_one_key_and_the_plan_says_so() {
     let e = env();
-    // второй коннектор добавляем в копию: в общей фикстуре он один, а золотые тесты считают записи
+    // we add a second connector to the copy: the shared fixture has only one, and the golden tests count entries
     let cj = e.home.join(".claude.json");
     let text = fs::read_to_string(&cj).unwrap();
     fs::write(
@@ -251,10 +251,10 @@ fn connectors_share_one_key_and_the_plan_says_so() {
         .iter()
         .filter(|x| x.client == Client::ClaudeCode && x.kind == Kind::Connector && x.can_toggle)
         .collect();
-    assert!(conns.len() >= 2, "в фикстуре несколько коннекторов");
+    assert!(conns.len() >= 2, "the fixture has several connectors");
     assert!(conns.iter().all(|c| c.state == State::Off));
     let p = plan(&e.home, &conns[0].id, true).unwrap();
-    // у `disableClaudeAiConnectors` значение `true` значит «выключено»: словами это видно без знания ключа
+    // for `disableClaudeAiConnectors` the value `true` means "off": in words this is clear without knowing the key
     assert_eq!((p.from.as_str(), p.to.as_str()), ("выключено", "включено"));
     assert_eq!(p.affects.len(), conns.len() - 1);
     apply(&e.home, &e.store, &conns[0].id, true, &p.base_sha).unwrap();
@@ -348,7 +348,7 @@ fn denied_connector_is_not_toggleable_even_when_already_off_by_the_global_key() 
         .unwrap();
     assert!(
         !c.can_toggle,
-        "запрет по имени ключом disableClaudeAiConnectors не снять"
+        "a deny by name via the disableClaudeAiConnectors key cannot be lifted"
     );
     assert!(plan(&e.home, &c.id, true)
         .unwrap_err()
@@ -374,13 +374,16 @@ fn repeated_toggle_and_rollback_chain_returns_identical_bytes() {
     let j = journal(&e.home, &e.store);
     assert_eq!(j.len(), 4);
     assert_eq!(j.iter().filter(|x| x.rolled_back).count(), 2);
-    assert!(j.iter().all(|x| !x.can_rollback), "все операции откатаны");
+    assert!(
+        j.iter().all(|x| !x.can_rollback),
+        "all operations are rolled back"
+    );
 }
 
 #[test]
 fn codex_app_flag_toggles_through_the_apps_table() {
     let e = env();
-    // `apps.demo-app` выключен в фикстуре, `apps._default` включён: запись включается явным ключом в своей таблице
+    // `apps.demo-app` is off in the fixture, `apps._default` is on: the entry is enabled by an explicit key in its own table
     let id = id_of(
         &loadout_core::scan(&e.home),
         Client::Codex,
@@ -394,11 +397,11 @@ fn codex_app_flag_toggles_through_the_apps_table() {
     let text = fs::read_to_string(codex_cfg(&e)).unwrap();
     assert!(
         text.contains("[apps._default]\nenabled = true"),
-        "общий ключ не тронут"
+        "the shared key is untouched"
     );
 }
 
-// ---- M4: корзина, правка, копирование, профили ----
+// ---- M4: trash, edit, copy, profiles ----
 
 fn state_in(e: &Env, id: &str) -> Option<State> {
     loadout_core::scan_with(&e.home, Some(&e.store))
@@ -452,7 +455,7 @@ fn mcp_without_flag_goes_to_trash_and_comes_back_with_the_same_id() {
         after["mcpServers"]["tool-a"],
         original["mcpServers"]["tool-a"]
     );
-    // запись видна как выключенная с тем же id, а без корзины в скан не попадает
+    // the entry is visible as off with the same id, and without the trash it does not show up in the scan
     assert_eq!(state_in(&e, &id), Some(State::Off));
     assert!(loadout_core::scan(&e.home)
         .entities
@@ -461,7 +464,7 @@ fn mcp_without_flag_goes_to_trash_and_comes_back_with_the_same_id() {
     let trash_text = fs::read_to_string(e.store.join("trash").join(format!("{id}.json"))).unwrap();
     assert!(
         trash_text.contains("FAKE-SECRET-AG-ENV"),
-        "значения лежат в корзине как есть"
+        "values sit in the trash as they are"
     );
     let shown = format!(
         "{}{}{}",
@@ -471,7 +474,7 @@ fn mcp_without_flag_goes_to_trash_and_comes_back_with_the_same_id() {
     );
     assert!(!shown.contains("FAKE-SECRET"), "{shown}");
 
-    // включить: файл семантически равен исходному, корзина пуста
+    // enable: the file is semantically equal to the original, the trash is empty
     let back = apply_i(&e, &tog(&id, true)).unwrap();
     assert_eq!(read_json(&ag_cfg(&e)), original);
     assert_eq!(state_in(&e, &id), Some(State::On));
@@ -487,12 +490,12 @@ fn trash_rollback_is_an_inverse_operation_even_after_the_client_rewrote_the_file
     let original = read_json(&cj);
     let done = apply_i(&e, &tog(&id, false)).unwrap();
     assert!(read_json(&cj)["mcpServers"].get("github").is_none());
-    // клиент переписал файл (так он делает постоянно): откат по хешу отказал бы, обратная операция проходит
+    // the client rewrote the file (it does this constantly): a hash-based rollback would refuse, the inverse operation goes through
     let mut v = read_json(&cj);
     v["numStartups"] = serde_json::json!(7);
     fs::write(&cj, serde_json::to_string_pretty(&v).unwrap()).unwrap();
     let j = journal(&e.home, &e.store);
-    assert!(j[0].can_rollback, "обратная операция возможна");
+    assert!(j[0].can_rollback, "the inverse operation is possible");
     rollback(&e.home, &e.store, &done.op).unwrap();
     let mut want = original;
     want["numStartups"] = serde_json::json!(7);
@@ -511,11 +514,11 @@ fn owners_stash_entry_returns_inside_the_file_and_other_stash_keys_stay() {
     assert_eq!(v["mcpServers"]["old"]["command"], "old");
     assert!(v["_disabledMcpServers"].get("old").is_none());
     assert_eq!(v["_disabledMcpServers"]["_note"], "стэш");
-    // указатель меняется (`/mcpServers/old`), а с ним и id: запись ищем по имени
+    // the pointer changes (`/mcpServers/old`), and so does the id: we look the entry up by name
     let live = id_in(&e, Client::ClaudeCode, "old");
     assert_ne!(live, id);
     assert_eq!(state_in(&e, &live), Some(State::On));
-    // откат при неизменном файле возвращает запись в стэш владельца (файл из бэкапа), а не в корзину Loadout
+    // rollback with an unchanged file puts the entry back into the owner's stash (file from the backup), not into the Loadout trash
     assert!(journal(&e.home, &e.store)[0].can_rollback);
     let before = fs::read(&cj).unwrap();
     rollback(&e.home, &e.store, &done.op).unwrap();
@@ -526,7 +529,7 @@ fn owners_stash_entry_returns_inside_the_file_and_other_stash_keys_stay() {
     assert_eq!(state_in(&e, &id), Some(State::Off));
     assert!(
         !e.store.join("trash").join(format!("{id}.json")).exists(),
-        "корзина не использована"
+        "the trash was not used"
     );
 }
 
@@ -558,7 +561,7 @@ fn edit_replaces_command_and_args_masks_the_log_and_rolls_back_to_identical_byte
     assert_eq!(v["mcpServers"]["desk-tool"]["args"][1], "FAKE-SECRET-NEW");
     assert_eq!(
         v["mcpServers"]["desk-tool"]["env"]["TOKEN"], "FAKE-SECRET-DESKENV",
-        "env не тронут"
+        "env is untouched"
     );
     assert_eq!(v["preferences"]["sidebarMode"], "chat");
     let shown = format!(
@@ -570,7 +573,7 @@ fn edit_replaces_command_and_args_masks_the_log_and_rolls_back_to_identical_byte
     rollback(&e.home, &e.store, &done.op).unwrap();
     assert_eq!(fs::read(&path).unwrap(), original);
 
-    // пустая команда, управляющие символы и запись без command отказывают
+    // an empty command, control characters and an entry without command are refused
     for bad in [
         Intent::Edit {
             entity: id.clone(),
@@ -627,15 +630,15 @@ fn copy_translates_between_json_and_toml_keeps_secrets_inside_the_core() {
     assert_eq!(
         s["env"]["TOKEN"].as_str(),
         Some("FAKE-SECRET-DESKENV"),
-        "значение скопировано как есть"
+        "the value was copied as is"
     );
-    // уже есть: второй раз отказ
+    // already exists: a second time is a refusal
     assert!(plan_s(&e, &to_codex).unwrap_err().contains("уже есть"));
-    // откат копии возвращает файл побайтово
+    // rolling back a copy restores the file byte for byte
     rollback(&e.home, &e.store, &done.op).unwrap();
     assert_eq!(fs::read(&cfg).unwrap(), original);
 
-    // Codex → Claude Code: http_headers → headers, type добавляется
+    // Codex → Claude Code: http_headers → headers, type is added
     let remote = id_in(&e, Client::Codex, "remote");
     let p = plan_s(
         &e,
@@ -705,14 +708,14 @@ fn add_creates_a_server_in_json_and_toml_hides_env_values_and_rolls_back() {
     rollback(&e.home, &e.store, &done.op).unwrap();
     assert_eq!(fs::read(&cfg).unwrap(), original);
 
-    // Antigravity (JSON), локальный сервер
+    // Antigravity (JSON), local server
     apply_i(&e, &add_local("antigravity", "local-ag")).unwrap();
     assert_eq!(
         read_json(&ag_cfg(&e))["mcpServers"]["local-ag"]["command"],
         "npx"
     );
 
-    // Claude Code, удалённый сервер: type http + url
+    // Claude Code, remote server: type http + url
     let remote = |to: &str, url: &str| Intent::Add {
         to: to.into(),
         name: "hosted".into(),
@@ -726,19 +729,19 @@ fn add_creates_a_server_in_json_and_toml_hides_env_values_and_rolls_back() {
     assert_eq!(v["mcpServers"]["hosted"]["type"], "http");
     assert_eq!(v["mcpServers"]["hosted"]["url"], "https://example.com/mcp");
 
-    // адрес без хоста и клиенты с непроверенной формой удалённого сервера — отказ
+    // an address without a host and clients with an unverified remote-server form are a refusal
     for bad in ["https://", "http://?x", "https://:80/x", "https://@h/"] {
         assert!(plan_s(&e, &remote("codex", bad)).is_err(), "{bad}");
     }
     assert!(plan_s(&e, &remote("antigravity", "https://example.com/mcp")).is_err());
     assert!(plan_s(&e, &remote("claude-desktop", "https://example.com/mcp")).is_err());
 
-    // точка в имени: Codex сам пишет такой ключ в кавычках (сверено с codex 0.159.3), указатель плана тоже
+    // a dot in the name: Codex itself writes such a key in quotes (checked against codex 0.159.3), and so does the plan pointer
     let p = plan_s(&e, &add_local("codex", "my.server")).unwrap();
     assert_eq!(p.pointer, "mcp_servers.\"my.server\"");
     assert!(plan_s(&e, &add_local("claude-code", "my.server")).is_ok());
 
-    // добавление не входит в пакет
+    // the addition is not part of the batch
     let items = [add_local("codex", "in-batch")];
     let bp = write::plan_batch(&e.home, Some(&e.store), &items);
     assert!(bp.plans.is_empty() && bp.skipped.len() == 1);
@@ -803,7 +806,7 @@ fn copy_refuses_same_client_deepseek_and_taken_names() {
             "{to}"
         );
     }
-    // `github` есть в Claude Code: копия из Codex с таким же именем отказывает
+    // `github` exists in Claude Code: a copy from Codex with the same name is refused
     let local = id_in(&e, Client::Antigravity, "tool-b");
     let ok = plan_s(
         &e,
@@ -823,14 +826,14 @@ fn plugin_files_deepseek_and_denied_entries_have_no_write_target() {
         .entities
         .iter()
         .find(|x| x.client == Client::Antigravity && x.kind == Kind::Mcp && x.scope != "user")
-        .expect("в фикстуре есть MCP плагина Antigravity");
+        .expect("the fixture has an Antigravity plugin MCP");
     assert!(!plugin_mcp.can_toggle && !plugin_mcp.can_edit);
     let ds = r
         .entities
         .iter()
         .find(|x| x.client == Client::DeepSeek && x.kind == Kind::Mcp)
         .unwrap();
-    // у DeepSeek запись выносится по строкам YAML (R2), но править и копировать её нельзя
+    // for DeepSeek the entry is moved out by YAML lines (R2), but it cannot be edited or copied
     assert!(ds.can_toggle && !ds.can_edit);
     assert_eq!(ds.toggle_level.as_deref(), Some("R2"));
     assert!(plan_s(
@@ -863,26 +866,26 @@ fn deepseek_entry_goes_to_trash_by_lines_and_returns_byte_identical() {
         !text.contains("mcp-demo") && text.contains("demo-hooks"),
         "{text}"
     );
-    // запись видна как выключенная, её описание берётся из строк в корзине, значения секретов не показываются
+    // the entry is visible as off, its description comes from the lines in the trash, secret values are not shown
     let r = loadout_core::scan_with(&e.home, Some(&e.store));
     let off = r
         .entities
         .iter()
         .find(|x| x.id == id)
-        .expect("запись из корзины");
+        .expect("entry from the trash");
     assert_eq!(off.state, State::Off);
     assert!(!serde_json::to_string(off).unwrap().contains("FAKE-SECRET"));
     let trashed = fs::read_to_string(e.store.join("trash").join(format!("{id}.json"))).unwrap();
     assert!(
         trashed.contains("FAKE-SECRET-DSENV") && trashed.contains("!!js process.cwd()"),
-        "строки как есть, с тегом"
+        "lines as they are, with the tag"
     );
 
-    // возврат и откат: файл побайтово как до выноса
+    // restore and rollback: the file is byte for byte as before the move-out
     let back = apply_i(&e, &tog(&id, true)).unwrap();
     assert_eq!(fs::read(&patch).unwrap(), original);
     assert!(!e.store.join("trash").join(format!("{id}.json")).exists());
-    // откат выноса после ручного изменения файла: обратная операция, а не возврат всего файла
+    // rollback of a move-out after a manual change to the file: an inverse operation, not a restore of the whole file
     let again = apply_i(&e, &tog(&id, false)).unwrap();
     let mut changed = fs::read_to_string(&patch).unwrap();
     changed.push_str("# дописал инструмент\n");
@@ -901,7 +904,7 @@ fn deepseek_profile_with_two_entries_of_one_operation_applies_both() {
     let e = env();
     let patch = e.home.join(".dsh/cordis.patch.yml");
     let text = fs::read_to_string(&patch).unwrap();
-    // вторая запись MCP в той же операции: после выноса первой её номер сдвигается, а id остаётся прежним
+    // a second MCP entry in the same operation: after the first is moved out its number shifts, while the id stays the same
     let extra = "    - id: mcp-two\n      name: \"@deepseek-ai/dsh-mcp-client\"\n      config:\n        serverName: two\n        transport: stdio\n        command: two.exe\n";
     let marker = "- insert:\n    - id: demo-hooks";
     assert!(text.contains(marker));
@@ -928,7 +931,7 @@ fn deepseek_profile_with_two_entries_of_one_operation_applies_both() {
     assert_eq!(
         applied.len(),
         2,
-        "обе записи выключены, ни одна не пропущена молча"
+        "both entries are off, none skipped silently"
     );
     let r = loadout_core::scan_with(&e.home, Some(&e.store));
     let off = |n: &str| {
@@ -945,16 +948,16 @@ fn deepseek_profile_with_two_entries_of_one_operation_applies_both() {
 fn core_enforces_the_level_that_main_grants() {
     let e = env();
     let id = id_in(&e, Client::Antigravity, "tool-b");
-    let i = tog(&id, false); // вынос в корзину: R2
+    let i = tog(&id, false); // move-out to the trash: R2
     let p = plan_s(&e, &i).unwrap();
     let err = write::apply(&e.home, &e.store, &i, &p.base_sha, "R1").unwrap_err();
     assert!(err.contains("R2"), "{err}");
     assert!(journal(&e.home, &e.store).is_empty());
     let done = write::apply(&e.home, &e.store, &i, &p.base_sha, "R2").unwrap();
-    // откат операции R2 тоже требует R2
+    // rolling back an R2 operation also requires R2
     assert!(write::rollback(&e.home, &e.store, &done.op, "R1").is_err());
     assert!(write::rollback(&e.home, &e.store, &done.op, "R2").is_ok());
-    // флаг (R1) проходит и с R1
+    // a flag (R1) passes with R1 too
     let flag = id_of(
         &loadout_core::scan(&e.home),
         Client::Codex,
@@ -992,10 +995,10 @@ fn plan_and_journal_have_no_home_path_and_edit_keeps_crlf() {
     let out = fs::read_to_string(&path).unwrap();
     assert!(
         !out.replace("\r\n", "").contains('\n'),
-        "в CRLF-файле появились голые LF: {out:?}"
+        "bare LF appeared in a CRLF file: {out:?}"
     );
 
-    // копирование: путь в замаскированной команде тоже заменяется на `~`
+    // copy: the path in a masked command is also replaced with `~`
     let b = id_in(&e, Client::Antigravity, "tool-b");
     let cp = plan_s(
         &e,
@@ -1011,7 +1014,7 @@ fn plan_and_journal_have_no_home_path_and_edit_keeps_crlf() {
 #[test]
 fn copy_refuses_an_entry_that_would_be_dead_at_the_receiver() {
     let e = env();
-    // удалённый сервер с адресом в нестандартном ключе: после перевода нет ни command, ни url
+    // a remote server with the address in a non-standard key: after the conversion there is neither command nor url
     let path = e
         .home
         .join("AppData/Roaming/Claude/claude_desktop_config.json");
@@ -1045,7 +1048,7 @@ fn different_value_under_the_same_trash_id_is_never_overwritten() {
     let id = id_in(&e, Client::Antigravity, "tool-b");
     let original = fs::read_to_string(ag_cfg(&e)).unwrap();
     apply_i(&e, &tog(&id, false)).unwrap();
-    // запись вернули руками, но уже с другой командой: старая копия в корзине — единственное место прежнего значения
+    // the entry was put back by hand, but with a different command: the old copy in the trash is the only place of the previous value
     fs::write(
         ag_cfg(&e),
         original.replace("\"command\": \"node\"", "\"command\": \"NEWNODE\""),
@@ -1065,7 +1068,7 @@ fn rollback_of_a_trash_operation_does_not_pick_another_entry_by_name() {
     fs::remove_file(e.store.join("trash").join(format!("{id}.json"))).unwrap();
     let before = fs::read(ag_cfg(&e)).unwrap();
     assert!(rollback(&e.home, &e.store, &done.op).is_err());
-    assert_eq!(fs::read(ag_cfg(&e)).unwrap(), before, "файл не тронут");
+    assert_eq!(fs::read(ag_cfg(&e)).unwrap(), before, "file untouched");
 }
 
 #[test]
@@ -1087,7 +1090,7 @@ fn batch_rollback_checks_every_level_before_undoing_anything() {
         journal(&e.home, &e.store)
             .iter()
             .all(|j| !j.rolled_back && j.op != "rollback"),
-        "пакет не откатился наполовину"
+        "the batch was not rolled back halfway"
     );
     assert!(write::rollback_batch(&e.home, &e.store, &batch, "R2").is_ok());
 }
@@ -1098,7 +1101,7 @@ fn deepseek_entry_returns_only_to_the_same_place() {
     let patch = e.home.join(".dsh/cordis.patch.yml");
     let id = id_in(&e, Client::DeepSeek, "demo");
     apply_i(&e, &tog(&id, false)).unwrap();
-    // установщик дописал новую операцию в начало файла: номера операций сдвинулись
+    // the installer prepended a new operation to the file: operation numbers shifted
     let text = fs::read_to_string(&patch).unwrap();
     fs::write(
         &patch,
@@ -1109,7 +1112,7 @@ fn deepseek_entry_returns_only_to_the_same_place() {
     assert!(err.contains("изменилась"), "{err}");
     assert!(
         !fs::read_to_string(&patch).unwrap().contains("mcp-demo"),
-        "в чужую операцию запись не вставлена"
+        "the entry was not inserted into someone else's operation"
     );
 }
 
@@ -1127,7 +1130,7 @@ fn deepseek_entry_without_a_simple_id_is_not_writable() {
         .unwrap();
     assert!(
         !ds.can_toggle,
-        "запись без простого id по строкам не выносится"
+        "an entry without a simple id is not moved out by lines"
     );
 }
 
@@ -1137,7 +1140,7 @@ fn stale_trash_item_does_not_block_the_next_removal() {
     let id = id_in(&e, Client::Antigravity, "tool-b");
     let original = fs::read(ag_cfg(&e)).unwrap();
     apply_i(&e, &tog(&id, false)).unwrap();
-    // запись вернули руками (например, `claude mcp add`): в корзине осталась устаревшая копия с тем же id
+    // the entry was put back by hand (for example, `claude mcp add`): a stale copy with the same id is left in the trash
     fs::write(ag_cfg(&e), &original).unwrap();
     assert_eq!(state_in(&e, &id), Some(State::On));
     assert!(e.store.join("trash").join(format!("{id}.json")).exists());
@@ -1186,7 +1189,7 @@ fn profile_applies_as_one_batch_and_rolls_back_together() {
     assert_eq!(
         bp.plans.iter().filter(|p| !p.noop).count(),
         2,
-        "меняются ровно две записи"
+        "exactly two entries change"
     );
     assert!(wbatch(&e.home, &e.store, &items, "стухшая подпись").is_err());
 
@@ -1208,10 +1211,10 @@ fn profile_applies_as_one_batch_and_rolls_back_together() {
     assert_eq!(read_json(&ag_cfg(&e)), before_ag);
     assert!(
         wrollback_batch(&e.home, &e.store, &batch).is_err(),
-        "второй раз нечего откатывать"
+        "nothing to roll back the second time"
     );
 
-    // профиль живёт дальше; удалённой записи он пропускает, а не падает
+    // the profile lives on; it skips a deleted entry instead of failing
     loadout_core::profiles::delete(&e.store, "рабочий").unwrap();
     assert!(loadout_core::profiles::list(&e.store).unwrap().is_empty());
 }
@@ -1223,22 +1226,22 @@ fn profile(name: &str) -> loadout_core::profiles::Profile {
     }
 }
 
-/// Битый `profiles.json` не превращается в «профилей нет»: чтение, сохранение и удаление отказывают и ничего не пишут;
-/// файл откладывается только явным `quarantine`, после чего профили снова работают.
+/// A broken `profiles.json` does not turn into "no profiles": reading, saving and deleting refuse and write nothing;
+/// the file is set aside only by an explicit `quarantine`, after which profiles work again.
 #[test]
 fn broken_profiles_file_is_refused_not_overwritten_and_set_aside_only_explicitly() {
     let e = env();
     use loadout_core::profiles as pr;
-    // нет файла — просто «профилей нет»
+    // no file just means "no profiles"
     assert!(pr::list(&e.store).unwrap().is_empty());
     assert!(
         pr::quarantine(&e.store).is_err(),
-        "нет файла: откладывать нечего"
+        "no file: nothing to set aside"
     );
     pr::save(&e.store, profile("рабочий")).unwrap();
     assert!(
         pr::quarantine(&e.store).is_err(),
-        "читающийся файл не откладывается"
+        "a readable file is not set aside"
     );
 
     let file = e.store.join("profiles.json");
@@ -1249,7 +1252,7 @@ fn broken_profiles_file_is_refused_not_overwritten_and_set_aside_only_explicitly
         assert!(pr::save(&e.store, profile("новый")).is_err());
         assert!(pr::delete(&e.store, "рабочий").is_err());
         assert!(pr::intents(&e.home, &e.store, "рабочий").is_err());
-        assert_eq!(fs::read_to_string(&file).unwrap(), junk, "файл не тронут");
+        assert_eq!(fs::read_to_string(&file).unwrap(), junk, "file untouched");
     }
 
     let name = pr::quarantine(&e.store).unwrap();
@@ -1264,10 +1267,10 @@ fn broken_profiles_file_is_refused_not_overwritten_and_set_aside_only_explicitly
     assert_eq!(pr::list(&e.store).unwrap().len(), 1);
 }
 
-/// Сухой прогон на настоящих конфигах (`cargo test -- --ignored`): только `plan`, ничего не пишется.
-/// Каждая переключаемая запись даёт план, файлы клиентов после прогона не изменились.
+/// Dry run on real configs (`cargo test -- --ignored`): only `plan`, nothing is written.
+/// Every toggleable entry yields a plan, and client files are unchanged after the run.
 #[test]
-#[ignore = "читает настоящий домашний каталог"]
+#[ignore = "reads the real home directory"]
 fn real_machine_plans_are_dry_and_succeed() {
     let home = PathBuf::from(
         std::env::var_os("USERPROFILE")
@@ -1291,16 +1294,16 @@ fn real_machine_plans_are_dry_and_succeed() {
         assert_eq!(p.base_sha.len(), 64);
         planned += 1;
     }
-    eprintln!("планов построено: {planned}");
-    assert!(planned > 0, "на машине нет ни одной переключаемой записи");
+    eprintln!("plans built: {planned}");
+    assert!(planned > 0, "the machine has no toggleable entries");
     let after: Vec<_> = files.iter().map(|f| fs::read(f).ok()).collect();
     for (i, f) in files.iter().enumerate() {
-        // `~/.claude.json` — файл самой сессии Claude Code, он переписывается постоянно: для него побайтово сравнивать
-        // нельзя (раньше проходило по везению). Что `plan` ничего не пишет, видно и по отсутствию наших временных файлов.
+        // `~/.claude.json` is the Claude Code session's own file and is rewritten constantly: a byte comparison for it
+        // is impossible (it used to pass by luck). That `plan` writes nothing also shows from the absence of our temporary files.
         if f.file_name().is_some_and(|n| n == ".claude.json") {
             continue;
         }
-        assert_eq!(before[i], after[i], "plan не должен менять {f:?}");
+        assert_eq!(before[i], after[i], "plan must not change {f:?}");
     }
     for f in &files {
         let (dir, base) = (
@@ -1311,7 +1314,7 @@ fn real_machine_plans_are_dry_and_succeed() {
             let n = e.file_name().to_string_lossy().into_owned();
             n.starts_with(&format!("{base}.loadout.")) && n.ends_with(".tmp")
         });
-        assert!(!left, "после plan остался временный файл записи");
+        assert!(!left, "a temporary write file was left after plan");
     }
 }
 
@@ -1388,22 +1391,22 @@ fn skill_install_is_journaled_and_rolls_back_into_a_backup() {
         p.notes
             .iter()
             .any(|n| n.contains("файлы кода") && n.contains("run.py") && n.contains("bin/tool")),
-        "файл без расширения — тоже код: {:?}",
+        "a file without an extension is code too: {:?}",
         p.notes
     );
-    // уровень проверяет ядро
+    // the core checks the level
     assert!(write::apply(&e.home, &e.store, &i, &p.base_sha, "R1").is_err());
     assert!(
         wapply(&e.home, &e.store, &i, &"0".repeat(64)).is_err(),
-        "чужой хеш плана"
+        "a foreign plan hash"
     );
     let a = wapply(&e.home, &e.store, &i, &p.base_sha).unwrap();
     let dir = e.home.join(".claude/skills/web");
     assert_eq!(fs::read_to_string(dir.join("run.py")).unwrap(), "print(1)");
-    assert!(!dir.join(".git").exists(), ".git не копируется");
+    assert!(!dir.join(".git").exists(), ".git is not copied");
     assert!(
         !e.store.join("staging").join(id).exists(),
-        "каталог подготовки убран"
+        "the staging directory is removed"
     );
     id_of(
         &loadout_core::scan(&e.home),
@@ -1413,7 +1416,7 @@ fn skill_install_is_journaled_and_rolls_back_into_a_backup() {
     );
     let j = journal(&e.home, &e.store);
     assert!(j[0].op == "installSkill" && j[0].can_rollback);
-    // повтор с тем же именем — отказ, существующий скил не перезаписывается
+    // a repeat with the same name is a refusal, an existing skill is not overwritten
     stage(&e, id, &[("SKILL.md", "---\n---\n")]);
     assert!(write::plan(&e.home, Some(&e.store), &skill(id, "", "web"))
         .unwrap_err()
@@ -1423,9 +1426,12 @@ fn skill_install_is_journaled_and_rolls_back_into_a_backup() {
     let removed = journal(&e.home, &e.store)[0].id.clone();
     assert!(
         e.store.join(removed).join("removed/run.py").is_file(),
-        "удалённое лежит в бэкапе"
+        "the deleted content sits in the backup"
     );
-    assert!(rollback(&e.home, &e.store, &a.op).is_err(), "второй откат");
+    assert!(
+        rollback(&e.home, &e.store, &a.op).is_err(),
+        "second rollback"
+    );
 }
 
 #[test]
@@ -1447,7 +1453,7 @@ fn skill_install_refuses_bad_input_and_a_changed_skill() {
         );
     }
     let i = skill(id, "", "plain");
-    // SKILL.md без других файлов, но с командой и разрешениями: предупреждение всё равно есть
+    // SKILL.md without other files but with a command and permissions: the warning is still there
     stage(
         &e,
         id,

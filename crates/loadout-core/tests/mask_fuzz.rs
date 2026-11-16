@@ -1,10 +1,10 @@
-//! Генеративная проверка маскирования: в случайно собранные командные строки подставляется «канарейка»,
-//! и ни в одном случае она не должна дойти до вывода. Канарейки двух видов: смесь регистров с цифрами
-//! и обычное строчное слово. Исключение одно: имя исполняемого файла в позиции команды показывается по замыслу,
-//! поэтому канарейка там не ставится.
+//! Generative masking check: a "canary" is inserted into randomly assembled command lines,
+//! and in no case may it reach the output. There are two kinds of canary: a mix of cases with digits
+//! and an ordinary lower-case word. There is one exception: the executable name in the command position is shown by design,
+//! so no canary is placed there.
 //!
-//! Генератор детерминированный (xorshift с фиксированным зерном): падение воспроизводится. Это не доказательство
-//! отсутствия обходов, а сеть против возврата уже найденных аудитами форм.
+//! The generator is deterministic (xorshift with a fixed seed): a failure is reproducible. This is not a proof
+//! that there are no bypasses, but a safety net against the return of forms already found by audits.
 
 use loadout_core::mask::{mask_args, mask_line, mask_url};
 
@@ -61,7 +61,7 @@ fn canary(rng: &mut Rng) -> &'static str {
     }
 }
 
-/// Одна случайная командная строка с канарейкой в случайном месте.
+/// One random command line with a canary in a random place.
 fn build(rng: &mut Rng) -> (String, &'static str) {
     let c = canary(rng);
     let program = rng.pick(&PROGRAMS);
@@ -98,7 +98,7 @@ fn canary_never_reaches_output() {
     for i in 0..20_000 {
         let (line, c) = build(&mut rng);
         let out = mask_line(&line);
-        assert!(!out.contains(c), "случай {i}: {line:?} -> {out:?}");
+        assert!(!out.contains(c), "case {i}: {line:?} -> {out:?}");
     }
 }
 
@@ -116,11 +116,11 @@ fn canary_in_url_never_reaches_output() {
             _ => format!("{c}://h.example/a"),
         };
         let out = mask_url(&url);
-        assert!(!out.contains(c), "случай {i}: {url:?} -> {out:?}");
+        assert!(!out.contains(c), "case {i}: {url:?} -> {out:?}");
         let args = mask_args(std::slice::from_ref(&url)).join(" ");
         assert!(
             !args.contains(c),
-            "случай {i} (как аргумент): {url:?} -> {args:?}"
+            "case {i} (as an argument): {url:?} -> {args:?}"
         );
     }
 }
