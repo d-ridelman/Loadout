@@ -1,20 +1,23 @@
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const BIN_NAME = process.platform === 'win32' ? 'ctxkit.exe' : 'ctxkit';
-// ctxkit лежит в воркспейсе Loadout (crates/ctxkit): сборка — в target корня репозитория
-const exe = process.env.CTXKIT_BIN || join(ROOT, '..', '..', 'target', 'release', BIN_NAME);
+const BIN_NAME = process.platform === 'win32' ? 'context-toolkit.exe' : 'context-toolkit';
+const OLD_BIN_NAME = process.platform === 'win32' ? 'ctxkit.exe' : 'ctxkit';
+// Инструменты контекста лежат в воркспейсе Loadout (crates/context-toolkit): сборка — в target корня репозитория
+const exe = process.env.CONTEXT_TOOLKIT_BIN || process.env.CTXKIT_BIN || join(ROOT, '..', '..', 'target', 'release', BIN_NAME);
+// Our variables (either name) from the session that runs the tests must reach no child: a case sets its own.
+for (const k of Object.keys(process.env)) if (/^(CONTEXT_TOOLKIT|CTXKIT)_/i.test(k)) delete process.env[k];
 
 if (!existsSync(exe)) {
   console.error(`Binary not found: ${exe}. Run \`cargo build --release\` first.`);
   process.exit(2);
 }
 
-// Hooks and `ctxkit check` read <profile>/ctxkit.json: no run may reach the real ~/.claude, so every child
+// Hooks and `context-toolkit check` read <profile>/context-toolkit.json: no run may reach the real ~/.claude, so every child
 // gets an empty profile (a case that needs policies passes its own CLAUDE_CONFIG_DIR).
 const isoProfile = mkdtempSync(join(tmpdir(), 'cg-prof-'));
 process.env.CLAUDE_CONFIG_DIR = isoProfile;
@@ -22,7 +25,6 @@ process.env.CLAUDE_CONFIG_DIR = isoProfile;
 const B = '\\';
 const runHook = (payload, extraArgs = [], extraEnv = {}) => {
   const env = { ...process.env, ...extraEnv };
-  if (!('CTXKIT_LANG' in extraEnv)) delete env.CTXKIT_LANG;
   const r = spawnSync(exe, extraArgs, {
     input: JSON.stringify(payload),
     encoding: 'utf8',
@@ -113,11 +115,11 @@ writeFileSync(fewLongLines, Array.from({ length: 10 }, () => 'x'.repeat(30000)).
 const midFile = join(dir, 'mid.txt');
 writeFileSync(midFile, Array.from({ length: 100 }, () => 'x'.repeat(300)).join('\n'));
 
-// Policies (ctxkit.json): a profile with the given config; `pol` runs a hook against it and returns the decision
+// Policies (context-toolkit.json): a profile with the given config; `pol` runs a hook against it and returns the decision
 const polProfile = (name, cfg) => {
   const p = join(dir, `pol-${name}`);
   mkdirSync(p, { recursive: true });
-  writeFileSync(join(p, 'ctxkit.json'), typeof cfg === 'string' ? cfg : JSON.stringify(cfg));
+  writeFileSync(join(p, 'context-toolkit.json'), typeof cfg === 'string' ? cfg : JSON.stringify(cfg));
   return p;
 };
 const decisionOf = (out) => {
@@ -146,20 +148,30 @@ const cases = [
     if (pol(on, 'Bash', { command: 'git commit --amend --no-edit' }) !== '') return 'amend --no-edit';
     if (pol(on, 'Bash', { command: 'git log --grep "Co-Authored-By"' }) !== '') return 'git log';
     if (!polReason(on, 'Bash', { command: COAUTH }).includes('Remove those lines')) return 'en text';
-    if (!polReason(on, 'Bash', { command: COAUTH }, { env: { CTXKIT_LANG: 'ru' } }).includes('Убери эти строки из сообщения коммита')) return 'ru text';
+    if (!polReason(on, 'Bash', { command: COAUTH }, { env: { CONTEXT_TOOLKIT_LANG: 'ru' } }).includes('Убери эти строки из сообщения коммита')) return 'ru text';
     // the other clients: DeepSeek Harness tool names, Antigravity run_command
     if (pol(on, 'bash', { command: COAUTH }, { args: ['--dsh'] }) !== 'deny') return 'dsh';
     const agy = JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine: COAUTH } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on }));
     if (agy.decision !== 'deny' || !agy.reason.includes('Remove those lines')) return 'agy';
     return true;
   }],
-  // ...off by default, and a missing or broken ctxkit.json also means off
+  // The policy file of the old name (ctxkit.json) is read while context-toolkit.json does not exist; the new file wins
+  [true, () => {
+    const p = join(dir, 'pol-oldname');
+    mkdirSync(p, { recursive: true });
+    writeFileSync(join(p, 'ctxkit.json'), JSON.stringify({ policies: { commit_hygiene: true } }));
+    if (pol(p, 'Bash', { command: COAUTH }) !== 'deny') return 'the old file is not read';
+    writeFileSync(join(p, 'context-toolkit.json'), JSON.stringify({ policies: {} }));
+    return pol(p, 'Bash', { command: COAUTH }) === '' || 'the new file must win';
+  }],
+  // ...off by default, and a missing or broken context-toolkit.json also means off
   [true, () => {
     if (pol(isoProfile, 'Bash', { command: COAUTH }) !== '') return 'no file';
     if (pol(P('commit-off', { commit_hygiene: false }), 'Bash', { command: COAUTH }) !== '') return 'off';
     if (pol(polProfile('commit-broken', '{"policies":'), 'Bash', { command: COAUTH }) !== '') return 'broken json';
     if (pol(P('commit-badtype', { commit_hygiene: 'yes' }), 'Bash', { command: COAUTH }) !== '') return 'bad type';
-    if (pol(P('commit', { commit_hygiene: true }), 'Bash', { command: COAUTH }, { env: { CTXKIT_GUARD: '0' } }) !== '') return 'CTXKIT_GUARD=0';
+    if (pol(P('commit', { commit_hygiene: true }), 'Bash', { command: COAUTH }, { env: { CONTEXT_TOOLKIT_GUARD: '0' } }) !== '') return 'CONTEXT_TOOLKIT_GUARD=0';
+    if (pol(P('commit', { commit_hygiene: true }), 'Bash', { command: COAUTH }, { env: { CTXKIT_GUARD: '0' } }) !== '') return 'old name CTXKIT_GUARD=0';
     const agyOff = JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine: COAUTH } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: isoProfile }));
     return agyOff.decision === 'ask' && agyOff.reason === undefined;
   }],
@@ -609,7 +621,7 @@ const cases = [
     if (existsSync(join(profile, 'agents', 'Explore.md'))) return false;
     if (readFileSync(join(profile, 'CLAUDE.md'), 'utf8') !== origClaudeMd) return false;
     if (JSON.parse(readFileSync(desktopFile, 'utf8')).byAccount.acct1.presets[0].settings.modelId !== 'claude-opus-5-5') return false;
-    if (JSON.parse(readFileSync(agyFile, 'utf8'))['ctxkit']) return false;
+    if (JSON.parse(readFileSync(agyFile, 'utf8'))['context-toolkit']) return false;
     // the preview says what will change (was -> became), the same lines as the real run
     for (const line of ['  model: (unset) -> sonnet', '  advisorModel: (unset) -> fable', '  effortLevel: (unset) -> high', '  effort modelSettings.claude-sonnet-5-5: (unset) -> high', '  desktop preset dev: model claude-opus-5-5 -> claude-sonnet-5-5, effort max -> high', '  desktop preset built-in local: model claude-opus-5-5 -> claude-sonnet-5-5, effort low -> high']) {
       if (!dry.stdout.includes(line)) return `dry-run lacks: ${line}`;
@@ -637,7 +649,7 @@ const cases = [
     if (!exploreMd.includes('model: haiku') || !checkerMd.includes('model: opus')) return false;
 
     const claudeMd1 = readFileSync(join(profile, 'CLAUDE.md'), 'utf8');
-    if (!claudeMd1.includes('# Existing Profile Rules') || !claudeMd1.includes('<!-- ctxkit:start -->') || claudeMd1.includes('<!-- claude-guard:start -->')) return false;
+    if (!claudeMd1.includes('# Existing Profile Rules') || !claudeMd1.includes('<!-- context-toolkit:start -->') || claudeMd1.includes('<!-- claude-guard:start -->')) return false;
 
     const desk1 = JSON.parse(readFileSync(desktopFile, 'utf8'));
     const p1 = desk1.byAccount.acct1.presets[0].settings;
@@ -645,7 +657,7 @@ const cases = [
     if (desk1.byAccount.acct1.builtIns.local.settings.modelId !== 'claude-sonnet-5-5') return false;
 
     const agy1 = JSON.parse(readFileSync(agyFile, 'utf8'));
-    if (!agy1['other-hook'] || agy1['claude-guard'] || agy1['ctxkit']?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'test-ctxkit --agy') return false; // a custom --hook-cmd gets --agy appended
+    if (!agy1['other-hook'] || agy1['claude-guard'] || agy1['ctxkit'] || agy1['context-toolkit']?.PreToolUse?.[0]?.hooks?.[0]?.command !== 'test-ctxkit --agy') return false; // a custom --hook-cmd gets --agy appended
 
     if (!run1.stdout.includes('3 global MCP servers')) return false;
     if (!run1.stdout.includes('Antigravity Diagnostics:')) return false;
@@ -670,13 +682,13 @@ const cases = [
     if (!noWarn.stdout.includes('  env.CLAUDE_CODE_SUBAGENT_MODEL: haiku -> sonnet') || noWarn.stdout.includes('[warn] env.CLAUDE_CODE_SUBAGENT_MODEL')) return false;
     if (readFileSync(join(profile, 'CLAUDE.md'), 'utf8') !== claudeMd1) return false;
     if (readdirSync(join(profile, 'backups')).length !== backups1.length) return false;
-    if (s1.env?.CTXKIT_LANG !== undefined) return false;
+    if (s1.env?.CONTEXT_TOOLKIT_LANG !== undefined || s1.env?.CTXKIT_LANG !== undefined) return false;
 
-    // 4) --lang ru sets CTXKIT_LANG=ru, switches templates, and appends --lang ru to default Antigravity hook
+    // 4) --lang ru sets CONTEXT_TOOLKIT_LANG=ru, switches templates, and appends --lang ru to default Antigravity hook
     const runRu = spawnSync(exe, [...commonArgs, '--lang', 'ru', '--force-agents'], { encoding: 'utf8' });
     if (runRu.status !== 0) return false;
     const sRu = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
-    if (sRu.env?.CTXKIT_LANG !== 'ru') return false;
+    if (sRu.env?.CONTEXT_TOOLKIT_LANG !== 'ru' || sRu.env?.CTXKIT_LANG !== undefined) return false;
     if (!readFileSync(join(profile, 'CLAUDE.md'), 'utf8').includes('Команда моделей')) return false;
     if (!readFileSync(join(profile, 'agents', 'Explore.md'), 'utf8').includes('исследователь')) return false;
 
@@ -695,7 +707,7 @@ const cases = [
     ], { encoding: 'utf8' });
     if (runAgyRu.status !== 0) return false;
     const agyRu = JSON.parse(readFileSync(agyRuFile, 'utf8'));
-    const agyRuCmd = agyRu['ctxkit']?.PreToolUse?.[0]?.hooks?.[0]?.command || '';
+    const agyRuCmd = agyRu['context-toolkit']?.PreToolUse?.[0]?.hooks?.[0]?.command || '';
     if (!agyRuCmd.endsWith(' --lang ru')) return false;
     return true;
   }],
@@ -741,8 +753,8 @@ const cases = [
       md: readFileSync(join(profile, 'CLAUDE.md'), 'utf8'),
       patch: readFileSync(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8'),
     };
-    if (!afterSetup.md.includes('<!-- ctxkit:start -->') || !afterSetup.patch.includes('ctxkit-hooks') || !existsSync(join(dshHome, 'ctxkit-hooks.json'))) return false;
-    const state = () => [join(profile, 'settings.json'), join(profile, 'CLAUDE.md'), agyFile, join(dshHome, 'AGENTS.md'), join(dshHome, 'ctxkit-hooks.json'), join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), hookBin]
+    if (!afterSetup.md.includes('<!-- context-toolkit:start -->') || !afterSetup.patch.includes('context-toolkit-hooks') || !existsSync(join(dshHome, 'context-toolkit-hooks.json'))) return false;
+    const state = () => [join(profile, 'settings.json'), join(profile, 'CLAUDE.md'), agyFile, join(dshHome, 'AGENTS.md'), join(dshHome, 'context-toolkit-hooks.json'), join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), hookBin]
       .map((f) => (existsSync(f) ? readFileSync(f, 'utf8') : null)).join('\u0000');
     const before = state();
 
@@ -760,7 +772,7 @@ const cases = [
     if (run.status !== 0) return false;
     const s = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
     const cmds = (ev) => (s.hooks?.[ev] ?? []).flatMap((g) => g.hooks.map((h) => h.command));
-    if (s.KEEP_ME?.a !== 1 || s.env?.KEEP_ME !== '42' || s.env?.CTXKIT_LANG !== undefined) return false;
+    if (s.KEEP_ME?.a !== 1 || s.env?.KEEP_ME !== '42' || s.env?.CONTEXT_TOOLKIT_LANG !== undefined || s.env?.CTXKIT_LANG !== undefined) return false;
     if (JSON.stringify(cmds('PreToolUse')) !== '["custom-other-hook","C:/tools/logger.exe ctxkit"]' || cmds('PostToolUse').length !== 0) return false;
     if (JSON.stringify(cmds('Stop')) !== JSON.stringify([foreignStop.command]) || cmds('SessionStart')[0] !== 'echo start') return false;
     // setup without model flags kept the user's own 'opus'; uninstall does not touch it either and only prints it
@@ -771,8 +783,8 @@ const cases = [
     if (readFileSync(join(profile, 'CLAUDE.md'), 'utf8') !== origMd) return false;
     if (existsSync(hookBin) || !existsSync(join(profile, 'agents', 'checker.md'))) return false; // binary gone, agents stay
     const agy = JSON.parse(readFileSync(agyFile, 'utf8'));
-    if (agy.ctxkit || !agy['other-hook']) return false;
-    if (existsSync(join(dshHome, 'ctxkit-hooks.json'))) return false;
+    if (agy.ctxkit || agy['context-toolkit'] || !agy['other-hook']) return false;
+    if (existsSync(join(dshHome, 'context-toolkit-hooks.json'))) return false;
     if (readFileSync(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8') !== origPatch) return false;
     if (readFileSync(join(dshHome, 'AGENTS.md'), 'utf8') !== '# dsh rules\n') return false;
 
@@ -781,6 +793,166 @@ const cases = [
     const nb1 = nBackups();
     const again = spawnSync(exe, ['setup', '--uninstall', ...common], { encoding: 'utf8' });
     return again.status === 0 && state() === after && nBackups() === nb1;
+  }],
+
+  // Migration from the old name ctxkit. A profile set up by the old binary (hooks on hooks/ctxkit.exe, the old rules
+  // markers, ctxkit.json made by setup, env.CTXKIT_LANG, the Antigravity key and the DSH block and file of the old name)
+  // ends up like a fresh profile set up by the new one; foreign hooks, keys and text stay; a repeat changes nothing;
+  // the rollback removes the new and the old, also from a profile that was never migrated
+  [true, () => {
+    const root = join(dir, 'migrate-test');
+    const fwd = (p) => p.replace(/\\/g, '/');
+    const make = (name, old) => {
+      const p = join(root, name);
+      const profile = join(p, 'profile');
+      const agyFile = join(p, 'agy', 'hooks.json');
+      const dshHome = join(p, 'dsh');
+      const cj = join(p, 'claude.json');
+      mkdirSync(join(profile, 'hooks'), { recursive: true });
+      mkdirSync(join(p, 'agy'), { recursive: true });
+      mkdirSync(join(dshHome, 'profiles', 'desktop'), { recursive: true });
+      writeFileSync(cj, '{}');
+      const foreignPre = { matcher: 'Edit', hooks: [{ type: 'command', command: 'node C:/tools/ctxkit-helper/x.js' }] };
+      const settings = { KEEP: 1, env: { KEEP_ME: '42' }, hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'echo start' }] }], PreToolUse: [foreignPre] } };
+      let md = '# Mine\n\nmy text\n';
+      const agy = { 'other-hook': { a: 1 } };
+      let patch = '- id: ui-chat\n';
+      const oldBin = join(profile, 'hooks', OLD_BIN_NAME);
+      if (old) {
+        copyFileSync(exe, oldBin);
+        const cmd = `"${fwd(oldBin)}"`;
+        const ours = (matcher, onFailure = true) => ({ ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command: cmd, timeout: 10, ...(onFailure ? { onFailure: 'continue' } : {}) }] });
+        settings.env.CTXKIT_LANG = 'ru';
+        settings.hooks.PreToolUse = [ours('Bash|PowerShell|Write|Read|Edit|MultiEdit'), foreignPre];
+        settings.hooks.PostToolUse = [ours('Edit|Write|MultiEdit')];
+        settings.hooks.Stop = [ours(null, false)];
+        md += '\n<!-- ctxkit:start -->\n## Команда моделей и экономия контекста (ctxkit)\n\n- old rule\n<!-- ctxkit:end -->\n';
+        writeFileSync(join(profile, 'ctxkit.json'), JSON.stringify({ created_by: 'ctxkit setup', policies: { stray_files: true } }));
+        agy.ctxkit = { PreToolUse: [{ matcher: 'read_file', hooks: [{ type: 'command', command: `${fwd(oldBin)} --agy --lang ru`, timeout: 10 }] }] };
+        writeFileSync(join(dshHome, 'ctxkit-hooks.json'), JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'read', hooks: [{ type: 'command', command: `& '${fwd(oldBin)}' --dsh --lang ru` }] }] } }));
+        patch += `\n# >>> ctxkit (managed by \`ctxkit setup --dsh\`; do not edit) >>>\n- insert:\n    - id: ctxkit-hooks\n      name: '@deepseek-ai/dsh-hooks-claude-code'\n      config:\n        configPath: '${join(dshHome, 'ctxkit-hooks.json')}'\n# <<< ctxkit <<<\n`;
+      }
+      writeFileSync(join(profile, 'settings.json'), JSON.stringify(settings, null, 2));
+      writeFileSync(join(profile, 'CLAUDE.md'), md);
+      writeFileSync(agyFile, JSON.stringify(agy, null, 2));
+      writeFileSync(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), patch);
+      const paths = ['--profile', profile, '--claude-json', cj, '--antigravity', '--agy-file', agyFile, '--dsh', '--dsh-home', dshHome, '--lang', 'ru'];
+      const setup = (...a) => spawnSync(exe, ['setup', '--with-rules', '--no-agents', '--skip-version-check', '--policy', 'stray-files', ...paths, ...a], { encoding: 'utf8' });
+      const undo = () => spawnSync(exe, ['setup', '--uninstall', ...paths], { encoding: 'utf8' });
+      const read = (f) => (existsSync(f) ? readFileSync(f, 'utf8') : null);
+      // the profile's files with its own path cut out (both profiles must give the same text)
+      const files = () => {
+        const cut = (t) => t === null ? null : [p, fwd(p), JSON.stringify(p).slice(1, -1), p.replace(/'/g, "''")].reduce((s, x) => s.split(x).join('<p>'), t);
+        const pol = (f) => { const v = read(f); if (v === null) return null; const j = JSON.parse(v); return { mark: j.created_by === 'ctxkit setup' || j.created_by === 'context-toolkit setup', policies: j.policies }; };
+        return {
+          settings: cut(read(join(profile, 'settings.json'))), md: read(join(profile, 'CLAUDE.md')),
+          policy: pol(join(profile, 'context-toolkit.json')), oldPolicy: read(join(profile, 'ctxkit.json')),
+          agy: cut(read(agyFile)), dsh: cut(read(join(dshHome, 'context-toolkit-hooks.json'))), oldDsh: read(join(dshHome, 'ctxkit-hooks.json')),
+          patch: cut(read(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'))),
+          hooksDir: existsSync(join(profile, 'hooks')) ? readdirSync(join(profile, 'hooks')).sort() : null,
+        };
+      };
+      const backups = () => [join(profile, 'backups'), join(dshHome, 'backups'), join(dshHome, 'profiles', 'desktop')].map((d) => (existsSync(d) ? readdirSync(d).length : 0)).join(',');
+      return { setup, undo, files, backups, oldBin, profile };
+    };
+    const fresh = make('fresh', false);
+    const migrated = make('old', true);
+    const r1 = fresh.setup();
+    const r2 = migrated.setup();
+    if (r1.status !== 0 || r2.status !== 0) return `setup: ${r1.stderr} ${r2.stderr}`;
+    const a = fresh.files();
+    const b = migrated.files();
+    if (JSON.stringify(a) !== JSON.stringify(b)) return `the migrated profile differs from a fresh one:\n${JSON.stringify(a)}\n${JSON.stringify(b)}`;
+    if (existsSync(migrated.oldBin) || b.oldPolicy !== null || b.oldDsh !== null) return 'old files left';
+    if (b.hooksDir.join() !== BIN_NAME || !b.md.includes('<!-- context-toolkit:start -->') || /ctxkit:/.test(b.md)) return `hooks dir / rules: ${b.hooksDir} ${b.md}`;
+    const s = JSON.parse(readFileSync(join(migrated.profile, 'settings.json'), 'utf8'));
+    if (s.env.CONTEXT_TOOLKIT_LANG !== 'ru' || 'CTXKIT_LANG' in s.env || s.env.KEEP_ME !== '42' || s.KEEP !== 1) return `env: ${JSON.stringify(s.env)}`;
+    if (!s.hooks.PreToolUse.some((g) => g.hooks.some((h) => h.command === 'node C:/tools/ctxkit-helper/x.js')) || s.hooks.SessionStart[0].hooks[0].command !== 'echo start') return 'foreign hooks lost';
+    if (!/старое имя: хуки на ctxkit/.test(r2.stdout) || !r2.stdout.includes('старое имя: env.CTXKIT_LANG -> env.CONTEXT_TOOLKIT_LANG') || !r2.stdout.includes('удалён bin')) return `the migration is not named: ${r2.stdout}`;
+    // a repeat changes nothing and makes no backup
+    const before = [JSON.stringify(migrated.files()), migrated.backups()];
+    if (migrated.setup().status !== 0 || JSON.stringify([JSON.stringify(migrated.files()), migrated.backups()]) !== JSON.stringify(before)) return 'the repeat changed something';
+    // the rollback: nothing of ours under either name, the owner's things stay
+    const gone = (x) => x.policy === null && x.oldPolicy === null && x.dsh === null && x.oldDsh === null && x.hooksDir === null
+      && x.md === '# Mine\n\nmy text\n' && x.patch === '- id: ui-chat\n' && JSON.parse(x.agy)['other-hook']?.a === 1 && Object.keys(JSON.parse(x.agy)).length === 1
+      && !/ctxkit\.exe|context-toolkit|CTXKIT|CONTEXT_TOOLKIT/.test(x.settings) && x.settings.includes('ctxkit-helper') && x.settings.includes('KEEP_ME');
+    if (migrated.undo().status !== 0 || !gone(migrated.files())) return `rollback of the migrated profile: ${JSON.stringify(migrated.files())}`;
+    const never = make('never', true);
+    const u = never.undo();
+    if (u.status !== 0 || !gone(never.files())) return `rollback of an old profile: ${u.stdout} ${JSON.stringify(never.files())}`;
+    return true;
+  }],
+
+  // The old hook binary is kept while a file setup did not rewrite still runs it (Antigravity without --antigravity),
+  // and an old policy file of the owner's is copied and kept
+  [true, () => {
+    const root = join(dir, 'migrate-keep');
+    const profile = join(root, 'profile');
+    mkdirSync(join(profile, 'hooks'), { recursive: true });
+    const oldBin = join(profile, 'hooks', OLD_BIN_NAME);
+    copyFileSync(exe, oldBin);
+    const agyFile = join(root, 'hooks.json');
+    writeFileSync(agyFile, JSON.stringify({ ctxkit: { PreToolUse: [{ hooks: [{ command: `${oldBin.replace(/\\/g, '/')} --agy` }] }] } }));
+    const own = '{"policies":{"commit_hygiene":true},"rules":["my own rule of five words"]}';
+    writeFileSync(join(profile, 'ctxkit.json'), own);
+    const cj = join(root, 'c.json');
+    writeFileSync(cj, '{}');
+    const r = spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--agy-file', agyFile, '--dsh-home', join(root, 'dsh'), '--skip-version-check', '--no-agents'], { encoding: 'utf8' });
+    if (r.status !== 0 || !existsSync(oldBin) || !r.stdout.includes('old binary kept') || !r.stdout.includes('context-toolkit setup --antigravity')) return `kept: ${r.status} ${r.stdout}`;
+    if (readFileSync(join(profile, 'ctxkit.json'), 'utf8') !== own || readFileSync(join(profile, 'context-toolkit.json'), 'utf8') !== own || !r.stdout.includes('no longer read')) return 'the owner\'s policy file';
+    const r2 = spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--antigravity', '--agy-file', agyFile, '--dsh-home', join(root, 'dsh'), '--skip-version-check', '--no-agents'], { encoding: 'utf8' });
+    return (r2.status === 0 && !existsSync(oldBin) && !readFileSync(agyFile, 'utf8').includes('ctxkit')) || `with --antigravity: ${r2.stdout}`;
+  }],
+
+  // ~/.local/bin/ctxkit.exe goes only when it is ours: a foreign program of that name (another --version) stays
+  [true, () => {
+    const runHome = (name, local) => {
+      const home = join(dir, `localbin-${name}`);
+      mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+      mkdirSync(join(home, '.claude', 'hooks'), { recursive: true });
+      copyFileSync(exe, join(home, '.claude', 'hooks', OLD_BIN_NAME));
+      const localBin = join(home, '.local', 'bin', OLD_BIN_NAME);
+      copyFileSync(local, localBin);
+      writeFileSync(join(home, 'c.json'), '{}');
+      const env = { ...process.env, USERPROFILE: home, HOME: home };
+      delete env.CLAUDE_CONFIG_DIR;
+      const r = spawnSync(exe, ['setup', '--claude-json', join(home, 'c.json'), '--skip-version-check', '--no-agents', '--agy-file', join(home, 'none.json'), '--dsh-home', join(home, '.dsh')], { encoding: 'utf8', env });
+      return { r, localBin, home };
+    };
+    const foreign = runHome('foreign', process.execPath);
+    if (foreign.r.status !== 0 || !existsSync(foreign.localBin) || !foreign.r.stdout.includes('not this product')) return `foreign: ${foreign.r.stdout} ${foreign.r.stderr}`;
+    if (existsSync(join(foreign.home, '.claude', 'hooks', OLD_BIN_NAME)) || !existsSync(join(foreign.home, '.local', 'bin', BIN_NAME))) return 'foreign: the hook copy should move';
+    const ours = runHome('ours', exe);
+    return (ours.r.status === 0 && !existsSync(ours.localBin)) || `ours: ${ours.r.stdout}`;
+  }],
+
+  // Windows: the old binary runs as a hook right now (Claude Code started it) and cannot be deleted. Setup still
+  // finishes (code 0, settings.json on the new binary) and names it for removal by hand; the next run removes it.
+  [true, () => {
+    if (process.platform !== 'win32') return true;
+    const root = join(dir, 'migrate-locked');
+    const profile = join(root, 'profile');
+    mkdirSync(join(profile, 'hooks'), { recursive: true });
+    const oldBin = join(profile, 'hooks', OLD_BIN_NAME);
+    copyFileSync(exe, oldBin);
+    writeFileSync(join(profile, 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: `"${oldBin.replace(/\\/g, '/')}"` }] }] } }));
+    const cj = join(root, 'c.json');
+    writeFileSync(cj, '{}');
+    const args = ['setup', '--profile', profile, '--claude-json', cj, '--agy-file', join(root, 'none.json'), '--dsh-home', join(root, 'dsh'), '--skip-version-check', '--no-agents', '--lang', 'ru'];
+    const hook = spawn(oldBin, [], { stdio: ['pipe', 'ignore', 'ignore'] }); // waits for the payload on stdin
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+      const r = spawnSync(exe, args, { encoding: 'utf8' });
+      const s = readFileSync(join(profile, 'settings.json'), 'utf8');
+      if (r.status !== 0 || !r.stdout.includes('удалите вручную') || !existsSync(oldBin) || s.includes(OLD_BIN_NAME) || !s.includes(BIN_NAME)) return `locked: ${r.status} ${r.stdout}`;
+    } finally {
+      hook.kill();
+    }
+    for (let i = 0; i < 20 && existsSync(oldBin); i++) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+      spawnSync(exe, args, { encoding: 'utf8' });
+    }
+    return !existsSync(oldBin) || 'the next run did not remove the old binary';
   }],
 
   // Data safety: the user's own text that mentions our markers survives, and a settings.json setup cannot
@@ -805,7 +977,7 @@ const cases = [
     writeFileSync(join(p1, 'CLAUDE.md'), prose);
     if (run(p1, '--with-rules').status !== 0) return false;
     const once = readFileSync(join(p1, 'CLAUDE.md'), 'utf8');
-    if (!once.startsWith(prose.trimEnd()) || !once.includes('\n<!-- ctxkit:start -->\n')) return false;
+    if (!once.startsWith(prose.trimEnd()) || !once.includes('\n<!-- context-toolkit:start -->\n')) return false;
     if (run(p1, '--with-rules').status !== 0 || readFileSync(join(p1, 'CLAUDE.md'), 'utf8') !== once) return false;
     if (run(p1, '--uninstall').status !== 0 || readFileSync(join(p1, 'CLAUDE.md'), 'utf8') !== prose) return false;
 
@@ -861,7 +1033,7 @@ const cases = [
     writeFileSync(join(p9, 'CLAUDE.md'), '﻿' + withBlock + '\nuser tail\n');
     if (run(p9, '--with-rules').status !== 0) return false;
     const bomText = readFileSync(join(p9, 'CLAUDE.md'), 'utf8');
-    if (bomText.split('<!-- ctxkit:start -->').length !== 2 || !bomText.includes('user tail')) return false;
+    if (bomText.split('<!-- context-toolkit:start -->').length !== 2 || !bomText.includes('user tail')) return false;
 
     // the preflight covers the Desktop presets file and the DeepSeek Harness files too: a refusal happens
     // before the binary is copied, settings.json is written or any backup is made
@@ -874,11 +1046,11 @@ const cases = [
       const home = join(root, `dsh-${name}`);
       mkdirSync(join(home, 'profiles', 'desktop'), { recursive: true });
       if (patch !== null) writeFileSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml'), patch);
-      if (hooksJson !== null) writeFileSync(join(home, 'ctxkit-hooks.json'), hooksJson);
+      if (hooksJson !== null) writeFileSync(join(home, 'context-toolkit-hooks.json'), hooksJson);
       const profile = mk(`dsh-${name}-profile`);
       const r = run(profile, '--dsh', '--dsh-home', home);
       const patchAfter = existsSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml')) ? readFileSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8') : null;
-      return { r, profile, patchAfter, hooksAfter: existsSync(join(home, 'ctxkit-hooks.json')) ? readFileSync(join(home, 'ctxkit-hooks.json'), 'utf8') : null };
+      return { r, profile, patchAfter, hooksAfter: existsSync(join(home, 'context-toolkit-hooks.json')) ? readFileSync(join(home, 'context-toolkit-hooks.json'), 'utf8') : null };
     };
     const half = dshCase('half', '- keep: 1\n# >>> ctxkit (managed by `ctxkit setup --dsh`; do not edit) >>>\n- insert: x\n', null);
     if (half.r.status !== 1 || !untouched(half.profile) || half.hooksAfter !== null || !half.r.stderr.includes('no end marker')) return `half block: ${half.r.status} ${half.r.stderr}`;
@@ -888,11 +1060,11 @@ const cases = [
     if (badHooks.r.status !== 1 || !untouched(badHooks.profile) || badHooks.hooksAfter !== '[1]' || badHooks.patchAfter !== '- keep: 1\n') return `hooks json: ${badHooks.r.status} ${badHooks.r.stderr}`;
     // no patch file yet: setup creates it; a dry run of the same is a preview, not an error
     const fresh = dshCase('fresh', null, null);
-    if (fresh.r.status !== 0 || !existsSync(join(fresh.profile, 'hooks')) || fresh.patchAfter === null || !fresh.patchAfter.includes('ctxkit-hooks')) return `fresh dsh: ${fresh.r.status} ${fresh.r.stderr}`;
+    if (fresh.r.status !== 0 || !existsSync(join(fresh.profile, 'hooks')) || fresh.patchAfter === null || !fresh.patchAfter.includes('context-toolkit-hooks')) return `fresh dsh: ${fresh.r.status} ${fresh.r.stderr}`;
     const dryHome = join(root, 'dsh-dry');
     mkdirSync(join(dryHome, 'profiles', 'desktop'), { recursive: true });
     const dryRun = run(mk('dsh-dry-profile'), '--dsh', '--dsh-home', dryHome, '--dry-run');
-    if (dryRun.status !== 0 || existsSync(join(dryHome, 'ctxkit-hooks.json'))) return `dsh dry run: ${dryRun.status} ${dryRun.stderr}`;
+    if (dryRun.status !== 0 || existsSync(join(dryHome, 'context-toolkit-hooks.json'))) return `dsh dry run: ${dryRun.status} ${dryRun.stderr}`;
 
     // a rollback that makes the only backup does not also claim there are none
     const p10 = mk('nobackups');
@@ -973,7 +1145,7 @@ const cases = [
     writeFileSync(join(pl, 'CLAUDE.md'), withBlock + 'extra\r\n');
     run(pl, '--uninstall');
     const crlf = readFileSync(join(pl, 'CLAUDE.md'), 'utf8');
-    return !/(^|[^\r])\n/.test(crlf) && crlf.includes('extra') && !crlf.includes('ctxkit:') || `CRLF lost: ${JSON.stringify(crlf)}`;
+    return !/(^|[^\r])\n/.test(crlf) && crlf.includes('extra') && !/(context-toolkit|ctxkit):/.test(crlf) || `CRLF lost: ${JSON.stringify(crlf)}`;
   }],
 
   // Safe failure: broken or odd hook input is a silent pass (exit 0, empty stdout), never a block or a crash
@@ -1047,7 +1219,7 @@ const cases = [
     const claude = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } });
     return raw(claude, [], { CTXKIT_GUARD: '0' }).out === '';
   }],
-  // "onFailure": "continue" on our PreToolUse / PostToolUse hooks (a failing ctxkit never stops the work), not on Stop
+  // "onFailure": "continue" on our PreToolUse / PostToolUse hooks (a failing hook binary never stops the work), not on Stop
   // (the docs: no effect there); the rollback still takes the hooks out, and a second setup does not stack them
   [true, () => {
     const root = join(dir, 'onfailure-test');
@@ -1058,7 +1230,7 @@ const cases = [
     const run = (...a) => spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--skip-version-check', '--no-agents', ...a], { encoding: 'utf8' });
     if (run().status !== 0 || run().status !== 0) return 'setup failed';
     const s = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
-    const ours = (ev) => (s.hooks?.[ev] ?? []).flatMap((g) => g.hooks).filter((h) => h.command.includes('ctxkit'));
+    const ours = (ev) => (s.hooks?.[ev] ?? []).flatMap((g) => g.hooks).filter((h) => h.command.includes('context-toolkit'));
     for (const ev of ['PreToolUse', 'PostToolUse']) {
       if (ours(ev).length !== 1 || ours(ev)[0].onFailure !== 'continue') return `${ev}: ${JSON.stringify(ours(ev))}`;
     }
@@ -1078,38 +1250,49 @@ const cases = [
     const profile = join(root, 'p');
     mkdirSync(profile);
     const r = spawnSync(exe, ['setup', '--profile', profile, '--claude-json', cj, '--skip-version-check', '--no-agents', '--antigravity', '--agy-file', agyFile], { encoding: 'utf8' });
-    const cmd = JSON.parse(readFileSync(agyFile, 'utf8')).ctxkit?.PreToolUse?.[0]?.hooks?.[0]?.command ?? '';
+    const cmd = JSON.parse(readFileSync(agyFile, 'utf8'))['context-toolkit']?.PreToolUse?.[0]?.hooks?.[0]?.command ?? '';
     return r.status === 0 && cmd.endsWith(' --agy') || `command: ${cmd} ${r.stderr}`;
   }],
-  // CTXKIT_GUARD=0 mutes PreToolUse/PostToolUse (and only them)
+  // CONTEXT_TOOLKIT_GUARD=0 (old name CTXKIT_GUARD=0) mutes PreToolUse/PostToolUse (and only them)
   [true, () => {
     const bad = join(dir, 'guard-off.json');
     writeFileSync(bad, '{ broken');
     const withGuard = (payload, env) => runHook(payload, [], env);
     const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } };
     const post = { hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: bad } };
-    return withGuard(read, {}).includes('"deny"') && withGuard(post, {}).includes('"block"')
-      && withGuard(read, { CTXKIT_GUARD: '0' }) === '' && withGuard(post, { CTXKIT_GUARD: '0' }) === ''
-      && JSON.parse(stopGate({ env: { CTXKIT_GUARD: '0' } })).decision === 'block';
-  }],
-
-  // CTXKIT_GUARD and CTXKIT_GATE share one rule: trimmed, case-insensitive 0/off/false/no turn the hook off
-  [true, () => {
-    const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } };
-    for (const v of ['0', ' 0 ', 'off', ' Off ', 'FALSE', 'No']) {
-      if (runHook(read, [], { CTXKIT_GUARD: v }) !== '') return `GUARD=${JSON.stringify(v)} did not mute`;
-      if (stopGate({ env: { CTXKIT_GATE: v } }) !== '') return `GATE=${JSON.stringify(v)} did not mute`;
-    }
-    for (const v of ['', '1', 'on', 'yes', 'of']) {
-      if (!runHook(read, [], { CTXKIT_GUARD: v }).includes('"deny"')) return `GUARD=${JSON.stringify(v)} muted`;
-      if (JSON.parse(stopGate({ env: { CTXKIT_GATE: v } })).decision !== 'block') return `GATE=${JSON.stringify(v)} muted`;
+    if (!(withGuard(read, {}).includes('"deny"') && withGuard(post, {}).includes('"block"'))) return 'on by default';
+    for (const name of ['CONTEXT_TOOLKIT_GUARD', 'CTXKIT_GUARD']) {
+      if (withGuard(read, { [name]: '0' }) !== '' || withGuard(post, { [name]: '0' }) !== '') return `${name}=0 did not mute`;
+      if (JSON.parse(stopGate({ env: { [name]: '0' } })).decision !== 'block') return `${name}=0 muted the Stop gate`;
     }
     return true;
   }],
 
-  // Localization (default en vs CTXKIT_LANG=ru / --lang ru)
+  // The switches share one rule under both names: trimmed, case-insensitive 0/off/false/no turn the hook off
+  [true, () => {
+    const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } };
+    for (const pre of ['CONTEXT_TOOLKIT_', 'CTXKIT_']) {
+      for (const v of ['0', ' 0 ', 'off', ' Off ', 'FALSE', 'No']) {
+        if (runHook(read, [], { [`${pre}GUARD`]: v }) !== '') return `${pre}GUARD=${JSON.stringify(v)} did not mute`;
+        if (stopGate({ env: { [`${pre}GATE`]: v } }) !== '') return `${pre}GATE=${JSON.stringify(v)} did not mute`;
+      }
+      for (const v of ['', '1', 'on', 'yes', 'of']) {
+        if (!runHook(read, [], { [`${pre}GUARD`]: v }).includes('"deny"')) return `${pre}GUARD=${JSON.stringify(v)} muted`;
+        if (JSON.parse(stopGate({ env: { [`${pre}GATE`]: v } })).decision !== 'block') return `${pre}GATE=${JSON.stringify(v)} muted`;
+      }
+    }
+    // the new name wins when both are set
+    if (!runHook(read, [], { CONTEXT_TOOLKIT_GUARD: '1', CTXKIT_GUARD: '0' }).includes('"deny"')) return 'GUARD: the old name won';
+    if (runHook(read, [], { CONTEXT_TOOLKIT_GUARD: '0', CTXKIT_GUARD: '1' }) !== '') return 'GUARD: the new name lost';
+    if (JSON.parse(stopGate({ env: { CONTEXT_TOOLKIT_GATE: 'on', CTXKIT_GATE: 'off' } })).decision !== 'block') return 'GATE: the old name won';
+    return true;
+  }],
+
+  // Localization (default en vs CONTEXT_TOOLKIT_LANG=ru, old name CTXKIT_LANG=ru, / --lang ru; the new name wins)
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }).includes('File is large')],
   [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }, [], { CTXKIT_LANG: 'ru' }).includes('Файл большой')],
+  [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }, [], { CONTEXT_TOOLKIT_LANG: 'ru' }).includes('Файл большой')],
+  [true, () => runHook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: bigFile } }, [], { CONTEXT_TOOLKIT_LANG: 'en', CTXKIT_LANG: 'ru' }).includes('File is large')],
   [true, () => runHook({ toolCall: { name: 'run_command', args: { CommandLine: `python -c "print('a${B}nb')"` } }, stepIdx: 1 }, ['--lang', 'ru']).includes('Так обратные слеши теряются')],
 
   // Stop gate: blocks once, never twice in a row, never after checker, can be muted
@@ -1134,7 +1317,7 @@ const cases = [
     const profile = join(dir, 'policy-profile');
     mkdirSync(profile, { recursive: true });
     const base = ['setup', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit', '--no-agents', '--skip-version-check'];
-    const file = join(profile, 'ctxkit.json');
+    const file = join(profile, 'context-toolkit.json');
     const run = (...a) => spawnSync(exe, [...base, ...a], { encoding: 'utf8' });
     const plain = run();
     if (plain.status !== 0 || existsSync(file) || !plain.stdout.includes('policies: none (kept; pass --policy')) return 'no flag must not create the file';
@@ -1143,7 +1326,7 @@ const cases = [
     if (dry.status !== 0 || existsSync(file) || !dry.stdout.includes('policy commit_hygiene: off -> on') || !dry.stdout.includes('policy build_slots: off -> 2')) return `dry: ${dry.stdout}`;
     const on = run('--policy', 'commit-hygiene,build-slots=2');
     const cfg = JSON.parse(readFileSync(file, 'utf8'));
-    if (on.status !== 0 || cfg.policies.commit_hygiene !== true || cfg.policies.build_slots !== 2 || cfg.created_by !== 'ctxkit setup') return `on: ${on.stdout}`;
+    if (on.status !== 0 || cfg.policies.commit_hygiene !== true || cfg.policies.build_slots !== 2 || cfg.created_by !== 'context-toolkit setup') return `on: ${on.stdout}`;
     const off = run('--policy', 'none');
     if (off.status !== 0 || !off.stdout.includes('policy commit_hygiene: on -> off') || Object.keys(JSON.parse(readFileSync(file, 'utf8')).policies).length !== 0) return `off: ${off.stdout}`;
     // the rules block lists the policies that are on and the owner's own `rules` items; off drops the lines again
@@ -1161,11 +1344,11 @@ const cases = [
     const settingsBefore = existsSync(join(profile, 'settings.json')) ? readFileSync(join(profile, 'settings.json'), 'utf8') : null;
     const refused = run('--policy', 'none');
     const settingsAfter = existsSync(join(profile, 'settings.json')) ? readFileSync(join(profile, 'settings.json'), 'utf8') : null;
-    if (refused.status !== 1 || !refused.stderr.includes('ctxkit.json') || settingsBefore !== settingsAfter) return 'broken ctxkit.json must be refused untouched';
+    if (refused.status !== 1 || !refused.stderr.includes('context-toolkit.json') || settingsBefore !== settingsAfter) return 'broken context-toolkit.json must be refused untouched';
     // without --policy / --with-rules the broken file does not stop setup, but the owner is told
     const told = run();
     if (told.status !== 0 || !told.stdout.includes('every policy is off until it is fixed')) return `no warning: ${told.stdout}`;
-    // rollback: the file setup made is deleted; the owner's keys stay
+    // rollback: the file setup made is deleted (the mark of the old name counts too); the owner's keys stay
     writeFileSync(file, JSON.stringify({ created_by: 'ctxkit setup', policies: { stray_files: true } }));
     const un = spawnSync(exe, ['setup', '--uninstall', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit'], { encoding: 'utf8' });
     if (un.status !== 0 || existsSync(file)) return `uninstall: ${un.stdout}`;
@@ -1181,8 +1364,9 @@ const cases = [
   // old output. Markup ([dry-run], [warn], ERR:, ->), `code`, "quoted values", --flags, paths and names are not translated.
   [true, () => {
     const CYR = /[А-Яа-яЁё]/;
-    // the English words of the old setup output; what a Russian line may keep is cut out by `strip` first
-    const EN = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|policies(?=:)|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass)\b/;
+    // the English words of the old setup output and of the migration (and the English product name: Russian says
+    // «Инструменты контекста»); what a Russian line may keep is cut out by `strip` first
+    const EN = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|policies(?=:)|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass|old name|moved|copied|move|copy|left|still|Context|Toolkit)\b/;
     const strip = (s) => s
       .replace(/\[(dry-run|warn|note|ok|info)\]/g, '')
       .replace(/^ERR:/gm, '')
@@ -1244,6 +1428,25 @@ const cases = [
       odd('half', { 'CLAUDE.md': '<!-- ctxkit:start -->\nx\n' }, ['--with-rules']);
       odd('policy', { 'ctxkit.json': '{"policies":{"commit_hygiene":"yes"}}' }, ['--with-rules']);
       odd('brokenjson', { 'settings.json': '{' }, []);
+      // the migration from the old name, its notes included: an Antigravity file still on the old binary, the
+      // owner's own old policy file, the old DSH file named by the owner's global patch (a dry run, then the real one)
+      const legacy = join(root, 'legacy');
+      mkdirSync(join(legacy, 'hooks'), { recursive: true });
+      const oldBin = join(legacy, 'hooks', OLD_BIN_NAME);
+      copyFileSync(exe, oldBin);
+      const oldCmd = `"${oldBin.replace(/\\/g, '/')}"`;
+      writeFileSync(join(legacy, 'settings.json'), JSON.stringify({ env: { CTXKIT_LANG: 'ru' }, hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: oldCmd }] }] } }));
+      writeFileSync(join(legacy, 'CLAUDE.md'), '<!-- ctxkit:start -->\nold\n<!-- ctxkit:end -->\n');
+      writeFileSync(join(legacy, 'ctxkit.json'), '{"policies":{}}');
+      const legacyAgy = join(root, 'legacy-agy.json');
+      writeFileSync(legacyAgy, JSON.stringify({ ctxkit: { PreToolUse: [{ hooks: [{ command: `${oldCmd} --agy` }] }] } }));
+      const legacyDsh = join(root, 'legacy-dsh');
+      mkdirSync(join(legacyDsh, 'profiles', 'desktop'), { recursive: true });
+      writeFileSync(join(legacyDsh, 'ctxkit-hooks.json'), '{}');
+      writeFileSync(join(legacyDsh, 'cordis.patch.yml'), `- configPath: '${join(legacyDsh, 'ctxkit-hooks.json')}'\n`);
+      writeFileSync(join(legacyDsh, 'profiles', 'desktop', 'cordis.patch.yml'), '# >>> ctxkit (managed by `ctxkit setup --dsh`; do not edit) >>>\n- insert: x\n# <<< ctxkit <<<\n');
+      const legacyArgs = ['setup', '--profile', legacy, '--claude-json', claudeJson, '--skip-version-check', '--no-agents', '--with-rules', '--agy-file', legacyAgy, '--dsh', '--dsh-home', legacyDsh, '--lang', lang];
+      runs.push([...legacyArgs, '--dry-run'], legacyArgs, ['setup', '--uninstall', '--profile', legacy, '--claude-json', claudeJson, '--lang', lang]);
       let all = '';
       for (const a of runs) {
         const r = spawnSync(exe, a, { encoding: 'utf8', timeout: 60000 });
@@ -1255,8 +1458,8 @@ const cases = [
     const ru = outputOf('ru');
     const cyr = en.split('\n').find((l) => CYR.test(l));
     if (cyr) return `Cyrillic in the English output: ${cyr}`;
-    if (!/Setting up profile/.test(en) || !en.includes('Removing ctxkit') || !en.includes('Diagnostics')) return 'the English output is not the setup output';
-    if (!CYR.test(ru) || !ru.includes('Настройка профиля') || !ru.includes('Удаление ctxkit')) return 'the Russian output is not Russian';
+    if (!/Setting up profile/.test(en) || !en.includes('Removing Context Toolkit') || !en.includes('Diagnostics') || !en.includes('old name: hooks on')) return 'the English output is not the setup output';
+    if (!CYR.test(ru) || !ru.includes('Настройка профиля') || !ru.includes('Удаление Инструментов контекста') || !ru.includes('старое имя: хуки на')) return 'the Russian output is not Russian';
     const bad = ru.split('\n').filter((l) => EN.test(strip(l)));
     if (bad.length) return `English words in the Russian output: ${bad.slice(0, 6).join(' // ')}`;
     return true;

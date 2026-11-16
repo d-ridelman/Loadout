@@ -372,7 +372,7 @@ fn an_owner_like_file_gives_only_its_real_repeats() {
     let md = format!("{OWNER_LIKE}{}\n", crate::setup::sample_block(Lang::Ru));
     let line_of = |needle: &str| md.lines().position(|l| l.contains(needle)).unwrap() + 1;
     let block = |needle: &str| {
-        let start = md.find("<!-- ctxkit:start").unwrap();
+        let start = md.find("<!-- context-toolkit:start").unwrap();
         md[start..]
             .lines()
             .position(|l| l.contains(needle))
@@ -605,12 +605,12 @@ fn doctor_reports_a_warning_with_both_lines_and_keeps_the_size_check_as_it_was()
         + 1;
     assert!(detail.contains(&format!("{group} and ")), "{detail}");
     assert!(
-        detail.contains("ctxkit block") && detail.contains(" ≈ "),
+        detail.contains("Context Toolkit block") && detail.contains(" ≈ "),
         "{detail}"
     );
     let fix = dup.fix.unwrap();
     assert!(
-        fix.contains("one place") && fix.contains("ctxkit.json") && fix.contains("rules"),
+        fix.contains("one place") && fix.contains("context-toolkit.json") && fix.contains("rules"),
         "{fix}"
     );
     assert!(
@@ -621,11 +621,11 @@ fn doctor_reports_a_warning_with_both_lines_and_keeps_the_size_check_as_it_was()
     let ru = ru.iter().find(|x| x.id == "rules_duplicate").unwrap();
     assert!(ru
         .fix
-        .is_some_and(|f| f.contains("одно место") && f.contains("ctxkit.json")));
+        .is_some_and(|f| f.contains("одно место") && f.contains("context-toolkit.json")));
     assert!(ru
         .detail
         .as_deref()
-        .is_some_and(|f| f.contains("блок ctxkit")));
+        .is_some_and(|f| f.contains("блок Инструментов контекста")));
     // a long file with the block: the size warning is unchanged and unique lines cause no duplicate finding
     let mut big = String::from("<!-- ctxkit:start -->\nr\n<!-- ctxkit:end -->\n");
     for i in 0..210 {

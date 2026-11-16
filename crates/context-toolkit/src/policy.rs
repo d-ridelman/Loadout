@@ -1,12 +1,13 @@
 //! Policies: protections the owner used to keep as prose in CLAUDE.md, enforced by hooks instead.
-//! They live in `<profile>/ctxkit.json` (profile: `CLAUDE_CONFIG_DIR`, else `~/.claude`):
+//! They live in `<profile>/context-toolkit.json` (profile: `CLAUDE_CONFIG_DIR`, else `~/.claude`; the old
+//! name `ctxkit.json` is read while the new file does not exist, and setup moves it):
 //!
 //! ```json
 //! {"policies": {"commit_hygiene": true, "confirm_irreversible": true, "stray_files": true, "build_slots": 2},
 //!  "stray_patterns": ["draft*.md"], "rules": ["my own line for the rules block"]}
 //! ```
 //!
-//! `ctxkit setup --policy ...` writes the file; hooks and `ctxkit check` only read it. A missing or
+//! `context-toolkit setup --policy ...` writes the file; hooks and `context-toolkit check` only read it. A missing or
 //! broken file means every policy is off and the hook stays silent.
 use crate::shell::Dialect;
 use crate::Lang;
@@ -15,9 +16,30 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const FILE: &str = "ctxkit.json";
-/// Written by `setup` into a `ctxkit.json` it created, so `--uninstall` can tell its own file from the owner's.
-pub const CREATED_BY: &str = "ctxkit setup";
+pub const FILE: &str = "context-toolkit.json";
+/// The file's name before the rename.
+pub const LEGACY_FILE: &str = "ctxkit.json";
+/// Written by `setup` into a policy file it created, so `--uninstall` can tell its own file from the owner's.
+pub const CREATED_BY: &str = "context-toolkit setup";
+/// The same mark as written before the rename.
+pub const LEGACY_CREATED_BY: &str = "ctxkit setup";
+
+/// Whether `created_by` is the mark setup writes (under either name).
+pub fn made_by_setup(created_by: Option<&Value>) -> bool {
+    created_by
+        .and_then(Value::as_str)
+        .is_some_and(|c| c == CREATED_BY || c == LEGACY_CREATED_BY)
+}
+
+/// The policy file that is read: `context-toolkit.json`, or `ctxkit.json` while only the old one exists.
+pub fn file_in(profile: &Path) -> PathBuf {
+    let (new, old) = (profile.join(FILE), profile.join(LEGACY_FILE));
+    if !new.exists() && old.exists() {
+        old
+    } else {
+        new
+    }
+}
 /// Policy keys in `policies`, in the order they are printed.
 pub const KEYS: [&str; 4] = [
     "commit_hygiene",
@@ -32,7 +54,7 @@ pub struct Config {
     pub commit_hygiene: bool,
     pub confirm_irreversible: bool,
     pub stray_files: bool,
-    /// Concurrent `ctxkit check` runs allowed on the machine; `None` = the policy is off.
+    /// Concurrent `context-toolkit check` runs allowed on the machine; `None` = the policy is off.
     pub build_slots: Option<u32>,
     pub stray_patterns: Vec<String>,
     pub rules: Vec<String>,
@@ -75,7 +97,7 @@ pub fn load() -> Config {
 }
 
 pub fn load_from(profile: &Path) -> Config {
-    fs::read_to_string(profile.join(FILE))
+    fs::read_to_string(file_in(profile))
         .ok()
         .and_then(|t| parse(&t).ok())
         .unwrap_or_default()
@@ -147,7 +169,7 @@ fn strings(root: &Map<String, Value>, key: &str, rules: bool) -> Result<Vec<Stri
                 "'{key}' содержит пустую строку"
             ));
         }
-        // A rules line lands in CLAUDE.md between the ctxkit markers: no line break, no marker text.
+        // A rules line lands in CLAUDE.md between the rules-block markers: no line break, no marker text.
         if rules && (s.contains(['\n', '\r']) || s.contains("<!--")) {
             return Err(msg!(
                 "'{key}' item must be one line without `<!--`: {s:?}",
@@ -378,6 +400,24 @@ mod tests {
         let c = load_from(&d);
         assert!(c.commit_hygiene && !c.stray_files);
         assert_eq!(c.build_slots, Some(3));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_old_file_name_is_read_until_the_new_one_exists() {
+        let d = std::env::temp_dir().join(format!("ctk-policy-old-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join(LEGACY_FILE), r#"{"policies":{"stray_files":true}}"#).unwrap();
+        assert_eq!(file_in(&d), d.join(LEGACY_FILE));
+        assert!(load_from(&d).stray_files, "only the old file: it is read");
+        fs::write(d.join(FILE), r#"{"policies":{"commit_hygiene":true}}"#).unwrap();
+        assert_eq!(file_in(&d), d.join(FILE));
+        let c = load_from(&d);
+        assert!(c.commit_hygiene && !c.stray_files, "the new file wins");
+        assert!(made_by_setup(Some(&serde_json::json!("ctxkit setup"))));
+        assert!(made_by_setup(Some(&serde_json::json!(CREATED_BY))));
+        assert!(!made_by_setup(Some(&serde_json::json!("me"))) && !made_by_setup(None));
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -1,5 +1,6 @@
-//! `ctxkit setup --uninstall`: removes only what `ctxkit setup` added (our hook elements, `CTXKIT_LANG`,
-//! the rules block, Antigravity/DSH entries, our binary). Model choices are not undone because the
+//! `context-toolkit setup --uninstall`: removes only what setup added, under the new name and the old one
+//! `ctxkit` (our hook elements, `CONTEXT_TOOLKIT_LANG` / `CTXKIT_LANG`, the rules block, Antigravity/DSH entries,
+//! our binaries). Model choices are not undone because the
 //! previous values are not known: they are printed with the path to the settings.json backups instead.
 use super::*;
 use crate::t;
@@ -24,7 +25,7 @@ pub(super) fn reject_setup_only_flags(args: &[String]) -> Option<&str> {
         .find(|a| SETUP_ONLY_FLAGS.contains(a))
 }
 
-/// Settings without our hook elements and `env.CTXKIT_LANG`. A container (`hooks`, `env`) that this
+/// Settings without our hook elements and the language key (`env.CONTEXT_TOOLKIT_LANG`, old `env.CTXKIT_LANG`). A container (`hooks`, `env`) that this
 /// emptied is dropped; everything else is left as it is.
 fn remove_from_settings(orig: &Value, hook_cmd: &str) -> Value {
     let mut next = orig.clone();
@@ -42,7 +43,9 @@ fn remove_from_settings(orig: &Value, hook_cmd: &str) -> Value {
         }
     }
     if let Some(env_obj) = root.get_mut("env").and_then(|e| e.as_object_mut()) {
-        if env_obj.remove("CTXKIT_LANG").is_some() && env_obj.is_empty() {
+        let new = env_obj.remove(LANG_ENV).is_some();
+        let old = env_obj.remove(OLD_LANG_ENV).is_some();
+        if (new || old) && env_obj.is_empty() {
             drop_keys.push("env");
         }
     }
@@ -68,7 +71,7 @@ fn join_cut(before: &str, after: &str) -> String {
     }
 }
 
-/// Text without every ctxkit (and legacy claude-guard) rules block.
+/// Text without every rules block (current markers, and the old ctxkit and claude-guard ones).
 fn strip_rules_blocks(text: &str) -> String {
     let mut text = text.to_string();
     while let Some((s, e)) = marker_span(&text) {
@@ -78,25 +81,27 @@ fn strip_rules_blocks(text: &str) -> String {
 }
 
 /// Text without the managed DSH block; `Err` when a start marker has no end marker after it.
-fn strip_dsh_block(text: &str) -> Result<String, ()> {
+pub(super) fn strip_dsh_block(text: &str) -> Result<String, ()> {
     let mut text = text.to_string();
-    while let Some(s) = text.find(DSH_MARKER_START) {
-        let len = text[s..].find(DSH_MARKER_END).ok_or(())?;
-        text = join_cut(&text[..s], &text[s + len + DSH_MARKER_END.len()..]);
+    while let Some((s, e)) = dsh_block_span(&text) {
+        text = join_cut(&text[..s], &text[e..]);
+    }
+    if dsh_marker_left(&text) {
+        return Err(());
     }
     Ok(text)
 }
 
+/// Whether a managed DSH start marker (of either name) is in the text.
+fn dsh_marker_left(text: &str) -> bool {
+    DSH_MARKERS.iter().any(|(s, _)| text.contains(s))
+}
+
 /// Whether any rules marker line is still in the text (after every whole block was cut out of it).
 fn marker_lines_left(text: &str) -> bool {
-    [
-        MARKER_START,
-        MARKER_END,
-        LEGACY_MARKER_START,
-        LEGACY_MARKER_END,
-    ]
-    .iter()
-    .any(|m| marker_lines(text, m) > 0)
+    MARKERS
+        .iter()
+        .any(|(s, e)| marker_lines(text, s) + marker_lines(text, e) > 0)
 }
 
 /// A backup and its bytes.
@@ -117,7 +122,7 @@ fn text_key(s: &str) -> String {
     s.replace("\r\n", "\n").trim_end().to_string()
 }
 
-/// The latest backup that is the text as it was before setup (no ctxkit block in it, `clean`) and equals
+/// The latest backup that is the text as it was before setup (no rules block of ours in it, `clean`) and equals
 /// the rolled-back `result` apart from line breaks and trailing whitespace: restoring its bytes gives the
 /// user's file back byte for byte (CRLF, a missing final newline, extra blank lines at the end).
 fn exact_text_backup<'a>(
@@ -177,8 +182,8 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
     // Markers that are still unbalanced after the whole blocks are gone (a start without an end).
     if marker_lines_left(&updated) {
         say!(
-            "  [warn] {}: a ctxkit start or end marker has no pair; remove the leftover block by hand",
-            "  [warn] {}: у начального или конечного маркера ctxkit нет пары; удалите оставшийся блок вручную",
+            "  [warn] {}: a rules-block start or end marker has no pair; remove the leftover block by hand",
+            "  [warn] {}: у начального или конечного маркера блока правил нет пары; удалите оставшийся блок вручную",
             path.display()
         );
     }
@@ -285,37 +290,47 @@ fn settings_outcome(next: &Value, backups: &[Saved], hook_cmd: &str) -> Settings
     SettingsOutcome::Write
 }
 
-/// Takes the `policies` section out of `ctxkit.json`. The file goes only when setup created it and nothing
-/// of the owner's is in it; otherwise the owner's keys stay and the output says which.
+/// Takes the `policies` section out of `context-toolkit.json` and, when it is there, out of the old `ctxkit.json`.
 fn remove_policies(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
-    let path = policies::path(profile);
+    remove_policies_in(&policies::path(profile), backup_dir, dry_run)?;
+    let old = profile.join(policy::LEGACY_FILE);
+    if old.exists() {
+        remove_policies_in(&old, backup_dir, dry_run)?;
+    }
+    Ok(())
+}
+
+/// Takes the `policies` section out of one policy file. The file goes only when setup created it and nothing
+/// of the owner's is in it; otherwise the owner's keys stay and the output says which.
+fn remove_policies_in(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
     if !path.exists() {
         say!(
-            "  ok ctxkit.json (not present): {}",
-            "  ок ctxkit.json нет: {}",
+            "  ok {name} (not present): {}",
+            "  ок {name} нет: {}",
             path.display()
         );
         return Ok(());
     }
-    let orig = match read_json_object(&path) {
+    let orig = match read_json_object(path) {
         Ok(v) => v,
         Err(e) => {
             say!(
-                "  [warn] {e}; ctxkit.json left as it is",
-                "  [warn] {e}; ctxkit.json оставлен как есть"
+                "  [warn] {e}; {name} left as it is",
+                "  [warn] {e}; {name} оставлен как есть"
             );
             return Ok(());
         }
     };
     let Some(root) = orig.as_object().filter(|r| r.contains_key("policies")) else {
         say!(
-            "  ok ctxkit.json (no policies section): {}",
-            "  ок в ctxkit.json нет раздела policies: {}",
+            "  ok {name} (no policies section): {}",
+            "  ок в {name} нет раздела policies: {}",
             path.display()
         );
         return Ok(());
     };
-    let created = root.get("created_by") == Some(&json!(policy::CREATED_BY));
+    let created = policy::made_by_setup(root.get("created_by"));
     let mut next = root.clone();
     next.remove("policies");
     next.remove("created_by");
@@ -323,11 +338,11 @@ fn remove_policies(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
     left.sort_unstable();
     if created && left.is_empty() {
         return delete_created(
-            &path,
+            path,
             backup_dir,
             &msg!(
-                "removed ctxkit.json (setup had created it)",
-                "ctxkit.json удалён (его создал setup)"
+                "removed {name} (setup had created it)",
+                "{name} удалён (его создал setup)"
             ),
             dry_run,
         );
@@ -345,14 +360,14 @@ fn remove_policies(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
         )
     };
     write_json_if_changed(
-        &path,
+        path,
         Some(backup_dir),
         &orig,
         &Value::Object(next),
         dry_run,
         &msg!(
-            "ctxkit.json (policies section removed)",
-            "ctxkit.json (раздел policies убран)"
+            "{name} (policies section removed)",
+            "{name} (раздел policies убран)"
         ),
     )?;
     println!("  {note}");
@@ -371,14 +386,26 @@ fn remove_antigravity_hooks(path: &Path, dry_run: bool) -> Result<(), String> {
     let orig = read_json_object(path)?;
     let mut next = orig.clone();
     if let Some(root) = next.as_object_mut() {
-        root.remove("ctxkit");
-        root.remove("claude-guard");
+        for k in [AGY_KEY, AGY_OLD_KEY, "claude-guard"] {
+            root.remove(k);
+        }
     }
     write_json_if_changed(path, None, &orig, &next, dry_run, "Antigravity hooks.json")
 }
 
 fn remove_dsh(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
-    let hooks_path = dsh_home.join("ctxkit-hooks.json");
+    for (i, file) in [DSH_HOOKS_FILE, OLD_DSH_HOOKS_FILE].into_iter().enumerate() {
+        let hooks_path = dsh_home.join(file);
+        // the old file is named only when it is there
+        if i == 1 && !hooks_path.exists() {
+            continue;
+        }
+        remove_dsh_hooks_file(&hooks_path, dsh_home, dry_run)?;
+    }
+    remove_dsh_block(dsh_home, dry_run)
+}
+
+fn remove_dsh_hooks_file(hooks_path: &Path, dsh_home: &Path, dry_run: bool) -> Result<(), String> {
     if !hooks_path.exists() {
         say!(
             "  ok DeepSeek Harness hooks (not present): {}",
@@ -392,15 +419,20 @@ fn remove_dsh(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
             hooks_path.display()
         );
     } else {
-        let b = backup_file(&hooks_path, &dsh_home.join("backups"))?;
+        let b = backup_file(hooks_path, &dsh_home.join("backups"))?;
         say!("  backup -> {}", "  копия -> {}", b.display());
-        remove_file(&hooks_path)?;
+        remove_file(hooks_path)?;
         say!(
             "  removed DeepSeek Harness hooks: {}",
             "  удалены хуки DeepSeek Harness: {}",
             hooks_path.display()
         );
     }
+    Ok(())
+}
+
+/// Cuts our managed block (either name) out of the DSH desktop profile patch.
+fn remove_dsh_block(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
     let profile = dsh_home.join("profiles").join("desktop");
     let patch = profile.join("cordis.patch.yml");
     if !patch.exists() {
@@ -409,41 +441,41 @@ fn remove_dsh(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
     let existing = read_text(&patch)?;
     let Ok(updated) = strip_dsh_block(&existing) else {
         say!(
-            "  [warn] {}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand",
-            "  [warn] {}: у начального маркера ctxkit нет конечного; удалите оставшийся блок ctxkit вручную",
+            "  [warn] {}: a Context Toolkit (or old ctxkit) start marker has no end marker; remove the leftover block by hand",
+            "  [warn] {}: у начального маркера Инструментов контекста (или старого ctxkit) нет конечного; удалите оставшийся блок вручную",
             patch.display()
         );
         return Ok(());
     };
     if existing == updated {
         say!(
-            "  ok DeepSeek Harness profile patch (no ctxkit block): {}",
-            "  ок в патче профиля DeepSeek Harness нет блока ctxkit: {}",
+            "  ok DeepSeek Harness profile patch (no block of ours): {}",
+            "  ок в патче профиля DeepSeek Harness нет нашего блока: {}",
             patch.display()
         );
     } else if dry_run {
         say!(
-            "  [dry-run] remove ctxkit block from DeepSeek Harness profile patch: {}",
-            "  [dry-run] удаление блока ctxkit из патча профиля DeepSeek Harness: {}",
+            "  [dry-run] remove our block from DeepSeek Harness profile patch: {}",
+            "  [dry-run] удаление нашего блока из патча профиля DeepSeek Harness: {}",
             patch.display()
         );
     } else {
         let backups = read_backups(&profile, "cordis.patch.yml");
-        let exact = exact_text_backup(&updated, &backups, |t| !t.contains(DSH_MARKER_START));
+        let exact = exact_text_backup(&updated, &backups, |t| !dsh_marker_left(t));
         let (bytes, what) = match exact {
             Some((from, b)) => (
                 b.clone(),
                 msg!(
-                    "removed ctxkit block from DeepSeek Harness profile patch (restored byte for byte from {})",
-                    "блок ctxkit убран из патча профиля DeepSeek Harness (файл возвращён байт в байт из {})",
+                    "removed our block from DeepSeek Harness profile patch (restored byte for byte from {})",
+                    "наш блок убран из патча профиля DeepSeek Harness (файл возвращён байт в байт из {})",
                     from.display()
                 ),
             ),
             None => (
                 updated.into_bytes(),
                 msg!(
-                    "removed ctxkit block from DeepSeek Harness profile patch",
-                    "блок ctxkit убран из патча профиля DeepSeek Harness"
+                    "removed our block from DeepSeek Harness profile patch",
+                    "наш блок убран из патча профиля DeepSeek Harness"
                 ),
             ),
         };
@@ -500,8 +532,8 @@ fn print_kept(
         "{}",
         t(
             lang,
-            "Left as is (ctxkit does not know the previous values; change by hand if you want them back):",
-            "Не тронуто (прежние значения ctxkit неизвестны; верните вручную, если нужно):"
+            "Left as is (Context Toolkit does not know the previous values; change by hand if you want them back):",
+            "Не тронуто (прежние значения Инструментам контекста неизвестны; верните вручную, если нужно):"
         )
     );
     for k in ["model", "advisorModel", "effortLevel", "modelSettings"] {
@@ -619,7 +651,7 @@ fn backup_lines(
 }
 
 /// Deletes `path` unless it is the running binary; on failure says how to do it by hand.
-fn remove_bin(path: &Path, running: &Path, dry_run: bool, lang: Lang) {
+pub(super) fn remove_bin(path: &Path, running: &Path, dry_run: bool, lang: Lang) {
     let manual = |why: &str| {
         println!(
             "  {}: {} ({why})",
@@ -664,8 +696,8 @@ pub(super) fn run(
 ) -> i32 {
     let tag = if opts.dry_run { "[dry-run] " } else { "" };
     say!(
-        "{tag}Removing ctxkit from profile: {}",
-        "{tag}Удаление ctxkit из профиля: {}",
+        "{tag}Removing Context Toolkit from profile: {}",
+        "{tag}Удаление Инструментов контекста из профиля: {}",
         profile.display()
     );
     let backup_dir = profile.join("backups");
@@ -788,33 +820,55 @@ pub(super) fn run(
     // The binary goes last: removed earlier, a settings.json failure would leave a hook on a missing file.
     if opts.hook_cmd.is_none() {
         let exe = env::current_exe().unwrap_or_default();
-        let local = home.join(".local").join("bin").join(bin_name);
-        // ~/.local/bin is shared; it is ours only when it is a byte copy of this binary or of the hooks/ one.
-        let local_is_ours = !custom_profile
-            && local.exists()
-            && (same_file_bytes(&exe, &local) || same_file_bytes(hook_bin, &local));
-        if hook_bin.exists() {
-            remove_bin(hook_bin, &exe, opts.dry_run, opts.lang);
-            if !(opts.antigravity || opts.agy_file.is_some() || opts.dsh || opts.dsh_home.is_some())
-            {
-                println!(
-                    "  {}",
-                    t(
-                        opts.lang,
-                        "[note] If setup ran with --antigravity / --dsh, their hooks now point at the removed binary: run the rollback again with the same flags.",
-                        "[note] Если setup запускался с --antigravity / --dsh, их хуки указывают на удалённый бинарь: запустите откат с теми же флагами."
-                    )
-                );
+        let old_hook = hook_bin.with_file_name(OLD_BIN_NAME);
+        let bin_dir = home.join(".local").join("bin");
+        // ~/.local/bin is shared; it is ours only when it is a byte copy of this binary or of a hooks/ one,
+        // or (the old name, maybe a build older than this one) when its --version says it is this product.
+        let ours = |local: &Path, hook: &Path, by_version: bool| {
+            !custom_profile
+                && local.is_file()
+                && (same_file_bytes(&exe, local)
+                    || same_file_bytes(hook, local)
+                    || (by_version && version_says_ours(local)))
+        };
+        let locals = [
+            (
+                bin_dir.join(bin_name),
+                ours(&bin_dir.join(bin_name), hook_bin, false),
+            ),
+            (
+                bin_dir.join(OLD_BIN_NAME),
+                ours(&bin_dir.join(OLD_BIN_NAME), &old_hook, true),
+            ),
+        ];
+        let had_hook = hook_bin.exists() || old_hook.exists();
+        for h in [hook_bin, old_hook.as_path()] {
+            if h.exists() {
+                remove_bin(h, &exe, opts.dry_run, opts.lang);
             }
         }
-        if local_is_ours {
-            remove_bin(&local, &exe, opts.dry_run, opts.lang);
-        } else if !custom_profile && local.exists() {
-            say!(
-                "  left (differs from ours): {}",
-                "  оставлен (отличается от нашего): {}",
-                local.display()
+        if had_hook
+            && !(opts.antigravity || opts.agy_file.is_some() || opts.dsh || opts.dsh_home.is_some())
+        {
+            println!(
+                "  {}",
+                t(
+                    opts.lang,
+                    "[note] If setup ran with --antigravity / --dsh, their hooks now point at the removed binary: run the rollback again with the same flags.",
+                    "[note] Если setup запускался с --antigravity / --dsh, их хуки указывают на удалённый бинарь: запустите откат с теми же флагами."
+                )
             );
+        }
+        for (local, is_ours) in &locals {
+            if *is_ours {
+                remove_bin(local, &exe, opts.dry_run, opts.lang);
+            } else if !custom_profile && local.exists() {
+                say!(
+                    "  left (differs from ours): {}",
+                    "  оставлен (отличается от нашего): {}",
+                    local.display()
+                );
+            }
         }
     }
     0
@@ -880,8 +934,49 @@ mod tests {
         let both =
             format!("a\n\n{LEGACY_MARKER_START}\nold\n{LEGACY_MARKER_END}\n\nb\n\n{block}\n\nc\n");
         assert_eq!(strip_rules_blocks(&both), "a\n\nb\n\nc\n");
+        let three = format!("{both}\n{OLD_MARKER_START}\nctxkit\n{OLD_MARKER_END}\n\nd\n");
+        assert_eq!(strip_rules_blocks(&three), "a\n\nb\n\nc\n\nd\n");
+        assert!(marker_lines_left(&format!("x\n{OLD_MARKER_END}\n")));
         let user_only = "# Mine\n";
         assert_eq!(strip_rules_blocks(user_only), user_only);
+    }
+
+    #[test]
+    fn the_rollback_takes_out_the_language_key_and_antigravity_keys_of_both_names() {
+        let orig = json!({"env": {"CONTEXT_TOOLKIT_LANG": "ru", "CTXKIT_LANG": "ru", "KEEP": "1"}});
+        assert_eq!(
+            remove_from_settings(&orig, "\"x\""),
+            json!({"env": {"KEEP": "1"}})
+        );
+        let only_ours = json!({"env": {"CONTEXT_TOOLKIT_LANG": "ru"}});
+        assert_eq!(remove_from_settings(&only_ours, "\"x\""), json!({}));
+        let d = policies::temp_profile("agy-rollback");
+        let agy = d.join("hooks.json");
+        fs::write(
+            &agy,
+            r#"{"context-toolkit":{},"ctxkit":{},"claude-guard":{},"other-hook":{"a":1}}"#,
+        )
+        .unwrap();
+        remove_antigravity_hooks(&agy, false).unwrap();
+        assert_eq!(
+            read_json_object(&agy).unwrap(),
+            json!({"other-hook": {"a": 1}})
+        );
+        // the policy files of both names: setup's own goes, the owner's keeps its keys
+        let old = d.join(policy::LEGACY_FILE);
+        fs::write(&old, r#"{"created_by":"ctxkit setup","policies":{}}"#).unwrap();
+        fs::write(
+            policies::path(&d),
+            r#"{"policies":{"stray_files":true},"rules":["a b c d e"]}"#,
+        )
+        .unwrap();
+        remove_policies(&d, &d.join("backups"), false).unwrap();
+        assert!(!old.exists());
+        assert_eq!(
+            read_json_object(&policies::path(&d)).unwrap(),
+            json!({"rules": ["a b c d e"]})
+        );
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

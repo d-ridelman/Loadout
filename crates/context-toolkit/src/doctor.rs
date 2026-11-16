@@ -41,23 +41,26 @@ pub fn lang_arg(args: &[String], i: usize) -> Option<usize> {
     Some(usize::from(!args[i].contains('=')))
 }
 
-/// First `ctxkit` hook command in PreToolUse, reduced to the executable path.
+/// First hook command of ours (`context-toolkit`, or the old `ctxkit`) in PreToolUse, reduced to the executable path.
 fn hook_command(settings: &Value) -> Option<String> {
     let cmd = settings["hooks"]["PreToolUse"]
         .as_array()?
         .iter()
         .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
         .find_map(|h| {
-            h["command"]
-                .as_str()
-                .filter(|c| crate::setup::our_name(c) == Some("ctxkit"))
+            h["command"].as_str().filter(|c| {
+                matches!(
+                    crate::setup::our_name(c),
+                    Some("context-toolkit" | "ctxkit")
+                )
+            })
         })?
         .trim();
     Some(
         match cmd.chars().next().filter(|c| matches!(c, '"' | '\'')) {
             Some(q) => cmd[1..].split(q).next().unwrap_or("").to_string(),
             None if Path::new(cmd).exists() => cmd.to_string(),
-            // `C:/x/ctxkit.exe --lang ru`: the executable is the first word
+            // `C:/x/context-toolkit.exe --lang ru`: the executable is the first word
             None => cmd.split_whitespace().next().unwrap_or(cmd).to_string(),
         },
     )
@@ -89,11 +92,11 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             "warn",
             t(
                 lang,
-                "no ctxkit hook in PreToolUse: reads and logs are not guarded",
-                "в PreToolUse нет хука ctxkit: чтения и логи не защищены",
+                "no Context Toolkit hook in PreToolUse: reads and logs are not guarded",
+                "в PreToolUse нет хука Инструментов контекста: чтения и логи не защищены",
             ),
             None,
-            Some("ctxkit setup"),
+            Some("context-toolkit setup"),
         )),
         Some(cmd) if Path::new(&cmd).is_absolute() && !Path::new(&cmd).exists() => out.push(f(
             "hooks",
@@ -104,7 +107,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                 "хук указывает на несуществующий бинарь: каждый вызов инструмента даст ошибку хука",
             ),
             Some(cmd),
-            Some("ctxkit setup"),
+            Some("context-toolkit setup"),
         )),
         Some(_) => out.push(f(
             "hooks",
@@ -129,7 +132,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                 "шлюз Stop установлен, но нет ни агента checker, ни advisorModel: он молчит",
             ),
             None,
-            Some("ctxkit setup"),
+            Some("context-toolkit setup"),
         )
     } else if has_gate {
         f("stop_gate", "ok", t(lang, "Stop gate installed", "шлюз Stop установлен"), None, None)
@@ -143,7 +146,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                 "нет шлюза Stop: ничто не возвращает модель к checker/advisor перед завершением хода",
             ),
             None,
-            Some("ctxkit setup"),
+            Some("context-toolkit setup"),
         )
     });
 
@@ -162,7 +165,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                 "основная сессия не закреплена на дешёвой модели (рутина может идти на Opus/Fable)",
             ),
             model,
-            Some("ctxkit setup --main-model sonnet"),
+            Some("context-toolkit setup --main-model sonnet"),
         ));
     } else {
         out.push(f(
@@ -189,10 +192,10 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                     "для основной модели нет записи в modelSettings: её effort не задан (алиас вроде `sonnet` мог уже сместиться на более новую модель, чем знает таблица)",
                 ),
                 Some(format!(
-                    "model {model}, expected modelSettings.{id}; ctxkit's alias table is from {}",
+                    "model {model}, expected modelSettings.{id}; the alias table of Context Toolkit is from {}",
                     crate::setup::MODEL_ALIASES_AS_OF
                 )),
-                Some("ctxkit setup --main-model <model> --effort <level>"),
+                Some("context-toolkit setup --main-model <model> --effort <level>"),
             ));
         }
     }
@@ -205,7 +208,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
         None,
     ));
     let sub = settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"].as_str();
-    // Older `ctxkit setup` wrote haiku here: it puts every subagent without its own `model`, code writers included, on haiku.
+    // Older setup versions wrote haiku here: it puts every subagent without its own `model`, code writers included, on haiku.
     let sub_haiku = sub.is_some_and(|v| v.to_ascii_lowercase().contains("haiku"));
     out.push(f(
         "subagent_model",
@@ -249,7 +252,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                 "нет файлов агентов: делегировать некому",
             ),
             Some(missing.join(", ")),
-            Some("ctxkit setup"),
+            Some("context-toolkit setup"),
         ));
     }
 
@@ -260,8 +263,8 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             "warn",
             t(
                 lang,
-                "the ctxkit markers in CLAUDE.md are unbalanced or the block is doubled (an older setup could leave this): setup refuses to touch the file and the rollback removes only part of it. Keep one block between the markers, or delete the markers and the old block by hand, then rerun setup --with-rules",
-                "маркеры ctxkit в CLAUDE.md не сбалансированы или блок задвоен (так могла оставить прежняя версия setup): setup такой файл не трогает, а откат убирает только часть. Оставь один блок между маркерами или удали маркеры и старый блок вручную, затем снова запусти setup --with-rules",
+                "the rules-block markers in CLAUDE.md are unbalanced or the block is doubled (an older setup could leave this): setup refuses to touch the file and the rollback removes only part of it. Keep one block between the markers, or delete the markers and the old block by hand, then rerun setup --with-rules",
+                "маркеры блока правил в CLAUDE.md не сбалансированы или блок задвоен (так могла оставить прежняя версия setup): setup такой файл не трогает, а откат убирает только часть. Оставь один блок между маркерами или удали маркеры и старый блок вручную, затем снова запусти setup --with-rules",
             ),
             Some(format!("{}: {problem}", profile.join("CLAUDE.md").display())),
             None,
@@ -269,7 +272,7 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
     }
     match &md {
         Ok(md) if marker_span(md).is_some() => {
-            out.push(f("rules_block", "ok", t(lang, "ctxkit rules block present", "блок правил ctxkit есть"), None, None));
+            out.push(f("rules_block", "ok", t(lang, "Context Toolkit rules block present", "блок правил Инструментов контекста есть"), None, None));
             let lines = md.lines().count();
             if lines > 200 || md.len() > 8192 {
                 out.push(f(
@@ -290,14 +293,14 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             "warn",
             t(
                 lang,
-                "no ctxkit rules block in CLAUDE.md: the model is never told when to call Explore, checker or advisor, so it usually will not",
-                "в CLAUDE.md нет блока правил ctxkit: модели нигде не сказано, когда звать Explore, checker и advisor, и обычно она их не зовёт",
+                "no Context Toolkit rules block in CLAUDE.md: the model is never told when to call Explore, checker or advisor, so it usually will not",
+                "в CLAUDE.md нет блока правил Инструментов контекста: модели нигде не сказано, когда звать Explore, checker и advisor, и обычно она их не зовёт",
             ),
             None,
-            Some("ctxkit setup --with-rules"),
+            Some("context-toolkit setup --with-rules"),
         )),
     }
-    // The same rule in two places (the owner's sections and the ctxkit block): the copies drift apart.
+    // The same rule in two places (the owner's sections and our block): the copies drift apart.
     let repeats = md
         .as_ref()
         .map(|m| crate::dupes::find(m))
@@ -314,14 +317,15 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             Some(crate::dupes::describe(&repeats, lang)),
             Some(t(
                 lang,
-                "keep each rule in one place: when your line says what the block says, delete your copy (the ctxkit block is rewritten by `ctxkit setup --with-rules`, so a point of your own that belongs there goes into ctxkit.json → rules); when your line is an exception to the block's rule, keep it",
-                "оставь одно место для каждого правила: если твоя строка говорит то же, что блок, удали свою копию (блок ctxkit переписывает `ctxkit setup --with-rules`, поэтому свой пункт, которому место в блоке, держи в ctxkit.json → rules); если твоя строка — исключение из правила блока, оставь её",
+                "keep each rule in one place: when your line says what the block says, delete your copy (the Context Toolkit block is rewritten by `context-toolkit setup --with-rules`, so a point of your own that belongs there goes into context-toolkit.json → rules); when your line is an exception to the block's rule, keep it",
+                "оставь одно место для каждого правила: если твоя строка говорит то же, что блок, удали свою копию (блок Инструментов контекста переписывает `context-toolkit setup --with-rules`, поэтому свой пункт, которому место в блоке, держи в context-toolkit.json → rules); если твоя строка — исключение из правила блока, оставь её",
             )),
         ));
     }
 
-    // ctxkit.json: silent when absent (the policies are opt-in); a broken file switches every policy off without a word.
-    let cfg_path = profile.join(crate::policy::FILE);
+    // The policy file: silent when absent (the policies are opt-in); a broken file switches every policy off without a word.
+    let cfg_path = crate::policy::file_in(profile);
+    let old_cfg = !cfg_path.ends_with(crate::policy::FILE);
     if cfg_path.exists() {
         // strict UTF-8 like the hooks and setup: a file the hooks cannot read must not look fine here
         let parsed = fs::read(&cfg_path)
@@ -332,7 +336,11 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             Ok(c) => f(
                 "policies",
                 "info",
-                t(lang, "policies (ctxkit.json)", "политики (ctxkit.json)"),
+                if old_cfg {
+                    t(lang, "policies (ctxkit.json, the old name)", "политики (ctxkit.json, старое имя)")
+                } else {
+                    t(lang, "policies (context-toolkit.json)", "политики (context-toolkit.json)")
+                },
                 Some(c.describe()),
                 None,
             ),
@@ -341,19 +349,83 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
                 "warn",
                 t(
                     lang,
-                    "ctxkit.json does not parse: every policy is off and the hooks stay silent",
-                    "ctxkit.json не разбирается: все политики выключены, хуки молчат",
+                    "the policy file does not parse: every policy is off and the hooks stay silent",
+                    "файл политик не разбирается: все политики выключены, хуки молчат",
                 ),
                 Some(format!("{}: {e}", cfg_path.display())),
                 Some(t(
                     lang,
-                    "fix the JSON or delete the file (setup refuses it as it is), then ctxkit setup --policy <list>",
-                    "поправь JSON или удали файл (setup в таком виде его не принимает), затем ctxkit setup --policy <list>",
+                    "fix the JSON or delete the file (setup refuses it as it is), then context-toolkit setup --policy <list>",
+                    "поправь JSON или удали файл (setup в таком виде его не принимает), затем context-toolkit setup --policy <list>",
                 )),
             ),
         });
     }
+    out.extend(legacy_name(profile, &settings, md.as_ref().ok(), lang));
     out
+}
+
+/// What of the installation still has the old name `ctxkit`: setup moves it all (the rules block only with
+/// `--with-rules`). A warning while the hooks still run the old binary, a note for leftovers.
+fn legacy_name(
+    profile: &Path,
+    settings: &Value,
+    md: Option<&String>,
+    lang: Lang,
+) -> Option<Finding> {
+    let old_hooks = ["PreToolUse", "PostToolUse", "Stop"].iter().any(|ev| {
+        settings["hooks"][ev]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+            .any(|h| h["command"].as_str().and_then(crate::setup::our_name) == Some("ctxkit"))
+    });
+    let old_markers = md.is_some_and(|m| crate::setup::has_old_markers(m));
+    let hooks_dir = profile.join("hooks");
+    let parts: Vec<String> = [
+        (
+            old_hooks,
+            format!("hooks -> {}", crate::setup::OLD_BIN_NAME),
+        ),
+        (
+            hooks_dir.join(crate::setup::OLD_BIN_NAME).exists(),
+            hooks_dir
+                .join(crate::setup::OLD_BIN_NAME)
+                .display()
+                .to_string(),
+        ),
+        (
+            settings["env"].get("CTXKIT_LANG").is_some(),
+            "env.CTXKIT_LANG".to_string(),
+        ),
+        (old_markers, "<!-- ctxkit:start -->".to_string()),
+        (
+            profile.join(crate::policy::LEGACY_FILE).exists(),
+            crate::policy::LEGACY_FILE.to_string(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(on, what)| on.then_some(what))
+    .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(f(
+        "legacy_name",
+        if old_hooks { "warn" } else { "info" },
+        t(
+            lang,
+            "parts of the installation still have the old name ctxkit: setup moves them to Context Toolkit",
+            "часть установки ещё на старом имени ctxkit: setup переведёт её на Инструменты контекста",
+        ),
+        Some(parts.join("; ")),
+        Some(if old_markers {
+            "context-toolkit setup --with-rules"
+        } else {
+            "context-toolkit setup"
+        }),
+    ))
 }
 
 pub fn profile_path(custom: Option<PathBuf>) -> Option<PathBuf> {
@@ -377,7 +449,7 @@ pub fn run_doctor(args: &[String]) -> i32 {
                 i += 1;
             }
             "--help" | "-h" => {
-                println!("Usage: ctxkit doctor [--json] [--profile <dir>] [--lang en|ru]");
+                println!("Usage: context-toolkit doctor [--json] [--profile <dir>] [--lang en|ru]");
                 return 0;
             }
             a if a == "--lang" || a.starts_with("--lang=") => match lang_arg(args, i) {
@@ -388,7 +460,7 @@ pub fn run_doctor(args: &[String]) -> i32 {
                 }
             },
             other => {
-                eprintln!("ERR: unknown option '{other}'. Usage: ctxkit doctor [--json] [--profile <dir>] [--lang en|ru]");
+                eprintln!("ERR: unknown option '{other}'. Usage: context-toolkit doctor [--json] [--profile <dir>] [--lang en|ru]");
                 return 2;
             }
         }
@@ -399,7 +471,7 @@ pub fn run_doctor(args: &[String]) -> i32 {
         return 1;
     };
     let lang = detect_lang(args);
-    crate::set_lang(lang); // the helpers shared with setup (parse errors of ctxkit.json, ...) speak the same language
+    crate::set_lang(lang); // the helpers shared with setup (parse errors of the policy file, ...) speak the same language
     let findings = diagnose(&profile, lang);
     let failed = findings.iter().any(|x| x.severity == "error");
     if json_out {
@@ -409,7 +481,7 @@ pub fn run_doctor(args: &[String]) -> i32 {
             .collect();
         let doc = json!({
             "schema": 1,
-            "tool": "ctxkit",
+            "tool": "context-toolkit",
             "version": env!("CARGO_PKG_VERSION"),
             "profile": profile.to_string_lossy(),
             "findings": list,
@@ -458,7 +530,7 @@ mod tests {
     #[test]
     fn configured_profile_is_clean_and_missing_hook_binary_is_an_error() {
         let d = temp("ctxkit_doctor_ok");
-        let exe = d.join("ctxkit.exe");
+        let exe = d.join("context-toolkit.exe");
         fs::write(&exe, b"x").unwrap();
         let cmd = format!("\"{}\"", exe.to_string_lossy().replace('\\', "/"));
         let settings = json!({
@@ -472,15 +544,79 @@ mod tests {
         fs::write(d.join("agents").join("checker.md"), "x").unwrap();
         fs::write(
             d.join("CLAUDE.md"),
-            "<!-- ctxkit:start -->\nr\n<!-- ctxkit:end -->\n",
+            "<!-- context-toolkit:start -->\nr\n<!-- context-toolkit:end -->\n",
         )
         .unwrap();
         let v = diagnose(&d, Lang::En);
         assert!(v
             .iter()
             .all(|x| x.severity != "warn" && x.severity != "error"));
+        assert!(v.iter().all(|x| x.id != "legacy_name"));
         fs::remove_file(&exe).unwrap();
         assert_eq!(sev(&diagnose(&d, Lang::En), "hooks"), "error");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_installation_of_the_old_name_is_installed_and_named_legacy() {
+        let d = temp("ctk_doctor_legacy");
+        fs::create_dir_all(d.join("hooks")).unwrap();
+        let exe = d.join("hooks").join(crate::setup::OLD_BIN_NAME);
+        fs::write(&exe, b"x").unwrap();
+        let cmd = format!("\"{}\"", exe.to_string_lossy().replace('\\', "/"));
+        let settings = json!({
+            "env": {"CTXKIT_LANG": "ru"},
+            "hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [{"type": "command", "command": cmd}]}]}
+        });
+        fs::write(d.join("settings.json"), settings.to_string()).unwrap();
+        fs::write(
+            d.join("CLAUDE.md"),
+            "<!-- ctxkit:start -->\nr\n<!-- ctxkit:end -->\n",
+        )
+        .unwrap();
+        fs::write(
+            d.join("ctxkit.json"),
+            r#"{"policies":{"stray_files":true}}"#,
+        )
+        .unwrap();
+        let v = diagnose(&d, Lang::En);
+        assert_eq!(sev(&v, "hooks"), "ok", "the old binary still guards");
+        assert_eq!(sev(&v, "rules_block"), "ok");
+        let legacy = v.iter().find(|x| x.id == "legacy_name").unwrap();
+        assert_eq!(legacy.severity, "warn");
+        assert_eq!(legacy.fix, Some("context-toolkit setup --with-rules"));
+        let detail = legacy.detail.as_deref().unwrap();
+        for part in [
+            "hooks ->",
+            "env.CTXKIT_LANG",
+            "<!-- ctxkit:start -->",
+            "ctxkit.json",
+        ] {
+            assert!(detail.contains(part), "{part}: {detail}");
+        }
+        let pol = v.iter().find(|x| x.id == "policies").unwrap();
+        assert!(
+            pol.message.contains("ctxkit.json") && pol.detail.as_deref() == Some("stray_files")
+        );
+        // after the move only a leftover file of the owner's is named, as a note
+        let new_cmd = cmd.replace("ctxkit", "context-toolkit");
+        fs::write(exe.with_file_name(crate::setup::BIN_NAME), b"x").unwrap();
+        fs::remove_file(&exe).unwrap();
+        let settings = json!({"hooks": {"PreToolUse": [{"hooks": [{"command": new_cmd}]}]}});
+        fs::write(d.join("settings.json"), settings.to_string()).unwrap();
+        fs::write(
+            d.join("CLAUDE.md"),
+            "<!-- context-toolkit:start -->\nr\n<!-- context-toolkit:end -->\n",
+        )
+        .unwrap();
+        let v = diagnose(&d, Lang::Ru);
+        let legacy = v.iter().find(|x| x.id == "legacy_name").unwrap();
+        assert_eq!(legacy.severity, "info");
+        assert_eq!(legacy.detail.as_deref(), Some("ctxkit.json"));
+        assert_eq!(legacy.fix, Some("context-toolkit setup"));
+        assert!(legacy.message.contains("Инструменты контекста"));
+        fs::remove_file(d.join("ctxkit.json")).unwrap();
+        assert!(diagnose(&d, Lang::En).iter().all(|x| x.id != "legacy_name"));
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -543,7 +679,7 @@ mod tests {
         assert_eq!(w.severity, "warn");
         assert_eq!(
             w.fix,
-            Some("ctxkit setup --main-model <model> --effort <level>")
+            Some("context-toolkit setup --main-model <model> --effort <level>")
         );
         let detail = w.detail.unwrap();
         assert!(

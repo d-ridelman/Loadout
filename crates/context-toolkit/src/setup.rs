@@ -12,10 +12,33 @@ mod uninstall;
 
 use crate::policy;
 
-const MARKER_START: &str = "<!-- ctxkit:start -->";
-const MARKER_END: &str = "<!-- ctxkit:end -->";
+const MARKER_START: &str = "<!-- context-toolkit:start -->";
+const MARKER_END: &str = "<!-- context-toolkit:end -->";
+/// The markers of the old name `ctxkit`: recognised everywhere, replaced by the new ones on `--with-rules`.
+const OLD_MARKER_START: &str = "<!-- ctxkit:start -->";
+const OLD_MARKER_END: &str = "<!-- ctxkit:end -->";
 const LEGACY_MARKER_START: &str = "<!-- claude-guard:start -->";
 const LEGACY_MARKER_END: &str = "<!-- claude-guard:end -->";
+/// Every generation of rules-block markers, the current one first.
+const MARKERS: [(&str, &str); 3] = [
+    (MARKER_START, MARKER_END),
+    (OLD_MARKER_START, OLD_MARKER_END),
+    (LEGACY_MARKER_START, LEGACY_MARKER_END),
+];
+/// The binary as setup installs it, and its name before the rename (an old installation still has it).
+pub(crate) const BIN_NAME: &str = if cfg!(windows) {
+    "context-toolkit.exe"
+} else {
+    "context-toolkit"
+};
+pub(crate) const OLD_BIN_NAME: &str = if cfg!(windows) {
+    "ctxkit.exe"
+} else {
+    "ctxkit"
+};
+/// `env` key of the language of the hooks; the old one is replaced (setup) or removed (rollback).
+const LANG_ENV: &str = "CONTEXT_TOOLKIT_LANG";
+const OLD_LANG_ENV: &str = "CTXKIT_LANG";
 /// Claude Code version that introduced the hook field `onFailure` (hooks reference).
 const ONFAILURE_SINCE: (u64, u64, u64) = (2, 1, 295);
 
@@ -50,9 +73,9 @@ struct SetupOpts {
     on_failure: bool,
     /// `--uninstall`: take out what setup added (see `uninstall.rs`).
     uninstall: bool,
-    /// `--policy`: which policies of `ctxkit.json` are on. Absent: the file is not touched.
+    /// `--policy`: which policies of `context-toolkit.json` are on. Absent: the file is not touched.
     policy: Option<policy::Selection>,
-    /// The policies after this run (from `ctxkit.json`); the rules block lists the ones that are on.
+    /// The policies after this run (from `context-toolkit.json`); the rules block lists the ones that are on.
     config: policy::Config,
     lang: Lang,
 }
@@ -171,8 +194,8 @@ pub fn run_setup(args: &[String]) -> i32 {
                 eprintln!(
                     "ERR: {}",
                     msg!(
-                        "unknown option '{other}'. Run `ctxkit setup --help`.",
-                        "неизвестный параметр '{other}'. См. `ctxkit setup --help`."
+                        "unknown option '{other}'. Run `context-toolkit setup --help`.",
+                        "неизвестный параметр '{other}'. См. `context-toolkit setup --help`."
                     )
                 );
                 return 2;
@@ -212,11 +235,7 @@ pub fn run_setup(args: &[String]) -> i32 {
         .or_else(|| env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from))
         .unwrap_or_else(|| home.join(".claude"));
 
-    let bin_name = if cfg!(windows) {
-        "ctxkit.exe"
-    } else {
-        "ctxkit"
-    };
+    let bin_name = BIN_NAME;
     let hook_bin_path = profile.join("hooks").join(bin_name);
     let hook_cmd = opts.hook_cmd.clone().unwrap_or_else(|| {
         let s = hook_bin_path.to_string_lossy().replace('\\', "/");
@@ -267,7 +286,7 @@ pub fn run_setup(args: &[String]) -> i32 {
     };
     let preflight = || -> Result<(), String> {
         preflight_settings(&profile.join("settings.json"), true)?;
-        // `ctxkit.json` feeds the rules block and `--policy` rewrites it: a file that does not parse stops both.
+        // `context-toolkit.json` feeds the rules block and `--policy` rewrites it: a file that does not parse stops both.
         if opts.policy.is_some() || opts.with_rules {
             policies::preflight(&profile)?;
         }
@@ -336,6 +355,11 @@ pub fn run_setup(args: &[String]) -> i32 {
             }
         };
 
+    // The policy file of the old name goes to the new one before `--policy` reads and writes it.
+    if let Err(e) = policies::migrate(&profile, &backup_dir, opts.dry_run) {
+        eprintln!("ERR: {e}");
+        return 1;
+    }
     opts.config = match policies::run(&profile, &backup_dir, opts.policy.as_ref(), opts.dry_run) {
         Ok(c) => c,
         Err(e) => {
@@ -412,8 +436,8 @@ pub fn run_setup(args: &[String]) -> i32 {
             // write now would be lost silently. A file passed with --desktop-file is not the app's.
             if p.exists() && opts.desktop_file.is_none() && claude_desktop_running() {
                 say!(
-                    "  [warn] Claude Desktop is running: it keeps session presets in memory and overwrites {}. Presets left unchanged. Quit it fully (tray icon too) and rerun `ctxkit setup --desktop` from a terminal, or choose the model in the app's model picker.",
-                    "  [warn] Claude Desktop запущен: он держит пресеты сессий в памяти и перезаписывает {}. Пресеты не изменены. Закройте его полностью (и значок в трее) и повторите `ctxkit setup --desktop` из терминала либо выберите модель в окне выбора модели приложения.",
+                    "  [warn] Claude Desktop is running: it keeps session presets in memory and overwrites {}. Presets left unchanged. Quit it fully (tray icon too) and rerun `context-toolkit setup --desktop` from a terminal, or choose the model in the app's model picker.",
+                    "  [warn] Claude Desktop запущен: он держит пресеты сессий в памяти и перезаписывает {}. Пресеты не изменены. Закройте его полностью (и значок в трее) и повторите `context-toolkit setup --desktop` из терминала либо выберите модель в окне выбора модели приложения.",
                     p.display()
                 );
             } else if p.exists() {
@@ -470,6 +494,11 @@ pub fn run_setup(args: &[String]) -> i32 {
         }
     }
 
+    // Last: every file that could run the old binary is rewritten by now.
+    if opts.hook_cmd.is_none() {
+        remove_old_binaries(&opts, &home, &profile, custom_profile, &settings_root);
+    }
+
     let claude_json = opts
         .claude_json
         .clone()
@@ -523,7 +552,7 @@ fn install_binary(
     let exe = env::current_exe().map_err(|e| {
         msg!(
             "current_exe: {e}",
-            "не удалось определить путь к ctxkit (current_exe): {e}"
+            "не удалось определить путь к своему бинарю (current_exe): {e}"
         )
     })?;
     let mut targets = vec![hook_bin.to_path_buf()];
@@ -562,6 +591,133 @@ fn install_binary(
         say!("  installed {}", "  установлен {}", dst.display());
     }
     Ok(())
+}
+
+/// `path` with `/` separators and in lower case, for comparing paths written in config files.
+fn norm_path(path: &str) -> String {
+    path.replace("\\\\", "/").replace('\\', "/").to_lowercase()
+}
+
+/// Whether the text of `file` names `bin` (a hook command that would run it). Unreadable: no.
+fn file_mentions(file: &Path, bin: &Path) -> bool {
+    fs::read_to_string(file)
+        .is_ok_and(|t| norm_path(&t).contains(&norm_path(&bin.to_string_lossy())))
+}
+
+/// Whether `out` (the stdout of `--version`) is the version line of this product, under either name.
+fn is_our_version_line(out: &str) -> bool {
+    let line = out.trim();
+    line.strip_prefix("context-toolkit ")
+        .or_else(|| line.strip_prefix("ctxkit "))
+        .is_some_and(|v| !v.contains(char::is_whitespace) && parse_semver(v).is_some())
+}
+
+/// Whether `exe` says it is this product: `--version` (stdin closed, at most 5 s) prints exactly
+/// `context-toolkit X.Y.Z` or, before the rename, `ctxkit X.Y.Z`. Anything else, a hang or a failed start: not ours.
+pub(crate) fn version_says_ours(exe: &Path) -> bool {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let Ok(mut child) = Command::new(exe)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+    let mut out = String::new();
+    child
+        .stdout
+        .take()
+        .is_some_and(|mut s| s.read_to_string(&mut out).is_ok())
+        && is_our_version_line(&out)
+}
+
+/// Migration from the old name: `hooks/ctxkit.exe` and our `~/.local/bin/ctxkit.exe` go once nothing runs them.
+/// Called after settings.json (and, with their flags, the Antigravity and DSH files) were written. The hook
+/// copy stays while a file that setup did not rewrite still points at it; a copy Windows will not let go
+/// (it is running as a hook right now) is named for removal by hand, and setup still succeeds.
+fn remove_old_binaries(
+    opts: &SetupOpts,
+    home: &Path,
+    profile: &Path,
+    custom_profile: bool,
+    settings: &Value,
+) {
+    let old_hook = profile.join("hooks").join(OLD_BIN_NAME);
+    let local = home.join(".local").join("bin").join(OLD_BIN_NAME);
+    let exe = env::current_exe().unwrap_or_default();
+    // Decided before the hook copy goes: a byte copy of it (setup put the same file in both places) is ours.
+    let local_ours = !custom_profile
+        && local.is_file()
+        && (same_file_bytes(&old_hook, &local)
+            || same_file_bytes(&exe, &local)
+            || version_says_ours(&local));
+    if old_hook.exists() {
+        let dsh_home = opts
+            .dsh_home
+            .clone()
+            .or_else(|| env::var_os("DSH_HOME").map(PathBuf::from))
+            .unwrap_or_else(|| home.join(".dsh"));
+        let agy = opts
+            .agy_file
+            .clone()
+            .unwrap_or_else(|| home.join(".gemini").join("config").join("hooks.json"));
+        let in_settings =
+            norm_path(&settings.to_string()).contains(&norm_path(&old_hook.to_string_lossy()));
+        let users: Vec<(&str, &str)> = [
+            (in_settings, "settings.json", ""),
+            (
+                file_mentions(&agy, &old_hook),
+                "Antigravity",
+                " --antigravity",
+            ),
+            (
+                file_mentions(&dsh_home.join(OLD_DSH_HOOKS_FILE), &old_hook),
+                "DeepSeek Harness",
+                " --dsh",
+            ),
+        ]
+        .into_iter()
+        .filter(|(used, ..)| *used)
+        .map(|(_, who, flag)| (who, flag))
+        .collect();
+        if users.is_empty() {
+            uninstall::remove_bin(&old_hook, &exe, opts.dry_run, opts.lang);
+        } else {
+            let who: Vec<&str> = users.iter().map(|u| u.0).collect();
+            let flags: String = users.iter().map(|u| u.1).collect();
+            say!(
+                "  [note] old binary kept: {} is still run by {}; rerun `context-toolkit setup{flags}` to move that too",
+                "  [note] старый бинарь оставлен: {} ещё запускают хуки {}; повторите `context-toolkit setup{flags}`, чтобы перевести и их",
+                old_hook.display(),
+                who.join(", ")
+            );
+        }
+    }
+    if local_ours {
+        uninstall::remove_bin(&local, &exe, opts.dry_run, opts.lang);
+    } else if !custom_profile && local.exists() {
+        say!(
+            "  left (not this product, by --version): {}",
+            "  оставлен (по --version это не наш продукт): {}",
+            local.display()
+        );
+    }
 }
 
 fn same_file_bytes(a: &Path, b: &Path) -> bool {
@@ -798,6 +954,20 @@ fn update_claude_settings(
             sub_old.as_deref().unwrap_or_default()
         );
     }
+    // The old name of the language key goes in any case: `--lang ru` writes the new one instead.
+    if orig["env"].get(OLD_LANG_ENV).is_some() {
+        if opts.lang == Lang::Ru {
+            say!(
+                "  old name: env.{OLD_LANG_ENV} -> env.{LANG_ENV}",
+                "  старое имя: env.{OLD_LANG_ENV} -> env.{LANG_ENV}"
+            );
+        } else {
+            say!(
+                "  old name: env.{OLD_LANG_ENV} removed (--lang en is the default)",
+                "  старое имя: env.{OLD_LANG_ENV} убран (--lang en — по умолчанию)"
+            );
+        }
+    }
     // `env` is created only when something goes into it.
     if opts.subagent_env || opts.lang == Lang::Ru {
         let env_obj = ensure_object(root, "env")?;
@@ -808,19 +978,38 @@ fn update_claude_settings(
             );
         }
         if opts.lang == Lang::Ru {
-            env_obj.insert("CTXKIT_LANG".to_string(), Value::String("ru".to_string()));
+            env_obj.remove(OLD_LANG_ENV);
+            env_obj.insert(LANG_ENV.to_string(), Value::String("ru".to_string()));
         }
     }
     if opts.lang == Lang::En {
         let emptied = root
             .get_mut("env")
             .and_then(|e| e.as_object_mut())
-            .is_some_and(|env_obj| env_obj.remove("CTXKIT_LANG").is_some() && env_obj.is_empty());
+            .is_some_and(|env_obj| {
+                let a = env_obj.remove(LANG_ENV).is_some();
+                let b = env_obj.remove(OLD_LANG_ENV).is_some();
+                (a || b) && env_obj.is_empty()
+            });
         if emptied {
             root.remove("env"); // our `--lang ru` created it
         }
     }
 
+    let old_hooks = ["PreToolUse", "PostToolUse", "Stop"].iter().any(|ev| {
+        orig["hooks"][ev]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+            .any(|h| h["command"].as_str().and_then(our_name) == Some("ctxkit"))
+    });
+    if old_hooks {
+        say!(
+            "  old name: hooks on {OLD_BIN_NAME} -> {hook_cmd}",
+            "  старое имя: хуки на {OLD_BIN_NAME} -> {hook_cmd}"
+        );
+    }
     let hooks_obj = ensure_object(root, "hooks")?;
     upsert_claude_hook_event(
         hooks_obj,
@@ -976,10 +1165,10 @@ fn first_words(cmd: &str, n: usize) -> Vec<String> {
     words
 }
 
-/// The one rule for "this hook command is ctxkit's": it equals the command being installed
+/// The one rule for "this hook command is ours": it equals the command being installed
 /// (`--hook-cmd`), or one of its first two words (the exe, or `node <script>`) is a file named
-/// `ctxkit` / `claude-guard` / `no-inline-backslash` (any case, .exe/.js/.mjs/.cmd or none).
-/// A foreign command that merely has "ctxkit" somewhere in its path is not ours.
+/// `context-toolkit`, or one of the old names `ctxkit` / `claude-guard` / `no-inline-backslash` (any case,
+/// .exe/.js/.mjs/.cmd or none). A foreign command that merely has "ctxkit" somewhere in its path is not ours.
 pub(crate) fn command_is_ours(cmd: &str, current: Option<&str>) -> bool {
     current.is_some_and(|c| c.trim() == cmd.trim()) || our_name(cmd).is_some()
 }
@@ -998,10 +1187,15 @@ fn word_stem(w: &str) -> String {
         .to_string()
 }
 
-/// Which of our names (`ctxkit` or a legacy one) the command runs: the first word, or the second one when
+/// Which of our names (`context-toolkit`, or an old one) the command runs: the first word, or the second one when
 /// the first is a script launcher (`node C:/x/no-inline-backslash.mjs`). `logger.exe ctxkit` is not ours.
 pub(crate) fn our_name(cmd: &str) -> Option<&'static str> {
-    const OURS: [&str; 3] = ["ctxkit", "claude-guard", "no-inline-backslash"];
+    const OURS: [&str; 4] = [
+        "context-toolkit",
+        "ctxkit",
+        "claude-guard",
+        "no-inline-backslash",
+    ];
     const LAUNCHERS: [&str; 9] = [
         "node", "nodejs", "bun", "deno", "npx", "python", "python3", "py", "&",
     ];
@@ -1044,7 +1238,7 @@ fn strip_our_hooks(list: Vec<Value>, current: Option<&str>) -> Vec<Value> {
 }
 
 /// `on_failure`: add `"onFailure": "continue"` (Claude Code 2.1.295+). Without Git Bash on Windows a hook that
-/// fails with `onFailure` unset can block the tool call; "continue" makes a crashing or missing ctxkit never
+/// fails with `onFailure` unset can block the tool call; "continue" makes a crashing or missing hook binary never
 /// stop the work (exit code 2, a deliberate block, still blocks). The docs say the field has no effect on
 /// `Stop` hooks, so the Stop group does not get it.
 fn upsert_claude_hook_event(
@@ -1216,10 +1410,7 @@ pub(crate) fn read_text(path: &Path) -> Result<String, String> {
 /// Span of our rules block. A marker counts only when it is alone on its line (as `append_block` writes it):
 /// the same text inside the user's own sentence is not ours, and cutting from it would delete their text.
 pub(crate) fn marker_span(text: &str) -> Option<(usize, usize)> {
-    for (start_m, end_m) in [
-        (MARKER_START, MARKER_END),
-        (LEGACY_MARKER_START, LEGACY_MARKER_END),
-    ] {
+    for (start_m, end_m) in MARKERS {
         let mut start = None;
         let mut off = 0;
         for line in text.split_inclusive('\n') {
@@ -1250,30 +1441,33 @@ fn marker_lines(text: &str, m: &str) -> usize {
         .count()
 }
 
-/// What is wrong with the rules markers in `text`, or `None` when there is one block, none, or one old
-/// `claude-guard` block that setup migrates. Wrong: a start without an end (or the reverse), more than one block,
-/// or an old and a new block together. Older versions of setup could leave such a file behind (they cut from a
-/// marker named inside a sentence); setup then adds a second block and the rollback removes only one.
+/// Whether the text has a rules marker line of an old name (`ctxkit`, `claude-guard`).
+pub(crate) fn has_old_markers(text: &str) -> bool {
+    MARKERS[1..]
+        .iter()
+        .any(|(s, e)| marker_lines(text, s) + marker_lines(text, e) > 0)
+}
+
+/// What is wrong with the rules markers in `text`, or `None` when there is one block, none, or one block of
+/// an old name (`ctxkit`, `claude-guard`) that setup migrates. Wrong: a start without an end (or the reverse),
+/// more than one block, or blocks of two names together. Older versions of setup could leave such a file behind
+/// (they cut from a marker named inside a sentence); setup then adds a second block and the rollback removes only one.
 pub(crate) fn marker_problem(text: &str) -> Option<String> {
-    let new = (
-        marker_lines(text, MARKER_START),
-        marker_lines(text, MARKER_END),
-    );
-    let old = (
-        marker_lines(text, LEGACY_MARKER_START),
-        marker_lines(text, LEGACY_MARKER_END),
-    );
+    let [new, old, legacy] = MARKERS.map(|(s, e)| (marker_lines(text, s), marker_lines(text, e)));
     let broken = |(s, e): (usize, usize)| s != e || s > 1;
-    if !(broken(new) || broken(old) || (new.0 >= 1 && old.0 >= 1)) {
+    let names = [new, old, legacy].iter().filter(|c| c.0 >= 1).count();
+    if !(broken(new) || broken(old) || broken(legacy) || names > 1) {
         return None;
     }
     Some(msg!(
-        "ctxkit markers: {} start / {} end lines, old claude-guard markers: {} start / {} end",
-        "маркеры ctxkit: строк начала {}, строк конца {}; старые маркеры claude-guard: начала {}, конца {}",
+        "rules markers: context-toolkit {} start / {} end lines, old ctxkit {} / {}, old claude-guard {} / {}",
+        "маркеры правил: context-toolkit — строк начала {}, конца {}; старые ctxkit — {} и {}; старые claude-guard — {} и {}",
         new.0,
         new.1,
         old.0,
-        old.1
+        old.1,
+        legacy.0,
+        legacy.1
     ))
 }
 
@@ -1531,8 +1725,14 @@ fn update_antigravity_hooks(path: &Path, command: &str, dry_run: bool) -> Result
         )
     })?;
     root.remove("claude-guard");
+    if root.remove(AGY_OLD_KEY).is_some() {
+        say!(
+            "  old name: Antigravity hooks.json key \"{AGY_OLD_KEY}\" -> \"{AGY_KEY}\"",
+            "  старое имя: ключ \"{AGY_OLD_KEY}\" в hooks.json Antigravity -> \"{AGY_KEY}\""
+        );
+    }
     root.insert(
-        "ctxkit".to_string(),
+        AGY_KEY.to_string(),
         json!({
             "PreToolUse": [
                 {
@@ -1551,9 +1751,34 @@ fn update_antigravity_hooks(path: &Path, command: &str, dry_run: bool) -> Result
     write_json_if_changed(path, None, &orig, &next, dry_run, "Antigravity hooks.json")
 }
 
-const DSH_MARKER_START: &str = "# >>> ctxkit (managed by `ctxkit setup --dsh`; do not edit) >>>";
-const DSH_MARKER_END: &str = "# <<< ctxkit <<<";
+/// Our key in Antigravity's hooks.json, and its name before the rename.
+const AGY_KEY: &str = "context-toolkit";
+const AGY_OLD_KEY: &str = "ctxkit";
+
+const DSH_MARKER_START: &str =
+    "# >>> context-toolkit (managed by `context-toolkit setup --dsh`; do not edit) >>>";
+const DSH_MARKER_END: &str = "# <<< context-toolkit <<<";
+/// The DSH block of the old name: replaced by setup, removed by the rollback.
+const OLD_DSH_MARKER_START: &str =
+    "# >>> ctxkit (managed by `ctxkit setup --dsh`; do not edit) >>>";
+const OLD_DSH_MARKER_END: &str = "# <<< ctxkit <<<";
+const DSH_MARKERS: [(&str, &str); 2] = [
+    (DSH_MARKER_START, DSH_MARKER_END),
+    (OLD_DSH_MARKER_START, OLD_DSH_MARKER_END),
+];
+/// Our hooks file in the DSH home, and its name before the rename.
+const DSH_HOOKS_FILE: &str = "context-toolkit-hooks.json";
+const OLD_DSH_HOOKS_FILE: &str = "ctxkit-hooks.json";
 const DSH_HOOKS_PLUGIN: &str = "@deepseek-ai/dsh-hooks-claude-code";
+
+/// Span of the first managed DSH block (of either name) with its end marker after the start.
+fn dsh_block_span(text: &str) -> Option<(usize, usize)> {
+    DSH_MARKERS.iter().find_map(|(start, end)| {
+        let s = text.find(start)?;
+        let len = text[s..].find(end)?;
+        Some((s, s + len + end.len()))
+    })
+}
 
 /// DSH runs hook commands via `pwsh -Command` on Windows and `bash -c` elsewhere.
 fn format_dsh_command(hook_bin_path: &Path, lang: Lang) -> String {
@@ -1588,14 +1813,26 @@ fn format_custom_dsh_command(cmd: &str, lang: Lang) -> String {
 /// end marker after it (guessing the span of a half-deleted block would eat the user's own entries), and the
 /// block is a sequence item, so appending it to a flow list or a mapping would break the YAML.
 fn dsh_patch_check(existing: &str, path: &Path) -> Result<(), String> {
-    match existing.find(DSH_MARKER_START) {
-        Some(s) if !existing[s..].contains(DSH_MARKER_END) => Err(msg!(
-            "{}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand and rerun",
-            "{}: у начального маркера ctxkit нет конечного; удалите оставшийся блок ctxkit вручную и запустите снова",
+    let found: Vec<usize> = DSH_MARKERS
+        .iter()
+        .filter_map(|(start, end)| {
+            let s = existing.find(start)?;
+            Some(usize::from(existing[s..].contains(end)))
+        })
+        .collect();
+    match found.as_slice() {
+        f if f.contains(&0) => Err(msg!(
+            "{}: a Context Toolkit (or old ctxkit) start marker has no end marker; remove the leftover block by hand and rerun",
+            "{}: у начального маркера Инструментов контекста (или старого ctxkit) нет конечного; удалите оставшийся блок вручную и запустите снова",
             path.display()
         )),
-        Some(_) => Ok(()),
-        None => {
+        [_, _] => Err(msg!(
+            "{}: holds both the Context Toolkit block and the old ctxkit block; delete the old one by hand and rerun",
+            "{}: в нём и блок Инструментов контекста, и старый блок ctxkit; удалите старый вручную и запустите снова",
+            path.display()
+        )),
+        [_] => Ok(()),
+        _ => {
             let first = existing
                 .lines()
                 .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
@@ -1622,11 +1859,12 @@ fn preflight_dsh(dsh_home: &Path) -> Result<(), String> {
         let text = read_text(&patch)?;
         dsh_patch_check(&text, &patch)?;
     }
-    read_json_object(&dsh_home.join("ctxkit-hooks.json")).map(|_| ())
+    read_json_object(&dsh_home.join(DSH_HOOKS_FILE)).map(|_| ())
 }
 
-/// Writes `<dsh_home>/ctxkit-hooks.json` and mounts the official Claude Code hook
-/// bridge on it from the desktop profile's `cordis.patch.yml`.
+/// Writes `<dsh_home>/context-toolkit-hooks.json` and mounts the official Claude Code hook
+/// bridge on it from the desktop profile's `cordis.patch.yml`. The block and hooks file of the old name
+/// (`ctxkit`) are replaced: the old file goes after the patch points at the new one, unless a patch still names it.
 fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(), String> {
     let profile = dsh_home.join("profiles").join("desktop");
     if !profile.exists() {
@@ -1668,7 +1906,7 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
         }
     }
 
-    let hooks_path = dsh_home.join("ctxkit-hooks.json");
+    let hooks_path = dsh_home.join(DSH_HOOKS_FILE);
     let group = |matcher: &str| json!([{ "matcher": matcher, "hooks": [{ "type": "command", "command": command, "timeout": 10 }] }]);
     let hooks = json!({ "hooks": {
         "PreToolUse": group("read|write|edit|apply_patch|bash|pwsh"),
@@ -1690,7 +1928,7 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
 
     let config_path = hooks_path.to_string_lossy().replace('\'', "''");
     let block = format!(
-        "{DSH_MARKER_START}\n- insert:\n    - id: ctxkit-hooks\n      name: '{DSH_HOOKS_PLUGIN}'\n      config:\n        configPath: '{config_path}'\n{DSH_MARKER_END}"
+        "{DSH_MARKER_START}\n- insert:\n    - id: context-toolkit-hooks\n      name: '{DSH_HOOKS_PLUGIN}'\n      config:\n        configPath: '{config_path}'\n{DSH_MARKER_END}"
     );
     // A dry run does not create the patch file, so it may not exist yet.
     let existing = if patch_path.exists() {
@@ -1700,15 +1938,8 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     };
     // Already refused by the preflight; checked again so this function stands on its own.
     dsh_patch_check(&existing, &patch_path)?;
-    let updated = match existing.find(DSH_MARKER_START) {
-        Some(s) => {
-            let len = existing[s..].find(DSH_MARKER_END).unwrap_or_default();
-            format!(
-                "{}{block}{}",
-                &existing[..s],
-                &existing[s + len + DSH_MARKER_END.len()..]
-            )
-        }
+    let updated = match dsh_block_span(&existing) {
+        Some((s, e)) => format!("{}{block}{}", &existing[..s], &existing[e..]),
         None => append_block(&existing, &block),
     };
     if existing == updated {
@@ -1732,6 +1963,42 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
             "  обновлён патч профиля DeepSeek Harness: {}",
             patch_path.display()
         );
+    }
+
+    // The hooks file of the old name: the profile patch now mounts the new one. A patch of the owner's
+    // (the global one, or a hand edit) that still names the old file keeps it.
+    let old_hooks = dsh_home.join(OLD_DSH_HOOKS_FILE);
+    if old_hooks.exists() {
+        // the profile patch as this run leaves it (a dry run has not written it)
+        let named_in = if updated.contains(OLD_DSH_HOOKS_FILE) {
+            Some(patch_path.as_path())
+        } else {
+            Some(global_patch.as_path())
+                .filter(|p| fs::read_to_string(p).is_ok_and(|t| t.contains(OLD_DSH_HOOKS_FILE)))
+        };
+        match named_in {
+            Some(p) => say!(
+                "  [note] old {} kept: {} still names it; point it at {DSH_HOOKS_FILE} and delete the old file",
+                "  [note] старый {} оставлен: на него ещё ссылается {}; укажите там {DSH_HOOKS_FILE} и удалите старый файл",
+                old_hooks.display(),
+                p.display()
+            ),
+            None if dry_run => say!(
+                "  [dry-run] remove old DeepSeek Harness hooks: {}",
+                "  [dry-run] удаление старых хуков DeepSeek Harness: {}",
+                old_hooks.display()
+            ),
+            None => {
+                let b = backup_file(&old_hooks, &dsh_home.join("backups"))?;
+                say!("  backup -> {}", "  копия -> {}", b.display());
+                remove_file(&old_hooks)?;
+                say!(
+                    "  old name: removed {}",
+                    "  старое имя: удалён {}",
+                    old_hooks.display()
+                );
+            }
+        }
     }
 
     // The bridge is not bundled with the desktop app; without it the insert loads nothing.
@@ -1840,7 +2107,7 @@ You are an independent verifier. You did not write this code and must never modi
     }
 }
 
-/// The block's lines that come from `ctxkit.json`, the one source of the policies: one short line per policy
+/// The block's lines that come from `context-toolkit.json`, the one source of the policies: one short line per policy
 /// that is on, then the owner's own `rules` items as they are (not translated; a leading `- ` is not doubled).
 /// Whatever is off or absent adds nothing, so turning a policy off and rerunning `--with-rules` drops its line.
 fn policy_lines(cfg: &policy::Config, lang: Lang) -> String {
@@ -1856,28 +2123,28 @@ fn policy_lines(cfg: &policy::Config, lang: Lang) -> String {
     if cfg.commit_hygiene {
         add(t(
             lang,
-            "Commit messages carry no `Co-Authored-By` or `Generated with` lines: the ctxkit hook blocks such a commit.",
-            "В сообщениях коммитов нет `Co-Authored-By` и `Generated with`: хук ctxkit такой коммит блокирует.",
+            "Commit messages carry no `Co-Authored-By` or `Generated with` lines: the Context Toolkit hook blocks such a commit.",
+            "В сообщениях коммитов нет `Co-Authored-By` и `Generated with`: хук Инструментов контекста такой коммит блокирует.",
         ));
     }
     if cfg.confirm_irreversible {
         add(t(
             lang,
-            "Irreversible commands (`git push`, `git reset --hard`, `git clean -f`, `git branch -D`, `rm -rf`) need the owner's confirmation: the ctxkit hook asks.",
-            "Необратимое (`git push`, `git reset --hard`, `git clean -f`, `git branch -D`, `rm -rf`) — только с подтверждения владельца: хук ctxkit спросит.",
+            "Irreversible commands (`git push`, `git reset --hard`, `git clean -f`, `git branch -D`, `rm -rf`) need the owner's confirmation: the Context Toolkit hook asks.",
+            "Необратимое (`git push`, `git reset --hard`, `git clean -f`, `git branch -D`, `rm -rf`) — только с подтверждения владельца: хук Инструментов контекста спросит.",
         ));
     }
     if cfg.stray_files {
         add(t(
             lang,
-            "Reports and notes go in the chat, not into a `report*.md` or `notes*.md` file in the project root: the ctxkit hook asks.",
-            "Отчёты и заметки отдавай в чат, не файлом `report*.md` или `notes*.md` в корне проекта: хук ctxkit спросит.",
+            "Reports and notes go in the chat, not into a `report*.md` or `notes*.md` file in the project root: the Context Toolkit hook asks.",
+            "Отчёты и заметки отдавай в чат, не файлом `report*.md` или `notes*.md` в корне проекта: хук Инструментов контекста спросит.",
         ));
     }
     if let Some(n) = cfg.build_slots {
         add(&match lang {
-            Lang::En => format!("Run builds and tests through `ctxkit check`: it keeps at most {n} running at once on this machine."),
-            Lang::Ru => format!("Сборки и тесты запускай через `ctxkit check`: он держит на машине не больше {n} одновременных."),
+            Lang::En => format!("Run builds and tests through `context-toolkit check`: it keeps at most {n} running at once on this machine."),
+            Lang::Ru => format!("Сборки и тесты запускай через `context-toolkit check`: он держит на машине не больше {n} одновременных."),
         });
     }
     for rule in &cfg.rules {
@@ -1924,12 +2191,12 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
             };
             format!(
                 "{MARKER_START}\n\
-## Команда моделей и экономия контекста (ctxkit)\n\n\
+## Команда моделей и экономия контекста (Инструменты контекста)\n\n\
 {adv_line}\
 - Поиск по коду, греп и чтение документации отправляй в `Explore` ({sub}); правку одного файла без изменения логики делай сам.\n\
 - Не объявляй задачу готовой без `checker` (Opus), кроме правки одного файла без изменения логики{gate}.\n\
 - Группируй независимые `Read`/`Edit`; не читай длинные файлы целиком: сначала `Grep` или LSP, затем диапазон.\n\
-- Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `ctxkit check <cmd>`.\n\
+- Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `context-toolkit check <cmd>`.\n\
 {extra}{MARKER_END}",
                 sub = opts.subagent
             )
@@ -1947,12 +2214,12 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
             };
             format!(
                 "{MARKER_START}\n\
-## Model Team & Context Discipline (ctxkit)\n\n\
+## Model Team & Context Discipline (Context Toolkit)\n\n\
 {adv_line}\
 - Delegate codebase search/grep/docs reading to `Explore` ({sub}); keep a one-file fix with no logic change local.\n\
 - Do not declare work done without `checker` (Opus), except a one-file change with no logic change{gate}.\n\
 - Batch independent `Read`/`Edit` calls; locate symbols via `Grep`/LSP first, then read tight line ranges.\n\
-- Run `ctxkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n\
+- Run `context-toolkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n\
 {extra}{MARKER_END}",
                 sub = opts.subagent
             )
@@ -2482,12 +2749,13 @@ fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
 fn print_help() {
     if is_ru() {
         println!(
-            "Использование: ctxkit setup [параметры]\n\n\
+            "Использование: context-toolkit setup [параметры]\n\n\
          Автоматическая экономная настройка Claude Code, Claude Desktop, Antigravity и DeepSeek Harness:\n\
          - Перед записью делает копии существующих конфигов\n\
          - Создаёт агентов Explore (haiku) и checker (opus); модель, советник и effort НЕ меняются, пока не переданы --main-model / --advisor / --effort (прежняя схема: --main-model sonnet --advisor fable --effort high). Изменения печатаются как «было -> стало»; свои env/хуки/плагины сохраняются\n\
-         - Подключает хуки ctxkit PreToolUse/PostToolUse с \"onFailure\": \"continue\" (упавший хук не блокирует вызов; claude 2.1.295+) вместо старых записей claude-guard / no-inline-backslash\n\
-         - До копирования и записи отказывается от файла, который не может обработать (необычный settings.json, битые пресеты/хуки/YAML, CLAUDE.md с удвоенным или непарным маркером ctxkit); файлы пишутся атомарно\n\
+         - Подключает хуки Инструментов контекста PreToolUse/PostToolUse с \"onFailure\": \"continue\" (упавший хук не блокирует вызов; claude 2.1.295+) вместо старых записей ctxkit / claude-guard / no-inline-backslash\n\
+         - Переводит установку прежнего имени ctxkit: хуки на hooks/ctxkit.exe, env.CTXKIT_LANG, ctxkit.json (созданный setup переносится, ваш копируется и остаётся), ключ ctxkit в Antigravity, блок и ctxkit-hooks.json в DSH, блок правил с маркерами ctxkit (с --with-rules). Старый hooks/ctxkit.exe удаляется после записи settings.json, если его больше ничто не запускает (запущенный сейчас называется для удаления вручную), ~/.local/bin/ctxkit.exe — только если это наш бинарь (сверка байтов или --version)\n\
+         - До копирования и записи отказывается от файла, который не может обработать (необычный settings.json, битые пресеты/хуки/YAML, CLAUDE.md с удвоенным или непарным маркером блока правил); файлы пишутся атомарно\n\
          - Подключает шлюз Stop, срабатывающий раз за ход: ход, где правился код без последующего checker/советника, возвращается один раз\n\
          - Проверяет включённые плагины, размер CLAUDE.md, глобальные MCP, версию Claude CLI и конфиги Antigravity\n\n\
          Параметры:\n\
@@ -2497,31 +2765,32 @@ fn print_help() {
            --advisor <name>       Записать `advisorModel` (без флага не пишется; например fable; \"none\" убирает)\n\
            --subagent <name>      Модель Explore и CLAUDE_CODE_SUBAGENT_MODEL (переменная пишется только с этим флагом; по умолчанию в Explore.md: haiku)\n\
            --effort <level>       Записать effort (без флага не пишется): modelSettings.<model>.effortLevel для --main-model или вашего `model` (известная модель, low|medium|high|xhigh), effortLevel верхнего уровня и пресеты Desktop с --desktop\n\
-           --no-stop-gate         Не подключать шлюз Stop (и убрать наш, если есть; переменная CTXKIT_GATE=0 глушит его на сессию)\n\
+           --no-stop-gate         Не подключать шлюз Stop (и убрать наш, если есть; переменная CONTEXT_TOOLKIT_GATE=0, старое имя CTXKIT_GATE=0, глушит его на сессию)\n\
            --no-agents            Не создавать Explore.md и checker.md\n\
            --force-agents         Перезаписать существующие Explore.md / checker.md\n\
            --with-rules           Добавить/обновить идемпотентный блок правил в CLAUDE.md\n\
            --desktop              Записать modelId (--desktop-model) в ccd-session-presets.json Claude Desktop; effort только с --effort\n\
            --desktop-model <id>   modelId для Desktop (по умолчанию: claude-sonnet-5-5)\n\
            --desktop-file <path>  Другой путь к ccd-session-presets.json\n\
-           --antigravity          Подключить ctxkit в hooks.json Antigravity и проверить MCP/плагины\n\
+           --antigravity          Подключить Инструменты контекста в hooks.json Antigravity и проверить MCP/плагины\n\
            --agy-file <path>      Другой путь к hooks.json Antigravity\n\
-           --dsh                  Подключить ctxkit в DeepSeek Harness Desktop (мост dsh-hooks-claude-code)\n\
+           --dsh                  Подключить Инструменты контекста в DeepSeek Harness Desktop (мост dsh-hooks-claude-code)\n\
            --dsh-home <path>      Другой домашний каталог DeepSeek Harness (по умолчанию: DSH_HOME или ~/.dsh)\n\
            --hook-cmd <cmd>       Другая команда хука\n\
-           --policy <list>        Политики <profile>/ctxkit.json, которые проверяют хуки; включены ровно перечисленные, остальные выключены (без флага не меняются): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (через запятую; `none` выключает все). Печатает «было -> стало» по каждой политике; ключи файла, написанные вами, сохраняются; блок правил после --with-rules перечисляет включённые политики\n\
+           --policy <list>        Политики <profile>/context-toolkit.json, которые проверяют хуки; включены ровно перечисленные, остальные выключены (без флага не меняются): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (через запятую; `none` выключает все). Печатает «было -> стало» по каждой политике; ключи файла, написанные вами, сохраняются; блок правил после --with-rules перечисляет включённые политики\n\
            --lang <en|ru>         Язык промптов, фрагментов, сообщений хуков и вывода setup (по умолчанию: en)\n\
-           --uninstall            Откат: убрать наши элементы хуков, CTXKIT_LANG, блок правил в CLAUDE.md (а с --antigravity/--agy-file или --dsh/--dsh-home и их записи), раздел policies в ctxkit.json (файл удаляется, только если его создал setup и в нём нет ничего вашего; иначе ваши ключи остаются и называются) и бинарник hooks/ctxkit; файл возвращается байт в байт из копии, если в нём больше ничего не менялось, а CLAUDE.md / settings.json, созданный setup, удаляется. Модель, советник, effort, env субагентов, пресеты Desktop и файлы агентов НЕ трогаются: печатаются их текущие значения и копии settings.json. Работает с --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; параметры установки отвергаются\n"
+           --uninstall            Откат: убрать наши элементы хуков (нового и старого имени), CONTEXT_TOOLKIT_LANG и CTXKIT_LANG, блок правил в CLAUDE.md (любые маркеры) (а с --antigravity/--agy-file или --dsh/--dsh-home и их записи), раздел policies в context-toolkit.json и ctxkit.json (файл удаляется, только если его создал setup и в нём нет ничего вашего; иначе ваши ключи остаются и называются) и бинарники hooks/context-toolkit и hooks/ctxkit (в ~/.local/bin — только наши); файл возвращается байт в байт из копии, если в нём больше ничего не менялось, а CLAUDE.md / settings.json, созданный setup, удаляется. Модель, советник, effort, env субагентов, пресеты Desktop и файлы агентов НЕ трогаются: печатаются их текущие значения и копии settings.json. Работает с --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; параметры установки отвергаются\n"
         );
         return;
     }
     println!(
-        "Usage: ctxkit setup [options]\n\n\
+        "Usage: context-toolkit setup [options]\n\n\
          Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness:\n\
          - Backs up existing configs before writing\n\
          - Creates the Explore (haiku) and checker (opus) agents; model, advisor and effort are NOT changed unless you pass --main-model / --advisor / --effort (the previous scheme: --main-model sonnet --advisor fable --effort high). Changes are printed as \"was -> became\"; custom env/hooks/plugins are preserved\n\
-         - Wires ctxkit PreToolUse/PostToolUse hooks with \"onFailure\": \"continue\" (a failing hook never blocks the call; claude 2.1.295+) replacing legacy claude-guard / no-inline-backslash entries\n\
-         - Refuses, before copying or writing anything, a file it cannot handle (odd settings.json, broken presets/hooks/YAML, a CLAUDE.md with a doubled or unpaired ctxkit marker); files are written atomically\n\
+         - Wires Context Toolkit PreToolUse/PostToolUse hooks with \"onFailure\": \"continue\" (a failing hook never blocks the call; claude 2.1.295+) replacing old ctxkit / claude-guard / no-inline-backslash entries\n\
+         - Moves an installation of the old name ctxkit: hooks on hooks/ctxkit.exe, env.CTXKIT_LANG, ctxkit.json (moved when setup created it, copied and kept when it is yours), the Antigravity key ctxkit, the DSH block and ctxkit-hooks.json, the rules block with ctxkit markers (with --with-rules). The old hooks/ctxkit.exe is deleted after settings.json is written when nothing runs it any more (one that is running right now is named for removal by hand), ~/.local/bin/ctxkit.exe only when it is ours (same bytes, or --version)\n\
+         - Refuses, before copying or writing anything, a file it cannot handle (odd settings.json, broken presets/hooks/YAML, a CLAUDE.md with a doubled or unpaired rules-block marker); files are written atomically\n\
          - Wires a once-per-turn Stop gate: a turn that edited code without checker/advisor afterwards is sent back once\n\
          - Audits enabled plugins, CLAUDE.md size, global MCPs, Claude CLI version, and Antigravity configs\n\n\
          Options:\n\
@@ -2531,21 +2800,21 @@ fn print_help() {
            --advisor <name>       Write `advisorModel` (not written without this flag; e.g. fable; \"none\" removes it)\n\
            --subagent <name>      Explore model and CLAUDE_CODE_SUBAGENT_MODEL (the env var is written only when this flag is given; Explore.md default: haiku)\n\
            --effort <level>       Write effort (not written without this flag): modelSettings.<model>.effortLevel for the --main-model or your own `model` (known model, low|medium|high|xhigh), top-level effortLevel, and Desktop presets with --desktop\n\
-           --no-stop-gate         Do not wire the Stop gate (and remove ours if present; env CTXKIT_GATE=0 mutes it per session)\n\
+           --no-stop-gate         Do not wire the Stop gate (and remove ours if present; env CONTEXT_TOOLKIT_GATE=0, old name CTXKIT_GATE=0, mutes it per session)\n\
            --no-agents            Skip creating Explore.md and checker.md\n\
            --force-agents         Overwrite existing Explore.md / checker.md\n\
            --with-rules           Add/update idempotent rules block in CLAUDE.md\n\
            --desktop              Set modelId (--desktop-model) in Claude Desktop ccd-session-presets.json; effort only with --effort\n\
            --desktop-model <id>   Desktop modelId (default: claude-sonnet-5-5)\n\
            --desktop-file <path>  Override ccd-session-presets.json path\n\
-           --antigravity          Wire ctxkit into Antigravity hooks.json and audit MCPs/plugins\n\
+           --antigravity          Wire Context Toolkit into Antigravity hooks.json and audit MCPs/plugins\n\
            --agy-file <path>      Override Antigravity hooks.json path\n\
-           --dsh                  Wire ctxkit into DeepSeek Harness Desktop (dsh-hooks-claude-code bridge)\n\
+           --dsh                  Wire Context Toolkit into DeepSeek Harness Desktop (dsh-hooks-claude-code bridge)\n\
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --hook-cmd <cmd>       Override hook command path\n\
-           --policy <list>        Policies of <profile>/ctxkit.json that hooks enforce; exactly the listed ones are on, the rest off (not changed without this flag): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (comma separated; `none` turns all off). Prints \"was -> became\" per policy; keys of the file you wrote yourself are kept; the rules block lists the policies that are on after --with-rules\n\
+           --policy <list>        Policies of <profile>/context-toolkit.json that hooks enforce; exactly the listed ones are on, the rest off (not changed without this flag): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (comma separated; `none` turns all off). Prints \"was -> became\" per policy; keys of the file you wrote yourself are kept; the rules block lists the policies that are on after --with-rules\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
-           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries), the policies section of ctxkit.json (the file is deleted only when setup created it and holds nothing of yours; otherwise your keys stay and are named) and the hooks/ctxkit binary; a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
+           --uninstall            Roll back: remove our hook elements (new and old name), CONTEXT_TOOLKIT_LANG and CTXKIT_LANG, the CLAUDE.md rules block (any markers) (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries), the policies section of context-toolkit.json and ctxkit.json (the file is deleted only when setup created it and holds nothing of yours; otherwise your keys stay and are named) and the hooks/context-toolkit and hooks/ctxkit binaries (in ~/.local/bin only ours); a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
     );
 }
 
@@ -2882,7 +3151,14 @@ mod tests {
         }
         assert!(!en.contains("- - "), "a bullet is not doubled");
         let ru = snippet(all, Lang::Ru);
-        assert!(ru.contains("хук ctxkit спросит") && ru.contains("не больше 3 одновременных"));
+        assert!(
+            ru.contains("хук Инструментов контекста спросит")
+                && ru.contains("не больше 3 одновременных")
+        );
+        assert!(ru.contains("## Команда моделей и экономия контекста (Инструменты контекста)"));
+        assert!(en.contains("## Model Team & Context Discipline (Context Toolkit)"));
+        assert!(en.contains("`context-toolkit check <cmd>`") && !en.contains("ctxkit"));
+        assert!(!ru.contains("ctxkit") && !ru.contains("Context Toolkit"));
         // all of it sits between the markers; the owner's items come last
         let (s, e) = marker_span(&en).unwrap();
         assert_eq!((s, e), (0, en.len()));
@@ -2943,13 +3219,21 @@ mod tests {
             ..SetupOpts::default()
         };
         let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &ru).unwrap();
-        assert_eq!(s["env"]["CTXKIT_LANG"], "ru");
+        assert_eq!(s["env"]["CONTEXT_TOOLKIT_LANG"], "ru");
         let s =
             update_claude_settings(&path, &d.join("b"), "\"x\"", &SetupOpts::default()).unwrap();
         assert!(
             s.get("env").is_none(),
             "env created by --lang ru goes with it"
         );
+        // the old key: replaced by --lang ru, removed by --lang en; a foreign key stays
+        fs::write(&path, r#"{"env":{"CTXKIT_LANG":"ru","KEEP":"1"}}"#).unwrap();
+        let s = update_claude_settings(&path, &d.join("b"), "\"x\"", &ru).unwrap();
+        assert_eq!(s["env"], json!({"CONTEXT_TOOLKIT_LANG": "ru", "KEEP": "1"}));
+        fs::write(&path, r#"{"env":{"CTXKIT_LANG":"ru"}}"#).unwrap();
+        let s =
+            update_claude_settings(&path, &d.join("b"), "\"x\"", &SetupOpts::default()).unwrap();
+        assert!(s.get("env").is_none(), "{s}");
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -3168,7 +3452,7 @@ mod tests {
         update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
         assert_eq!(first, fs::read_to_string(&patch).unwrap());
         assert!(first.starts_with(foreign));
-        assert_eq!(first.matches("id: ctxkit-hooks").count(), 1);
+        assert_eq!(first.matches("id: context-toolkit-hooks").count(), 1);
         assert!(first.contains("name: '@deepseek-ai/dsh-hooks-claude-code'"));
 
         // A flow list or a mapping at the top level is refused, not corrupted.
@@ -3181,7 +3465,7 @@ mod tests {
         update_dsh_hooks(&home, "ctxkit --dsh", false).unwrap();
         assert!(fs::read_to_string(&patch)
             .unwrap()
-            .contains("id: ctxkit-hooks"));
+            .contains("id: context-toolkit-hooks"));
 
         // An orphan end marker above must not make the block multiply.
         fs::write(&patch, format!("{DSH_MARKER_END}\n{foreign}")).unwrap();
@@ -3190,7 +3474,7 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&patch)
                 .unwrap()
-                .matches("id: ctxkit-hooks")
+                .matches("id: context-toolkit-hooks")
                 .count(),
             1
         );
@@ -3200,7 +3484,7 @@ mod tests {
         assert!(update_dsh_hooks(&home, "ctxkit --dsh", false).is_err());
         assert_eq!(fs::read_to_string(&patch).unwrap(), half);
 
-        let hooks = read_json_object(&home.join("ctxkit-hooks.json")).unwrap();
+        let hooks = read_json_object(&home.join(DSH_HOOKS_FILE)).unwrap();
         assert_eq!(
             hooks["hooks"]["PreToolUse"][0]["matcher"],
             "read|write|edit|apply_patch|bash|pwsh"
@@ -3214,6 +3498,132 @@ mod tests {
             "ctxkit --dsh"
         );
         let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn dsh_block_and_hooks_file_of_the_old_name_are_replaced() {
+        let home = env::temp_dir().join(format!("ctk_dsh_migrate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        let profile = home.join("profiles").join("desktop");
+        fs::create_dir_all(&profile).unwrap();
+        let patch = profile.join("cordis.patch.yml");
+        let old_file = home.join(OLD_DSH_HOOKS_FILE);
+        let old_block = format!(
+            "{OLD_DSH_MARKER_START}\n- insert:\n    - id: ctxkit-hooks\n      config:\n        configPath: '{}'\n{OLD_DSH_MARKER_END}",
+            old_file.display()
+        );
+        let foreign = "- id: ui-chat\n";
+        fs::write(
+            &patch,
+            format!("{foreign}\n{old_block}\n- id: mine-after\n"),
+        )
+        .unwrap();
+        fs::write(&old_file, r#"{"hooks":{}}"#).unwrap();
+        // a dry run changes nothing
+        update_dsh_hooks(&home, "new --dsh", true).unwrap();
+        assert!(
+            old_file.exists()
+                && fs::read_to_string(&patch)
+                    .unwrap()
+                    .contains("id: ctxkit-hooks")
+        );
+        update_dsh_hooks(&home, "new --dsh", false).unwrap();
+        let after = fs::read_to_string(&patch).unwrap();
+        assert!(!after.contains("ctxkit"), "{after}");
+        assert_eq!(after.matches("id: context-toolkit-hooks").count(), 1);
+        assert!(after.starts_with(foreign) && after.contains("- id: mine-after"));
+        assert!(
+            !old_file.exists(),
+            "the old hooks file goes once the patch points at the new one"
+        );
+        assert!(home.join("backups").read_dir().unwrap().count() == 1);
+        assert!(home.join(DSH_HOOKS_FILE).exists());
+        // the second run changes nothing
+        update_dsh_hooks(&home, "new --dsh", false).unwrap();
+        assert_eq!(fs::read_to_string(&patch).unwrap(), after);
+        // a global patch of the owner's that names the old file keeps it
+        fs::write(&old_file, "{}").unwrap();
+        fs::write(
+            home.join("cordis.patch.yml"),
+            format!("- configPath: '{}'\n", old_file.display()),
+        )
+        .unwrap();
+        update_dsh_hooks(&home, "new --dsh", false).unwrap();
+        assert!(old_file.exists());
+        // both blocks at once: refused, untouched
+        let both = format!("{after}\n{old_block}\n");
+        fs::write(&patch, &both).unwrap();
+        assert!(update_dsh_hooks(&home, "new --dsh", false).is_err());
+        assert_eq!(fs::read_to_string(&patch).unwrap(), both);
+        // the rollback cuts blocks of both names
+        assert_eq!(
+            uninstall::strip_dsh_block(&both)
+                .unwrap()
+                .matches(">>>")
+                .count(),
+            0
+        );
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn our_version_line_is_recognised_under_both_names_only() {
+        assert!(is_our_version_line("context-toolkit 0.1.0\n"));
+        assert!(is_our_version_line("ctxkit 0.1.0\r\n"));
+        for other in [
+            "ctxkit",
+            "ctxkit 0.1",
+            "other 0.1.0",
+            "ctxkit 0.1.0 extra",
+            "v22.1.0",
+            "",
+        ] {
+            assert!(!is_our_version_line(other), "{other}");
+        }
+        // a program that is not ours (another --version output) and one that does not start
+        let exe = env::current_exe().unwrap();
+        assert!(!version_says_ours(
+            &exe.with_file_name("no-such-program.exe")
+        ));
+    }
+
+    #[test]
+    fn rules_blocks_of_every_name_are_found_and_mixed_names_refused() {
+        for (s, e) in MARKERS {
+            let text = format!("mine\n\n{s}\nold\n{e}\n");
+            assert!(marker_span(&text).is_some() && marker_problem(&text).is_none());
+        }
+        assert!(has_old_markers(&format!("{OLD_MARKER_START}\n")));
+        assert!(!has_old_markers(&format!(
+            "{MARKER_START}\nx\n{MARKER_END}\n"
+        )));
+        let mixed =
+            format!("{OLD_MARKER_START}\na\n{OLD_MARKER_END}\n{MARKER_START}\nb\n{MARKER_END}\n");
+        assert!(marker_problem(&mixed).is_some());
+        // --with-rules on the old block: the new markers in its place, the owner's text around it kept
+        let d = env::temp_dir().join(format!("ctk_rules_migrate_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let md = d.join("CLAUDE.md");
+        fs::write(
+            &md,
+            format!("# Mine\r\n\r\n{OLD_MARKER_START}\r\nold\r\n{OLD_MARKER_END}\r\n\r\ntail\r\n"),
+        )
+        .unwrap();
+        let block = sample_block(Lang::En);
+        upsert_claude_md(&md, &d.join("backups"), &block, false).unwrap();
+        let after = fs::read_to_string(&md).unwrap();
+        assert!(
+            after.starts_with("# Mine\r\n\r\n<!-- context-toolkit:start -->\r\n"),
+            "{after}"
+        );
+        assert!(
+            after.ends_with("<!-- context-toolkit:end -->\r\n\r\ntail\r\n")
+                && !after.contains("ctxkit:")
+        );
+        upsert_claude_md(&md, &d.join("backups"), &block, false).unwrap();
+        assert_eq!(fs::read_to_string(&md).unwrap(), after, "idempotent");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

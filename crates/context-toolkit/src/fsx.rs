@@ -30,7 +30,10 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("file");
-    let tmp = target.with_file_name(format!(".{name}.ctxkit-{}.tmp", std::process::id()));
+    let tmp = target.with_file_name(format!(
+        ".{name}.context-toolkit-{}.tmp",
+        std::process::id()
+    ));
     let res = (|| -> std::io::Result<()> {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(bytes)?;

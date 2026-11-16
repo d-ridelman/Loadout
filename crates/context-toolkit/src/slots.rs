@@ -1,4 +1,4 @@
-//! Policy `build_slots`: `ctxkit check` takes one of N machine-wide slots before it starts a build, so a
+//! Policy `build_slots`: `context-toolkit check` takes one of N machine-wide slots before it starts a build, so a
 //! shared machine never runs more than N checks at once.
 //!
 //! A slot is the file `<temp>/ctxkit-slots/slot-<n>.lock`, held with an operating-system lock for as long as
@@ -31,6 +31,7 @@ impl Drop for Slot {
 }
 
 pub fn dir() -> PathBuf {
+    // The folder keeps the old name (ctxkit): a binary of the old name still running elsewhere shares the same limit.
     std::env::temp_dir().join("ctxkit-slots")
 }
 
@@ -197,7 +198,7 @@ mod tests {
     fn files_left_by_a_dead_process_do_not_hold_a_slot() {
         let d = temp("dead");
         fs::create_dir_all(&d).unwrap();
-        // what a killed `ctxkit check` leaves: the files, no lock, an old pid inside
+        // what a killed `context-toolkit check` leaves: the files, no lock, an old pid inside
         fs::write(d.join("slot-0.lock"), "").unwrap();
         fs::write(d.join("slot-0.info"), "999999\n1\n").unwrap();
         let s = quick(&d, 1).expect("the dead holder's slot is free");

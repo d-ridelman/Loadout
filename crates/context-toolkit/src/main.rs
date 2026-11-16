@@ -105,13 +105,21 @@ fn detect_lang(args: &[String]) -> Lang {
         }
         i += 1;
     }
-    env::var("CTXKIT_LANG")
-        .ok()
+    our_env("LANG")
         .and_then(|v| parse_lang(&v))
         .unwrap_or(Lang::En)
 }
 
-/// The one rule of the emergency switches `CTXKIT_GUARD` and `CTXKIT_GATE`: the value, trimmed and
+/// Our environment variable `CONTEXT_TOOLKIT_<suffix>`, else its old name `CTXKIT_<suffix>` (still honoured:
+/// profiles and shells set before the rename keep working). The new name wins when both are set.
+pub fn our_env(suffix: &str) -> Option<String> {
+    env::var(format!("CONTEXT_TOOLKIT_{suffix}"))
+        .or_else(|_| env::var(format!("CTXKIT_{suffix}")))
+        .ok()
+}
+
+/// The one rule of the emergency switches `CONTEXT_TOOLKIT_GUARD` and `CONTEXT_TOOLKIT_GATE` (old names
+/// `CTXKIT_GUARD`, `CTXKIT_GATE`): the value, trimmed and
 /// without regard to case, is `0`, `off`, `false` or `no`. Anything else (or unset) leaves the hook on.
 fn is_off_value(v: &str) -> bool {
     matches!(
@@ -120,8 +128,34 @@ fn is_off_value(v: &str) -> bool {
     )
 }
 
-pub fn env_off(name: &str) -> bool {
-    env::var(name).is_ok_and(|v| is_off_value(&v))
+/// `suffix`: `GUARD` or `GATE` (see `our_env`).
+pub fn env_off(suffix: &str) -> bool {
+    our_env(suffix).is_some_and(|v| is_off_value(&v))
+}
+
+/// The top-level `--help`: the subcommands, and that a bare run is the hook itself.
+fn print_help() {
+    let ver = env!("CARGO_PKG_VERSION");
+    say!(
+        "Context Toolkit {ver}: hooks and diagnostics that keep the context of AI agents small.\n\n\
+         Usage:\n\
+           context-toolkit setup [options]     install the hooks, agents and rules (see `context-toolkit setup --help`)\n\
+           context-toolkit doctor [--json]     check the installation\n\
+           context-toolkit report [--json]     per-day counters from Claude Code transcripts\n\
+           context-toolkit check <cmd...>      run a build or test with short output\n\
+           context-toolkit --version           print the version\n\n\
+         Without a subcommand it is the hook: it reads the call from stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness).\n\
+         Formerly named ctxkit: the old name is still recognised, and `context-toolkit setup` moves an installation to the new one.",
+        "Инструменты контекста {ver}: хуки и диагностика, которые держат контекст ИИ-агентов небольшим.\n\n\
+         Использование:\n\
+           context-toolkit setup [параметры]   поставить хуки, агентов и правила (см. `context-toolkit setup --help`)\n\
+           context-toolkit doctor [--json]     проверить установку\n\
+           context-toolkit report [--json]     счётчики по дням из транскриптов Claude Code\n\
+           context-toolkit check <cmd...>      запустить сборку или тесты с коротким выводом\n\
+           context-toolkit --version           показать версию\n\n\
+         Без подкоманды это сам хук: он читает вызов из stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness).\n\
+         Раньше назывались ctxkit: старое имя по-прежнему распознаётся, а `context-toolkit setup` переводит установку на новое."
+    );
 }
 
 fn main() {
@@ -133,6 +167,11 @@ fn main() {
         Some("report") => std::process::exit(report::run_report(&args[1..])),
         Some("--version" | "-V") => {
             println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        Some("--help" | "-h") => {
+            set_lang(detect_lang(&args));
+            print_help();
             return;
         }
         _ => {}
@@ -209,8 +248,8 @@ fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
             Client::Claude
         }
     });
-    // Emergency switch for PreToolUse/PostToolUse (the Stop gate has its own CTXKIT_GATE=0).
-    if call["hook_event_name"].as_str() != Some("Stop") && env_off("CTXKIT_GUARD") {
+    // Emergency switch for PreToolUse/PostToolUse (the Stop gate has its own CONTEXT_TOOLKIT_GATE=0).
+    if call["hook_event_name"].as_str() != Some("Stop") && env_off("GUARD") {
         if client == Client::Antigravity {
             agy_pass(forced_post || call.get("error").is_some());
         }
@@ -296,7 +335,7 @@ fn handle_antigravity(call: &Value, forced_post: bool, lang: Lang) {
         _ => None,
     };
 
-    // The policies of ctxkit.json (off unless the owner turned them on) come after the fixed guards.
+    // The policies of context-toolkit.json (off unless the owner turned them on) come after the fixed guards.
     let verdict = match (&reason, tool) {
         (None, "run_command") => policy::shell(
             &policy::load(),

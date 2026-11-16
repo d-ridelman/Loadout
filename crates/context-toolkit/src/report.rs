@@ -1,4 +1,4 @@
-//! `ctxkit report`: per-day aggregates from Claude Code transcripts (`<profile>/projects/**/*.jsonl`).
+//! `context-toolkit report`: per-day aggregates from Claude Code transcripts (`<profile>/projects/**/*.jsonl`).
 //! Only counters leave this module: no prompts, paths or tool output.
 //! shortcut: days are UTC (std has no time zone), so "today" can differ from local by a few hours; add a zone when a GUI needs it.
 //!
@@ -58,7 +58,7 @@ fn classify(cmd: &str) -> Kind {
     static CHECK: OnceLock<Regex> = OnceLock::new();
     static BUILD: OnceLock<Regex> = OnceLock::new();
     static INSPECT: OnceLock<Regex> = OnceLock::new();
-    if rx(&CHECK, r"\bctxkit(\.exe)?\s+check\b").is_match(cmd) {
+    if rx(&CHECK, r"\b(context-toolkit|ctxkit)(\.exe)?\s+check\b").is_match(cmd) {
         Kind::Check
     } else if rx(
         &BUILD,
@@ -644,7 +644,7 @@ pub fn run_report(args: &[String]) -> i32 {
                 i += 1;
             }
             "--help" | "-h" => {
-                println!("Usage: ctxkit report [--json] [--days N] [--profile <dir>]");
+                println!("Usage: context-toolkit report [--json] [--days N] [--profile <dir>]");
                 return 0;
             }
             a if a == "--lang" || a.starts_with("--lang=") => match lang_arg(args, i) {
@@ -655,7 +655,7 @@ pub fn run_report(args: &[String]) -> i32 {
                 }
             },
             other => {
-                eprintln!("ERR: unknown option '{other}'. Usage: ctxkit report [--json] [--days N] [--profile <dir>]");
+                eprintln!("ERR: unknown option '{other}'. Usage: context-toolkit report [--json] [--days N] [--profile <dir>]");
                 return 2;
             }
         }
@@ -672,7 +672,7 @@ pub fn run_report(args: &[String]) -> i32 {
     if json_out {
         println!(
             "{}",
-            json!({"schema": 1, "tool": "ctxkit", "tz": "UTC", "days": days})
+            json!({"schema": 1, "tool": "context-toolkit", "tz": "UTC", "days": days})
         );
     } else {
         println!("day         main(son/opus+fable/haiku)  sub  tool_result  read  inspect  build  check(calls)  adv  agents");
@@ -790,7 +790,12 @@ mod tests {
 
     #[test]
     fn classifies_commands() {
-        assert!(classify("ctxkit check cargo test") == Kind::Check);
+        assert!(
+            classify("ctxkit check cargo test") == Kind::Check,
+            "the old name in old transcripts"
+        );
+        assert!(classify("context-toolkit check cargo test") == Kind::Check);
+        assert!(classify("C:/u/.local/bin/context-toolkit.exe check npm test") == Kind::Check);
         assert!(classify("cargo test --release") == Kind::Build);
         assert!(classify("cat a.txt | head") == Kind::Inspect);
         assert!(classify("git status") == Kind::Other);

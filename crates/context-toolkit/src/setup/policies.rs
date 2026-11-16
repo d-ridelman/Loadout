@@ -1,4 +1,4 @@
-//! `ctxkit.json` in `ctxkit setup`: `--policy` writes the `policies` section, every other run only reads it
+//! `context-toolkit.json` in `context-toolkit setup`: `--policy` writes the `policies` section, every other run only reads it
 //! (the rules block lists the policies that are on). The rollback side lives in `uninstall.rs`.
 use super::*;
 use crate::policy::{self, Config, Selection};
@@ -7,9 +7,9 @@ pub(super) fn path(profile: &Path) -> PathBuf {
     profile.join(policy::FILE)
 }
 
-/// `Err` when an existing `ctxkit.json` cannot be parsed: checked before anything is written.
+/// `Err` when the policy file that is read (`policy::file_in`) cannot be parsed: checked before anything is written.
 pub(super) fn preflight(profile: &Path) -> Result<(), String> {
-    let p = path(profile);
+    let p = policy::file_in(profile);
     if !p.exists() {
         return Ok(());
     }
@@ -23,6 +23,71 @@ pub(super) fn preflight(profile: &Path) -> Result<(), String> {
     })
 }
 
+/// The policy file of the old name (`ctxkit.json`) goes to `context-toolkit.json`, byte for byte. One that setup
+/// had created (its `created_by` mark) is moved: the old file goes after the new one is written (a backup stays).
+/// One the owner wrote is copied and kept, and the output says it is no longer read. With both files present
+/// nothing moves: the new one is read, and the old one is named.
+pub(super) fn migrate(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
+    let (new, old) = (path(profile), profile.join(policy::LEGACY_FILE));
+    if !old.exists() {
+        return Ok(());
+    }
+    if new.exists() {
+        say!(
+            "  [note] {} is not read while {} exists; delete it when you no longer need it",
+            "  [note] {} не читается, пока есть {}; удалите его, когда он больше не нужен",
+            old.display(),
+            new.display()
+        );
+        return Ok(());
+    }
+    let bytes = fs::read(&old).map_err(|e| {
+        msg!(
+            "read {}: {e}",
+            "не удалось прочитать {}: {e}",
+            old.display()
+        )
+    })?;
+    let ours = std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok())
+        .is_some_and(|v| policy::made_by_setup(v.get("created_by")));
+    if dry_run {
+        say!(
+            "  [dry-run] old name: {} {} -> {}",
+            "  [dry-run] старое имя: {} {} -> {}",
+            if ours {
+                msg!("move", "перенос")
+            } else {
+                msg!("copy", "копирование")
+            },
+            old.display(),
+            new.display()
+        );
+        return Ok(());
+    }
+    write_atomic(&new, &bytes)?;
+    if ours {
+        let b = backup_file(&old, backup_dir)?;
+        say!("  backup -> {}", "  копия -> {}", b.display());
+        remove_file(&old)?;
+        say!(
+            "  old name: moved {} -> {}",
+            "  старое имя: перенесён {} -> {}",
+            old.display(),
+            new.display()
+        );
+    } else {
+        say!(
+            "  old name: copied {} -> {}; the old file is yours and stays, but it is no longer read: delete it when you like",
+            "  старое имя: скопирован {} -> {}; старый файл ваш и остаётся, но больше не читается: удалите его, когда захотите",
+            old.display(),
+            new.display()
+        );
+    }
+    Ok(())
+}
+
 /// Applies `--policy` (when given) and returns the policies as they are after this run.
 /// Without the flag nothing is written, and the file is not even created.
 pub(super) fn run(
@@ -31,7 +96,7 @@ pub(super) fn run(
     sel: Option<&Selection>,
     dry_run: bool,
 ) -> Result<Config, String> {
-    let p = path(profile);
+    let p = policy::file_in(profile);
     let Some(sel) = sel else {
         // not an error without `--policy`/`--with-rules` (preflight guards those), but the owner is told:
         // a file that does not parse means every policy is off
@@ -65,12 +130,13 @@ pub(super) fn run(
     };
     let existed = p.exists();
     let orig = read_json_object(&p)?;
+    let p = path(profile); // written under the new name, also when the old file was read (a dry run moved nothing)
     let before = policy::parse(&orig.to_string())?;
     let mut next = orig.clone();
     let root = next.as_object_mut().ok_or_else(|| {
         msg!(
-            "ctxkit.json root is not object",
-            "корень ctxkit.json не является объектом"
+            "context-toolkit.json root is not object",
+            "корень context-toolkit.json не является объектом"
         )
     })?;
     sel.apply(root);
@@ -120,12 +186,12 @@ pub(super) fn run(
     );
     if !existed && after == Config::default() {
         say!(
-            "  policies: none, so no ctxkit.json is created",
-            "  политики: нет, поэтому ctxkit.json не создаётся"
+            "  policies: none, so no context-toolkit.json is created",
+            "  политики: нет, поэтому context-toolkit.json не создаётся"
         );
         return Ok(after);
     }
-    write_json_if_changed(&p, Some(backup_dir), &orig, &next, dry_run, "ctxkit.json")?;
+    write_json_if_changed(&p, Some(backup_dir), &orig, &next, dry_run, policy::FILE)?;
     Ok(after)
 }
 
@@ -221,12 +287,61 @@ mod tests {
         fs::write(path(&d), r#"{"policies":{"commit_hygiene":"yes"}}"#).unwrap();
         let err = preflight(&d).unwrap_err();
         assert!(
-            err.contains("ctxkit.json") && err.contains("commit_hygiene"),
+            err.contains("context-toolkit.json") && err.contains("commit_hygiene"),
             "{err}"
         );
         fs::write(path(&d), "{").unwrap();
         assert!(preflight(&d).is_err());
         let _ = fs::remove_dir_all(&d);
         assert!(preflight(&d).is_ok(), "no file is fine");
+    }
+
+    #[test]
+    fn the_old_policy_file_is_moved_when_setup_made_it_and_copied_when_it_is_the_owners() {
+        let d = temp_profile("migrate");
+        let (new, old, bak) = (path(&d), d.join(policy::LEGACY_FILE), d.join("backups"));
+        // nothing to move
+        migrate(&d, &bak, false).unwrap();
+        assert!(!new.exists() && !bak.exists());
+        // made by setup under the old name: a dry run moves nothing, a real run moves it byte for byte
+        let ours = "{\"created_by\":\"ctxkit setup\",\r\n \"policies\":{\"stray_files\":true}}";
+        fs::write(&old, ours).unwrap();
+        migrate(&d, &bak, true).unwrap();
+        assert!(old.exists() && !new.exists(), "dry run");
+        migrate(&d, &bak, false).unwrap();
+        assert!(!old.exists());
+        assert_eq!(fs::read_to_string(&new).unwrap(), ours);
+        assert_eq!(
+            fs::read_dir(&bak).unwrap().count(),
+            1,
+            "the old file is backed up"
+        );
+        assert!(policy::load_from(&d).stray_files);
+        // a second run: nothing left to move
+        migrate(&d, &bak, false).unwrap();
+        assert_eq!(fs::read_to_string(&new).unwrap(), ours);
+        // the owner's own old file: copied, and it stays
+        let e = temp_profile("migrate-own");
+        let own = r#"{"policies":{"commit_hygiene":true},"rules":["mine of five words"]}"#;
+        fs::write(e.join(policy::LEGACY_FILE), own).unwrap();
+        migrate(&e, &e.join("backups"), false).unwrap();
+        assert_eq!(fs::read_to_string(path(&e)).unwrap(), own);
+        assert_eq!(
+            fs::read_to_string(e.join(policy::LEGACY_FILE)).unwrap(),
+            own
+        );
+        // both present: nothing moves, the new file is the one read
+        fs::write(path(&e), r#"{"policies":{}}"#).unwrap();
+        migrate(&e, &e.join("backups"), false).unwrap();
+        assert_eq!(fs::read_to_string(path(&e)).unwrap(), r#"{"policies":{}}"#);
+        assert!(!policy::load_from(&e).commit_hygiene);
+        // `--policy` on an old file in a dry run reads it and writes nothing
+        let f = temp_profile("migrate-dry");
+        fs::write(f.join(policy::LEGACY_FILE), own).unwrap();
+        let cfg = run(&f, &f.join("backups"), Some(&sel("stray-files")), true).unwrap();
+        assert!(cfg.stray_files && !path(&f).exists());
+        for x in [d, e, f] {
+            let _ = fs::remove_dir_all(&x);
+        }
     }
 }

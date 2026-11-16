@@ -1,7 +1,7 @@
 //! Policy `stray_files`: a `Write` of a report-like or scratch file (`report*.md`, `*-analysis.md`, `notes*.md`,
 //! `*.tmp`, `*.bak`, ...) straight into the project root (the hook's `cwd`) or the profile root is answered
 //! with "ask": the owner wants reports in the chat, not in a file. Files in subfolders (`docs/`, `tests/`)
-//! are not touched. `stray_patterns` in `ctxkit.json` adds patterns (`*` is the only wildcard).
+//! are not touched. `stray_patterns` in `context-toolkit.json` adds patterns (`*` is the only wildcard).
 use crate::policy::Config;
 use crate::Lang;
 use std::path::{Component, Path, PathBuf};
@@ -97,10 +97,10 @@ pub fn reason(
         .any(|pat| glob(pat, &name));
     hit.then(|| match lang {
         Lang::En => format!(
-            "`{name}` looks like a report or scratch file in the project root. The owner wants reports in the chat, not in a file (policy stray_files in ctxkit.json): answer in the chat, or put the file in a subfolder (docs/, tests/) if it belongs to the project."
+            "`{name}` looks like a report or scratch file in the project root. The owner wants reports in the chat, not in a file (policy stray_files in context-toolkit.json): answer in the chat, or put the file in a subfolder (docs/, tests/) if it belongs to the project."
         ),
         Lang::Ru => format!(
-            "`{name}` похож на отчёт или временный файл в корне проекта. Владелец просит отчёты в чат, а не в файл (политика stray_files в ctxkit.json): ответь в чате или положи файл в подкаталог (docs/, tests/), если он относится к проекту."
+            "`{name}` похож на отчёт или временный файл в корне проекта. Владелец просит отчёты в чат, а не в файл (политика stray_files в context-toolkit.json): ответь в чате или положи файл в подкаталог (docs/, tests/), если он относится к проекту."
         ),
     })
 }

@@ -12,11 +12,11 @@ const MAX_LINES: usize = 30;
 
 pub fn run_check(args: &[String]) -> i32 {
     if args.is_empty() {
-        eprintln!("Usage: ctxkit check <command...>");
+        eprintln!("Usage: context-toolkit check <command...>");
         return 2;
     }
 
-    // Policy build_slots (ctxkit.json): wait for a machine-wide slot; held until this function returns,
+    // Policy build_slots (context-toolkit.json): wait for a machine-wide slot; held until this function returns,
     // also on a panic. Off by default; any trouble with the slot files means no slot and no waiting.
     let _slot = crate::policy::load().build_slots.and_then(|n| {
         let lang = crate::detect_lang(&[]);
@@ -182,7 +182,7 @@ fn startable_directly(program: &Path) -> bool {
         .is_some_and(|e| ["exe", "com", "bat", "cmd"].contains(&e.to_ascii_lowercase().as_str()))
 }
 
-/// How `ctxkit check` starts the command. On Windows a program found on `PATH` (an `.exe`, or an
+/// How `context-toolkit check` starts the command. On Windows a program found on `PATH` (an `.exe`, or an
 /// `npm.cmd` / `.bat`, which std quotes for `cmd.exe` itself) is started directly, so `&`, `|`, `%` and
 /// `^` in its arguments reach it as they are. What only `cmd` can run (one of its built-ins such as `dir`,
 /// a name that is no file, a script run through its file association) goes through `cmd.exe /d /c`,

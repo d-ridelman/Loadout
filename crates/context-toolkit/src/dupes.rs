@@ -1,16 +1,16 @@
 //! `doctor` check `rules_duplicate`: the same rule standing in two places of `CLAUDE.md` (the owner's own
-//! sections and the ctxkit block say the same thing). A model reads both, and the two copies drift apart.
+//! sections and the Context Toolkit block say the same thing). A model reads both, and the two copies drift apart.
 //!
 //! Two tests, both over bullet lines only (headings, prose and fenced code are ignored):
 //!
 //! * **Same wording**, any two lines except two lines of the block: the clauses of the lines (a clause ends at
 //!   `.` `;` `!` `?`, a parenthesis or a spaced dash), lower-cased, without markup, of 5 words or more, share at
 //!   least 0.8 of their distinct words.
-//! * **Paraphrase**, an owner's line against a line of the ctxkit block only (the block's rules are known and
+//! * **Paraphrase**, an owner's line against a line of our block only (the block's rules are known and
 //!   few; two of the owner's own neighbouring points on one topic are the common false alarm, so they get the
 //!   strict test alone). An owner's sentences and their clauses (split also at `;` and `: `) are compared
 //!   with each clause of the block line (a clause "X, not Y" also as `X` and `not Y`; a clause that two block
-//!   lines share, "the ctxkit hook asks", is boilerplate and skipped). Each
+//!   lines share, "the Context Toolkit hook asks", is boilerplate and skipped). Each
 //!   side gives *anchors* (the words of `code` and **bold** spans and the names `sonnet`, `opus`, `haiku`,
 //!   `fable`, `advisor`, `checker`, `explore`, `lsp`, `grep`, case-folded) and *concepts* (the other words
 //!   without stop words: a small Russian/English synonym group such as "ask: спрашивай / подтверждение /
@@ -42,7 +42,7 @@ pub struct Pair {
     /// 1-based line numbers, `a < b`.
     pub a: usize,
     pub b: usize,
-    /// Which of the two lines is inside the ctxkit block.
+    /// Which of the two lines is inside our rules block.
     pub a_in_block: bool,
     pub b_in_block: bool,
     /// The repeated part of each line, as written.
@@ -80,9 +80,27 @@ fn clauses_of(text: &str) -> Vec<&str> {
         .collect()
 }
 
+/// The text in lower case with every name of the product as the one word `ctxkit` (the old name): a line
+/// written before the rename (`ctxkit check`) and the block's (`context-toolkit check`) name the same tool,
+/// and the corpus the tests measure keeps its word counts.
+fn one_name(text: &str) -> String {
+    let mut s = text.to_lowercase();
+    for name in [
+        "context-toolkit",
+        "context toolkit",
+        "инструменты контекста",
+        "инструментов контекста",
+        "инструментам контекста",
+        "инструментами контекста",
+        "инструментах контекста",
+    ] {
+        s = s.replace(name, "ctxkit");
+    }
+    s
+}
+
 fn words_of(clause: &str) -> HashSet<String> {
-    clause
-        .to_lowercase()
+    one_name(clause)
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(str::to_string)
@@ -312,7 +330,7 @@ struct Unit {
     negated: bool,
     /// How many negation words the piece has.
     negations: usize,
-    /// The anchors and concepts a single negation stands before ("без `ctxkit check`", "needs no confirmation").
+    /// The anchors and concepts a single negation stands before ("без `context-toolkit check`", "needs no confirmation").
     neg_anchors: HashSet<String>,
     neg_concepts: HashSet<String>,
 }
@@ -326,6 +344,7 @@ fn is_negation(w: &str) -> bool {
 }
 
 fn unit_of(text: &str) -> Unit {
+    let text = &one_name(text);
     // the words in order, with whether they stand in `code` or **bold** (an anchor) or in the text (a concept)
     let mut words: Vec<(String, bool)> = Vec::new();
     let mut push = |s: &str, marked: bool| {
@@ -549,7 +568,11 @@ pub fn find(md: &str) -> Vec<Pair> {
 pub fn describe(pairs: &[Pair], lang: Lang) -> String {
     let tag = |in_block: bool| {
         if in_block {
-            t(lang, " (ctxkit block)", " (блок ctxkit)")
+            t(
+                lang,
+                " (Context Toolkit block)",
+                " (блок Инструментов контекста)",
+            )
         } else {
             ""
         }

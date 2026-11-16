@@ -427,8 +427,8 @@ pub fn reason(cmd: &str, d: Dialect, lang: Lang, home: Option<&str>) -> Option<S
         ),
         t(
             lang,
-            "Confirm to run it (policy confirm_irreversible in ctxkit.json).",
-            "Подтверди запуск (политика confirm_irreversible в ctxkit.json)."
+            "Confirm to run it (policy confirm_irreversible in context-toolkit.json).",
+            "Подтверди запуск (политика confirm_irreversible в context-toolkit.json)."
         )
     ))
 }

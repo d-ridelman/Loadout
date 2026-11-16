@@ -109,8 +109,8 @@ pub fn reason(cmd: &str, d: Dialect, lang: Lang, cwd: Option<&Path>) -> Option<S
     Some(
         t(
             lang,
-            "The commit message has a `Co-Authored-By` or `Generated with` line. Remove those lines from the message and run the commit again (policy commit_hygiene in ctxkit.json).",
-            "В сообщении коммита есть строка `Co-Authored-By` или `Generated with`. Убери эти строки из сообщения коммита и повтори коммит (политика commit_hygiene в ctxkit.json).",
+            "The commit message has a `Co-Authored-By` or `Generated with` line. Remove those lines from the message and run the commit again (policy commit_hygiene in context-toolkit.json).",
+            "В сообщении коммита есть строка `Co-Authored-By` или `Generated with`. Убери эти строки из сообщения коммита и повтори коммит (политика commit_hygiene в context-toolkit.json).",
         )
         .to_string(),
     )

@@ -32,7 +32,7 @@ pub fn stop_reason(call: &Value, lang: Lang) -> Option<String> {
     if call["stop_hook_active"].as_bool() == Some(true) {
         return None;
     }
-    if crate::env_off("CTXKIT_GATE") {
+    if crate::env_off("GATE") {
         return None;
     }
     let text = read_tail(Path::new(call["transcript_path"].as_str()?))?;
@@ -80,7 +80,7 @@ impl Helpers {
     }
 }
 
-/// The profile this binary serves: the parent of the `hooks/` folder it runs from (where `ctxkit setup`
+/// The profile this binary serves: the parent of the `hooks/` folder it runs from (where `context-toolkit setup`
 /// puts it), else `CLAUDE_CONFIG_DIR`, else `~/.claude`.
 fn profile_dir() -> PathBuf {
     let exe = std::env::current_exe().ok();
