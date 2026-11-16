@@ -7,6 +7,9 @@ import { t } from './i18n'
 export const BACKUP_KEEP_OPS = 100
 export const BACKUP_KEEP_DAYS = 90
 
+/** Где лежат копии по умолчанию: `userData` Electron называется по `name` из package.json (`loadout-app`). Для текста; в диалоге main подставляет настоящий путь. */
+export const BACKUP_DIR_HINT = '%APPDATA%\\loadout-app\\backups'
+
 /**
  * Прямым текстом о том, что лежит в копиях и где. Показывается в диалоге включения записи (R1/R2) и в журнале.
  * `dir` — каталог копий, как его покажет окно.

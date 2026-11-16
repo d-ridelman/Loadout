@@ -1095,6 +1095,29 @@ fn new_op_dir(store: &Path) -> Result<(String, PathBuf), String> {
     ))
 }
 
+/// Временные файлы убитых ядер: у каждого pid своё имя, и без уборки такой файл (копия конфига целиком, с секретами)
+/// остался бы рядом с настоящим навсегда. Удаляются `<файл>.loadout.*.tmp` старше десяти минут; свежий чужой файл —
+/// запись другого ядра в этот момент — не трогаем.
+fn clean_stale_tmp(file: &Path) {
+    let (Some(dir), Some(name)) = (file.parent(), file.file_name()) else {
+        return;
+    };
+    let prefix = format!("{}.loadout.", name.to_string_lossy());
+    let old = |p: &Path| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(600))
+    };
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if n.starts_with(&prefix) && n.ends_with(".tmp") && old(&e.path()) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 // Шов для тестов гонок: колбэк вызывается между записью временного файла и сверкой с ожидаемым содержимым.
 #[cfg(test)]
 type Hook = Box<dyn Fn(&Path)>;
@@ -1110,6 +1133,7 @@ thread_local! {
 /// файла его успел переписать клиент, замены нет и ничего не записано.
 fn atomic_write(file: &Path, bytes: &[u8], expect: &[u8]) -> Result<(), String> {
     use std::io::Write;
+    clean_stale_tmp(file);
     let mut name = file.as_os_str().to_owned();
     name.push(format!(".loadout.{}.tmp", std::process::id()));
     let tmp = PathBuf::from(name);

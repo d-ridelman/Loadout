@@ -71,6 +71,34 @@ fn no_tmp(e: &Env) {
     assert!(!left, "временный файл не остался");
 }
 
+/// Временные файлы убитых ядер (другие pid) старше десяти минут убираются при следующей записи, свежие остаются.
+#[test]
+fn stale_temp_files_of_dead_cores_are_cleaned_but_fresh_ones_stay() {
+    let e = env("stale-tmp");
+    let dir = cfg(&e).parent().unwrap().to_owned();
+    let stale = dir.join("config.toml.loadout.4242.tmp");
+    let fresh = dir.join("config.toml.loadout.4343.tmp");
+    let other = dir.join("other.toml.loadout.1.tmp");
+    for f in [&stale, &fresh, &other] {
+        fs::write(f, "секрет").unwrap();
+    }
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for f in [&stale, &other] {
+        fs::File::options()
+            .write(true)
+            .open(f)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+    let i = toggle(&e, false);
+    let p = super::plan(&e.home, Some(&e.store), &i).unwrap();
+    apply(&e.home, &e.store, &i, &p.base_sha, "R2").unwrap();
+    assert!(!stale.exists(), "старый временный файл убран");
+    assert!(fresh.exists(), "свежий (запись другого ядра) не тронут");
+    assert!(other.exists(), "чужие файлы с другим именем не трогаем");
+}
+
 #[test]
 fn commit_refuses_when_the_file_changes_right_before_the_swap() {
     let e = env("commit");

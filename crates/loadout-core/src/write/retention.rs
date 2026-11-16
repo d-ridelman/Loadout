@@ -6,7 +6,7 @@
 use serde::Serialize;
 use std::path::Path;
 
-/// Сколько последних операций хранить. Значение дублируется в тексте окна (`app/src/shared/model.ts`), тест сверяет.
+/// Сколько последних операций хранить. Значение дублируется в тексте окна (`app/src/shared/backups.ts`), тест сверяет.
 pub const KEEP_OPS: usize = 100;
 /// Сколько дней хранить операции. То же.
 pub const KEEP_DAYS: u64 = 90;
@@ -54,19 +54,50 @@ pub struct Pruned {
     pub kept: usize,
 }
 
-/// Оставляет первые `keep` операций (новые первыми) не старше [`KEEP_DAYS`] на момент `now`, а также `protect`.
-/// Остальное удаляется. Сбой удаления одного каталога не останавливает остальные.
+/// Пакет профиля операции (`batch` в манифесте), если он есть и читается.
+fn batch_of(store: &Path, id: &str) -> Option<String> {
+    let text = std::fs::read_to_string(store.join(id).join("manifest.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("batch")?.as_str().map(str::to_owned)
+}
+
+/// Оставляет первые `keep` операций (новые первыми) не старше [`KEEP_DAYS`] на момент `now`. Остальное удаляется, кроме:
+/// - всего, что не старше самой старой из `protect` (откат операции и откат пакета новее самих операций, их строки
+///   нужны, чтобы журнал знал об откате);
+/// - хвоста пакета профиля, начало которого осталось: пакет не режется посередине, иначе его откат стал бы частичным;
+/// - полной копии скила после неполного отката (каталог без манифеста, но с `removed/`): её удаляет только срок.
+///
+/// Сбой удаления одного каталога не останавливает остальные.
 pub(super) fn prune_at(store: &Path, keep: usize, now: u64, protect: &[String]) -> Pruned {
+    let floor = protect.iter().min();
+    let ids = op_ids(store);
     let (mut removed, mut kept, mut newest_gone) = (0, 0, String::new());
-    for (i, id) in op_ids(store).into_iter().enumerate() {
-        let fresh = i < keep && now.saturating_sub(id_ms(&id)) <= KEEP_DAYS * DAY_MS;
-        if fresh || protect.contains(&id) {
+    let mut last_kept: Option<&String> = None;
+    let mut batch: Option<Option<String>> = None; // пакет последней оставленной операции, читается при первом кандидате
+    let mut cut = false; // граница пакета пройдена: дальше пакетов не склеиваем
+    for (i, id) in ids.iter().enumerate() {
+        let aged = now.saturating_sub(id_ms(id)) > KEEP_DAYS * DAY_MS;
+        if (i < keep && !aged) || floor.is_some_and(|f| id >= f) {
             kept += 1;
-        } else if std::fs::remove_dir_all(store.join(&id)).is_ok() {
-            removed += 1;
-            newest_gone = newest_gone.max(id);
+            last_kept = Some(id);
+            continue;
+        }
+        if !cut {
+            let head = batch.get_or_insert_with(|| last_kept.and_then(|k| batch_of(store, k)));
+            if head.is_some() && batch_of(store, id) == *head {
+                kept += 1;
+                last_kept = Some(id);
+                continue;
+            }
+            cut = true;
+        }
+        let dir = store.join(id);
+        let skill_copy = !dir.join("manifest.json").exists() && dir.join("removed").is_dir();
+        if (skill_copy && !aged) || std::fs::remove_dir_all(&dir).is_err() {
+            kept += 1;
         } else {
-            kept += 1;
+            removed += 1;
+            newest_gone = newest_gone.max(id.clone());
         }
     }
     if !newest_gone.is_empty() && newest_gone > pruned_mark(store).unwrap_or_default() {
@@ -184,7 +215,8 @@ mod tests {
             op(&d, now - 20, 0),
             op(&d, now - 10, 0),
         );
-        let r = prune_at(&d, 1, now, std::slice::from_ref(&a));
+        // защищённая `b`: она и всё новее неё (её откат) остаются, старее неё удаляется
+        let r = prune_at(&d, 1, now, std::slice::from_ref(&b));
         assert_eq!(
             r,
             Pruned {
@@ -192,11 +224,68 @@ mod tests {
                 kept: 2
             }
         );
-        assert!(d.join(&a).exists() && !d.join(&b).exists() && d.join(&c).exists());
-        assert!(was_pruned(&d, &b) && !was_pruned(&d, &c));
-        // второй прогон с более старым удалением метку не уменьшает
+        assert!(!d.join(&a).exists() && d.join(&b).exists() && d.join(&c).exists());
+        assert!(was_pruned(&d, &a) && !was_pruned(&d, &b));
+        // следующий прогон без защиты метку только двигает вперёд
         prune_at(&d, 0, now, &[]);
         assert!(was_pruned(&d, &c));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn with_batch(d: &Path, id: &str, batch: &str) {
+        std::fs::write(
+            d.join(id).join("manifest.json"),
+            format!(r#"{{"batch":"{batch}"}}"#),
+        )
+        .unwrap();
+    }
+
+    /// Пакет профиля не режется на границе: откат пакета не должен стать частичным.
+    #[test]
+    fn a_batch_is_not_cut_in_the_middle() {
+        let d = store("batch");
+        let now = 400 * DAY_MS;
+        let single = op(&d, now - 500, 0);
+        let members: Vec<String> = (0..5).map(|i| op(&d, now - 400 + i, 0)).collect();
+        for m in &members {
+            with_batch(&d, m, "1");
+        }
+        let newest = op(&d, now - 10, 0);
+        // лимит 3 попадает внутрь пакета (newest + два члена): остальные члены остаются, одиночная старше пакета уходит
+        let r = prune_at(&d, 3, now, &[]);
+        assert_eq!(
+            r,
+            Pruned {
+                removed: 1,
+                kept: 6
+            }
+        );
+        assert!(members.iter().all(|m| d.join(m).exists()));
+        assert!(d.join(&newest).exists() && !d.join(&single).exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Полная копия скила после неполного отката (каталог без манифеста, с `removed/`) уходит только по сроку.
+    #[test]
+    fn a_skill_copy_left_by_a_failed_rollback_goes_only_by_age() {
+        let d = store("skillcopy");
+        let now = 500 * DAY_MS;
+        let copy = op(&d, now - 40, 0);
+        std::fs::create_dir_all(d.join(&copy).join("removed")).unwrap();
+        let junk = op(&d, now - 30, 0); // сорванная операция без манифеста и без копии скила
+        let newest = op(&d, now - 20, 0);
+        let r = prune_at(&d, 1, now, &[]);
+        assert_eq!(
+            r,
+            Pruned {
+                removed: 1,
+                kept: 2
+            }
+        );
+        assert!(d.join(&copy).exists() && !d.join(&junk).exists() && d.join(&newest).exists());
+        // через 90 дней уходит и она
+        assert_eq!(prune_at(&d, 10, now + 91 * DAY_MS, &[]).removed, 2);
+        assert!(!d.join(&copy).exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

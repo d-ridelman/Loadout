@@ -781,6 +781,34 @@ fn old_backups_are_pruned_by_the_rpc_method_and_by_the_prune_command() {
     assert_eq!(missing.status.code(), Some(2));
 }
 
+/// Без `--backups` команда берёт `%APPDATA%\<name из app/package.json>\backups`: так Electron называет `userData`.
+#[test]
+fn prune_defaults_to_the_electron_user_data_dir_named_after_the_package() {
+    let pkg: Value = serde_json::from_str(
+        &fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/package.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let name = pkg["name"].as_str().unwrap();
+    assert!(
+        pkg.get("productName").is_none(),
+        "с productName в package.json имя каталога данных другое: поправьте APP_DATA_DIR и тексты"
+    );
+    let appdata = std::env::temp_dir().join(format!("loadout-appdata-{}", std::process::id()));
+    let dir = appdata.join(name).join("backups").join("0000000000001-00");
+    fs::create_dir_all(&dir).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_loadout"))
+        .arg("prune")
+        .env("APPDATA", &appdata)
+        .output()
+        .unwrap();
+    let _ = fs::remove_dir_all(&appdata);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("удалено операций: 1"),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn broken_profiles_file_is_an_error_over_jsonrpc_and_is_set_aside_on_request() {
     let mut s = Server::start_writable();

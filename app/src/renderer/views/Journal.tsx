@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { JournalEntry, WriteLevel } from '../../shared/model'
-import { backupNotice } from '../../shared/backups'
+import { BACKUP_DIR_HINT, backupNotice } from '../../shared/backups'
 import { getLang, t } from '../../shared/i18n'
 import { levelOk } from './Inspector'
 
@@ -79,7 +79,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
       <h2>{t('Журнал', 'Journal')}</h2>
       <details className="small">
         <summary>{t('Где хранятся копии и что в них', 'Where the copies are kept and what is in them')}</summary>
-        <p className="mute small">{backupNotice('%APPDATA%\\Loadout\\backups')}</p>
+        <p className="mute small">{backupNotice(BACKUP_DIR_HINT)}</p>
         <div className="actions">
           <button disabled={busy !== null} onClick={() => void prune()}>{t('Очистить старые копии…', 'Clean up old copies…')}</button>
         </div>

@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// Каталог данных окна в `%APPDATA%`: Electron называет его по `name` из `app/package.json` (тест `serve.rs` сверяет).
+const APP_DATA_DIR: &str = "loadout-app";
+
 fn home_or_default(home: Option<PathBuf>) -> Option<PathBuf> {
     home.or_else(|| {
         std::env::var_os("USERPROFILE")
@@ -53,7 +56,7 @@ fn serve_main(args: &[String]) -> ExitCode {
 }
 
 /// `loadout prune [--backups КАТАЛОГ] [--lang ru|en]`: удаляет старые копии операций (оставляет последние 100 и не старше
-/// 90 дней, корзина не трогается). Без `--backups` берёт `%APPDATA%\Loadout\backups`, куда складывает копии окно.
+/// 90 дней, корзина не трогается). Без `--backups` берёт `%APPDATA%\loadout-app\backups`, куда складывает копии окно.
 fn prune_main(args: &[String]) -> ExitCode {
     let mut backups = None;
     let mut it = args.iter();
@@ -71,7 +74,7 @@ fn prune_main(args: &[String]) -> ExitCode {
         }
     }
     let Some(dir) = backups.or_else(|| {
-        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Loadout").join("backups"))
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(APP_DATA_DIR).join("backups"))
     }) else {
         eprintln!(
             "{}",

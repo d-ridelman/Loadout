@@ -43,11 +43,11 @@ plan → preview → hash lock (`base_sha`) → backup + manifest → temp file 
 
 ### Copies and secrets
 
-Operation backups and the Loadout trash keep client configs **in full and as plain text, including the `env` values of MCP servers (keys and tokens)**. They live in `%APPDATA%\Loadout\backups` (inside the Windows profile; Loadout sets no permissions of its own, access is inherited from the user profile) and are never sent anywhere. The dialog that enables writing (R1/R2) says so too.
+Operation backups and the Loadout trash keep client configs **in full and as plain text, including the `env` values of MCP servers (keys and tokens)**. They live in `%APPDATA%\loadout-app\backups` (the app's data folder is named after the package, `loadout-app`; inside the Windows profile; Loadout sets no permissions of its own, access is inherited from the user profile) and are never sent anywhere. The dialog that enables writing (R1/R2) says so too.
 
-- The last 100 operations not older than 90 days are kept. Older ones are deleted before a new write, by the “Clean up old copies” button in the journal and by the `loadout prune` command (defaults to `%APPDATA%\Loadout\backups`, another directory: `--backups`). Rolling back an already deleted operation is refused with a clear message.
+- The last 100 operations not older than 90 days are kept. Older ones are deleted before a new write, by the “Clean up old copies” button in the journal and by the `loadout prune` command (defaults to `%APPDATA%\loadout-app\backups`, another directory: `--backups`). Rolling back an already deleted operation is refused with a clear message.
 - The trash (`backups\trash`) is not cleaned by itself: it holds the only copy of a trashed MCP entry, which returns to the client file when turned on.
-- The uninstaller leaves the data alone. To remove everything, close Loadout and delete the `%APPDATA%\Loadout` folder (or just `%APPDATA%\Loadout\backups`). The cleanup command sits next to the app: `& "$env:LOCALAPPDATA\Programs\Loadout\resources\loadout.exe" prune`.
+- The uninstaller leaves the data alone. To remove everything, close Loadout and delete the `%APPDATA%\loadout-app` folder (or just `%APPDATA%\loadout-app\backups`). The cleanup command sits next to the app: `& "$env:LOCALAPPDATA\Programs\Loadout\resources\loadout.exe" prune`.
 
 | Add an MCP server | Install a plugin |
 |---|---|
