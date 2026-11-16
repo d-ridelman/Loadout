@@ -1167,6 +1167,38 @@ const cases = [
     return !/(^|[^\r])\n/.test(crlf) && crlf.includes('extra') && !/(context-toolkit|ctxkit):/.test(crlf) || `CRLF lost: ${JSON.stringify(crlf)}`;
   }],
 
+  // Hand edits made after setup survive the rollback: a key and hooks of the user's own (one of them inside the group
+  // of ours) in settings.json, lines before and after our block in CLAUDE.md. Only what setup added goes.
+  [true, () => {
+    const p = join(dir, 'hand-edits-test');
+    mkdirSync(p, { recursive: true });
+    const cj = join(p, 'c.json');
+    writeFileSync(cj, '{}');
+    const run = (...a) => spawnSync(exe, ['setup', '--profile', p, '--claude-json', cj, '--skip-version-check', ...a], { encoding: 'utf8' });
+    writeFileSync(join(p, 'settings.json'), JSON.stringify({ model: 'opus' }, null, 2));
+    writeFileSync(join(p, 'CLAUDE.md'), '# Mine\nkeep\n');
+    if (run('--with-rules').status !== 0) return 'setup failed';
+    const s = JSON.parse(readFileSync(join(p, 'settings.json'), 'utf8'));
+    const ours = (s.hooks?.PreToolUse ?? []).find((g) => g.hooks.some((h) => /context-toolkit/.test(h.command)));
+    if (!ours) return `no hook of ours after setup: ${JSON.stringify(s)}`;
+    ours.hooks.push({ type: 'command', command: 'my-own-pre-hook' });
+    s.hooks.SessionStart = [{ hooks: [{ type: 'command', command: 'my-own-start-hook' }] }];
+    s.myKey = { a: 1 };
+    writeFileSync(join(p, 'settings.json'), JSON.stringify(s, null, 2));
+    const md = readFileSync(join(p, 'CLAUDE.md'), 'utf8');
+    writeFileSync(join(p, 'CLAUDE.md'), `${md.replace('keep\n', 'keep\nadded before\n')}added after\n`);
+    const u = run('--uninstall');
+    if (u.status !== 0) return `uninstall: ${u.stderr}`;
+    const after = JSON.parse(readFileSync(join(p, 'settings.json'), 'utf8'));
+    const cmds = (ev) => (after.hooks?.[ev] ?? []).flatMap((g) => g.hooks.map((h) => h.command));
+    if (after.myKey?.a !== 1 || after.model !== 'opus') return `own keys lost: ${JSON.stringify(after)}`;
+    if (JSON.stringify(cmds('PreToolUse')) !== '["my-own-pre-hook"]' || JSON.stringify(cmds('SessionStart')) !== '["my-own-start-hook"]') return `own hooks lost: ${JSON.stringify(after.hooks)}`;
+    if (/context-toolkit|ctxkit/i.test(JSON.stringify(after))) return `ours left in settings.json: ${JSON.stringify(after)}`;
+    const mdAfter = readFileSync(join(p, 'CLAUDE.md'), 'utf8');
+    if (!mdAfter.includes('added before') || !mdAfter.includes('added after') || !mdAfter.startsWith('# Mine\nkeep\n') || /(context-toolkit|ctxkit):/.test(mdAfter)) return `CLAUDE.md: ${JSON.stringify(mdAfter)}`;
+    return true;
+  }],
+
   // Safe failure: broken or odd hook input is a silent pass (exit 0, empty stdout), never a block or a crash
   [true, () => {
     const raw = (input, args = [], env = {}) => {
