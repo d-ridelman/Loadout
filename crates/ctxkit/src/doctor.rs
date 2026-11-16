@@ -314,8 +314,8 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             Some(crate::dupes::describe(&repeats, lang)),
             Some(t(
                 lang,
-                "keep each rule in one place: delete one of the two lines (the one outside the ctxkit block, if the block already says it)",
-                "оставь одно место для каждого правила: удали одну из двух строк (вне блока ctxkit, если блок это уже говорит)",
+                "keep each rule in one place: when your line says what the block says, delete your copy (the ctxkit block is rewritten by `ctxkit setup --with-rules`, so a point of your own that belongs there goes into ctxkit.json → rules); when your line is an exception to the block's rule, keep it",
+                "оставь одно место для каждого правила: если твоя строка говорит то же, что блок, удали свою копию (блок ctxkit переписывает `ctxkit setup --with-rules`, поэтому свой пункт, которому место в блоке, держи в ctxkit.json → rules); если твоя строка — исключение из правила блока, оставь её",
             )),
         ));
     }

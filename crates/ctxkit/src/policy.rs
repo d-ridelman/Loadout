@@ -342,6 +342,14 @@ mod tests {
         let any =
             |cmd: &str| shell(&both, cmd, &[Dialect::Posix, Dialect::Ps], Lang::En, None).is_some();
         assert!(any("rm -rf x") && any("Remove-Item x -Recurse -Force") && !any("ls"));
+        // inside `cmd /c` too: the marked commit is denied, the deny wins over the ask of the same line
+        let in_cmd = r#"cmd /c "git commit -m \"Co-Authored-By: x\" & rd /s /q out""#;
+        assert!(matches!(run(&both, in_cmd), Some(Verdict::Deny(_))));
+        assert!(matches!(run(&only_ask, in_cmd), Some(Verdict::Ask(_))));
+        assert!(matches!(
+            run(&only_ask, "cmd /c rd /s /q out"),
+            Some(Verdict::Ask(_))
+        ));
     }
 
     #[test]

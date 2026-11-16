@@ -13,6 +13,8 @@ use std::path::Path;
 pub enum Dialect {
     Posix,
     Ps,
+    /// cmd.exe, only for the script of `cmd /c` (no `'` quotes, no `$(`, no `#` comments; `^` escapes).
+    Cmd,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -82,6 +84,14 @@ impl Lx {
         self.d == Dialect::Ps
     }
 
+    fn posix(&self) -> bool {
+        self.d == Dialect::Posix
+    }
+
+    fn cmd(&self) -> bool {
+        self.d == Dialect::Cmd
+    }
+
     /// Reads commands until the end of the text, or (inside `$(`) until the matching `)`.
     #[allow(unused_assignments)] // the `flush!` of the last `end_cmd!` resets a flag nobody reads
     fn commands(&mut self, stop_at_rparen: bool) -> Option<()> {
@@ -134,6 +144,12 @@ impl Lx {
                         self.bodies.push((id, body));
                     }
                 }
+                // in cmd.exe `;` separates arguments, not commands
+                ';' if self.cmd() => {
+                    word.push(';');
+                    in_word = true;
+                    self.i += 1;
+                }
                 ';' | '|' => {
                     end_cmd!();
                     self.i += 1;
@@ -167,12 +183,12 @@ impl Lx {
                         return Some(());
                     }
                 }
-                '#' if !in_word => {
+                '#' if !in_word && !self.cmd() => {
                     while self.peek(0).is_some_and(|c| c != '\n') {
                         self.i += 1;
                     }
                 }
-                '<' if !self.ps()
+                '<' if self.posix()
                     && self.peek(1) == Some('<')
                     && self.peek(2) != Some('<')
                     && (self.i == 0 || self.c[self.i - 1] != '<') =>
@@ -226,7 +242,13 @@ impl Lx {
     fn word_char(&mut self, word: &mut String) -> Option<()> {
         let ch = self.peek(0)?;
         match ch {
-            '\\' if !self.ps() => {
+            '^' if self.cmd() => {
+                if let Some(n) = self.peek(1).filter(|&n| n != '\n') {
+                    word.push(n);
+                }
+                self.i += 2;
+            }
+            '\\' if self.posix() => {
                 let next = self.peek(1);
                 match next {
                     None => {
@@ -255,7 +277,7 @@ impl Lx {
                 }
                 self.i += 2;
             }
-            '\'' => {
+            '\'' if !self.cmd() => {
                 self.i += 1;
                 loop {
                     let c = self.peek(0)?;
@@ -270,8 +292,8 @@ impl Lx {
                 self.i += 1;
                 self.double_quoted(word)?;
             }
-            '$' if self.peek(1) == Some('(') => self.substitution(word)?,
-            '`' => self.backticks(word)?,
+            '$' if self.peek(1) == Some('(') && !self.cmd() => self.substitution(word)?,
+            '`' if self.posix() => self.backticks(word)?,
             _ => {
                 word.push(ch);
                 self.i += 1;
@@ -288,7 +310,7 @@ impl Lx {
                     self.i += 1;
                     return Some(());
                 }
-                '\\' if !self.ps() => match self.peek(1)? {
+                '\\' if self.posix() => match self.peek(1)? {
                     '\n' => self.i += 2,
                     n @ ('"' | '\\' | '$' | '`') => {
                         word.push(n);
@@ -304,8 +326,8 @@ impl Lx {
                     word.push(self.peek(1)?);
                     self.i += 2;
                 }
-                '$' if self.peek(1) == Some('(') => self.substitution(word)?,
-                '`' => self.backticks(word)?,
+                '$' if self.peek(1) == Some('(') && !self.cmd() => self.substitution(word)?,
+                '`' if self.posix() => self.backticks(word)?,
                 _ => {
                     word.push(c);
                     self.i += 1;
@@ -452,7 +474,7 @@ impl Lx {
     }
 }
 
-/// Visits every simple command of `src` (and of the scripts passed to `bash -c` / `pwsh -Command`) until the
+/// Visits every simple command of `src` (and of the scripts passed to `bash -c` / `pwsh -Command` / `cmd /c`) until the
 /// visitor returns `Some`. A text that cannot be parsed has no commands.
 pub fn scan<T>(src: &str, d: Dialect, f: &mut dyn FnMut(&Cmd, Dialect) -> Option<T>) -> Option<T> {
     scan_depth(src, d, f, 0)
@@ -587,6 +609,34 @@ fn nested_script(c: &Cmd) -> Option<(String, Dialect)> {
             })?;
             let rest = &args[k + 1..];
             (!rest.is_empty()).then(|| (rest.join(" "), Dialect::Ps))
+        }
+        // `cmd /c ...`, `cmd /s /k "..."`; Git Bash users write `//c` so the switch is not taken for a path
+        "cmd" => {
+            let k = args.iter().position(|a| {
+                matches!(
+                    a.to_lowercase().as_str(),
+                    "/c" | "//c" | "/k" | "//k" | "/r"
+                )
+            })?;
+            // One argument is the script with its outer quotes stripped (as cmd does); several are rebuilt the
+            // way the Windows command line carries them: an argument with a space or `&|<>^` is quoted, so
+            // `cmd /c echo "a & b"` stays one echo.
+            let script = match &args[k + 1..] {
+                [] => return None,
+                [one] => one.clone(),
+                rest => rest
+                    .iter()
+                    .map(|a| {
+                        if a.contains(|c: char| c.is_whitespace() || "&|<>^".contains(c)) {
+                            format!("\"{a}\"")
+                        } else {
+                            a.clone()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            };
+            Some((script, Dialect::Cmd))
         }
         _ => None,
     }
@@ -856,6 +906,16 @@ mod tests {
         ));
         assert!(hit("powershell -c target", Dialect::Ps));
         assert!(hit("bash -c \"bash -c 'target'\"", Dialect::Posix));
+        // cmd.exe: `/c`, `//c` (Git Bash), `/k`; its own quoting (`'` is text, `^` escapes)
+        assert!(hit("cmd /c \"echo it's & target\"", Dialect::Posix));
+        assert!(hit("cmd //c target", Dialect::Posix));
+        assert!(hit("cmd.exe /d /k target", Dialect::Ps));
+        assert!(!hit("cmd /c echo target", Dialect::Posix));
+        assert!(!hit("cmd /c \"echo a ^& target\"", Dialect::Posix));
+        assert_eq!(
+            words("rd ^/s \"C:\\a b\" 'x' $y `q # z", Dialect::Cmd),
+            [v(&["rd", "/s", "C:\\a b", "'x'", "$y", "`q", "#", "z"])]
+        );
         // a heredoc fed to a shell is its script
         assert!(hit("bash <<'EOF'\ntarget\nEOF", Dialect::Posix));
         assert!(hit("sh -s <<EOF\necho a\ntarget\nEOF", Dialect::Posix));
