@@ -1473,3 +1473,256 @@ fn skill_install_refuses_bad_input_and_a_changed_skill() {
         .contains("изменился"));
     assert!(e.home.join(".claude/skills/plain/SKILL.md").is_file());
 }
+
+// ---- every write names the file and the key it really changes ----
+
+type Tree = std::collections::BTreeMap<String, Vec<u8>>;
+
+/// Every file under `root` with its bytes, by path relative to `root` with `/`.
+fn tree(root: &Path) -> Tree {
+    fn walk(root: &Path, dir: &Path, out: &mut Tree) {
+        for f in fs::read_dir(dir).unwrap().flatten() {
+            let p = f.path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else {
+                let rel = p.strip_prefix(root).unwrap().to_string_lossy();
+                out.insert(rel.replace('\\', "/"), fs::read(&p).unwrap());
+            }
+        }
+    }
+    let mut out = Tree::new();
+    walk(root, root, &mut out);
+    out
+}
+
+/// Files that differ between two trees (changed, added or removed).
+fn changed_files(a: &Tree, b: &Tree) -> Vec<String> {
+    let mut keys: Vec<&String> = a.keys().chain(b.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    keys.into_iter()
+        .filter(|k| a.get(*k) != b.get(*k))
+        .cloned()
+        .collect()
+}
+
+/// Dotted TOML key path (`plugins."p1@bundled".enabled`) as plain keys.
+fn toml_keys(pointer: &str) -> Vec<String> {
+    let (mut keys, mut cur, mut quoted, mut esc) = (Vec::new(), String::new(), false, false);
+    for c in pointer.chars() {
+        match (quoted, esc, c) {
+            (true, true, _) => {
+                cur.push(c);
+                esc = false;
+            }
+            (true, false, '\\') => esc = true,
+            (_, false, '"') => quoted = !quoted,
+            (false, _, '.') => keys.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    keys.push(cur);
+    keys
+}
+
+/// The value under the plan's key: a JSON pointer for JSON, a dotted path for TOML. `None` when the key is absent.
+fn value_at(file: &str, bytes: &[u8], pointer: &str) -> Option<serde_json::Value> {
+    let text = String::from_utf8_lossy(bytes);
+    let text = text.trim_start_matches('\u{feff}');
+    if file.ends_with(".toml") {
+        let t: toml::Table = text.parse().unwrap();
+        let mut v = serde_json::to_value(t).unwrap();
+        for k in toml_keys(pointer) {
+            v = v.get(&k)?.clone();
+        }
+        Some(v)
+    } else {
+        let v: serde_json::Value = serde_json::from_str(text).unwrap();
+        v.pointer(pointer).cloned()
+    }
+}
+
+/// Exactly one file changed, it is the one named by `file`, and (JSON, TOML) the value under `pointer` differs.
+fn assert_only(e: &Env, before: &Tree, after: &Tree, file: &str, pointer: &str, what: &str) {
+    let home = e.home.to_string_lossy().replace('\\', "/");
+    let rel = file
+        .strip_prefix("~/")
+        .or_else(|| file.strip_prefix(&format!("{home}/")))
+        .unwrap_or_else(|| panic!("{what}: the plan names a file outside home: {file}"));
+    assert_eq!(changed_files(before, after), vec![rel.to_owned()], "{what}");
+    if rel.ends_with(".json") || rel.ends_with(".toml") {
+        let at = |x: Option<&Vec<u8>>| x.and_then(|bytes| value_at(rel, bytes, pointer));
+        assert!(!pointer.is_empty(), "{what}: no key in the plan");
+        assert_ne!(
+            at(before.get(rel)),
+            at(after.get(rel)),
+            "{what}: nothing changed under {pointer} in {file}"
+        );
+    }
+}
+
+/// Applies `i` and checks the plan and its journal line against the disk.
+fn check_write(e: &Env, i: &Intent, what: &str) -> (Plan, Applied) {
+    let p = plan_s(e, i).unwrap_or_else(|err| panic!("{what}: {err}"));
+    let before = tree(&e.home);
+    let done =
+        wapply(&e.home, &e.store, i, &p.base_sha).unwrap_or_else(|err| panic!("{what}: {err}"));
+    let after = tree(&e.home);
+    if p.op == "installSkill" {
+        let dir = p.file.strip_prefix("~/").unwrap();
+        let ch = changed_files(&before, &after);
+        assert!(
+            !ch.is_empty() && ch.iter().all(|f| f.starts_with(dir)),
+            "{what}: {ch:?}"
+        );
+    } else {
+        assert_only(e, &before, &after, &p.file, &p.pointer, what);
+    }
+    let j = journal(&e.home, &e.store);
+    assert_eq!(
+        (&j[0].file, &j[0].pointer),
+        (&p.file, &p.pointer),
+        "{what}: journal"
+    );
+    (p, done)
+}
+
+/// Rolls back `op` and checks that only the file named in its journal line changed.
+fn check_rollback(e: &Env, op: &str, what: &str) {
+    let j = journal(&e.home, &e.store);
+    let line = j.iter().find(|x| x.id == op).unwrap();
+    let before = tree(&e.home);
+    rollback(&e.home, &e.store, op).unwrap_or_else(|err| panic!("{what}: rollback: {err}"));
+    let after = tree(&e.home);
+    if line.op == "installSkill" {
+        let dir = line.file.strip_prefix("~/").unwrap();
+        let ch = changed_files(&before, &after);
+        assert!(ch.iter().all(|f| f.starts_with(dir)), "{what}: {ch:?}");
+    } else {
+        let what = format!("{what}: rollback");
+        assert_only(e, &before, &after, &line.file, &line.pointer, &what);
+    }
+}
+
+#[test]
+fn every_write_changes_exactly_the_file_and_key_its_plan_and_journal_name() {
+    let scan = loadout_core::scan(&env().home);
+    let mut rows = 0;
+    // toggles: every switchable entry of every client, then back from the trash, then the rollback
+    for x in scan.entities.iter().filter(|x| x.can_toggle) {
+        let e = env();
+        let what = format!("toggle {:?} {:?} {}", x.client, x.kind, x.name);
+        let enable = matches!(x.state, State::Off | State::Unknown);
+        let p = plan_s(&e, &tog(&x.id, enable)).unwrap_or_else(|err| panic!("{what}: {err}"));
+        if p.noop {
+            continue;
+        }
+        let original = tree(&e.home);
+        let (p, first) = check_write(&e, &tog(&x.id, enable), &what);
+        rows += 1;
+        if p.trash == "out" {
+            // back from the trash: the key returns to the same place, the file is the original byte for byte
+            let (_, back) = check_write(&e, &tog(&x.id, true), &format!("{what}: back"));
+            assert_eq!(
+                changed_files(&original, &tree(&e.home)),
+                Vec::<String>::new(),
+                "{what}: the entry came back to another place"
+            );
+            check_rollback(&e, &back.op, &what);
+        } else {
+            check_rollback(&e, &first.op, &what);
+        }
+    }
+    // edits and copies of every editable MCP, additions to every client that takes them
+    let to = ["claude-code", "claude-desktop", "antigravity", "codex"];
+    for x in scan.entities.iter().filter(|x| x.can_edit) {
+        let e = env();
+        let edit = Intent::Edit {
+            entity: x.id.clone(),
+            command: "new-cmd".into(),
+            args: vec!["--x".into()],
+        };
+        let what = format!("edit {:?} {}", x.client, x.name);
+        if plan_s(&e, &edit).is_ok() {
+            let (_, a) = check_write(&e, &edit, &what);
+            check_rollback(&e, &a.op, &what);
+            rows += 1;
+        }
+        for c in to.iter().filter(|c| **c != x.client.slug()) {
+            let e = env();
+            let copy = Intent::Copy {
+                entity: x.id.clone(),
+                to: (*c).to_owned(),
+            };
+            if plan_s(&e, &copy).is_ok() {
+                let what = format!("copy {:?} {} -> {c}", x.client, x.name);
+                let (_, a) = check_write(&e, &copy, &what);
+                check_rollback(&e, &a.op, &what);
+                rows += 1;
+            }
+        }
+    }
+    for c in to {
+        let e = env();
+        let what = format!("add -> {c}");
+        let (_, a) = check_write(&e, &add_local(c, "tbl.added"), &what);
+        check_rollback(&e, &a.op, &what);
+        rows += 1;
+    }
+    // a profile bundle: the files its lines name are exactly the files that changed
+    let e = env();
+    let r = loadout_core::scan(&e.home);
+    let items = vec![
+        tog(&id_of(&r, Client::Codex, Kind::Plugin, "p1@bundled"), false),
+        tog(
+            &id_of(&r, Client::ClaudeCode, Kind::Plugin, "alpha@mp"),
+            false,
+        ),
+    ];
+    let bp = write::plan_batch(&e.home, Some(&e.store), &items);
+    let before = tree(&e.home);
+    let (batch, _) = wbatch(&e.home, &e.store, &items, &bp.batch_sha).unwrap();
+    let mut named: Vec<String> = bp
+        .plans
+        .iter()
+        .map(|p| p.file.strip_prefix("~/").unwrap().to_owned())
+        .collect();
+    named.sort();
+    assert_eq!(changed_files(&before, &tree(&e.home)), named, "bundle");
+    assert!(named.contains(&".claude/settings.json".to_owned()));
+    wrollback_batch(&e.home, &e.store, &batch).unwrap();
+    assert!(
+        changed_files(&before, &tree(&e.home)).is_empty(),
+        "bundle rollback"
+    );
+    // a skill: everything it writes lies under the directory the plan names
+    let e = env();
+    let st = "abcdefabcdefabcdefabcdefabcdef00";
+    stage(&e, st, &[("SKILL.md", "---\nname: tbl\n---\n")]);
+    let (_, a) = check_write(&e, &skill(st, "", "tbl"), "skill");
+    check_rollback(&e, &a.op, "skill");
+    assert!(rows > 15, "too few rows: {rows}");
+}
+
+/// The Claude Code plugin is found in `installed_plugins.json` but switched in `settings.json`: the plan and the
+/// inspector (`toggleAt`) name `settings.json` and `enabledPlugins`.
+#[test]
+fn claude_code_plugin_plan_names_settings_json_and_enabled_plugins() {
+    let e = env();
+    let r = loadout_core::scan(&e.home);
+    let x = r
+        .entities
+        .iter()
+        .find(|x| x.client == Client::ClaudeCode && x.kind == Kind::Plugin && x.name == "alpha@mp")
+        .unwrap();
+    assert_eq!(x.origin.file, "~/.claude/plugins/installed_plugins.json");
+    let shown = serde_json::to_value(x).unwrap();
+    assert_eq!(shown["toggleAt"]["file"], "~/.claude/settings.json");
+    assert_eq!(shown["toggleAt"]["pointer"], "/enabledPlugins/alpha@mp");
+    let p = plan(&e.home, &x.id, false).unwrap();
+    assert_eq!(
+        (p.file.as_str(), p.pointer.as_str()),
+        ("~/.claude/settings.json", "/enabledPlugins/alpha@mp")
+    );
+}

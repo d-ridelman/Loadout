@@ -8,7 +8,7 @@
 
 use crate::edit;
 use crate::mask;
-use crate::model::{Client, Entity, Format, Kind, ScanResult, Source, State, TargetKind};
+use crate::model::{Client, Entity, Format, Kind, ScanResult, Source, State, Target, TargetKind};
 use crate::tilde;
 use crate::trash;
 use crate::yaml_edit;
@@ -269,7 +269,47 @@ fn tokens_of(entry: &Value) -> Vec<String> {
     t
 }
 
-fn plan_for(e: &Entity, op: &str, level: &str, file: String, old: &[u8]) -> Plan {
+/// The place a write lands, as the plan, the journal and the inspector name it: the real file (`~` form) and the key in it.
+/// The entry's `origin` is where the scan found it, which for Claude Code plugins and connectors is another file.
+pub(crate) fn locate(
+    home: &Path,
+    file: &Path,
+    format: Format,
+    path: &[String],
+    entry: &Entity,
+) -> (String, String) {
+    let pointer = match format {
+        Format::Json => path
+            .iter()
+            .map(|k| format!("/{}", crate::esc_ptr(k)))
+            .collect(),
+        Format::Toml => path
+            .iter()
+            .map(|k| crate::codex::toml_key(k))
+            .collect::<Vec<_>>()
+            .join("."),
+        // DeepSeek's path is positional (operation and entry numbers): the scan pointer names the entry
+        Format::Yaml => entry.origin.pointer.clone(),
+    };
+    (tilde(home, file), pointer)
+}
+
+/// Where switching `e` writes. Coming back from the owner's stash lands in `mcpServers`, not in the stash key.
+pub(crate) fn toggle_place(home: &Path, e: &Entity, t: &Target) -> (String, String) {
+    match (&t.kind, t.path.last()) {
+        (TargetKind::Restore(Source::Stash(_)), Some(key)) => locate(
+            home,
+            &t.file,
+            t.format,
+            &["mcpServers".to_owned(), key.clone()],
+            e,
+        ),
+        _ => locate(home, &t.file, t.format, &t.path, e),
+    }
+}
+
+fn plan_for(e: &Entity, op: &str, level: &str, at: (String, String), old: &[u8]) -> Plan {
+    let (file, pointer) = at;
     Plan {
         op: op.to_owned(),
         level: level.to_owned(),
@@ -278,7 +318,7 @@ fn plan_for(e: &Entity, op: &str, level: &str, file: String, old: &[u8]) -> Plan
         kind: e.kind,
         name: e.name.clone(),
         file,
-        pointer: e.origin.pointer.clone(),
+        pointer,
         enable: true,
         from: String::new(),
         to: String::new(),
@@ -338,7 +378,7 @@ fn prep_toggle(
     let t = e.target.clone().ok_or_else(|| why_not(e))?;
     guard_file(home, &t.file)?;
     let (old, text) = read_text(&t.file)?;
-    let mut plan = plan_for(e, "toggle", "R1", e.origin.file.clone(), &old);
+    let mut plan = plan_for(e, "toggle", "R1", toggle_place(home, e, &t), &old);
     plan.enable = enable;
     let mut new = old.clone();
     let (mut trash, mut inverse) = (None, None);
@@ -389,14 +429,17 @@ fn prep_toggle(
                 plan.trash = "out".into();
                 let (key, parent) = t.path.split_last().ok_or_else(empty_path)?;
                 let stale = store.and_then(|s| trash::read(s, &e.id));
-                let mut anchor = None;
-                let (nt, raw) = match t.format {
+                let ((nt, raw), anchor) = match t.format {
                     Format::Yaml => {
                         let (oi, ei) = yaml_pos(&t.path)?;
-                        anchor = yaml_edit::anchor_of(&text, oi, ei)?;
-                        yaml_edit::cut(&text, oi, ei)?
+                        let anchor = yaml_edit::anchor_of(&text, oi, ei)?;
+                        (yaml_edit::cut(&text, oi, ei)?, anchor)
                     }
-                    _ => edit::cut_json(&text, &t.path)?,
+                    // the next key, so the return puts the entry back in its place, not at the end
+                    _ => (
+                        edit::cut_json(&text, &t.path)?,
+                        edit::next_key(&text, &t.path)?,
+                    ),
                 };
                 // A copy with this id in the trash while the entry is alive in the file is a trace of an earlier move (entry restored by hand).
                 // The same text can be overwritten (the earlier copy stays in the manifest), a different one cannot: it would be lost.
@@ -454,7 +497,7 @@ fn prep_toggle(
                 plan.from.clone()
             };
             if enable {
-                let (base, raw, live) = match src {
+                let (base, raw, live, before) = match src {
                     Source::Trash(tid) => {
                         let s = store.ok_or_else(|| {
                             crate::tr!(
@@ -496,20 +539,26 @@ fn prep_toggle(
                                 inverse_enable: Some(false),
                             });
                         }
+                        let before = it.anchor.clone();
                         trash = Some(TrashChange {
                             id: tid.clone(),
                             before: Some(it),
                             after: None,
                         });
-                        (text.clone(), raw, live)
+                        (text.clone(), raw, live, before)
                     }
                     Source::Stash(_) => {
+                        plan.notes.push(crate::tr!(
+                            "Запись переносится из {} в mcpServers того же файла.",
+                            "The entry moves from {} to mcpServers in the same file.",
+                            t.path.first().map_or("", String::as_str)
+                        ));
                         let (nt, raw) = edit::cut_json(&text, &t.path)?;
                         let key = t.path.last().ok_or_else(empty_path)?.clone();
-                        (nt, raw, vec!["mcpServers".to_owned(), key])
+                        (nt, raw, vec!["mcpServers".to_owned(), key], None)
                     }
                 };
-                new = edit::put_raw_json(&base, &live, &raw, false)
+                new = edit::put_raw_json(&base, &live, &raw, false, before.as_deref())
                     .map_err(cannot_restore)?
                     .into_bytes();
                 inverse = Some(false);
@@ -575,7 +624,8 @@ fn prep_edit(
     if !args.is_empty() || entry.get("args").is_some() {
         new_text = edit::put_value(s.format, &new_text, &key("args"), &json!(args), true)?;
     }
-    let mut plan = plan_for(e, "edit", "R2", e.origin.file.clone(), &old);
+    let at = locate(home, &s.file, s.format, &s.path, e);
+    let mut plan = plan_for(e, "edit", "R2", at, &old);
     plan.from = masked_line(&tokens_of(&entry));
     let mut now = vec![command.to_owned()];
     now.extend(args.iter().cloned());
@@ -717,13 +767,8 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
     }
     let new_text = edit::put_value(format, &text, &path, &value, false)?;
 
-    let mut plan = plan_for(e, "copy", "R2", tilde(home, &file), &old);
+    let mut plan = plan_for(e, "copy", "R2", locate(home, &file, format, &path, e), &old);
     plan.client = dest;
-    plan.pointer = match format {
-        Format::Json | Format::Yaml => format!("/{root}/{key}"),
-        Format::Toml if key.contains('.') => format!("{root}.\"{key}\""),
-        Format::Toml => format!("{root}.{key}"),
-    };
     plan.from = crate::tr!("нет записи", "no entry");
     let shown = {
         let t = tokens_of(&value);
@@ -902,6 +947,10 @@ fn prep_add(
             env_keys.join(", ")
         ));
     }
+    let pointer = match format {
+        Format::Toml => crate::codex::toml_key(root) + "." + &crate::codex::toml_key(name),
+        _ => format!("/{root}/{}", crate::esc_ptr(name)),
+    };
     let plan = Plan {
         op: "add".into(),
         level: "R2".into(),
@@ -910,11 +959,7 @@ fn prep_add(
         kind: Kind::Mcp,
         name: name.to_owned(),
         file: tilde(home, &file),
-        pointer: match format {
-            Format::Json | Format::Yaml => format!("/{root}/{name}"),
-            Format::Toml if name.contains('.') => format!("{root}.\"{name}\""),
-            Format::Toml => format!("{root}.{name}"),
-        },
+        pointer,
         enable: true,
         from: crate::tr!("нет записи", "no entry"),
         to: crate::tr!("добавить: {}", "add: {}", masked_line(&shown)),
@@ -943,8 +988,13 @@ fn prepare(
 ) -> Result<Prepared, String> {
     let mut p = prepare_raw(home, store, scan, i)?;
     // The plan and journal receive the typed command and copied arguments: the home directory path in them becomes `~`
-    for s in [&mut p.plan.from, &mut p.plan.to] {
+    for s in [&mut p.plan.from, &mut p.plan.to, &mut p.plan.file] {
         *s = crate::scrub_home(home, s);
+    }
+    // the key comes from the file, like the scan pointer: token-like words in it are hidden the same way (see `Entity::fs_named`)
+    p.plan.pointer = crate::scrub_home(home, &p.plan.pointer);
+    if !scan.entities.iter().any(|e| e.id == p.entity && e.fs_named) {
+        p.plan.pointer = mask::scrub_words(&p.plan.pointer);
     }
     for n in &mut p.plan.notes {
         *n = crate::scrub_home(home, n);
@@ -1607,7 +1657,12 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
                 kind: m.kind.clone(),
                 name: m.name.clone(),
                 pointer: m.pointer.clone(),
-                file: m.file.clone(),
+                // the written file itself: older lines named the file the entry was found in
+                file: if m.kind == "skill" || m.path.is_empty() {
+                    m.file.clone()
+                } else {
+                    crate::scrub_home(home, &tilde(home, Path::new(&m.path)))
+                },
                 from: relang(&m.from),
                 to: relang(&m.to),
                 rolled_back,

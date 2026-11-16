@@ -9,7 +9,7 @@ const CLIENT: Client = Client::Codex;
 const CONFIG: &str = "~/.codex/config.toml";
 
 /// A TOML key in the pointer: bare if it consists of `A-Za-z0-9_-`, otherwise quoted.
-fn toml_key(name: &str) -> String {
+pub(crate) fn toml_key(name: &str) -> String {
     if !name.is_empty()
         && name
             .chars()

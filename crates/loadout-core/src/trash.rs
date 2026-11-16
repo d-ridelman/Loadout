@@ -19,7 +19,8 @@ pub struct Item {
     /// `json` (the entry's value) or `yaml` (its lines in `cordis.patch.yml`, `parent`/`key` are the operation and entry numbers).
     #[serde(default = "json_format")]
     pub format: String,
-    /// `yaml` only: the `id` of the operation's neighbouring entry, which the return uses to make sure the place is the same.
+    /// `yaml`: the `id` of the operation's neighbouring entry, which the return uses to make sure the place is the same.
+    /// `json`: the key that followed the entry, which the return puts it back in front of (`None`: it was last, or an older item).
     #[serde(default)]
     pub anchor: Option<String>,
     pub client: String,

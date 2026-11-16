@@ -153,6 +153,10 @@ pub struct Entity {
     /// Which entry level is needed for switching: `R1` (flag) or `R2` (trash).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub toggle_level: Option<String>,
+    /// Where switching writes, when that is not `origin`: a Claude Code plugin is found in `installed_plugins.json`
+    /// but switched in `settings.json`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toggle_at: Option<Origin>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
@@ -226,6 +230,7 @@ impl Entity {
             can_toggle: false,
             toggle_why: None,
             toggle_level: None,
+            toggle_at: None,
         }
     }
 

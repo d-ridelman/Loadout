@@ -494,6 +494,15 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
         if !e.can_toggle {
             e.toggle_why = Some(write::why_not(e));
         }
+        // the same place the write plan will name; computed before the origin strings below are scrubbed
+        e.toggle_at = e
+            .target
+            .as_ref()
+            .map(|t| {
+                let (file, pointer) = write::toggle_place(home, e, t);
+                model::Origin { file, pointer }
+            })
+            .filter(|at| *at != e.origin);
         for s in [
             &mut e.name,
             &mut e.scope,
@@ -502,6 +511,13 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
             &mut e.origin.pointer,
         ] {
             scrub_str(s, &forms);
+        }
+        if let Some(at) = e.toggle_at.as_mut() {
+            scrub_str(&mut at.file, &forms);
+            scrub_str(&mut at.pointer, &forms);
+            if !e.fs_named {
+                at.pointer = mask::scrub_words(&at.pointer);
+            }
         }
         // Strings from files in names, scopes and pointers: words that look like a token are hidden.
         // Names from the file system (skill directories, the Codex directory) are left alone: they are not secrets, and hiding them merges entries.

@@ -63,7 +63,7 @@ pub fn set_bool(
                     return Err(crate::tr!("значение не булево", "value is not a boolean"))
                 }
                 Found::Missing { obj, depth } => {
-                    insert_json(obj_text, obj, &path[depth..], &value.to_string())?
+                    insert_json(obj_text, obj, &path[depth..], &value.to_string(), None)?
                 }
             })
         })?,
@@ -151,6 +151,16 @@ pub fn put_value(
 }
 
 fn put_json_text(body: &str, path: &[String], raw: &str, replace: bool) -> Result<String, String> {
+    put_json_text_before(body, path, raw, replace, None)
+}
+
+fn put_json_text_before(
+    body: &str,
+    path: &[String],
+    raw: &str,
+    replace: bool,
+    before: Option<&str>,
+) -> Result<String, String> {
     with_json(body, path, |t, found| match found {
         Found::Value(_) if !replace => Err(crate::tr!("такой ключ уже есть", "key already exists")),
         Found::Value(v) => {
@@ -166,21 +176,60 @@ fn put_json_text(body: &str, path: &[String], raw: &str, replace: bool) -> Resul
                 &t[r.end..]
             ))
         }
-        Found::Missing { obj, depth } => insert_json(t, obj, &path[depth..], raw),
+        Found::Missing { obj, depth } => {
+            // the neighbour counts only when the key goes straight into an existing object
+            let before = before.filter(|_| depth + 1 == path.len());
+            insert_json(t, obj, &path[depth..], raw, before)
+        }
     })
 }
 
 /// Inserts into JSON a value already written as text (from [`cut_json`]): key order and form are preserved.
+/// `before` is the key that followed the entry when it was cut out: the value goes back in front of it, and to the end
+/// of the object when that key is gone.
 pub fn put_raw_json(
     text: &str,
     path: &[String],
     raw: &str,
     replace: bool,
+    before: Option<&str>,
 ) -> Result<String, String> {
     serde_json::from_str::<serde_json::Value>(raw)
         .map_err(|_| crate::tr!("значение не JSON", "value is not JSON"))?;
     let (bom, body) = split_bom(text);
-    Ok(format!("{bom}{}", put_json_text(body, path, raw, replace)?))
+    Ok(format!(
+        "{bom}{}",
+        put_json_text_before(body, path, raw, replace, before)?
+    ))
+}
+
+/// The key right after `path` in its object (`None` for the last one): [`put_raw_json`] puts a cut entry back before it.
+pub fn next_key(text: &str, path: &[String]) -> Result<Option<String>, String> {
+    let (_, body) = split_bom(text);
+    let (key, parents) = path
+        .split_last()
+        .ok_or_else(|| crate::tr!("пустой путь", "empty path"))?;
+    let parsed = parse_to_ast(body, &CollectOptions::default(), &ParseOptions::default())
+        .map_err(|_| crate::tr!("не JSON", "not JSON"))?;
+    let Some(Value::Object(root)) = parsed.value else {
+        return Err(crate::tr!(
+            "корень JSON не объект",
+            "JSON root is not an object"
+        ));
+    };
+    let mut obj = &root;
+    for k in parents {
+        match find(obj, k).map(|p| &p.value) {
+            Some(Value::Object(o)) => obj = o,
+            _ => return Err(crate::tr!("нет такого пути", "no such path")),
+        }
+    }
+    let props = &obj.properties;
+    Ok(props
+        .iter()
+        .rposition(|p| name_of(&p.name) == key)
+        .and_then(|i| props.get(i + 1))
+        .map(|p| name_of(&p.name).to_owned()))
 }
 
 /// Cuts a property out of JSON and returns the new text and the value (text as in the file, indentation reset to zero).
@@ -379,6 +428,7 @@ fn insert_json(
     obj: &Object<'_>,
     keys: &[String],
     leaf: &str,
+    before: Option<&str>,
 ) -> Result<String, String> {
     let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let (start, end) = (obj.range().start, obj.range().end);
@@ -397,6 +447,10 @@ fn insert_json(
             } else {
                 ", ".to_owned()
             };
+            if let Some(next) = before.and_then(|b| find(obj, b)) {
+                let at = next.range.start;
+                return Ok(format!("{}{prop}{sep}{}", &text[..at], &text[at..]));
+            }
             let at = last.range.end;
             Ok(format!("{}{sep}{prop}{}", &text[..at], &text[at..]))
         }
@@ -607,6 +661,30 @@ mod tests {
         assert_eq!(sem(&cut), sem("{\"mcpServers\": {}}"));
         let back = put_value(Format::Json, &cut, &path, &sem(&raw), false).unwrap();
         assert_eq!(sem(&back), sem(one));
+    }
+
+    /// Cut and put back before the remembered neighbour: the very same bytes for every position, LF and CRLF.
+    /// A neighbour that is gone sends the entry to the end of the object.
+    #[test]
+    fn json_put_back_before_the_neighbour_keeps_the_key_order_byte_for_byte() {
+        for text in [S.to_owned(), S.replace('\n', "\r\n")] {
+            for name in ["a", "b", "c"] {
+                let path = p(&["mcpServers", name]);
+                let next = next_key(&text, &path).unwrap();
+                let (cut, raw) = cut_json(&text, &path).unwrap();
+                let back = put_raw_json(&cut, &path, &raw, false, next.as_deref()).unwrap();
+                assert_eq!(back, text, "{name}");
+            }
+        }
+        assert_eq!(
+            next_key(S, &p(&["mcpServers", "a"])).unwrap().as_deref(),
+            Some("b")
+        );
+        assert_eq!(next_key(S, &p(&["mcpServers", "c"])).unwrap(), None);
+        let (cut, raw) = cut_json(S, &p(&["mcpServers", "a"])).unwrap();
+        let (cut, _) = cut_json(&cut, &p(&["mcpServers", "b"])).unwrap();
+        let back = put_raw_json(&cut, &p(&["mcpServers", "a"]), &raw, false, Some("b")).unwrap();
+        assert!(back.find("\"c\"").unwrap() < back.find("\"a\"").unwrap());
     }
 
     #[test]
