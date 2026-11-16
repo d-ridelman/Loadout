@@ -89,6 +89,14 @@ export function RollbackDialog({ rows, batch, onClose, onDone }: RollbackProps) 
             <b>{r.name}</b> <span className="mute">· {clientName(r.client)}</span>
           </p>
           <Change file={r.file} pointer={r.pointer} from={r.to} to={r.rollbackTo ?? r.from} />
+          {/* a batch stops at the first line that cannot be rolled back: say so before, not after */}
+          {!r.canRollback && r.why ? (
+            <p className="s-broken">
+              {batch !== null
+                ? t(`Эта запись не откатится (${r.why}): пакет остановится на ней.`, `This entry will not roll back (${r.why}): the batch stops at it.`)
+                : t(`Эта запись не откатится: ${r.why}.`, `This entry will not roll back: ${r.why}.`)}
+            </p>
+          ) : null}
         </div>
       ))}
       <p className="mute small">
