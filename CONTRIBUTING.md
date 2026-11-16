@@ -6,14 +6,18 @@ Thanks for looking. Loadout writes into the config files of other programs, so t
 
 ## Set up
 
-Requirements: Windows 10/11, Rust (MSVC toolchain), Node.js.
+Requirements: Windows 11 x64 (Windows 10 is not tested), Rust 1.89 or newer with the MSVC toolchain, Node.js 22.12 or newer, `git`.
 
 ```bash
 git clone https://github.com/d-ridelman/Loadout.git
 cd Loadout
 cargo build --release
-cd app && npm install
+cd app && npm ci
 ```
+
+If `app/node_modules/electron/dist/electron.exe` is missing after `npm ci` (npm did not run the package install scripts), download it with `node node_modules/electron/install.js`.
+
+`npm run dev` opens the window in development mode. It reads your real configs and keeps its data in `%APPDATA%\loadout-app`, like an installed copy. To work on a copy, set `LOADOUT_HOME` (a home folder with client configs) and `LOADOUT_USER_DATA` (the window's data folder); the installed build ignores these variables.
 
 ## Before you push
 
@@ -26,10 +30,12 @@ cargo test
 cd app
 npm run typecheck
 npx vitest run
-npm run e2e          # builds the core and the window, drives the real app on fixtures
+npm run e2e          # builds the core, context-toolkit.exe and the window, drives the real app on fixtures (about 3 minutes)
 ```
 
-`crates/context-toolkit` also has `node crates/context-toolkit/tests/guard.test.mjs` (needs `cargo build --release` first).
+`crates/context-toolkit` also has `node crates/context-toolkit/tests/guard.test.mjs` (needs `cargo build --release` first). To check the packaged build: `npm run pack`, then `npm run pack:check` (it reads your real configs, read-only, level R0).
+
+The e2e run opens app windows and takes screenshots, so run it when the machine is idle. Window snapshots go to `state/`; commit only the ones that changed meaningfully and revert the rest (`git checkout -- state/`).
 
 ## Rules that matter
 
@@ -38,7 +44,8 @@ npm run e2e          # builds the core and the window, drives the real app on fi
 - **Edit surgically.** JSON by AST, TOML by `toml_edit`, YAML by lines: only the touched value changes, comments, key order and line endings stay.
 - **Secrets stay in the core.** Environment values and headers must not appear in a plan, a journal entry, an error message or the window. Names of keys are fine, values are not. A new field that could carry a value needs a masking test.
 - **Logic changes come with a test** that fails before the change and passes after it. Extra code that nobody asked for is a reason to push back.
-- **Screenshots**: `docs/screenshots/` are copies of e2e snapshots from `state/`. Refresh them when the UI changes visibly.
+- **README screenshots** (`docs/screenshots/`) are made by `npm run docs-shots` in `app/`: a 1920×1080 window on fixtures, in Russian and English. The script checks that the window shows neither the user name nor the real home path, but look at every screenshot yourself before committing it. Refresh them when the UI changes visibly.
+- **Vulnerabilities** are not discussed in issues: see [SECURITY.md](SECURITY.md).
 - No GitHub Actions or Dependabot are configured on purpose.
 
 ## Pull requests
