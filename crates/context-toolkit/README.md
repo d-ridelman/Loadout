@@ -149,7 +149,7 @@ The choice lives in `<profile>/context-toolkit.json` (`CLAUDE_CONFIG_DIR`, else 
 {
   "policies": { "commit_hygiene": true, "confirm_irreversible": true, "stray_files": true, "build_slots": 2 },
   "stray_patterns": ["draft*.md"],
-  "rules": ["Субагентам, которые правят код, задавай model: \"sonnet\", никогда haiku"]
+  "rules": ["Give subagents that edit code model: \"sonnet\", never haiku"]
 }
 ```
 
