@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Инструменты контекста лежат в Cargo-воркспейсе Loadout (crates/context-toolkit): lock и target — в корне репозитория
+# Context Toolkit lives in the Loadout Cargo workspace (crates/context-toolkit): the lock file and target are at the repository root
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$REPO_ROOT"
 cargo build --release -p context-toolkit
