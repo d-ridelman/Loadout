@@ -267,8 +267,8 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             None,
         ));
     }
-    match md {
-        Ok(md) if marker_span(&md).is_some() => {
+    match &md {
+        Ok(md) if marker_span(md).is_some() => {
             out.push(f("rules_block", "ok", t(lang, "ctxkit rules block present", "блок правил ctxkit есть"), None, None));
             let lines = md.lines().count();
             if lines > 200 || md.len() > 8192 {
@@ -296,6 +296,62 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             None,
             Some("ctxkit setup --with-rules"),
         )),
+    }
+    // The same rule in two places (the owner's sections and the ctxkit block): the copies drift apart.
+    let repeats = md
+        .as_ref()
+        .map(|m| crate::dupes::find(m))
+        .unwrap_or_default();
+    if !repeats.is_empty() {
+        out.push(f(
+            "rules_duplicate",
+            "warn",
+            t(
+                lang,
+                "CLAUDE.md says the same rule in two places: a model reads both copies and they drift apart",
+                "в CLAUDE.md одно и то же правило записано в двух местах: модель читает обе копии, и со временем они расходятся",
+            ),
+            Some(crate::dupes::describe(&repeats, lang)),
+            Some(t(
+                lang,
+                "keep each rule in one place: delete one of the two lines (the one outside the ctxkit block, if the block already says it)",
+                "оставь одно место для каждого правила: удали одну из двух строк (вне блока ctxkit, если блок это уже говорит)",
+            )),
+        ));
+    }
+
+    // ctxkit.json: silent when absent (the policies are opt-in); a broken file switches every policy off without a word.
+    let cfg_path = profile.join(crate::policy::FILE);
+    if cfg_path.exists() {
+        // strict UTF-8 like the hooks and setup: a file the hooks cannot read must not look fine here
+        let parsed = fs::read(&cfg_path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))
+            .and_then(|text| crate::policy::parse(&text));
+        out.push(match parsed {
+            Ok(c) => f(
+                "policies",
+                "info",
+                t(lang, "policies (ctxkit.json)", "политики (ctxkit.json)"),
+                Some(c.describe()),
+                None,
+            ),
+            Err(e) => f(
+                "policies",
+                "warn",
+                t(
+                    lang,
+                    "ctxkit.json does not parse: every policy is off and the hooks stay silent",
+                    "ctxkit.json не разбирается: все политики выключены, хуки молчат",
+                ),
+                Some(format!("{}: {e}", cfg_path.display())),
+                Some(t(
+                    lang,
+                    "fix the JSON or delete the file (setup refuses it as it is), then ctxkit setup --policy <list>",
+                    "поправь JSON или удали файл (setup в таком виде его не принимает), затем ctxkit setup --policy <list>",
+                )),
+            ),
+        });
     }
     out
 }
@@ -342,7 +398,9 @@ pub fn run_doctor(args: &[String]) -> i32 {
         eprintln!("ERR: cannot determine USERPROFILE / HOME directory");
         return 1;
     };
-    let findings = diagnose(&profile, detect_lang(args));
+    let lang = detect_lang(args);
+    crate::set_lang(lang); // the helpers shared with setup (parse errors of ctxkit.json, ...) speak the same language
+    let findings = diagnose(&profile, lang);
     let failed = findings.iter().any(|x| x.severity == "error");
     if json_out {
         let list: Vec<Value> = findings
@@ -552,6 +610,46 @@ mod tests {
         bytes.push(0xff);
         fs::write(d.join("CLAUDE.md"), bytes).unwrap();
         assert_eq!(sev(&diagnose(&d, Lang::En), "rules_block"), "ok");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn ctxkit_json_is_reported_only_when_present_and_a_broken_one_warns() {
+        let d = temp("ctxkit_doctor_policies");
+        let find = |text: Option<&str>| {
+            match text {
+                Some(t) => fs::write(d.join("ctxkit.json"), t).unwrap(),
+                None => {
+                    let _ = fs::remove_file(d.join("ctxkit.json"));
+                }
+            }
+            diagnose(&d, Lang::En)
+                .into_iter()
+                .find(|x| x.id == "policies")
+        };
+        assert!(find(None).is_none());
+        let ok = find(Some(
+            r#"{"policies":{"commit_hygiene":true,"build_slots":2}}"#,
+        ))
+        .unwrap();
+        assert_eq!(ok.severity, "info");
+        assert_eq!(ok.detail.unwrap(), "commit_hygiene, build_slots=2");
+        let bad = find(Some(r#"{"policies":{"commit_hygiene":"yes"}}"#)).unwrap();
+        assert_eq!(bad.severity, "warn");
+        assert!(bad.detail.unwrap().contains("commit_hygiene"));
+        assert_eq!(find(Some("{")).unwrap().severity, "warn");
+        // a file with a byte that is not UTF-8 is unreadable for the hooks, so it is not "fine" here either
+        fs::write(
+            d.join("ctxkit.json"),
+            b"{\"policies\":{\"stray_files\":true}} \xff",
+        )
+        .unwrap();
+        let utf = diagnose(&d, Lang::En)
+            .into_iter()
+            .find(|x| x.id == "policies")
+            .unwrap();
+        assert_eq!(utf.severity, "warn");
+        assert!(utf.fix.unwrap().contains("delete the file"));
         let _ = fs::remove_dir_all(&d);
     }
 

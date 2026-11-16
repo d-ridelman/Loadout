@@ -29,7 +29,34 @@ const day = {
 }
 
 describe('ctxkit: параметры setup', () => {
-  const ok = { withRules: true, desktop: false, antigravity: true, dsh: false, noStopGate: false, lang: 'ru', advisor: 'fable', mainModel: 'keep', effort: 'keep' }
+  const ok = { withRules: true, desktop: false, antigravity: true, dsh: false, noStopGate: false, lang: 'ru', advisor: 'fable', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 }
+
+  it('политики: перечисления и число 1–8 проверяются строго, текст пользователя в аргументы не попадает', () => {
+    for (const m of ['keep', 'on', 'off']) expect(parseSetupOptions({ ...ok, policyMode: m }).policyMode).toBe(m)
+    for (const m of ['ON', 'none', '--policy x', '', undefined, true]) expect(() => parseSetupOptions({ ...ok, policyMode: m })).toThrow()
+    for (const n of [1, 2, 8]) expect(parseSetupOptions({ ...ok, buildSlotsN: n }).buildSlotsN).toBe(n)
+    for (const n of [0, 9, 2.5, -1, '2', '2,stray-files', NaN, Infinity, undefined, null]) expect(() => parseSetupOptions({ ...ok, buildSlotsN: n })).toThrow()
+    for (const k of ['commitHygiene', 'confirmIrreversible', 'strayFiles', 'buildSlots']) {
+      expect(() => parseSetupOptions({ ...ok, [k]: 'yes' })).toThrow()
+      expect(() => parseSetupOptions({ ...ok, [k]: undefined })).toThrow()
+    }
+  })
+
+  it('--policy: «не менять» флаг не передаёт; «включить выбранные» — перечень из закрытого списка; «выключить все» и пустой выбор — none', () => {
+    const args = (o: object) => setupArgs(parseSetupOptions({ ...ok, ...o }), true)
+    expect(args({})).not.toContain('--policy')
+    // выбранное при «не менять» не отправляется
+    expect(args({ commitHygiene: true, buildSlots: true })).not.toContain('--policy')
+    const val = (o: object) => {
+      const a = args(o)
+      return a[a.indexOf('--policy') + 1]
+    }
+    expect(val({ policyMode: 'on', commitHygiene: true, confirmIrreversible: true, strayFiles: true, buildSlots: true, buildSlotsN: 3 })).toBe('commit-hygiene,confirm-irreversible,stray-files,build-slots=3')
+    expect(val({ policyMode: 'on', strayFiles: true, buildSlots: true })).toBe('stray-files,build-slots=2')
+    expect(val({ policyMode: 'on', commitHygiene: true })).toBe('commit-hygiene')
+    expect(val({ policyMode: 'on' })).toBe('none')
+    expect(val({ policyMode: 'off', commitHygiene: true })).toBe('none')
+  })
 
   it('принимает только булевы флаги и перечисления', () => {
     expect(parseSetupOptions(ok)).toEqual(ok)
@@ -69,6 +96,7 @@ describe('ctxkit: параметры setup', () => {
     expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(5) // профиль, пресеты Desktop, hooks.json Antigravity, каталог DSH, .claude.json
     // ни одного значения из страницы не попадает в аргументы как есть, кроме перечислений
     expect(a.every((x) => x.startsWith('--') || ['setup', 'ru', 'fable'].includes(x))).toBe(true)
+    expect(setupArgs(parseSetupOptions({ ...ok, policyMode: 'on', commitHygiene: true }), true).filter((x) => !x.startsWith('--'))).toEqual(['setup', 'ru', 'fable', 'commit-hygiene'])
   })
 })
 

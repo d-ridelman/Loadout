@@ -88,3 +88,14 @@ export function stopGateOff(d: CtxkitDoctor): boolean | null {
   const g = sev('stop_gate')
   return g === 'ok' ? false : g === 'info' ? true : null
 }
+
+/**
+ * Подпись «сейчас включены: …» для блока «Защиты» по находке `policies` (она есть, только если есть ctxkit.json):
+ * `{ text, broken }` или `null`, если файла нет. Только подпись, в форму и в аргументы ничего отсюда не попадает.
+ */
+export function policiesNow(d: CtxkitDoctor): { text: string; broken: boolean } | null {
+  const f = d.findings.find((x) => x.id === 'policies')
+  if (!f) return null
+  if (f.severity === 'warn' || f.severity === 'error') return { text: f.message, broken: true }
+  return { text: f.detail ?? '', broken: false }
+}

@@ -50,6 +50,7 @@ CLI args / stdin JSON
 | Tools | `Read`, `Write`, `Edit`, `MultiEdit`, `Bash`, `PowerShell` | `read_file`, `write_file`, `edit_file`, `run_command` |
 | `PreToolUse` deny | `hookSpecificOutput.permissionDecision = "deny"` | `{"decision": "deny", "reason": "..."}` |
 | `PreToolUse` allow | Empty `stdout` | `{"decision": "ask"}` |
+| `PreToolUse` ask (policies `confirm_irreversible`, `stray_files`, see the README) | `hookSpecificOutput.permissionDecision = "ask"` + `permissionDecisionReason` | `{"decision": "ask", "reason": "..."}` |
 | `PostToolUse` | Syntax validation and `{"decision": "block"}` | Returns `{}` only (post-write blocking not supported) |
 
 In Antigravity's hook contract, `"decision": "allow"` auto-approves tool execution and bypasses user confirmation policies. On clean checks, `ctxkit` always emits `{"decision": "ask"}` so Antigravity enforces its own built-in security policy.

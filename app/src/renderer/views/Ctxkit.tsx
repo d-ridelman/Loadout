@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
+import { MAX_BUILD_SLOTS } from '../../shared/model'
 import { getLang, t } from '../../shared/i18n'
-import { chars, daysDesc, pct, segments, stopGateOff, summarize } from '../ctxkit-stats'
+import { chars, daysDesc, pct, policiesNow, segments, stopGateOff, summarize } from '../ctxkit-stats'
 
 // t() только во время рендера: язык выбирается до первой отрисовки, а не при импорте модуля
 const sev = (s: FindingSeverity): { ch: string; label: string; cls: string } =>
@@ -25,7 +26,11 @@ const copyText = (k: CtxkitStatus['hook']): string =>
 const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'var(--orange)', other: 'var(--deco)' } as const
 
 /** Язык хуков по умолчанию — язык интерфейса (потом настройка независима); функция, а не константа: язык выбирается после импорта. */
-const defaults = (): SetupOptions => ({ withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: getLang(), advisor: 'keep', mainModel: 'keep', effort: 'keep' })
+const defaults = (): SetupOptions => ({
+  withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: getLang(), advisor: 'keep', mainModel: 'keep', effort: 'keep',
+  // «Защиты»: по умолчанию ctxkit.json не трогается; отмеченное считается, только если выбрать «Включить выбранные»
+  policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2,
+})
 
 /** Что сейчас делает ctxkit: определяет, какая кнопка занята. */
 type Busy = 'preview' | 'apply' | 'undoPreview' | 'undo'
@@ -194,8 +199,49 @@ export function Ctxkit({ level, onNotice }: Props) {
             <label><input type="checkbox" checked={opts.antigravity} onChange={(e) => change({ antigravity: e.target.checked })} /> Antigravity</label>
             <label><input type="checkbox" checked={opts.dsh} onChange={(e) => change({ dsh: e.target.checked })} /> DeepSeek Harness</label>
           </fieldset>
+          <fieldset className="choices" aria-describedby="ctx-policy-hint">
+            <legend className="mute small">{t('Защиты (ctxkit.json)', 'Safeguards (ctxkit.json)')}</legend>
+            <div className="field">
+              <label htmlFor="ctx-policy">{t('Политики', 'Policies')}</label>
+              <select id="ctx-policy" value={opts.policyMode} onChange={(e) => change({ policyMode: e.target.value as SetupOptions['policyMode'] })}>
+                <option value="keep">{t('Не менять (по умолчанию)', 'Keep as is (default)')}</option>
+                <option value="on">{t('Включить выбранные', 'Turn on the selected')}</option>
+                <option value="off">{t('Выключить все', 'Turn all off')}</option>
+              </select>
+              <span id="ctx-policy-hint" className="mute small">
+                {t(
+                  'Хуки сами ничего из этого не включают: политики живут в ctxkit.json профиля. «Включить выбранные» оставляет включёнными ровно отмеченные ниже, остальные выключает; ключи файла, написанные вами, сохраняются. Предпросмотр покажет по строке на каждую политику (выкл -> вкл) на языке, выбранном ниже.',
+                  'Hooks turn none of this on by themselves: the policies live in the profile ctxkit.json. “Turn on the selected” leaves exactly the ticked ones below on and turns the rest off; keys of the file you wrote yourself are kept. The preview shows one line per policy (off -> on) in the language chosen below.',
+                )}
+                {(() => {
+                  const now = doctor.status === 'ready' ? policiesNow(doctor.data) : null
+                  if (!now) return doctor.status === 'ready' ? ` ${t('Сейчас: ctxkit.json нет, все политики выключены.', 'Now: there is no ctxkit.json, every policy is off.')}` : ''
+                  return now.broken ? ` ${t('Сейчас:', 'Now:')} ${now.text}` : ` ${t('Сейчас включены:', 'Currently on:')} ${now.text}`
+                })()}
+              </span>
+            </div>
+            <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.commitHygiene} onChange={(e) => change({ commitHygiene: e.target.checked })} /> {t('Гигиена коммитов: хук блокирует коммит со строками Co-Authored-By и Generated with', 'Commit hygiene: the hook blocks a commit with Co-Authored-By or Generated with lines')}</label>
+            <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.confirmIrreversible} onChange={(e) => change({ confirmIrreversible: e.target.checked })} /> {t('Подтверждение необратимого: хук спрашивает перед git push, reset --hard, rm -rf и подобным', 'Confirm irreversible commands: the hook asks before git push, reset --hard, rm -rf and the like')}</label>
+            <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.strayFiles} onChange={(e) => change({ strayFiles: e.target.checked })} /> {t('Неожиданные файлы-отчёты: хук спрашивает перед записью report*.md, summary*.md и подобных в корень проекта', 'Stray report files: the hook asks before a report*.md, summary*.md or similar is written at the project root')}</label>
+            <div className="inline-row">
+              <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.buildSlots} onChange={(e) => change({ buildSlots: e.target.checked })} /> {t('Лимит параллельных сборок: ctxkit check запускает не больше N сборок и тестов одновременно', 'Parallel build limit: ctxkit check runs at most N builds and tests at once')}</label>
+              <input
+                type="number"
+                min={1}
+                max={MAX_BUILD_SLOTS}
+                step={1}
+                value={opts.buildSlotsN}
+                disabled={opts.policyMode !== 'on' || !opts.buildSlots}
+                aria-label={t('Лимит параллельных сборок, от 1 до 8', 'Parallel build limit, 1 to 8')}
+                onChange={(e) => {
+                  const n = Math.trunc(Number(e.target.value))
+                  if (Number.isFinite(n)) change({ buildSlotsN: Math.min(MAX_BUILD_SLOTS, Math.max(1, n)) })
+                }}
+              />
+            </div>
+          </fieldset>
           <div className="field">
-            <label htmlFor="ctx-lang">{t('Язык подсказок и хуков', 'Language of prompts and hooks')}</label>
+            <label htmlFor="ctx-lang">{t('Язык подсказок, хуков и вывода ctxkit', 'Language of prompts, hooks and ctxkit output')}</label>
             <select id="ctx-lang" value={opts.lang} onChange={(e) => change({ lang: e.target.value as SetupOptions['lang'] })}>
               <option value="ru">{t('русский', 'Russian')}</option>
               <option value="en">{t('английский', 'English')}</option>

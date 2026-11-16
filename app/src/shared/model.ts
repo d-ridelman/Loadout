@@ -222,7 +222,19 @@ export interface SetupOptions {
   mainModel: 'keep' | 'sonnet' | 'opus' | 'haiku'
   /** 'keep' — `--effort` не передаётся: effort остаётся как есть */
   effort: 'keep' | 'low' | 'medium' | 'high' | 'xhigh'
+  /** 'keep' — `--policy` не передаётся (ctxkit.json не трогается); 'on' — включены ровно отмеченные политики ниже; 'off' — `--policy none` */
+  policyMode: 'keep' | 'on' | 'off'
+  /** Политики «Защиты» (учитываются при policyMode 'on'): гигиена коммитов, подтверждение необратимого, неожиданные файлы-отчёты, лимит сборок */
+  commitHygiene: boolean
+  confirmIrreversible: boolean
+  strayFiles: boolean
+  buildSlots: boolean
+  /** Лимит параллельных сборок, 1–8 (при buildSlots) */
+  buildSlotsN: number
 }
+
+/** Верхняя граница лимита сборок в окне. ctxkit сам принимает до 64 (`MAX_SLOTS`): окно ограничивает себя, и уже записанное в ctxkit.json значение выше 8 оно только понижает. */
+export const MAX_BUILD_SLOTS = 8
 
 /** Что окно просит убрать вместе с настройками Claude Code: интеграции, которые `setup` поставил по галочкам. */
 export interface UninstallOptions {

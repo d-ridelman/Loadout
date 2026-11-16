@@ -14,6 +14,11 @@ if (!existsSync(exe)) {
   process.exit(2);
 }
 
+// Hooks and `ctxkit check` read <profile>/ctxkit.json: no run may reach the real ~/.claude, so every child
+// gets an empty profile (a case that needs policies passes its own CLAUDE_CONFIG_DIR).
+const isoProfile = mkdtempSync(join(tmpdir(), 'cg-prof-'));
+process.env.CLAUDE_CONFIG_DIR = isoProfile;
+
 const B = '\\';
 const runHook = (payload, extraArgs = [], extraEnv = {}) => {
   const env = { ...process.env, ...extraEnv };
@@ -108,7 +113,171 @@ writeFileSync(fewLongLines, Array.from({ length: 10 }, () => 'x'.repeat(30000)).
 const midFile = join(dir, 'mid.txt');
 writeFileSync(midFile, Array.from({ length: 100 }, () => 'x'.repeat(300)).join('\n'));
 
+// Policies (ctxkit.json): a profile with the given config; `pol` runs a hook against it and returns the decision
+const polProfile = (name, cfg) => {
+  const p = join(dir, `pol-${name}`);
+  mkdirSync(p, { recursive: true });
+  writeFileSync(join(p, 'ctxkit.json'), typeof cfg === 'string' ? cfg : JSON.stringify(cfg));
+  return p;
+};
+const decisionOf = (out) => {
+  if (out === '') return '';
+  const j = JSON.parse(out); // exactly one JSON document on stdout
+  return j.hookSpecificOutput?.permissionDecision ?? j.decision;
+};
+const pol = (profile, tool_name, tool_input, { args = [], env = {}, cwd } = {}) =>
+  decisionOf(runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input, ...(cwd ? { cwd } : {}) }, args, { CLAUDE_CONFIG_DIR: profile, ...env }));
+const polReason = (profile, tool_name, tool_input, extra = {}) => {
+  const out = runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input, ...(extra.cwd ? { cwd: extra.cwd } : {}) }, extra.args ?? [], { CLAUDE_CONFIG_DIR: profile, ...(extra.env ?? {}) });
+  const j = JSON.parse(out);
+  return j.hookSpecificOutput?.permissionDecisionReason ?? j.reason;
+};
+const P = (name, policies, extra = {}) => polProfile(name, { policies, ...extra });
+const COAUTH = 'git commit -m "fix: x" -m "Co-Authored-By: Claude <c@x>"';
+
 const cases = [
+  // Policy commit_hygiene
+  [true, () => {
+    const on = P('commit', { commit_hygiene: true });
+    if (pol(on, 'Bash', { command: COAUTH }) !== 'deny') return 'deny expected';
+    if (pol(on, 'PowerShell', { command: "git commit -m @'\nfix\n\nCo-Authored-By: x\n'@" }) !== 'deny') return 'ps here-string';
+    if (pol(on, 'Bash', { command: "git commit -m \"$(cat <<'EOF'\nfix \"q\"\n\nGenerated with Claude Code\nEOF\n)\"" }) !== 'deny') return 'heredoc';
+    if (pol(on, 'Bash', { command: 'git commit -m "fix: clean"' }) !== '') return 'clean commit must pass silently';
+    if (pol(on, 'Bash', { command: 'git commit --amend --no-edit' }) !== '') return 'amend --no-edit';
+    if (pol(on, 'Bash', { command: 'git log --grep "Co-Authored-By"' }) !== '') return 'git log';
+    if (!polReason(on, 'Bash', { command: COAUTH }).includes('Remove those lines')) return 'en text';
+    if (!polReason(on, 'Bash', { command: COAUTH }, { env: { CTXKIT_LANG: 'ru' } }).includes('Убери эти строки из сообщения коммита')) return 'ru text';
+    // the other clients: DeepSeek Harness tool names, Antigravity run_command
+    if (pol(on, 'bash', { command: COAUTH }, { args: ['--dsh'] }) !== 'deny') return 'dsh';
+    const agy = JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine: COAUTH } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on }));
+    if (agy.decision !== 'deny' || !agy.reason.includes('Remove those lines')) return 'agy';
+    return true;
+  }],
+  // ...off by default, and a missing or broken ctxkit.json also means off
+  [true, () => {
+    if (pol(isoProfile, 'Bash', { command: COAUTH }) !== '') return 'no file';
+    if (pol(P('commit-off', { commit_hygiene: false }), 'Bash', { command: COAUTH }) !== '') return 'off';
+    if (pol(polProfile('commit-broken', '{"policies":'), 'Bash', { command: COAUTH }) !== '') return 'broken json';
+    if (pol(P('commit-badtype', { commit_hygiene: 'yes' }), 'Bash', { command: COAUTH }) !== '') return 'bad type';
+    if (pol(P('commit', { commit_hygiene: true }), 'Bash', { command: COAUTH }, { env: { CTXKIT_GUARD: '0' } }) !== '') return 'CTXKIT_GUARD=0';
+    const agyOff = JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine: COAUTH } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: isoProfile }));
+    return agyOff.decision === 'ask' && agyOff.reason === undefined;
+  }],
+
+  // Policy confirm_irreversible: "ask" for every client, a deny from commit_hygiene wins, one JSON on stdout
+  [true, () => {
+    const on = P('irrev', { confirm_irreversible: true });
+    const ask = (tool, command, o = {}) => pol(on, tool, { command }, o);
+    for (const c of ['git push', 'git push --force origin main', 'git reset --hard', 'git clean -fd', 'git branch -D x', 'git checkout -- .', 'git restore .', 'rm -rf build', 'rm -r -f build', 'cd a && git push']) {
+      if (ask('Bash', c) !== 'ask') return `bash ask: ${c}`;
+    }
+    for (const c of ['Remove-Item C:\\x -Recurse -Force', 'Remove-Item C:\\', 'git push -f']) {
+      if (ask('PowerShell', c) !== 'ask') return `ps ask: ${c}`;
+    }
+    for (const c of ['git status', 'git push --dry-run', 'git stash push', 'git restore --staged .', 'rm -r dir', 'echo "git push"', 'git commit -m "git push --force"']) {
+      if (ask('Bash', c) !== '') return `bash quiet: ${c}`;
+    }
+    // cmd switches (`/q`, `/s`) are not drive roots in PowerShell, nor through Antigravity's both-shells pass
+    for (const c of ['del /q file.txt', 'rd /s /q build', 'Remove-Item /f x']) {
+      if (ask('PowerShell', c) !== '') return `ps quiet: ${c}`;
+    }
+    const agyQuiet = (CommandLine) => JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on })).reason === undefined;
+    if (!agyQuiet('del /q file.txt') || !agyQuiet('rd /s /q build') || !agyQuiet('Remove-Item /f x')) return 'agy quiet';
+    const raw = JSON.parse(runHook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push --force' } }, [], { CLAUDE_CONFIG_DIR: on }));
+    if (raw.hookSpecificOutput.hookEventName !== 'PreToolUse' || raw.hookSpecificOutput.permissionDecision !== 'ask' || !raw.hookSpecificOutput.permissionDecisionReason.includes('git push --force')) return 'ask format';
+    if (!polReason(on, 'Bash', { command: 'git reset --hard' }, { env: { CTXKIT_LANG: 'ru' } }).includes('Подтверди запуск')) return 'ru';
+    if (ask('bash', 'git push', { args: ['--dsh'] }) !== 'ask' || ask('pwsh', 'Remove-Item x -Recurse -Force', { args: ['--dsh'] }) !== 'ask') return 'dsh';
+    const agy = (CommandLine) => JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on }));
+    const a = agy('git push');
+    if (a.decision !== 'ask' || !a.reason?.includes('git push') || agy('Remove-Item x -Recurse -Force').decision !== 'ask' || agy('ls').reason !== undefined) return 'agy';
+    // deny (commit hygiene) beats ask, and only one answer is printed
+    const both = P('both', { confirm_irreversible: true, commit_hygiene: true });
+    if (pol(both, 'Bash', { command: 'git commit -m "Co-Authored-By: x" && git push' }) !== 'deny') return 'deny beats ask';
+    // off by default; broken file; the emergency switch
+    return pol(isoProfile, 'Bash', { command: 'git push' }) === '' && pol(polProfile('irrev-broken', '{'), 'Bash', { command: 'git push' }) === '' && pol(on, 'Bash', { command: 'git push' }, { env: { CTXKIT_GUARD: 'off' } }) === '';
+  }],
+
+  // Policy build_slots: three parallel `ctxkit check` runs, two slots; a killed holder frees its slot
+  [true, () => {
+    const root = join(dir, 'slots-test');
+    const tmp = join(root, 'tmp');
+    mkdirSync(tmp, { recursive: true });
+    const worker = join(root, 'worker.mjs');
+    writeFileSync(worker, [
+      "import { writeFileSync, readdirSync, rmSync, appendFileSync, mkdirSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      'const d = process.env.SLOT_TEST_DIR; mkdirSync(d, { recursive: true });',
+      "const me = join(d, `run-${process.pid}`); writeFileSync(me, '');",
+      "appendFileSync(join(d, 'seen.txt'), readdirSync(d).filter((f) => f.startsWith('run-')).length + '\\n');",
+      'await new Promise((r) => setTimeout(r, Number(process.env.SLOT_HOLD_MS ?? 800)));',
+      'rmSync(me, { force: true });',
+    ].join('\n'));
+    const driver = join(root, 'driver.mjs');
+    writeFileSync(driver, [
+      "import { spawn } from 'node:child_process';",
+      'const [exe, worker, n] = process.argv.slice(2);',
+      "const runs = Array.from({ length: +n }, () => new Promise((res) => { const c = spawn(exe, ['check', 'node', worker], { stdio: ['ignore', 'pipe', 'pipe'] }); let err = ''; let out = ''; c.stdout.on('data', (d) => (out += d)); c.stderr.on('data', (d) => (err += d)); c.on('close', (code) => res({ code, err, out })); }));",
+      'console.log(JSON.stringify(await Promise.all(runs)));',
+    ].join('\n'));
+    const env = (profile, extra = {}) => ({ ...process.env, CTXKIT_LANG: 'en', CLAUDE_CONFIG_DIR: profile, TMP: tmp, TEMP: tmp, TMPDIR: tmp, SLOT_TEST_DIR: join(root, 'seen'), ...extra });
+    const slotsProfile = P('slots', { build_slots: 2 });
+    const r = spawnSync('node', [driver, exe, worker, '3'], { encoding: 'utf8', env: env(slotsProfile) });
+    if (r.status !== 0) return `driver: ${r.stderr}`;
+    const runs = JSON.parse(r.stdout);
+    if (!runs.every((x) => x.code === 0 && x.out.startsWith('OK'))) return `runs failed: ${r.stdout}`;
+    const seen = readFileSync(join(root, 'seen', 'seen.txt'), 'utf8').trim().split('\n').map(Number);
+    if (Math.max(...seen) !== 2) return `limit 2, saw ${seen}`;
+    if (!runs.some((x) => x.err.includes('waiting for a build slot (2 busy)'))) return `no wait message: ${r.stdout}`;
+    // the policy off: all three run together
+    rmSync(join(root, 'seen'), { recursive: true, force: true });
+    const free = spawnSync('node', [driver, exe, worker, '3'], { encoding: 'utf8', env: env(isoProfile) });
+    const seenFree = readFileSync(join(root, 'seen', 'seen.txt'), 'utf8').trim().split('\n').map(Number);
+    if (free.status !== 0 || Math.max(...seenFree) !== 3 || free.stdout.includes('waiting for a build slot')) return `off must not limit: ${seenFree}`;
+    // a killed holder frees its slot: limit 1, the first run is killed while it holds it
+    const one = P('slots-one', { build_slots: 1 });
+    const killer = join(root, 'killer.mjs');
+    writeFileSync(killer, [
+      "import { spawn } from 'node:child_process'; import { existsSync, readdirSync } from 'node:fs'; import { join } from 'node:path';",
+      'const [exe, worker, seen] = process.argv.slice(2);',
+      "const first = spawn(exe, ['check', 'node', worker], { stdio: 'ignore', env: { ...process.env, SLOT_HOLD_MS: '6000' } });",
+      "for (let i = 0; i < 100 && !(existsSync(seen) && readdirSync(seen).some((f) => f.startsWith('run-'))); i++) await new Promise((r) => setTimeout(r, 100));",
+      'first.kill();',
+      'const t0 = Date.now();',
+      "const second = spawn(exe, ['check', 'node', worker], { stdio: 'ignore', env: { ...process.env, SLOT_HOLD_MS: '10' } });",
+      "const code = await new Promise((res) => second.on('close', res));",
+      'console.log(JSON.stringify({ code, ms: Date.now() - t0 }));',
+    ].join('\n'));
+    rmSync(join(root, 'seen'), { recursive: true, force: true });
+    const k = spawnSync('node', [killer, exe, worker, join(root, 'seen')], { encoding: 'utf8', env: env(one), timeout: 60000 });
+    if (!k.stdout) return `killed holder kept the slot (no answer in 60 s): ${k.stderr}`;
+    const kr = JSON.parse(k.stdout);
+    if (kr.code !== 0 || kr.ms > 5000) return `killed holder kept the slot: ${k.stdout}`;
+    return true;
+  }],
+
+  // Policy stray_files: report-like files at the project root or the profile root are asked about
+  [true, () => {
+    const proj = join(dir, 'stray-proj');
+    mkdirSync(join(proj, 'docs'), { recursive: true });
+    const on = P('stray', { stray_files: true }, { stray_patterns: ['draft*.md'] });
+    const w = (file_path, o = {}) => pol(on, o.tool ?? 'Write', { file_path, content: 'x' }, { cwd: proj, ...o });
+    for (const f of ['report.md', 'Report-final.md', 'perf-analysis.md', 'summary.md', 'notes-1.md', 'x.tmp', 'cfg.bak', 'draft-1.md']) {
+      if (w(join(proj, f)) !== 'ask') return `ask: ${f}`;
+    }
+    if (w('notes.md') !== 'ask') return 'relative path against cwd';
+    if (w(join(on, 'summary.md')) !== 'ask') return 'profile root';
+    for (const f of [join('docs', 'report.md'), 'README.md', 'src.rs', join('docs', '..', 'docs', 'notes.md')]) {
+      if (w(join(proj, f)) !== '') return `quiet: ${f}`;
+    }
+    if (pol(on, 'Edit', { file_path: join(proj, 'report.md'), new_string: 'x' }, { cwd: proj }) !== '') return 'only Write';
+    if (!polReason(on, 'Write', { file_path: join(proj, 'report.md'), content: 'x' }, { cwd: proj, env: { CTXKIT_LANG: 'ru' } }).includes('отчёты в чат')) return 'ru';
+    if (w(join(proj, 'report.md'), { tool: 'write', args: ['--dsh'] }) !== 'ask') return 'dsh';
+    const agy = JSON.parse(runHook({ cwd: proj, toolCall: { name: 'write_file', args: { Path: join(proj, 'report.md'), Content: 'x' } }, stepIdx: 1 }, ['--agy'], { CLAUDE_CONFIG_DIR: on }));
+    if (agy.decision !== 'ask' || !agy.reason?.includes('reports in the chat')) return 'agy';
+    // off by default and for a broken file
+    return pol(isoProfile, 'Write', { file_path: join(proj, 'report.md'), content: 'x' }, { cwd: proj }) === '' && pol(polProfile('stray-broken', '{"policies":[]}'), 'Write', { file_path: join(proj, 'report.md'), content: 'x' }, { cwd: proj }) === '';
+  }],
+
   // Second review pass: redirect detection must survive escapes and odd quotes
   [true, () => sh(`echo "C:${B}${B}dir${B}${B}" > f.txt`)],
   [true, () => sh(`printf 'it'${B}''s a${B}n' > f.txt`)],
@@ -595,9 +764,10 @@ const cases = [
     if (JSON.stringify(cmds('PreToolUse')) !== '["custom-other-hook","C:/tools/logger.exe ctxkit"]' || cmds('PostToolUse').length !== 0) return false;
     if (JSON.stringify(cmds('Stop')) !== JSON.stringify([foreignStop.command]) || cmds('SessionStart')[0] !== 'echo start') return false;
     // setup without model flags kept the user's own 'opus'; uninstall does not touch it either and only prints it
-    if (s.model !== 'opus' || !run.stdout.includes('model: "opus"') || !run.stdout.includes('latest:')) return false;
-    if (!setupRun.stdout.includes('  model: opus (kept; pass --main-model sonnet to set)') || s.advisorModel !== undefined || s.effortLevel !== undefined) return false;
-    if (!run.stdout.includes('desktop preset dev: model "claude-sonnet-5-5", effort "low"')) return false; // preset effort kept without --effort
+    // (this block runs with --lang ru, so the lines are the Russian ones)
+    if (s.model !== 'opus' || !run.stdout.includes('model: "opus"') || !run.stdout.includes('последняя:')) return false;
+    if (!setupRun.stdout.includes('  model: opus (оставлено; чтобы задать, передайте --main-model sonnet)') || s.advisorModel !== undefined || s.effortLevel !== undefined) return false;
+    if (!run.stdout.includes('пресет Desktop dev: model "claude-sonnet-5-5", effort "low"')) return false; // preset effort kept without --effort
     if (readFileSync(join(profile, 'CLAUDE.md'), 'utf8') !== origMd) return false;
     if (existsSync(hookBin) || !existsSync(join(profile, 'agents', 'checker.md'))) return false; // binary gone, agents stay
     const agy = JSON.parse(readFileSync(agyFile, 'utf8'));
@@ -958,6 +1128,195 @@ const cases = [
     if (!only('both').includes('neither `checker` nor the advisor')) return 'both';
     return stopGate({ profile: 'none' }) === '' || 'nothing configured must not block';
   }],
+
+  // Policies: `setup --policy` writes <profile>/ctxkit.json, nothing without the flag, rollback, broken file refused
+  [true, () => {
+    const profile = join(dir, 'policy-profile');
+    mkdirSync(profile, { recursive: true });
+    const base = ['setup', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit', '--no-agents', '--skip-version-check'];
+    const file = join(profile, 'ctxkit.json');
+    const run = (...a) => spawnSync(exe, [...base, ...a], { encoding: 'utf8' });
+    const plain = run();
+    if (plain.status !== 0 || existsSync(file) || !plain.stdout.includes('policies: none (kept; pass --policy')) return 'no flag must not create the file';
+    if (run('--policy', 'bogus').status !== 2) return 'unknown policy must exit 2';
+    const dry = run('--policy', 'commit-hygiene,build-slots=2', '--dry-run');
+    if (dry.status !== 0 || existsSync(file) || !dry.stdout.includes('policy commit_hygiene: off -> on') || !dry.stdout.includes('policy build_slots: off -> 2')) return `dry: ${dry.stdout}`;
+    const on = run('--policy', 'commit-hygiene,build-slots=2');
+    const cfg = JSON.parse(readFileSync(file, 'utf8'));
+    if (on.status !== 0 || cfg.policies.commit_hygiene !== true || cfg.policies.build_slots !== 2 || cfg.created_by !== 'ctxkit setup') return `on: ${on.stdout}`;
+    const off = run('--policy', 'none');
+    if (off.status !== 0 || !off.stdout.includes('policy commit_hygiene: on -> off') || Object.keys(JSON.parse(readFileSync(file, 'utf8')).policies).length !== 0) return `off: ${off.stdout}`;
+    // the rules block lists the policies that are on and the owner's own `rules` items; off drops the lines again
+    const withRules = JSON.parse(readFileSync(file, 'utf8'));
+    withRules.rules = ['My own item for the block, five words'];
+    writeFileSync(file, JSON.stringify(withRules));
+    run('--policy', 'commit-hygiene,stray-files', '--with-rules');
+    const md1 = readFileSync(join(profile, 'CLAUDE.md'), 'utf8');
+    if (!md1.includes('`Co-Authored-By`') || !md1.includes('`report*.md`') || !md1.includes('- My own item for the block, five words\n') || md1.includes('git push')) return `rules lines: ${md1}`;
+    run('--policy', 'none', '--with-rules');
+    const md2 = readFileSync(join(profile, 'CLAUDE.md'), 'utf8');
+    if (md2.includes('Co-Authored-By') || !md2.includes('My own item for the block')) return `rules lines off: ${md2}`;
+    // a broken file stops setup before anything else is written
+    writeFileSync(file, '{"policies":{"commit_hygiene":"yes"}}');
+    const settingsBefore = existsSync(join(profile, 'settings.json')) ? readFileSync(join(profile, 'settings.json'), 'utf8') : null;
+    const refused = run('--policy', 'none');
+    const settingsAfter = existsSync(join(profile, 'settings.json')) ? readFileSync(join(profile, 'settings.json'), 'utf8') : null;
+    if (refused.status !== 1 || !refused.stderr.includes('ctxkit.json') || settingsBefore !== settingsAfter) return 'broken ctxkit.json must be refused untouched';
+    // without --policy / --with-rules the broken file does not stop setup, but the owner is told
+    const told = run();
+    if (told.status !== 0 || !told.stdout.includes('every policy is off until it is fixed')) return `no warning: ${told.stdout}`;
+    // rollback: the file setup made is deleted; the owner's keys stay
+    writeFileSync(file, JSON.stringify({ created_by: 'ctxkit setup', policies: { stray_files: true } }));
+    const un = spawnSync(exe, ['setup', '--uninstall', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit'], { encoding: 'utf8' });
+    if (un.status !== 0 || existsSync(file)) return `uninstall: ${un.stdout}`;
+    writeFileSync(file, JSON.stringify({ created_by: 'ctxkit setup', policies: { stray_files: true }, rules: ['my own rule of five words'] }));
+    const un2 = spawnSync(exe, ['setup', '--uninstall', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit'], { encoding: 'utf8' });
+    const left = JSON.parse(readFileSync(file, 'utf8'));
+    if (un2.status !== 0 || left.policies || left.created_by || left.rules?.[0] !== 'my own rule of five words' || !un2.stdout.includes('kept your keys: rules')) return `uninstall keeps: ${un2.stdout}`;
+    return spawnSync(exe, ['setup', '--uninstall', '--policy', 'none', '--profile', profile], { encoding: 'utf8' }).status === 2;
+  }],
+
+  // Language of the whole output of `setup` and `setup --uninstall` (dry run and real, every integration and policy, the
+  // warnings and the errors): --lang en has no Cyrillic; --lang ru has Cyrillic and none of the stock English words of the
+  // old output. Markup ([dry-run], [warn], ERR:, ->), `code`, "quoted values", --flags, paths and names are not translated.
+  [true, () => {
+    const CYR = /[А-Яа-яЁё]/;
+    // the English words of the old setup output; what a Russian line may keep is cut out by `strip` first
+    const EN = /\b(installed|unchanged|skip|skipped|kept|update|updated|remove|removed|removing|backup|backups|created|wrote|written|not found|Setting up|Diagnostics|enabled|global|servers?|skills?|plugins?|policies(?=:)|lines|exceed|trim|restart|Quit|manually|gate|hooks?|rules|block|agent|is|are|the|with|and|not|no|of|in|to|for|or|has|have|run|pass)\b/;
+    const strip = (s) => s
+      .replace(/\[(dry-run|warn|note|ok|info)\]/g, '')
+      .replace(/^ERR:/gm, '')
+      .replace(/`[^`]*`/g, '')
+      .replace(/"[^"]*"/g, '')
+      .replace(/\S*[\\/]\S*/g, '')
+      .replace(/\S+\.(json|md|yml|exe|bak)\S*/g, '')
+      .replace(/--[\w-]+/g, '')
+      .replace(/\b\w+(-\w+)+\b/g, '') // hyphenated names (claude-guard, no-inline-backslash)
+      .replace(/\b\w+(\.\w+)+\b/g, ''); // dotted keys (hooks.Stop, env.CLAUDE_CODE_SUBAGENT_MODEL)
+    const outputOf = (lang) => {
+      const root = join(dir, `lang-${lang}`);
+      const profile = join(root, 'profile');
+      const agyDir = join(root, 'agy');
+      const dshHome = join(root, 'dsh');
+      const presets = join(root, 'presets.json');
+      const claudeJson = join(root, 'claude.json');
+      mkdirSync(profile, { recursive: true });
+      mkdirSync(join(dshHome, 'profiles', 'desktop'), { recursive: true });
+      mkdirSync(join(dshHome, 'skills'), { recursive: true });
+      for (let i = 0; i < 16; i++) mkdirSync(join(dshHome, 'skills', `s${i}`), { recursive: true });
+      writeFileSync(join(dshHome, 'cordis.patch.yml'), '- id: mcp-a\n- id: mcp-b\n- id: mcp-c\n- insert:\n    - name: \'@deepseek-ai/dsh-hooks-claude-code\'\n');
+      writeFileSync(join(dshHome, 'AGENTS.md'), '# dsh rules\n');
+      mkdirSync(join(agyDir, 'plugins'), { recursive: true });
+      for (let i = 0; i < 7; i++) {
+        mkdirSync(join(agyDir, 'plugins', `p${i}`), { recursive: true });
+        writeFileSync(join(agyDir, 'plugins', `p${i}`, 'plugin.json'), '{}');
+      }
+      writeFileSync(join(agyDir, 'mcp_config.json'), JSON.stringify({ mcpServers: { m1: {}, m2: {}, m3: {}, m4: {}, m5: {} } }));
+      writeFileSync(join(agyDir, 'hooks.json'), '{}');
+      writeFileSync(presets, JSON.stringify({ byAccount: { a: { presets: [{ name: 'dev', settings: { modelId: 'claude-opus-5-5', effort: 'low' } }], builtIns: { local: { settings: { modelId: 'x' } } } } } }));
+      writeFileSync(claudeJson, JSON.stringify({ mcpServers: { a: {}, b: {}, c: {} } }));
+      const plugins = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`pl${i}@m`, true]));
+      writeFileSync(join(profile, 'settings.json'), JSON.stringify({ enabledPlugins: plugins }));
+      writeFileSync(join(profile, 'CLAUDE.md'), `${Array.from({ length: 250 }, (_, i) => `line ${i}`).join('\n')}\n`);
+      const paths = ['--profile', profile, '--claude-json', claudeJson, '--desktop-file', presets, '--agy-file', join(agyDir, 'hooks.json'), '--dsh-home', dshHome];
+      const full = ['setup', '--with-rules', '--desktop', '--antigravity', '--dsh', '--main-model', 'sonnet', '--advisor', 'fable', '--effort', 'high', '--subagent', 'sonnet', '--policy', 'commit-hygiene,confirm-irreversible,stray-files,build-slots=3', '--lang', lang, ...paths];
+      const un = ['setup', '--uninstall', '--antigravity', '--dsh', '--lang', lang, ...paths];
+      const runs = [
+        [...full, '--dry-run'], full, full, // preview (with the claude version check), the real run, the repeat ("unchanged")
+        [...full, '--skip-version-check', '--policy', 'none', '--no-stop-gate', '--no-agents'],
+        [...un, '--dry-run'], un, un,
+        ['setup', '--help', '--lang', lang],
+        // errors
+        ['setup', '--bogus', '--lang', lang], ['setup', '--lang', lang, '--profile'], ['setup', '--lang', lang, '--lang', 'xx'], ['setup', '--policy', 'bogus', '--lang', lang],
+        ['setup', '--policy', 'none,stray-files', '--lang', lang], ['setup', '--uninstall', '--no-agents', '--lang', lang],
+      ];
+      // the warnings of a profile whose subagent env is Haiku and whose ctxkit.json is broken, and the refusals of odd files
+      const odd = (name, files, args) => {
+        const p = join(root, name);
+        mkdirSync(p, { recursive: true });
+        for (const [f, text] of Object.entries(files)) writeFileSync(join(p, f), text);
+        runs.push(['setup', '--profile', p, '--claude-json', claudeJson, '--skip-version-check', '--hook-cmd', 'test-ctxkit', '--lang', lang, ...args]);
+        return p;
+      };
+      odd('haiku', { 'settings.json': JSON.stringify({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' } }), 'ctxkit.json': '{"policies":{"stray_files":"yes"}}' }, ['--no-agents']);
+      odd('hooks', { 'settings.json': '{"hooks":{"Stop":1}}' }, []);
+      odd('env', { 'settings.json': '{"env":[]}' }, []);
+      odd('half', { 'CLAUDE.md': '<!-- ctxkit:start -->\nx\n' }, ['--with-rules']);
+      odd('policy', { 'ctxkit.json': '{"policies":{"commit_hygiene":"yes"}}' }, ['--with-rules']);
+      odd('brokenjson', { 'settings.json': '{' }, []);
+      let all = '';
+      for (const a of runs) {
+        const r = spawnSync(exe, a, { encoding: 'utf8', timeout: 60000 });
+        all += `${r.stdout}${r.stderr}`;
+      }
+      return all.split(root).join('<root>');
+    };
+    const en = outputOf('en');
+    const ru = outputOf('ru');
+    const cyr = en.split('\n').find((l) => CYR.test(l));
+    if (cyr) return `Cyrillic in the English output: ${cyr}`;
+    if (!/Setting up profile/.test(en) || !en.includes('Removing ctxkit') || !en.includes('Diagnostics')) return 'the English output is not the setup output';
+    if (!CYR.test(ru) || !ru.includes('Настройка профиля') || !ru.includes('Удаление ctxkit')) return 'the Russian output is not Russian';
+    const bad = ru.split('\n').filter((l) => EN.test(strip(l)));
+    if (bad.length) return `English words in the Russian output: ${bad.slice(0, 6).join(' // ')}`;
+    return true;
+  }],
+
+  // The messages of the policies in both languages: the block of commit_hygiene, the questions of confirm_irreversible and
+  // stray_files, the wait for a build slot, the doctor findings `policies` and `rules_duplicate`
+  [true, () => {
+    const CYR = /[А-Яа-яЁё]/;
+    const langs = ['en', 'ru'];
+    const out = {};
+    const on = P('lang-on', { commit_hygiene: true, confirm_irreversible: true, stray_files: true });
+    const proj = join(dir, 'lang-proj');
+    mkdirSync(proj, { recursive: true });
+    for (const l of langs) {
+      const env = { CTXKIT_LANG: l };
+      out[l] = {
+        commit: polReason(on, 'Bash', { command: COAUTH }, { env }),
+        irreversible: polReason(on, 'Bash', { command: 'git push --force' }, { env }),
+        stray: polReason(on, 'Write', { file_path: join(proj, 'report.md'), content: 'x' }, { cwd: proj, env }),
+      };
+      // the same through `--lang` (Antigravity hook wiring)
+      const agy = JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine: COAUTH } }, stepIdx: 1 }, ['--agy', '--lang', l], { CLAUDE_CONFIG_DIR: on }));
+      out[l].agy = agy.reason;
+      // doctor: the policies finding and the repeated rule
+      const p = join(dir, `lang-doctor-${l}`);
+      mkdirSync(p, { recursive: true });
+      writeFileSync(join(p, 'ctxkit.json'), JSON.stringify({ policies: { commit_hygiene: true } }));
+      const rule = 'Always run the full test suite before every commit and read the failures carefully';
+      writeFileSync(join(p, 'CLAUDE.md'), `# Mine\n\n- ${rule}\n\n<!-- ctxkit:start -->\n## Rules\n\n- ${rule}\n<!-- ctxkit:end -->\n`);
+      const d = JSON.parse(spawnSync(exe, ['doctor', '--json', '--profile', p, '--lang', l], { encoding: 'utf8' }).stdout);
+      const text = (id) => { const x = d.findings.find((f) => f.id === id); return x ? [x.message, x.detail ?? '', x.fix ?? ''].join(' | ') : undefined; };
+      out[l].policies = text('policies');
+      out[l].dupes = text('rules_duplicate');
+      writeFileSync(join(p, 'ctxkit.json'), '{"policies":{"commit_hygiene":"yes"}}');
+      const d2 = JSON.parse(spawnSync(exe, ['doctor', '--json', '--profile', p, '--lang', l], { encoding: 'utf8' }).stdout);
+      const bad = d2.findings.find((f) => f.id === 'policies');
+      out[l].badPolicies = bad ? [bad.message, bad.detail ?? '', bad.fix ?? ''].join(' | ') : undefined;
+      // the owner's switch off in setup, policies line of the doctor with none on
+      writeFileSync(join(p, 'ctxkit.json'), '{"policies":{}}');
+      const d3 = JSON.parse(spawnSync(exe, ['doctor', '--json', '--profile', p, '--lang', l], { encoding: 'utf8' }).stdout);
+      out[l].nonePolicies = d3.findings.find((f) => f.id === 'policies')?.detail;
+    }
+    for (const k of Object.keys(out.en)) {
+      if (out.en[k] === undefined || out.ru[k] === undefined) return `missing ${k}: ${JSON.stringify([out.en[k], out.ru[k]])}`;
+      if (CYR.test(out.en[k])) return `Cyrillic in the English ${k}: ${out.en[k]}`;
+      if (!CYR.test(out.ru[k])) return `no Russian in ${k}: ${out.ru[k]}`;
+    }
+    // the wait for a build slot, in Russian (the English one is checked in the slots case above)
+    const root = join(dir, 'slots-test');
+    const tmp = join(root, 'tmp');
+    const driver = join(root, 'driver.mjs');
+    const worker = join(root, 'worker.mjs');
+    rmSync(join(root, 'seen'), { recursive: true, force: true });
+    const env = { ...process.env, CTXKIT_LANG: 'ru', CLAUDE_CONFIG_DIR: P('lang-slots', { build_slots: 1 }), TMP: tmp, TEMP: tmp, TMPDIR: tmp, SLOT_TEST_DIR: join(root, 'seen') };
+    const r = spawnSync('node', [driver, exe, worker, '2'], { encoding: 'utf8', env });
+    if (r.status !== 0) return `slots driver: ${r.stderr}`;
+    if (!JSON.parse(r.stdout).some((x) => x.err.includes('жду слот сборки (1 занято)'))) return `no Russian wait message: ${r.stdout}`;
+    return true;
+  }],
 ];
 
 let failed = 0;
@@ -971,6 +1330,7 @@ try {
   });
 } finally {
   rmSync(dir, { recursive: true, force: true });
+  rmSync(isoProfile, { recursive: true, force: true });
 }
 
 console.log(failed ? `${failed} of ${cases.length} FAILED` : `ALL ${cases.length} PASSED`);

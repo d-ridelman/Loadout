@@ -1,13 +1,44 @@
+/// `msg!("english {x}", "русский {x}", args..)` -> `String` in the language of this run (`set_lang`; English by default).
+/// Both texts are `format!` strings with the same placeholders (same idea as `tr!` in loadout-core). Markup that the
+/// window and the tests parse (`[dry-run]`, `[warn]`, `[note]`, `[ok]`, `[info]`, `ERR:`, ` -> `) and names (paths,
+/// flags, model names) are not translated. Defined before the modules so that all of them can use it.
+macro_rules! msg {
+    ($en:literal, $ru:literal $(, $arg:expr)* $(,)?) => {{
+        #[allow(clippy::useless_format)]
+        let s: String = if $crate::is_ru() {
+            format!($ru $(, $arg)*)
+        } else {
+            format!($en $(, $arg)*)
+        };
+        s
+    }};
+}
+
+/// `println!` of a `msg!`.
+macro_rules! say {
+    ($($t:tt)*) => {
+        println!("{}", msg!($($t)*))
+    };
+}
+
 mod backslash;
 mod check;
+mod commit;
 mod doctor;
+mod dupes;
 mod fsx;
 mod gate;
 mod guard;
+mod irreversible;
+mod policy;
 mod report;
 mod setup;
+mod shell;
+mod slots;
+mod stray;
 
 use serde_json::{json, Value};
+use shell::Dialect;
 use std::env;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -35,6 +66,20 @@ pub fn parse_lang(s: &str) -> Option<Lang> {
     } else {
         None
     }
+}
+
+thread_local! {
+    /// The language of what `setup` / `setup --uninstall` / `doctor` print: set once from `--lang`, read by `msg!`.
+    /// Per thread, so parallel unit tests do not see each other's language.
+    static LANG: std::cell::Cell<Lang> = const { std::cell::Cell::new(Lang::En) };
+}
+
+pub fn set_lang(lang: Lang) {
+    LANG.with(|c| c.set(lang));
+}
+
+pub fn is_ru() -> bool {
+    LANG.with(std::cell::Cell::get) == Lang::Ru
 }
 
 pub fn t(lang: Lang, en: &'static str, ru: &'static str) -> &'static str {
@@ -251,12 +296,33 @@ fn handle_antigravity(call: &Value, forced_post: bool, lang: Lang) {
         _ => None,
     };
 
+    // The policies of ctxkit.json (off unless the owner turned them on) come after the fixed guards.
+    let verdict = match (&reason, tool) {
+        (None, "run_command") => policy::shell(
+            &policy::load(),
+            args["CommandLine"].as_str().unwrap_or(""),
+            &[Dialect::Posix, Dialect::Ps],
+            lang,
+            cwd.as_deref(),
+        ),
+        (None, "write_file") => policy::write(
+            &policy::load(),
+            args["Path"].as_str().unwrap_or(""),
+            cwd.as_deref(),
+            lang,
+        ),
+        _ => None,
+    };
+    let answer = |decision: &str, reason: String| {
+        print!("{}", json!({ "decision": decision, "reason": reason }));
+    };
     if let Some(reason) = reason {
-        let out = json!({
-            "decision": "deny",
-            "reason": reason
-        });
-        print!("{out}");
+        answer("deny", reason);
+    } else if let Some(v) = verdict {
+        match v {
+            policy::Verdict::Deny(r) => answer("deny", r),
+            policy::Verdict::Ask(r) => answer("ask", r),
+        }
     } else {
         // Delegate to Antigravity's built-in confirmation policy rather than auto-allowing.
         agy_pass(false);
@@ -395,24 +461,55 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
         return;
     }
 
-    if tool == "Bash" || tool == "PowerShell" {
+    let verdict = if tool == "Bash" || tool == "PowerShell" {
         if let Some(reason) =
             guard::shell_read_guard(tool, command, client, lang, eff_cwd.as_deref())
         {
             deny_claude(reason);
+            return;
         }
+        let dialect = if tool == "PowerShell" {
+            Dialect::Ps
+        } else {
+            Dialect::Posix
+        };
+        policy::shell(
+            &policy::load(),
+            command,
+            &[dialect],
+            lang,
+            eff_cwd.as_deref(),
+        )
+    } else if tool == "Write" {
+        policy::write(&policy::load(), path, eff_cwd.as_deref(), lang)
+    } else {
+        None
+    };
+    match verdict {
+        Some(policy::Verdict::Deny(r)) => deny_claude(r),
+        Some(policy::Verdict::Ask(r)) => ask_claude(r),
+        None => {}
     }
 }
 
-fn deny_claude(reason: String) {
+/// PreToolUse answer, `hookSpecificOutput.permissionDecision` = `deny` (blocks) or `ask` (the user is asked).
+fn decide_claude(decision: &str, reason: String) {
     let out = json!({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": decision,
             "permissionDecisionReason": reason
         }
     });
     print!("{out}");
+}
+
+fn deny_claude(reason: String) {
+    decide_claude("deny", reason);
+}
+
+fn ask_claude(reason: String) {
+    decide_claude("ask", reason);
 }
 
 #[cfg(test)]

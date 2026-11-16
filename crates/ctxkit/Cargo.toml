@@ -2,6 +2,7 @@
 name = "ctxkit"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.89" # File::try_lock (slots.rs)
 description = "Surgical context and token toolkit for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness"
 license = "MIT"
 repository = "https://github.com/d-ridelman/Loadout"

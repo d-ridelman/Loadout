@@ -1,5 +1,5 @@
 use crate::fsx::write_atomic;
-use crate::{parse_lang, Lang};
+use crate::{is_ru, parse_lang, set_lang, t, Lang};
 use serde_json::{json, Map, Value};
 use std::env;
 use std::fs;
@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod policies;
 mod uninstall;
+
+use crate::policy;
 
 const MARKER_START: &str = "<!-- ctxkit:start -->";
 const MARKER_END: &str = "<!-- ctxkit:end -->";
@@ -47,6 +50,10 @@ struct SetupOpts {
     on_failure: bool,
     /// `--uninstall`: take out what setup added (see `uninstall.rs`).
     uninstall: bool,
+    /// `--policy`: which policies of `ctxkit.json` are on. Absent: the file is not touched.
+    policy: Option<policy::Selection>,
+    /// The policies after this run (from `ctxkit.json`); the rules block lists the ones that are on.
+    config: policy::Config,
     lang: Lang,
 }
 
@@ -76,6 +83,8 @@ impl Default for SetupOpts {
             no_stop_gate: false,
             on_failure: true,
             uninstall: false,
+            policy: None,
+            config: policy::Config::default(),
             lang: Lang::En,
         }
     }
@@ -83,6 +92,15 @@ impl Default for SetupOpts {
 
 pub fn run_setup(args: &[String]) -> i32 {
     let mut opts = SetupOpts::default();
+    // The language first, so that an error in an option read before `--lang` is already in it (no env fallback: the default is English).
+    // The last valid one wins, as in the option loop below.
+    if let Some(l) = (0..args.len())
+        .rev()
+        .filter(|&p| args[p] == "--lang")
+        .find_map(|p| args.get(p + 1).and_then(|v| parse_lang(v)))
+    {
+        set_lang(l);
+    }
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -102,9 +120,12 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--uninstall" => opts.uninstall = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
             | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home"
-            | "--hook-cmd" | "--claude-json" | "--lang") => {
+            | "--hook-cmd" | "--claude-json" | "--lang" | "--policy") => {
                 let Some(val) = args.get(i + 1) else {
-                    eprintln!("ERR: missing value for {flag}");
+                    eprintln!(
+                        "ERR: {}",
+                        msg!("missing value for {flag}", "нет значения для {flag}")
+                    );
                     return 2;
                 };
                 match flag {
@@ -122,9 +143,22 @@ pub fn run_setup(args: &[String]) -> i32 {
                     "--dsh-home" => opts.dsh_home = Some(PathBuf::from(val)),
                     "--hook-cmd" => opts.hook_cmd = Some(val.clone()),
                     "--claude-json" => opts.claude_json = Some(PathBuf::from(val)),
+                    "--policy" => match policy::parse_selection(val) {
+                        Ok(sel) => opts.policy = Some(sel),
+                        Err(e) => {
+                            eprintln!("ERR: {e}");
+                            return 2;
+                        }
+                    },
                     "--lang" => {
                         let Some(parsed) = parse_lang(val) else {
-                            eprintln!("ERR: unsupported --lang '{val}' (use en or ru)");
+                            eprintln!(
+                                "ERR: {}",
+                                msg!(
+                                    "unsupported --lang '{val}' (use en or ru)",
+                                    "неподдерживаемый --lang '{val}' (en или ru)"
+                                )
+                            );
                             return 2;
                         };
                         opts.lang = parsed;
@@ -134,7 +168,13 @@ pub fn run_setup(args: &[String]) -> i32 {
                 i += 1;
             }
             other => {
-                eprintln!("ERR: unknown option '{other}'. Run `ctxkit setup --help`.");
+                eprintln!(
+                    "ERR: {}",
+                    msg!(
+                        "unknown option '{other}'. Run `ctxkit setup --help`.",
+                        "неизвестный параметр '{other}'. См. `ctxkit setup --help`."
+                    )
+                );
                 return 2;
             }
         }
@@ -143,13 +183,25 @@ pub fn run_setup(args: &[String]) -> i32 {
 
     if opts.uninstall {
         if let Some(bad) = uninstall::reject_setup_only_flags(args) {
-            eprintln!("ERR: {bad} is a setup option and cannot be combined with --uninstall");
+            eprintln!(
+                "ERR: {}",
+                msg!(
+                    "{bad} is a setup option and cannot be combined with --uninstall",
+                    "{bad} относится к установке и не сочетается с --uninstall"
+                )
+            );
             return 2;
         }
     }
 
     let Some(home) = home_dir() else {
-        eprintln!("ERR: cannot determine USERPROFILE / HOME directory");
+        eprintln!(
+            "ERR: {}",
+            msg!(
+                "cannot determine USERPROFILE / HOME directory",
+                "не удалось определить каталог USERPROFILE / HOME"
+            )
+        );
         return 1;
     };
 
@@ -184,15 +236,24 @@ pub fn run_setup(args: &[String]) -> i32 {
     }
 
     if opts.dry_run {
-        println!("[dry-run] profile: {}", profile.display());
+        say!(
+            "[dry-run] profile: {}",
+            "[dry-run] профиль: {}",
+            profile.display()
+        );
     } else {
-        println!("Setting up profile: {}", profile.display());
+        say!(
+            "Setting up profile: {}",
+            "Настройка профиля: {}",
+            profile.display()
+        );
     }
     // An unknown version (no `claude` on PATH: Desktop bundles its own, or --skip-version-check) gets the field.
     if !opts.skip_version_check && check_claude_version().is_some_and(|v| v < ONFAILURE_SINCE) {
         opts.on_failure = false;
-        println!(
-            "  [note] claude CLI is older than 2.1.295, which does not know \"onFailure\": the hooks are written without it (run `claude update` and setup again)"
+        say!(
+            "  [note] claude CLI is older than 2.1.295, which does not know \"onFailure\": the hooks are written without it (run `claude update` and setup again)",
+            "  [note] claude CLI старше 2.1.295 и не знает поля \"onFailure\": хуки записаны без него (выполните `claude update` и запустите setup снова)"
         );
     }
 
@@ -206,6 +267,10 @@ pub fn run_setup(args: &[String]) -> i32 {
     };
     let preflight = || -> Result<(), String> {
         preflight_settings(&profile.join("settings.json"), true)?;
+        // `ctxkit.json` feeds the rules block and `--policy` rewrites it: a file that does not parse stops both.
+        if opts.policy.is_some() || opts.with_rules {
+            policies::preflight(&profile)?;
+        }
         if opts.with_rules {
             preflight_rules_file(&profile.join("CLAUDE.md"))?;
             if opts.dsh {
@@ -249,7 +314,13 @@ pub fn run_setup(args: &[String]) -> i32 {
             custom_profile,
             opts.dry_run,
         ) {
-            eprintln!("ERR: binary install failed: {e}");
+            eprintln!(
+                "ERR: {}",
+                msg!(
+                    "binary install failed: {e}",
+                    "не удалось установить бинарник: {e}"
+                )
+            );
             return 1;
         }
     }
@@ -264,6 +335,20 @@ pub fn run_setup(args: &[String]) -> i32 {
                 return 1;
             }
         };
+
+    opts.config = match policies::run(&profile, &backup_dir, opts.policy.as_ref(), opts.dry_run) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("ERR: {e}");
+            return 1;
+        }
+    };
+    if opts.policy.is_some() && !opts.with_rules {
+        say!(
+            "  [note] the rules block in CLAUDE.md is not refreshed: run setup with --with-rules to add or drop the policy lines",
+            "  [note] блок правил в CLAUDE.md не обновлён: запустите setup с --with-rules, чтобы добавить или убрать строки политик"
+        );
+    }
 
     if !opts.no_agents {
         let agents_dir = profile.join("agents");
@@ -326,8 +411,9 @@ pub fn run_setup(args: &[String]) -> i32 {
             // The running app keeps its presets in memory and saves them over the file, so a
             // write now would be lost silently. A file passed with --desktop-file is not the app's.
             if p.exists() && opts.desktop_file.is_none() && claude_desktop_running() {
-                println!(
+                say!(
                     "  [warn] Claude Desktop is running: it keeps session presets in memory and overwrites {}. Presets left unchanged. Quit it fully (tray icon too) and rerun `ctxkit setup --desktop` from a terminal, or choose the model in the app's model picker.",
+                    "  [warn] Claude Desktop запущен: он держит пресеты сессий в памяти и перезаписывает {}. Пресеты не изменены. Закройте его полностью (и значок в трее) и повторите `ctxkit setup --desktop` из терминала либо выберите модель в окне выбора модели приложения.",
                     p.display()
                 );
             } else if p.exists() {
@@ -341,7 +427,11 @@ pub fn run_setup(args: &[String]) -> i32 {
                     return 1;
                 }
             } else {
-                println!("  skip desktop presets (not found: {})", p.display());
+                say!(
+                    "  skip desktop presets (not found: {})",
+                    "  пресеты Desktop пропущены (не найдены: {})",
+                    p.display()
+                );
             }
         }
     }
@@ -430,25 +520,46 @@ fn install_binary(
     custom_profile: bool,
     dry_run: bool,
 ) -> Result<(), String> {
-    let exe = env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let exe = env::current_exe().map_err(|e| {
+        msg!(
+            "current_exe: {e}",
+            "не удалось определить путь к ctxkit (current_exe): {e}"
+        )
+    })?;
     let mut targets = vec![hook_bin.to_path_buf()];
     if !custom_profile {
         targets.push(home.join(".local").join("bin").join(bin_name));
     }
     for dst in targets {
         if same_file_bytes(&exe, &dst) {
-            println!("  ok bin {}", dst.display());
+            say!("  ok bin {}", "  ок bin {}", dst.display());
             continue;
         }
         if dry_run {
-            println!("  [dry-run] install bin -> {}", dst.display());
+            say!(
+                "  [dry-run] install bin -> {}",
+                "  [dry-run] установка bin -> {}",
+                dst.display()
+            );
             continue;
         }
         if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                msg!(
+                    "mkdir {}: {e}",
+                    "не удалось создать каталог {}: {e}",
+                    parent.display()
+                )
+            })?;
         }
-        fs::copy(&exe, &dst).map_err(|e| format!("copy to {}: {e}", dst.display()))?;
-        println!("  installed {}", dst.display());
+        fs::copy(&exe, &dst).map_err(|e| {
+            msg!(
+                "copy to {}: {e}",
+                "не удалось скопировать в {}: {e}",
+                dst.display()
+            )
+        })?;
+        say!("  installed {}", "  установлен {}", dst.display());
     }
     Ok(())
 }
@@ -470,18 +581,39 @@ pub(crate) fn read_json_object(path: &Path) -> Result<Value, String> {
     if !path.exists() {
         return Ok(Value::Object(Map::new()));
     }
-    let raw = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let raw = fs::read_to_string(path).map_err(|e| {
+        msg!(
+            "read {}: {e}",
+            "не удалось прочитать {}: {e}",
+            path.display()
+        )
+    })?;
     let clean = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
-    let val: Value =
-        serde_json::from_str(clean).map_err(|e| format!("parse JSON {}: {e}", path.display()))?;
+    let val: Value = serde_json::from_str(clean).map_err(|e| {
+        msg!(
+            "parse JSON {}: {e}",
+            "не удалось разобрать JSON {}: {e}",
+            path.display()
+        )
+    })?;
     if !val.is_object() {
-        return Err(format!("expected JSON object in {}", path.display()));
+        return Err(msg!(
+            "expected JSON object in {}",
+            "ожидался JSON-объект в {}",
+            path.display()
+        ));
     }
     Ok(val)
 }
 
 fn backup_file(path: &Path, backup_dir: &Path) -> Result<PathBuf, String> {
-    fs::create_dir_all(backup_dir).map_err(|e| format!("mkdir {}: {e}", backup_dir.display()))?;
+    fs::create_dir_all(backup_dir).map_err(|e| {
+        msg!(
+            "mkdir {}: {e}",
+            "не удалось создать каталог {}: {e}",
+            backup_dir.display()
+        )
+    })?;
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -496,8 +628,14 @@ fn backup_file(path: &Path, backup_dir: &Path) -> Result<PathBuf, String> {
         dst = backup_dir.join(format!("{name}.{ts}.{seq}.bak"));
         seq += 1;
     }
-    fs::copy(path, &dst)
-        .map_err(|e| format!("backup {} -> {}: {e}", path.display(), dst.display()))?;
+    fs::copy(path, &dst).map_err(|e| {
+        msg!(
+            "backup {} -> {}: {e}",
+            "не удалось сделать копию {} -> {}: {e}",
+            path.display(),
+            dst.display()
+        )
+    })?;
     Ok(dst)
 }
 
@@ -510,11 +648,19 @@ fn write_json_if_changed(
     label: &str,
 ) -> Result<(), String> {
     if orig == updated {
-        println!("  ok {label} (unchanged): {}", path.display());
+        say!(
+            "  ok {label} (unchanged): {}",
+            "  ок {label} (без изменений): {}",
+            path.display()
+        );
         return Ok(());
     }
     if dry_run {
-        println!("  [dry-run] update {label}: {}", path.display());
+        say!(
+            "  [dry-run] update {label}: {}",
+            "  [dry-run] обновление {label}: {}",
+            path.display()
+        );
         return Ok(());
     }
     if path.exists() {
@@ -523,14 +669,24 @@ fn write_json_if_changed(
             parent.join("backups")
         });
         let b = backup_file(path, &bdir)?;
-        println!("  backup -> {}", b.display());
+        say!("  backup -> {}", "  копия -> {}", b.display());
     } else if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            msg!(
+                "mkdir {}: {e}",
+                "не удалось создать каталог {}: {e}",
+                parent.display()
+            )
+        })?;
     }
-    let pretty =
-        serde_json::to_string_pretty(updated).map_err(|e| format!("serialize {label}: {e}"))?;
+    let pretty = serde_json::to_string_pretty(updated)
+        .map_err(|e| msg!("serialize {label}: {e}", "не удалось записать {label}: {e}"))?;
     write_atomic(path, format!("{pretty}\n").as_bytes())?;
-    println!("  updated {label}: {}", path.display());
+    say!(
+        "  updated {label}: {}",
+        "  обновлено {label}: {}",
+        path.display()
+    );
     Ok(())
 }
 
@@ -542,7 +698,12 @@ fn update_claude_settings(
 ) -> Result<Value, String> {
     let orig = read_json_object(path)?;
     let mut next = orig.clone();
-    let root = next.as_object_mut().ok_or("settings root is not object")?;
+    let root = next.as_object_mut().ok_or_else(|| {
+        msg!(
+            "settings root is not object",
+            "корень settings.json не является объектом"
+        )
+    })?;
 
     // What setup changes in the user's choices is printed as "was -> became" (also in --dry-run).
     let old = |v: &Value| v.as_str().map(str::to_string);
@@ -606,8 +767,9 @@ fn update_claude_settings(
                     );
                     entry.insert("effortLevel".to_string(), Value::String(e.to_string()));
                 }
-                _ => println!(
-                    "  effort: modelSettings not written (needs a known main model, from --main-model or the `model` in settings.json, and low|medium|high|xhigh); top-level effortLevel only"
+                _ => say!(
+                    "  effort: modelSettings not written (needs a known main model, from --main-model or the `model` in settings.json, and low|medium|high|xhigh); top-level effortLevel only",
+                    "  effort: modelSettings не записан (нужна известная основная модель из --main-model или `model` в settings.json и low|medium|high|xhigh); записан только effortLevel верхнего уровня"
                 ),
             }
         }
@@ -630,8 +792,9 @@ fn update_claude_settings(
         .as_deref()
         .is_some_and(|v| v.to_ascii_lowercase().contains("haiku"))
     {
-        println!(
+        say!(
             "  [warn] env.CLAUDE_CODE_SUBAGENT_MODEL={} puts every subagent without its own model (code writers too) on Haiku; left as is. Remove it, or pass --subagent <model> to change it",
+            "  [warn] env.CLAUDE_CODE_SUBAGENT_MODEL={} переводит на Haiku каждого субагента без собственной модели (и тех, кто пишет код); оставлено как есть. Удалите его или передайте --subagent <model>, чтобы изменить",
             sub_old.as_deref().unwrap_or_default()
         );
     }
@@ -676,7 +839,10 @@ fn update_claude_settings(
     // Stop takes no matcher. The gate fires once per turn (see gate.rs); --no-stop-gate removes our group.
     if opts.no_stop_gate {
         remove_our_hook_event(hooks_obj, "Stop", Some(hook_cmd));
-        println!("  Stop gate: off (--no-stop-gate); our Stop hook is removed if present");
+        say!(
+            "  Stop gate: off (--no-stop-gate); our Stop hook is removed if present",
+            "  Шлюз Stop: выключен (--no-stop-gate); наш хук Stop убран, если был"
+        );
     } else {
         upsert_claude_hook_event(hooks_obj, "Stop", None, hook_cmd, false);
         let advisor_set = root
@@ -688,17 +854,20 @@ fn update_claude_settings(
                 .parent()
                 .is_some_and(|p| p.join("agents").join("checker.md").is_file());
         if advisor_set || checker {
-            println!(
+            let (en, ru) = match (checker, advisor_set) {
+                (true, true) => ("checker/advisor", "checker/советника"),
+                (true, false) => ("checker", "checker"),
+                _ => ("advisor", "советника"),
+            };
+            say!(
                 "  Stop gate: on, hook Stop sends the model back once per turn if code edits lack {}; remove with --no-stop-gate",
-                match (checker, advisor_set) {
-                    (true, true) => "checker/advisor",
-                    (true, false) => "checker",
-                    _ => "advisor",
-                }
+                "  Шлюз Stop: включён, хук Stop раз за ход возвращает модель, если правки кода остались без {}; убрать: --no-stop-gate",
+                if is_ru() { ru } else { en }
             );
         } else {
-            println!(
-                "  Stop gate: on, but there is no `checker` agent and no advisor, so it stays silent until one exists (--advisor <model>, or setup without --no-agents)"
+            say!(
+                "  Stop gate: on, but there is no `checker` agent and no advisor, so it stays silent until one exists (--advisor <model>, or setup without --no-agents)",
+                "  Шлюз Stop: включён, но агента `checker` и советника нет, поэтому он молчит, пока не появится один из них (--advisor <model> или setup без --no-agents)"
             );
         }
     }
@@ -716,19 +885,33 @@ fn update_claude_settings(
 
 /// One "was -> became" line for a setting; `new == None` means the key ends up unset.
 fn change_line(label: &str, old: Option<&str>, new: Option<&str>) -> String {
-    let show = |v: Option<&str>| v.unwrap_or("(unset)").to_string();
+    let show = |v: Option<&str>| v.unwrap_or(unset_word()).to_string();
     if old == new {
-        format!("  {label}: {} (unchanged)", show(new))
+        msg!(
+            "  {label}: {} (unchanged)",
+            "  {label}: {} (без изменений)",
+            show(new)
+        )
     } else {
         format!("  {label}: {} -> {}", show(old), show(new))
     }
 }
 
+/// "(unset)": the value of a key that is absent.
+pub(crate) fn unset_word() -> &'static str {
+    if is_ru() {
+        "(не задано)"
+    } else {
+        "(unset)"
+    }
+}
+
 /// The line for a setting that setup leaves alone because its flag was not given.
 fn kept_line(label: &str, current: Option<&str>, hint: &str) -> String {
-    format!(
+    msg!(
         "  {label}: {} (kept; pass {hint} to set)",
-        current.unwrap_or("(unset)")
+        "  {label}: {} (оставлено; чтобы задать, передайте {hint})",
+        current.unwrap_or(unset_word())
     )
 }
 
@@ -761,7 +944,12 @@ fn ensure_object<'a>(
     parent
         .get_mut(key)
         .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| format!("'{key}' is not a JSON object"))
+        .ok_or_else(|| {
+            msg!(
+                "'{key}' is not a JSON object",
+                "'{key}' не является JSON-объектом"
+            )
+        })
 }
 
 /// Splits the first `n` words of a command line; quotes (" or ') keep a path with spaces in one word.
@@ -911,24 +1099,33 @@ fn write_agent_file(
     if path.exists() && !force {
         let existing = fs::read_to_string(path).unwrap_or_default();
         if existing == content {
-            println!("  ok agent (unchanged): {}", path.display());
+            say!(
+                "  ok agent (unchanged): {}",
+                "  ок агент (без изменений): {}",
+                path.display()
+            );
         } else {
-            println!(
+            say!(
                 "  keep existing agent (pass --force-agents to overwrite): {}",
+                "  существующий агент оставлен (чтобы перезаписать, передайте --force-agents): {}",
                 path.display()
             );
         }
         return Ok(());
     }
     if dry_run {
-        println!("  [dry-run] write agent: {}", path.display());
+        say!(
+            "  [dry-run] write agent: {}",
+            "  [dry-run] запись агента: {}",
+            path.display()
+        );
         return Ok(());
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        mkdir(parent)?;
     }
     write_atomic(path, content.as_bytes())?;
-    println!("  wrote agent: {}", path.display());
+    say!("  wrote agent: {}", "  записан агент: {}", path.display());
     Ok(())
 }
 
@@ -939,7 +1136,7 @@ fn upsert_claude_md(
     dry_run: bool,
 ) -> Result<(), String> {
     let existing = if path.exists() {
-        fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?
+        read_text(path)?
     } else {
         String::new()
     };
@@ -953,22 +1150,67 @@ fn upsert_claude_md(
     };
 
     if existing == updated {
-        println!("  ok CLAUDE.md rules (unchanged): {}", path.display());
+        say!(
+            "  ok CLAUDE.md rules (unchanged): {}",
+            "  ок правила CLAUDE.md (без изменений): {}",
+            path.display()
+        );
         return Ok(());
     }
     if dry_run {
-        println!("  [dry-run] update CLAUDE.md rules: {}", path.display());
+        say!(
+            "  [dry-run] update CLAUDE.md rules: {}",
+            "  [dry-run] обновление правил CLAUDE.md: {}",
+            path.display()
+        );
         return Ok(());
     }
     if path.exists() {
         let b = backup_file(path, backup_dir)?;
-        println!("  backup -> {}", b.display());
+        say!("  backup -> {}", "  копия -> {}", b.display());
     } else if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        mkdir(parent)?;
     }
     write_atomic(path, updated.as_bytes())?;
-    println!("  updated CLAUDE.md rules: {}", path.display());
+    say!(
+        "  updated CLAUDE.md rules: {}",
+        "  обновлены правила CLAUDE.md: {}",
+        path.display()
+    );
     Ok(())
+}
+
+/// `fs::create_dir_all` with an error in the language of the run.
+pub(crate) fn mkdir(dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|e| {
+        msg!(
+            "mkdir {}: {e}",
+            "не удалось создать каталог {}: {e}",
+            dir.display()
+        )
+    })
+}
+
+/// `fs::remove_file` with an error in the language of the run.
+pub(crate) fn remove_file(path: &Path) -> Result<(), String> {
+    fs::remove_file(path).map_err(|e| {
+        msg!(
+            "remove {}: {e}",
+            "не удалось удалить {}: {e}",
+            path.display()
+        )
+    })
+}
+
+/// `fs::read_to_string` with an error in the language of the run.
+pub(crate) fn read_text(path: &Path) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|e| {
+        msg!(
+            "read {}: {e}",
+            "не удалось прочитать {}: {e}",
+            path.display()
+        )
+    })
 }
 
 /// Span of our rules block. A marker counts only when it is alone on its line (as `append_block` writes it):
@@ -1025,17 +1267,22 @@ pub(crate) fn marker_problem(text: &str) -> Option<String> {
     if !(broken(new) || broken(old) || (new.0 >= 1 && old.0 >= 1)) {
         return None;
     }
-    Some(format!(
+    Some(msg!(
         "ctxkit markers: {} start / {} end lines, old claude-guard markers: {} start / {} end",
-        new.0, new.1, old.0, old.1
+        "маркеры ctxkit: строк начала {}, строк конца {}; старые маркеры claude-guard: начала {}, конца {}",
+        new.0,
+        new.1,
+        old.0,
+        old.1
     ))
 }
 
 /// `Err` when a rules file has the broken marker picture of `marker_problem`: setup must not add a second block.
 pub(crate) fn check_rules_markers(path: &Path, text: &str) -> Result<(), String> {
     match marker_problem(text) {
-        Some(p) => Err(format!(
+        Some(p) => Err(msg!(
             "{}: {p}; keep one block (the lines `{MARKER_START}` ... `{MARKER_END}`) or delete the markers and the old block by hand, then rerun",
+            "{}: {p}; оставьте один блок (строки `{MARKER_START}` ... `{MARKER_END}`) или удалите маркеры и старый блок вручную и запустите снова",
             path.display()
         )),
         None => Ok(()),
@@ -1047,7 +1294,7 @@ fn preflight_rules_file(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
-    let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let text = read_text(path)?;
     check_rules_markers(path, &text)
 }
 
@@ -1056,9 +1303,7 @@ pub(crate) fn readable_utf8(p: &Path) -> Result<(), String> {
     if !p.exists() {
         return Ok(());
     }
-    fs::read_to_string(p)
-        .map(|_| ())
-        .map_err(|e| format!("read {}: {e}", p.display()))
+    read_text(p).map(|_| ())
 }
 
 /// Refuses a settings.json whose structure setup or the rollback would have to guess at (nothing is written
@@ -1069,10 +1314,18 @@ pub(crate) fn preflight_settings(path: &Path, for_setup: bool) -> Result<(), Str
     }
     let v = read_json_object(path)?;
     if let Some(h) = v.get("hooks") {
-        let h = h.as_object().ok_or("'hooks' is not a JSON object")?;
+        let h = h.as_object().ok_or_else(|| {
+            msg!(
+                "'hooks' is not a JSON object",
+                "'hooks' не является JSON-объектом"
+            )
+        })?;
         for ev in ["PreToolUse", "PostToolUse", "Stop"] {
             if h.get(ev).is_some_and(|e| !e.is_array()) {
-                return Err(format!("'hooks.{ev}' is not a JSON array"));
+                return Err(msg!(
+                    "'hooks.{ev}' is not a JSON array",
+                    "'hooks.{ev}' не является JSON-массивом"
+                ));
             }
         }
     }
@@ -1082,7 +1335,10 @@ pub(crate) fn preflight_settings(path: &Path, for_setup: bool) -> Result<(), Str
     }
     for k in objects {
         if v.get(k).is_some_and(|x| !x.is_object()) {
-            return Err(format!("'{k}' is not a JSON object"));
+            return Err(msg!(
+                "'{k}' is not a JSON object",
+                "'{k}' не является JSON-объектом"
+            ));
         }
     }
     if for_setup {
@@ -1091,7 +1347,11 @@ pub(crate) fn preflight_settings(path: &Path, for_setup: bool) -> Result<(), Str
             .and_then(|m| m.as_object())
             .and_then(|m| m.iter().find(|(_, e)| !e.is_object()))
         {
-            return Err(format!("'modelSettings.{}' is not a JSON object", bad.0));
+            return Err(msg!(
+                "'modelSettings.{}' is not a JSON object",
+                "'modelSettings.{}' не является JSON-объектом",
+                bad.0
+            ));
         }
     }
     Ok(())
@@ -1163,26 +1423,42 @@ fn update_desktop_presets(
     let orig = read_json_object(path)?;
     let mut next = orig.clone();
     let Some(accounts) = next.get_mut("byAccount").and_then(|v| v.as_object_mut()) else {
-        println!("  skip desktop presets (no byAccount): {}", path.display());
+        say!(
+            "  skip desktop presets (no byAccount): {}",
+            "  пресеты Desktop пропущены (нет byAccount): {}",
+            path.display()
+        );
         return Ok(());
     };
     // Sets modelId/effort of one preset and prints "model X -> Y, effort A -> B".
     let apply = |name: &str, s: &mut Map<String, Value>| {
         let was = |k: &str| s.get(k).and_then(|v| v.as_str()).map(str::to_string);
         let (m0, e0) = (was("modelId"), was("effort"));
-        let shown = |v: &Option<String>| v.clone().unwrap_or_else(|| "(unset)".to_string());
+        let shown = |v: &Option<String>| v.clone().unwrap_or_else(|| unset_word().to_string());
         let model = if m0.as_deref() == Some(model_id) {
-            format!("model {model_id} (unchanged)")
+            msg!(
+                "model {model_id} (unchanged)",
+                "model {model_id} (без изменений)"
+            )
         } else {
             format!("model {} -> {model_id}", shown(&m0))
         };
         // Without --effort the preset's own effort stays.
         let eff = match effort {
-            Some(e) if e0.as_deref() == Some(e) => format!("effort {e} (unchanged)"),
+            Some(e) if e0.as_deref() == Some(e) => {
+                msg!("effort {e} (unchanged)", "effort {e} (без изменений)")
+            }
             Some(e) => format!("effort {} -> {e}", shown(&e0)),
-            None => format!("effort {} (kept; pass --effort to set)", shown(&e0)),
+            None => msg!(
+                "effort {} (kept; pass --effort to set)",
+                "effort {} (оставлено; чтобы задать, передайте --effort)",
+                shown(&e0)
+            ),
         };
-        println!("  desktop preset {name}: {model}, {eff}");
+        say!(
+            "  desktop preset {name}: {model}, {eff}",
+            "  пресет Desktop {name}: {model}, {eff}"
+        );
         s.insert("modelId".to_string(), Value::String(model_id.to_string()));
         if let Some(e) = effort {
             s.insert("effort".to_string(), Value::String(e.to_string()));
@@ -1191,7 +1467,14 @@ fn update_desktop_presets(
     for (_acct_id, acct) in accounts.iter_mut() {
         if let Some(presets) = acct.get_mut("presets").and_then(|v| v.as_array_mut()) {
             for p in presets.iter_mut() {
-                let name = p["name"].as_str().unwrap_or("(unnamed)").to_string();
+                let name = p["name"]
+                    .as_str()
+                    .unwrap_or(if is_ru() {
+                        "(без имени)"
+                    } else {
+                        "(unnamed)"
+                    })
+                    .to_string();
                 if let Some(s) = p.get_mut("settings").and_then(|v| v.as_object_mut()) {
                     apply(&name, s);
                 }
@@ -1200,12 +1483,23 @@ fn update_desktop_presets(
         if let Some(built_ins) = acct.get_mut("builtIns").and_then(|v| v.as_object_mut()) {
             for (k, b) in built_ins.iter_mut() {
                 if let Some(s) = b.get_mut("settings").and_then(|v| v.as_object_mut()) {
-                    apply(&format!("built-in {k}"), s);
+                    apply(&msg!("built-in {k}", "встроенный {k}"), s);
                 }
             }
         }
     }
-    write_json_if_changed(path, None, &orig, &next, dry_run, "desktop presets")
+    write_json_if_changed(
+        path,
+        None,
+        &orig,
+        &next,
+        dry_run,
+        if is_ru() {
+            "пресеты Desktop"
+        } else {
+            "desktop presets"
+        },
+    )
 }
 
 fn format_antigravity_command(hook_bin_path: &Path, lang: Lang) -> String {
@@ -1230,9 +1524,12 @@ fn format_antigravity_command(hook_bin_path: &Path, lang: Lang) -> String {
 fn update_antigravity_hooks(path: &Path, command: &str, dry_run: bool) -> Result<(), String> {
     let orig = read_json_object(path)?;
     let mut next = orig.clone();
-    let root = next
-        .as_object_mut()
-        .ok_or("hooks.json root is not object")?;
+    let root = next.as_object_mut().ok_or_else(|| {
+        msg!(
+            "hooks.json root is not object",
+            "корень hooks.json не является объектом"
+        )
+    })?;
     root.remove("claude-guard");
     root.insert(
         "ctxkit".to_string(),
@@ -1251,7 +1548,7 @@ fn update_antigravity_hooks(path: &Path, command: &str, dry_run: bool) -> Result
             ]
         }),
     );
-    write_json_if_changed(path, None, &orig, &next, dry_run, "antigravity hooks.json")
+    write_json_if_changed(path, None, &orig, &next, dry_run, "Antigravity hooks.json")
 }
 
 const DSH_MARKER_START: &str = "# >>> ctxkit (managed by `ctxkit setup --dsh`; do not edit) >>>";
@@ -1292,8 +1589,9 @@ fn format_custom_dsh_command(cmd: &str, lang: Lang) -> String {
 /// block is a sequence item, so appending it to a flow list or a mapping would break the YAML.
 fn dsh_patch_check(existing: &str, path: &Path) -> Result<(), String> {
     match existing.find(DSH_MARKER_START) {
-        Some(s) if !existing[s..].contains(DSH_MARKER_END) => Err(format!(
+        Some(s) if !existing[s..].contains(DSH_MARKER_END) => Err(msg!(
             "{}: ctxkit start marker has no end marker; remove the leftover ctxkit block by hand and rerun",
+            "{}: у начального маркера ctxkit нет конечного; удалите оставшийся блок ctxkit вручную и запустите снова",
             path.display()
         )),
         Some(_) => Ok(()),
@@ -1302,8 +1600,9 @@ fn dsh_patch_check(existing: &str, path: &Path) -> Result<(), String> {
                 .lines()
                 .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
             if first.is_some_and(|l| l.trim_end() != "-" && !l.starts_with("- ")) {
-                return Err(format!(
+                return Err(msg!(
                     "{}: top level is not a block list (`- ...`); add the entry from examples/dsh-cordis.patch.yml by hand",
+                    "{}: верхний уровень не является блочным списком (`- ...`); добавьте запись из examples/dsh-cordis.patch.yml вручную",
                     path.display()
                 ));
             }
@@ -1320,8 +1619,7 @@ fn preflight_dsh(dsh_home: &Path) -> Result<(), String> {
     }
     let patch = profile.join("cordis.patch.yml");
     if patch.exists() {
-        let text =
-            fs::read_to_string(&patch).map_err(|e| format!("read {}: {e}", patch.display()))?;
+        let text = read_text(&patch)?;
         dsh_patch_check(&text, &patch)?;
     }
     read_json_object(&dsh_home.join("ctxkit-hooks.json")).map(|_| ())
@@ -1332,20 +1630,26 @@ fn preflight_dsh(dsh_home: &Path) -> Result<(), String> {
 fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(), String> {
     let profile = dsh_home.join("profiles").join("desktop");
     if !profile.exists() {
-        println!("  skip DeepSeek Harness (not found: {})", profile.display());
+        say!(
+            "  skip DeepSeek Harness (not found: {})",
+            "  DeepSeek Harness пропущен (не найден: {})",
+            profile.display()
+        );
         return Ok(());
     }
     let patch_path = profile.join("cordis.patch.yml");
     if !patch_path.exists() {
         if dry_run {
-            println!(
+            say!(
                 "  [dry-run] create DeepSeek Harness profile patch: {}",
+                "  [dry-run] создание патча профиля DeepSeek Harness: {}",
                 patch_path.display()
             );
         } else {
             write_atomic(&patch_path, b"# DeepSeek Harness profile patch\n")?;
-            println!(
+            say!(
                 "  created DeepSeek Harness profile patch: {}",
+                "  создан патч профиля DeepSeek Harness: {}",
                 patch_path.display()
             );
         }
@@ -1355,8 +1659,9 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     if global_patch.exists() {
         if let Ok(content) = fs::read_to_string(&global_patch) {
             if content.contains(DSH_HOOKS_PLUGIN) || content.contains("orca-agent-hooks") {
-                println!(
+                say!(
                     "  [warn] {} contains hook plugins (might conflict or duplicate hooks with profile desktop)",
+                    "  [warn] {} содержит плагины хуков (возможен конфликт или дублирование хуков с профилем desktop)",
                     global_patch.display()
                 );
             }
@@ -1376,7 +1681,11 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
         &orig,
         &hooks,
         dry_run,
-        "DeepSeek Harness hooks",
+        if is_ru() {
+            "хуки DeepSeek Harness"
+        } else {
+            "DeepSeek Harness hooks"
+        },
     )?;
 
     let config_path = hooks_path.to_string_lossy().replace('\'', "''");
@@ -1385,8 +1694,7 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
     );
     // A dry run does not create the patch file, so it may not exist yet.
     let existing = if patch_path.exists() {
-        fs::read_to_string(&patch_path)
-            .map_err(|e| format!("read {}: {e}", patch_path.display()))?
+        read_text(&patch_path)?
     } else {
         String::new()
     };
@@ -1404,21 +1712,24 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
         None => append_block(&existing, &block),
     };
     if existing == updated {
-        println!(
+        say!(
             "  ok DeepSeek Harness profile patch (unchanged): {}",
+            "  ок патч профиля DeepSeek Harness (без изменений): {}",
             patch_path.display()
         );
     } else if dry_run {
-        println!(
+        say!(
             "  [dry-run] update DeepSeek Harness profile patch: {}",
+            "  [dry-run] обновление патча профиля DeepSeek Harness: {}",
             patch_path.display()
         );
     } else {
         let b = backup_file(&patch_path, &profile)?;
-        println!("  backup -> {}", b.display());
+        say!("  backup -> {}", "  копия -> {}", b.display());
         write_atomic(&patch_path, updated.as_bytes())?;
-        println!(
+        say!(
             "  updated DeepSeek Harness profile patch: {}",
+            "  обновлён патч профиля DeepSeek Harness: {}",
             patch_path.display()
         );
     }
@@ -1445,18 +1756,29 @@ fn update_dsh_hooks(dsh_home: &Path, command: &str, dry_run: bool) -> Result<(),
         "desktopVersion",
     );
     let problem = match (&installed, &app) {
-        (None, _) => "is not installed",
-        (Some(i), Some(a)) if i != a => "does not match the app version",
-        _ => "",
+        (None, _) => msg!("is not installed", "не установлен"),
+        (Some(i), Some(a)) if i != a => {
+            msg!(
+                "does not match the app version",
+                "не совпадает с версией приложения"
+            )
+        }
+        _ => String::new(),
     };
     if problem.is_empty() {
-        println!("  [ok]   DeepSeek Harness: {DSH_HOOKS_PLUGIN} is installed; restart the app to load hooks");
+        say!(
+            "  [ok]   DeepSeek Harness: {DSH_HOOKS_PLUGIN} is installed; restart the app to load hooks",
+            "  [ok]   DeepSeek Harness: {DSH_HOOKS_PLUGIN} установлен; перезапустите приложение, чтобы загрузить хуки"
+        );
     } else {
         let version = app.unwrap_or_else(|| "<DSH version>".to_string());
-        println!(
+        say!(
             "  [warn] DeepSeek Harness: {DSH_HOOKS_PLUGIN} {problem} in {} (installed: {}) - hooks stay inactive. Run there: pnpm add -E {DSH_HOOKS_PLUGIN}@{version} @deepseek-ai/dsh-hook-protocol@{version} and restart the app.",
+            "  [warn] DeepSeek Harness: {DSH_HOOKS_PLUGIN} {problem} в {} (установлена: {}) - хуки неактивны. Выполните там: pnpm add -E {DSH_HOOKS_PLUGIN}@{version} @deepseek-ai/dsh-hook-protocol@{version} и перезапустите приложение.",
             profile.display(),
-            installed.as_deref().unwrap_or("none")
+            installed
+                .as_deref()
+                .unwrap_or(if is_ru() { "нет" } else { "none" })
         );
     }
     Ok(())
@@ -1518,6 +1840,52 @@ You are an independent verifier. You did not write this code and must never modi
     }
 }
 
+/// The block's lines that come from `ctxkit.json`, the one source of the policies: one short line per policy
+/// that is on, then the owner's own `rules` items as they are (not translated; a leading `- ` is not doubled).
+/// Whatever is off or absent adds nothing, so turning a policy off and rerunning `--with-rules` drops its line.
+fn policy_lines(cfg: &policy::Config, lang: Lang) -> String {
+    let mut out = String::new();
+    // `bullet`: the line gets the `- ` of a list item unless it brings one
+    let mut add = |line: &str| {
+        if !(line.starts_with("- ") || line.starts_with("* ")) {
+            out.push_str("- ");
+        }
+        out.push_str(line);
+        out.push('\n');
+    };
+    if cfg.commit_hygiene {
+        add(t(
+            lang,
+            "Commit messages carry no `Co-Authored-By` or `Generated with` lines: the ctxkit hook blocks such a commit.",
+            "В сообщениях коммитов нет `Co-Authored-By` и `Generated with`: хук ctxkit такой коммит блокирует.",
+        ));
+    }
+    if cfg.confirm_irreversible {
+        add(t(
+            lang,
+            "Irreversible commands (`git push`, `git reset --hard`, `git clean -f`, `git branch -D`, `rm -rf`) need the owner's confirmation: the ctxkit hook asks.",
+            "Необратимое (`git push`, `git reset --hard`, `git clean -f`, `git branch -D`, `rm -rf`) — только с подтверждения владельца: хук ctxkit спросит.",
+        ));
+    }
+    if cfg.stray_files {
+        add(t(
+            lang,
+            "Reports and notes go in the chat, not into a `report*.md` or `notes*.md` file in the project root: the ctxkit hook asks.",
+            "Отчёты и заметки отдавай в чат, не файлом `report*.md` или `notes*.md` в корне проекта: хук ctxkit спросит.",
+        ));
+    }
+    if let Some(n) = cfg.build_slots {
+        add(&match lang {
+            Lang::En => format!("Run builds and tests through `ctxkit check`: it keeps at most {n} running at once on this machine."),
+            Lang::Ru => format!("Сборки и тесты запускай через `ctxkit check`: он держит на машине не больше {n} одновременных."),
+        });
+    }
+    for rule in &cfg.rules {
+        add(rule);
+    }
+    out
+}
+
 /// The rules block. Model names come from `settings` (the result of this run: the flags, else the user's
 /// own `model` / `advisorModel`); a model that is not set anywhere is not named.
 fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
@@ -1539,6 +1907,7 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
             "; the Stop hook sends you back once if edits were left without `checker`"
         }
     };
+    let extra = policy_lines(&opts.config, opts.lang);
     match opts.lang {
         Lang::Ru => {
             let adv_line = match (main, adv) {
@@ -1561,7 +1930,7 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
 - Не объявляй задачу готовой без `checker` (Opus), кроме правки одного файла без изменения логики{gate}.\n\
 - Группируй независимые `Read`/`Edit`; не читай длинные файлы целиком: сначала `Grep` или LSP, затем диапазон.\n\
 - Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `ctxkit check <cmd>`.\n\
-{MARKER_END}",
+{extra}{MARKER_END}",
                 sub = opts.subagent
             )
         }
@@ -1584,7 +1953,7 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
 - Do not declare work done without `checker` (Opus), except a one-file change with no logic change{gate}.\n\
 - Batch independent `Read`/`Edit` calls; locate symbols via `Grep`/LSP first, then read tight line ranges.\n\
 - Run `ctxkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n\
-{MARKER_END}",
+{extra}{MARKER_END}",
                 sub = opts.subagent
             )
         }
@@ -1598,24 +1967,31 @@ fn print_diagnostics(
     home: &Path,
     opts: &SetupOpts,
 ) {
-    println!("\nDiagnostics:");
+    say!("\nDiagnostics:", "\nДиагностика:");
     if !opts.skip_version_check && settings["advisorModel"].as_str() == Some("fable") {
         match check_claude_version() {
             Some(ver) => {
                 if ver < (2, 1, 321) {
-                    println!(
+                    say!(
                         "  [warn] claude CLI {}.{}.{} < 2.1.321 (required for Fable advisor). Run `claude update`.",
-                        ver.0, ver.1, ver.2
+                        "  [warn] claude CLI {}.{}.{} < 2.1.321 (нужна для советника Fable). Выполните `claude update`.",
+                        ver.0,
+                        ver.1,
+                        ver.2
                     );
                 } else {
-                    println!(
+                    say!(
                         "  [ok]   claude CLI {}.{}.{} (>= 2.1.321)",
-                        ver.0, ver.1, ver.2
+                        "  [ok]   claude CLI {}.{}.{} (>= 2.1.321)",
+                        ver.0,
+                        ver.1,
+                        ver.2
                     );
                 }
             }
-            None => println!(
-                "  [info] `claude` CLI not found in PATH (Desktop client uses bundled version)"
+            None => say!(
+                "  [info] `claude` CLI not found in PATH (Desktop client uses bundled version)",
+                "  [info] `claude` CLI не найден в PATH (клиент Desktop использует свою версию)"
             ),
         }
     }
@@ -1632,13 +2008,18 @@ fn print_diagnostics(
             })
             .collect();
         if on.len() > 8 {
-            println!(
+            say!(
                 "  [warn] {} global plugins enabled ({}). Disable niche plugins globally and enable per-project in .claude/settings.json to cut tool-schema bloat.",
+                "  [warn] глобально включено плагинов: {} ({}). Отключите узкие плагины глобально и включайте их по проектам в .claude/settings.json, чтобы не раздувать схемы инструментов.",
                 on.len(),
                 on.join(", ")
             );
         } else {
-            println!("  [ok]   {} global plugins enabled", on.len());
+            say!(
+                "  [ok]   {} global plugins enabled",
+                "  [ok]   глобально включено плагинов: {}",
+                on.len()
+            );
         }
     }
 
@@ -1647,15 +2028,17 @@ fn print_diagnostics(
         let lines = raw.lines().count();
         let kb = raw.len() as f64 / 1024.0;
         if lines > 200 || raw.len() > 8192 {
-            println!(
+            say!(
                 "  [warn] {} is {} lines ({:.1} KB) — trim below 200 lines / ~6 KB and move area rules into .claude/rules/*.md",
+                "  [warn] {}: строк {} ({:.1} КБ) — сократите до 200 строк / ~6 КБ и вынесите правила по областям в .claude/rules/*.md",
                 claude_md.display(),
                 lines,
                 kb
             );
         } else {
-            println!(
+            say!(
                 "  [ok]   {} is {} lines ({:.1} KB)",
+                "  [ok]   {}: строк {} ({:.1} КБ)",
                 claude_md.display(),
                 lines,
                 kb
@@ -1667,15 +2050,17 @@ fn print_diagnostics(
         if let Some(mcps) = cj.get("mcpServers").and_then(|v| v.as_object()) {
             if mcps.len() > 2 {
                 let names: Vec<&str> = mcps.keys().map(String::as_str).collect();
-                println!(
+                say!(
                     "  [warn] {} global MCP servers in {} ({}): OpenAPI/fat schemas load on every turn.",
+                    "  [warn] глобальных MCP-серверов: {} в {} ({}): тяжёлые схемы (OpenAPI) грузятся в каждом ходе.",
                     mcps.len(),
                     claude_json.display(),
                     names.join(", ")
                 );
             } else {
-                println!(
+                say!(
                     "  [ok]   {} global MCP server(s) in {}",
+                    "  [ok]   глобальных MCP-серверов: {} в {}",
                     mcps.len(),
                     claude_json.display()
                 );
@@ -1712,28 +2097,37 @@ fn print_diagnostics(
 }
 
 fn print_dsh_diagnostics(dsh_home: &Path) {
-    println!("\nDeepSeek Harness Diagnostics:");
+    say!(
+        "\nDeepSeek Harness Diagnostics:",
+        "\nДиагностика DeepSeek Harness:"
+    );
     let agents_md = dsh_home.join("AGENTS.md");
     if let Ok(raw) = fs::read_to_string(&agents_md) {
         let lines = raw.lines().count();
         let kb = raw.len() as f64 / 1024.0;
         if lines > 200 || raw.len() > 8192 {
-            println!(
+            say!(
                 "  [warn] {} is {} lines ({:.1} KB) — trim below 200 lines / ~8 KB.",
+                "  [warn] {}: строк {} ({:.1} КБ) — сократите до 200 строк / ~8 КБ.",
                 agents_md.display(),
                 lines,
                 kb
             );
         } else {
-            println!(
+            say!(
                 "  [ok]   {} is {} lines ({:.1} KB)",
+                "  [ok]   {}: строк {} ({:.1} КБ)",
                 agents_md.display(),
                 lines,
                 kb
             );
         }
     } else {
-        println!("  [info] no global {} found", agents_md.display());
+        say!(
+            "  [info] no global {} found",
+            "  [info] глобальный {} не найден",
+            agents_md.display()
+        );
     }
 
     let global_patch = dsh_home.join("cordis.patch.yml");
@@ -1747,14 +2141,16 @@ fn print_dsh_diagnostics(dsh_home: &Path) {
                 })
                 .count();
             if mcps > 2 {
-                println!(
+                say!(
                     "  [warn] {} global MCP servers found in {}",
+                    "  [warn] глобальных MCP-серверов найдено: {} в {}",
                     mcps,
                     global_patch.display()
                 );
             } else if mcps > 0 {
-                println!(
+                say!(
                     "  [ok]   {} global MCP server(s) in {}",
+                    "  [ok]   глобальных MCP-серверов: {} в {}",
                     mcps,
                     global_patch.display()
                 );
@@ -1770,14 +2166,16 @@ fn print_dsh_diagnostics(dsh_home: &Path) {
                 .filter(|e| e.path().is_dir())
                 .count();
             if count > 15 {
-                println!(
+                say!(
                     "  [warn] {} global skills in {} — consider pruning unused skills",
+                    "  [warn] глобальных скилов: {} в {} — подумайте, какие неиспользуемые убрать",
                     count,
                     skills_dir.display()
                 );
             } else {
-                println!(
+                say!(
                     "  [ok]   {} global skill(s) in {}",
+                    "  [ok]   глобальных скилов: {} в {}",
                     count,
                     skills_dir.display()
                 );
@@ -1787,7 +2185,7 @@ fn print_dsh_diagnostics(dsh_home: &Path) {
 }
 
 fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>) {
-    println!("\nAntigravity Diagnostics:");
+    say!("\nAntigravity Diagnostics:", "\nДиагностика Antigravity:");
     if let Some(cli_path) = agy_cli_settings {
         if let Ok(cfg) = read_json_object(cli_path) {
             if let Some(model) = cfg.get("model").and_then(|v| v.as_str()) {
@@ -1797,13 +2195,20 @@ fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>
                     || lower.contains("mini")
                     || lower.contains("haiku")
                 {
-                    println!("  [ok]   agy CLI model: {model}");
+                    say!(
+                        "  [ok]   agy CLI model: {model}",
+                        "  [ok]   модель agy CLI: {model}"
+                    );
                 } else if lower.contains("pro") || lower.contains("opus") {
-                    println!(
-                        "  [warn] agy CLI model: {model} (invoke_subagent defaults to Model='inherit'; pass 'flash'/'flash_lite' for search/routine subagents)"
+                    say!(
+                        "  [warn] agy CLI model: {model} (invoke_subagent defaults to Model='inherit'; pass 'flash'/'flash_lite' for search/routine subagents)",
+                        "  [warn] модель agy CLI: {model} (invoke_subagent по умолчанию берёт Model='inherit'; для поисковых и рутинных субагентов передавайте 'flash'/'flash_lite')"
                     );
                 } else {
-                    println!("  [info] agy CLI model: {model}");
+                    say!(
+                        "  [info] agy CLI model: {model}",
+                        "  [info] модель agy CLI: {model}"
+                    );
                 }
             }
         }
@@ -1813,17 +2218,22 @@ fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>
     if agy_dir.join("plugins").is_dir() || !enabled_plugins.is_empty() {
         let names: Vec<&str> = enabled_plugins.iter().map(|(n, _)| n.as_str()).collect();
         if enabled_plugins.len() > 6 {
-            println!(
+            say!(
                 "  [warn] Antigravity: {} global plugins enabled ({}). Disable niche plugins in {}/config.json or UI.",
+                "  [warn] Antigravity: глобально включено плагинов: {} ({}). Отключите узкие плагины в {}/config.json или в интерфейсе.",
                 enabled_plugins.len(),
                 names.join(", "),
                 agy_dir.display()
             );
         } else if names.is_empty() {
-            println!("  [ok]   Antigravity: 0 global plugins enabled");
+            say!(
+                "  [ok]   Antigravity: 0 global plugins enabled",
+                "  [ok]   Antigravity: глобально включено плагинов: 0"
+            );
         } else {
-            println!(
+            say!(
                 "  [ok]   Antigravity: {} global plugin(s) enabled ({})",
+                "  [ok]   Antigravity: глобально включено плагинов: {} ({})",
                 enabled_plugins.len(),
                 names.join(", ")
             );
@@ -1841,15 +2251,17 @@ fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>
     if agy_dir.join("mcp_config.json").is_file() || total_mcps > 0 {
         let mut parts = Vec::new();
         if !global_mcps.is_empty() {
-            parts.push(format!(
+            parts.push(msg!(
                 "{} in mcp_config.json [{}]",
+                "{} в mcp_config.json [{}]",
                 global_mcps.len(),
                 global_mcps.join(", ")
             ));
         }
         if !plugin_mcps.is_empty() {
-            parts.push(format!(
+            parts.push(msg!(
                 "{} in plugins [{}]",
+                "{} в плагинах [{}]",
                 plugin_mcps.len(),
                 plugin_mcps.join(", ")
             ));
@@ -1860,13 +2272,15 @@ fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>
             format!(" ({})", parts.join(", "))
         };
         if total_mcps > 4 {
-            println!(
+            say!(
                 "  [warn] Antigravity: {} active global MCP servers{breakdown} - even with Lazy schemas, tool lists and plugin rules grow startup context; keep project-only MCPs in .agents/mcp_config.json or disable unused plugins.",
+                "  [warn] Antigravity: активных глобальных MCP-серверов: {}{breakdown} - даже с ленивыми схемами списки инструментов и правила плагинов раздувают стартовый контекст; держите проектные MCP в .agents/mcp_config.json или отключите ненужные плагины.",
                 total_mcps
             );
         } else {
-            println!(
+            say!(
                 "  [ok]   Antigravity: {} active global MCP server(s){breakdown}",
+                "  [ok]   Antigravity: активных глобальных MCP-серверов: {}{breakdown}",
                 total_mcps
             );
         }
@@ -1876,21 +2290,24 @@ fn print_antigravity_diagnostics(agy_dir: &Path, agy_cli_settings: Option<&Path>
     if !oversized.is_empty() {
         let list: Vec<String> = oversized
             .iter()
-            .map(|(name, b)| format!("{name} ({:.1} KB)", *b as f64 / 1024.0))
+            .map(|(name, b)| msg!("{name} ({:.1} KB)", "{name} ({:.1} КБ)", *b as f64 / 1024.0))
             .collect();
-        println!(
+        say!(
             "  [warn] Antigravity: plugin rule file(s) exceed 24 KB per-file cap: {}",
+            "  [warn] Antigravity: файлы правил плагинов превышают лимит 24 КБ на файл: {}",
             list.join(", ")
         );
     } else if rule_bytes > 16_384 {
-        println!(
+        say!(
             "  [warn] Antigravity: {} enabled plugin rule file(s) total {:.1} KB - trims startup token baseline when trimmed or scoped per project.",
+            "  [warn] Antigravity: файлов правил включённых плагинов: {}, всего {:.1} КБ - если сократить их или привязать к проектам, стартовый расход токенов снизится.",
             rule_files,
             rule_bytes as f64 / 1024.0
         );
     } else if rule_files > 0 {
-        println!(
+        say!(
             "  [ok]   Antigravity: {} plugin rule file(s), {:.1} KB total (within 24 KB/file cap)",
+            "  [ok]   Antigravity: файлов правил плагинов: {}, всего {:.1} КБ (в пределах лимита 24 КБ на файл)",
             rule_files,
             rule_bytes as f64 / 1024.0
         );
@@ -2045,6 +2462,41 @@ fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
 }
 
 fn print_help() {
+    if is_ru() {
+        println!(
+            "Использование: ctxkit setup [параметры]\n\n\
+         Автоматическая экономная настройка Claude Code, Claude Desktop, Antigravity и DeepSeek Harness:\n\
+         - Перед записью делает копии существующих конфигов\n\
+         - Создаёт агентов Explore (haiku) и checker (opus); модель, советник и effort НЕ меняются, пока не переданы --main-model / --advisor / --effort (прежняя схема: --main-model sonnet --advisor fable --effort high). Изменения печатаются как «было -> стало»; свои env/хуки/плагины сохраняются\n\
+         - Подключает хуки ctxkit PreToolUse/PostToolUse с \"onFailure\": \"continue\" (упавший хук не блокирует вызов; claude 2.1.295+) вместо старых записей claude-guard / no-inline-backslash\n\
+         - До копирования и записи отказывается от файла, который не может обработать (необычный settings.json, битые пресеты/хуки/YAML, CLAUDE.md с удвоенным или непарным маркером ctxkit); файлы пишутся атомарно\n\
+         - Подключает шлюз Stop, срабатывающий раз за ход: ход, где правился код без последующего checker/советника, возвращается один раз\n\
+         - Проверяет включённые плагины, размер CLAUDE.md, глобальные MCP, версию Claude CLI и конфиги Antigravity\n\n\
+         Параметры:\n\
+           --dry-run              Предпросмотр изменений без записи файлов\n\
+           --profile <dir>        Каталог конфигурации Claude (по умолчанию: ~/.claude или CLAUDE_CONFIG_DIR)\n\
+           --main-model <name>    Записать `model` (без флага не пишется; например sonnet)\n\
+           --advisor <name>       Записать `advisorModel` (без флага не пишется; например fable; \"none\" убирает)\n\
+           --subagent <name>      Модель Explore и CLAUDE_CODE_SUBAGENT_MODEL (переменная пишется только с этим флагом; по умолчанию в Explore.md: haiku)\n\
+           --effort <level>       Записать effort (без флага не пишется): modelSettings.<model>.effortLevel для --main-model или вашего `model` (известная модель, low|medium|high|xhigh), effortLevel верхнего уровня и пресеты Desktop с --desktop\n\
+           --no-stop-gate         Не подключать шлюз Stop (и убрать наш, если есть; переменная CTXKIT_GATE=0 глушит его на сессию)\n\
+           --no-agents            Не создавать Explore.md и checker.md\n\
+           --force-agents         Перезаписать существующие Explore.md / checker.md\n\
+           --with-rules           Добавить/обновить идемпотентный блок правил в CLAUDE.md\n\
+           --desktop              Записать modelId (--desktop-model) в ccd-session-presets.json Claude Desktop; effort только с --effort\n\
+           --desktop-model <id>   modelId для Desktop (по умолчанию: claude-sonnet-5-5)\n\
+           --desktop-file <path>  Другой путь к ccd-session-presets.json\n\
+           --antigravity          Подключить ctxkit в hooks.json Antigravity и проверить MCP/плагины\n\
+           --agy-file <path>      Другой путь к hooks.json Antigravity\n\
+           --dsh                  Подключить ctxkit в DeepSeek Harness Desktop (мост dsh-hooks-claude-code)\n\
+           --dsh-home <path>      Другой домашний каталог DeepSeek Harness (по умолчанию: DSH_HOME или ~/.dsh)\n\
+           --hook-cmd <cmd>       Другая команда хука\n\
+           --policy <list>        Политики <profile>/ctxkit.json, которые проверяют хуки; включены ровно перечисленные, остальные выключены (без флага не меняются): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (через запятую; `none` выключает все). Печатает «было -> стало» по каждой политике; ключи файла, написанные вами, сохраняются; блок правил после --with-rules перечисляет включённые политики\n\
+           --lang <en|ru>         Язык промптов, фрагментов, сообщений хуков и вывода setup (по умолчанию: en)\n\
+           --uninstall            Откат: убрать наши элементы хуков, CTXKIT_LANG, блок правил в CLAUDE.md (а с --antigravity/--agy-file или --dsh/--dsh-home и их записи), раздел policies в ctxkit.json (файл удаляется, только если его создал setup и в нём нет ничего вашего; иначе ваши ключи остаются и называются) и бинарник hooks/ctxkit; файл возвращается байт в байт из копии, если в нём больше ничего не менялось, а CLAUDE.md / settings.json, созданный setup, удаляется. Модель, советник, effort, env субагентов, пресеты Desktop и файлы агентов НЕ трогаются: печатаются их текущие значения и копии settings.json. Работает с --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; параметры установки отвергаются\n"
+        );
+        return;
+    }
     println!(
         "Usage: ctxkit setup [options]\n\n\
          Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness:\n\
@@ -2073,8 +2525,9 @@ fn print_help() {
            --dsh                  Wire ctxkit into DeepSeek Harness Desktop (dsh-hooks-claude-code bridge)\n\
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --hook-cmd <cmd>       Override hook command path\n\
+           --policy <list>        Policies of <profile>/ctxkit.json that hooks enforce; exactly the listed ones are on, the rest off (not changed without this flag): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (comma separated; `none` turns all off). Prints \"was -> became\" per policy; keys of the file you wrote yourself are kept; the rules block lists the policies that are on after --with-rules\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
-           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries) and the hooks/ctxkit binary; a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
+           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries), the policies section of ctxkit.json (the file is deleted only when setup created it and holds nothing of yours; otherwise your keys stay and are named) and the hooks/ctxkit binary; a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
     );
 }
 
@@ -2147,6 +2600,26 @@ mod tests {
             change_line("advisorModel", Some("fable"), None),
             "  advisorModel: fable -> (unset)"
         );
+    }
+
+    #[test]
+    fn lines_follow_the_language_of_the_run_and_keep_the_arrow() {
+        set_lang(Lang::Ru);
+        assert_eq!(
+            change_line("advisorModel", None, Some("fable")),
+            "  advisorModel: (не задано) -> fable"
+        );
+        assert_eq!(
+            change_line("model", Some("a"), Some("a")),
+            "  model: a (без изменений)"
+        );
+        assert_eq!(
+            kept_line("model", Some("opus"), "--main-model sonnet"),
+            "  model: opus (оставлено; чтобы задать, передайте --main-model sonnet)"
+        );
+        assert_eq!(msg!("one {}", "один {}", 1), "один 1");
+        set_lang(Lang::En);
+        assert_eq!(msg!("one {}", "один {}", 1), "one 1");
     }
 
     #[test]
@@ -2364,6 +2837,75 @@ mod tests {
             assert!(!blank.contains("sonnet") && !blank.contains("opus"));
             assert!(!blank.contains("advisor"));
         }
+    }
+
+    #[test]
+    fn rules_block_lists_the_policies_that_are_on_and_the_owners_own_items() {
+        let snippet = |cfg: &str, lang: Lang| {
+            let opts = SetupOpts {
+                config: policy::parse(cfg).unwrap(),
+                lang,
+                ..SetupOpts::default()
+            };
+            rules_snippet(&opts, &json!({}))
+        };
+        let all = r#"{"policies":{"commit_hygiene":true,"confirm_irreversible":true,"stray_files":true,"build_slots":3},
+            "rules":["Субагентам, которые правят код, задавай model: \"sonnet\", никогда haiku","- a line that is a bullet already"]}"#;
+        let en = snippet(all, Lang::En);
+        for want in [
+            "`Co-Authored-By`",
+            "`git push`",
+            "`report*.md`",
+            "at most 3 running",
+            "- Субагентам, которые правят код, задавай model: \"sonnet\", никогда haiku\n",
+            "\n- a line that is a bullet already\n",
+        ] {
+            assert!(en.contains(want), "{want}\n{en}");
+        }
+        assert!(!en.contains("- - "), "a bullet is not doubled");
+        let ru = snippet(all, Lang::Ru);
+        assert!(ru.contains("хук ctxkit спросит") && ru.contains("не больше 3 одновременных"));
+        // all of it sits between the markers; the owner's items come last
+        let (s, e) = marker_span(&en).unwrap();
+        assert_eq!((s, e), (0, en.len()));
+        assert!(en
+            .trim_end_matches(MARKER_END)
+            .trim_end()
+            .ends_with("a bullet already"));
+        // one line per policy and per item, no more
+        let base = snippet("{}", Lang::En).lines().count();
+        assert_eq!(en.lines().count(), base + 6);
+        // off or absent policies add nothing: the block is the old one
+        for off in [
+            "{}",
+            r#"{"policies":{"commit_hygiene":false,"build_slots":0}}"#,
+        ] {
+            assert_eq!(
+                snippet(off, Lang::En),
+                rules_snippet(&SetupOpts::default(), &json!({}))
+            );
+        }
+        // idempotent in the file, and a policy turned off drops its line on the next run
+        let d = std::env::temp_dir().join(format!("ctxkit_rules_policy_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let (md, bak) = (d.join("CLAUDE.md"), d.join("backups"));
+        fs::write(&md, "# Mine\nkeep this line\n").unwrap();
+        upsert_claude_md(&md, &bak, &en, false).unwrap();
+        let once = fs::read_to_string(&md).unwrap();
+        upsert_claude_md(&md, &bak, &en, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(&md).unwrap(),
+            once,
+            "second run changes nothing"
+        );
+        assert!(once.starts_with("# Mine\nkeep this line\n"));
+        let slim = snippet(r#"{"policies":{"stray_files":true}}"#, Lang::En);
+        upsert_claude_md(&md, &bak, &slim, false).unwrap();
+        let after = fs::read_to_string(&md).unwrap();
+        assert!(after.contains("`report*.md`") && !after.contains("Co-Authored-By"));
+        assert_eq!(after.matches(MARKER_START).count(), 1);
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CtxkitDoctor, Entity, FindingSeverity } from '../shared/model'
-import { stopGateOff } from './ctxkit-stats'
+import { policiesNow, stopGateOff } from './ctxkit-stats'
 import { buildRows, onlyUnknown, scopeRank } from './aggregate'
 import { plural } from '../shared/i18n'
 import { diagnose } from './doctor'
@@ -87,6 +87,18 @@ describe('галочка шлюза Stop', () => {
     // чистый профиль: хука нет, «нет шлюза» — не выбор пользователя, остаётся шлюз по умолчанию
     expect(stopGateOff(doc(['hooks', 'warn'], ['stop_gate', 'info']))).toBeNull()
     expect(stopGateOff(doc())).toBeNull()
+  })
+})
+
+describe('подпись «сейчас включены» в блоке «Защиты»', () => {
+  const doc = (...f: [string, FindingSeverity, string | null][]): CtxkitDoctor => ({
+    version: '1',
+    findings: f.map(([id, severity, detail]) => ({ id, severity, message: `m-${id}`, detail, fix: null })),
+  })
+  it('есть ctxkit.json — подпись из находки policies; нет файла — null', () => {
+    expect(policiesNow(doc())).toBeNull()
+    expect(policiesNow(doc(['policies', 'info', 'commit_hygiene, build_slots=2']))).toEqual({ text: 'commit_hygiene, build_slots=2', broken: false })
+    expect(policiesNow(doc(['policies', 'warn', 'x']))).toEqual({ text: 'm-policies', broken: true })
   })
 })
 
