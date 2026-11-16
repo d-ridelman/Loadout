@@ -50,6 +50,7 @@ CLI args / stdin JSON
 | Инструменты | `Read`, `Write`, `Edit`, `MultiEdit`, `Bash`, `PowerShell` | `read_file`, `write_file`, `edit_file`, `run_command` |
 | Блокировка `PreToolUse` | `hookSpecificOutput.permissionDecision = "deny"` | `{"decision": "deny", "reason": "..."}` |
 | Пропуск `PreToolUse` | Пустой `stdout` | `{"decision": "ask"}` |
+| Вопрос `PreToolUse` (политики `confirm_irreversible`, `stray_files`, см. README) | `hookSpecificOutput.permissionDecision = "ask"` + `permissionDecisionReason` | `{"decision": "ask", "reason": "..."}` |
 | `PostToolUse` | Проверка синтаксиса и `{"decision": "block"}` | Только `{}` (блокировка после записи не поддерживается) |
 
 В контракте Antigravity значение `"decision": "allow"` автоматически одобряет вызов инструмента в обход политики подтверждений пользователя. Поэтому при успешной проверке `ctxkit` всегда возвращает `{"decision": "ask"}`, передавая финальное решение встроенной политике безопасности.
