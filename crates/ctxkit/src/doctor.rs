@@ -297,6 +297,34 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
             Some("ctxkit setup --with-rules"),
         )),
     }
+
+    // ctxkit.json: silent when absent (the policies are opt-in); a broken file switches every policy off without a word.
+    let cfg_path = profile.join(crate::policy::FILE);
+    if cfg_path.exists() {
+        let parsed = fs::read(&cfg_path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| crate::policy::parse(&String::from_utf8_lossy(&b)));
+        out.push(match parsed {
+            Ok(c) => f(
+                "policies",
+                "info",
+                t(lang, "policies (ctxkit.json)", "политики (ctxkit.json)"),
+                Some(c.describe()),
+                None,
+            ),
+            Err(e) => f(
+                "policies",
+                "warn",
+                t(
+                    lang,
+                    "ctxkit.json does not parse: every policy is off and the hooks stay silent",
+                    "ctxkit.json не разбирается: все политики выключены, хуки молчат",
+                ),
+                Some(format!("{}: {e}", cfg_path.display())),
+                Some("ctxkit setup --policy <list>"),
+            ),
+        });
+    }
     out
 }
 
@@ -552,6 +580,34 @@ mod tests {
         bytes.push(0xff);
         fs::write(d.join("CLAUDE.md"), bytes).unwrap();
         assert_eq!(sev(&diagnose(&d, Lang::En), "rules_block"), "ok");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn ctxkit_json_is_reported_only_when_present_and_a_broken_one_warns() {
+        let d = temp("ctxkit_doctor_policies");
+        let find = |text: Option<&str>| {
+            match text {
+                Some(t) => fs::write(d.join("ctxkit.json"), t).unwrap(),
+                None => {
+                    let _ = fs::remove_file(d.join("ctxkit.json"));
+                }
+            }
+            diagnose(&d, Lang::En)
+                .into_iter()
+                .find(|x| x.id == "policies")
+        };
+        assert!(find(None).is_none());
+        let ok = find(Some(
+            r#"{"policies":{"commit_hygiene":true,"build_slots":2}}"#,
+        ))
+        .unwrap();
+        assert_eq!(ok.severity, "info");
+        assert_eq!(ok.detail.unwrap(), "commit_hygiene, build_slots=2");
+        let bad = find(Some(r#"{"policies":{"commit_hygiene":"yes"}}"#)).unwrap();
+        assert_eq!(bad.severity, "warn");
+        assert!(bad.detail.unwrap().contains("commit_hygiene"));
+        assert_eq!(find(Some("{")).unwrap().severity, "warn");
         let _ = fs::remove_dir_all(&d);
     }
 

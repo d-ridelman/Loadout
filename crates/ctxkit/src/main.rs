@@ -4,6 +4,7 @@ mod doctor;
 mod fsx;
 mod gate;
 mod guard;
+mod policy;
 mod report;
 mod setup;
 

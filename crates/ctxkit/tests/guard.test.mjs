@@ -14,6 +14,11 @@ if (!existsSync(exe)) {
   process.exit(2);
 }
 
+// Hooks and `ctxkit check` read <profile>/ctxkit.json: no run may reach the real ~/.claude, so every child
+// gets an empty profile (a case that needs policies passes its own CLAUDE_CONFIG_DIR).
+const isoProfile = mkdtempSync(join(tmpdir(), 'cg-prof-'));
+process.env.CLAUDE_CONFIG_DIR = isoProfile;
+
 const B = '\\';
 const runHook = (payload, extraArgs = [], extraEnv = {}) => {
   const env = { ...process.env, ...extraEnv };
@@ -958,6 +963,40 @@ const cases = [
     if (!only('both').includes('neither `checker` nor the advisor')) return 'both';
     return stopGate({ profile: 'none' }) === '' || 'nothing configured must not block';
   }],
+
+  // Policies: `setup --policy` writes <profile>/ctxkit.json, nothing without the flag, rollback, broken file refused
+  [true, () => {
+    const profile = join(dir, 'policy-profile');
+    mkdirSync(profile, { recursive: true });
+    const base = ['setup', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit', '--no-agents', '--skip-version-check'];
+    const file = join(profile, 'ctxkit.json');
+    const run = (...a) => spawnSync(exe, [...base, ...a], { encoding: 'utf8' });
+    const plain = run();
+    if (plain.status !== 0 || existsSync(file) || !plain.stdout.includes('policies: none (kept; pass --policy')) return 'no flag must not create the file';
+    if (run('--policy', 'bogus').status !== 2) return 'unknown policy must exit 2';
+    const dry = run('--policy', 'commit-hygiene,build-slots=2', '--dry-run');
+    if (dry.status !== 0 || existsSync(file) || !dry.stdout.includes('policy commit_hygiene: off -> on') || !dry.stdout.includes('policy build_slots: off -> 2')) return `dry: ${dry.stdout}`;
+    const on = run('--policy', 'commit-hygiene,build-slots=2');
+    const cfg = JSON.parse(readFileSync(file, 'utf8'));
+    if (on.status !== 0 || cfg.policies.commit_hygiene !== true || cfg.policies.build_slots !== 2 || cfg.created_by !== 'ctxkit setup') return `on: ${on.stdout}`;
+    const off = run('--policy', 'none');
+    if (off.status !== 0 || !off.stdout.includes('policy commit_hygiene: on -> off') || Object.keys(JSON.parse(readFileSync(file, 'utf8')).policies).length !== 0) return `off: ${off.stdout}`;
+    // a broken file stops setup before anything else is written
+    writeFileSync(file, '{"policies":{"commit_hygiene":"yes"}}');
+    const settingsBefore = existsSync(join(profile, 'settings.json')) ? readFileSync(join(profile, 'settings.json'), 'utf8') : null;
+    const refused = run('--policy', 'none');
+    const settingsAfter = existsSync(join(profile, 'settings.json')) ? readFileSync(join(profile, 'settings.json'), 'utf8') : null;
+    if (refused.status !== 1 || !refused.stderr.includes('ctxkit.json') || settingsBefore !== settingsAfter) return 'broken ctxkit.json must be refused untouched';
+    // rollback: the file setup made is deleted; the owner's keys stay
+    writeFileSync(file, JSON.stringify({ created_by: 'ctxkit setup', policies: { stray_files: true } }));
+    const un = spawnSync(exe, ['setup', '--uninstall', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit'], { encoding: 'utf8' });
+    if (un.status !== 0 || existsSync(file)) return `uninstall: ${un.stdout}`;
+    writeFileSync(file, JSON.stringify({ created_by: 'ctxkit setup', policies: { stray_files: true }, rules: ['my own rule of five words'] }));
+    const un2 = spawnSync(exe, ['setup', '--uninstall', '--profile', profile, '--claude-json', join(dir, 'policy-claude.json'), '--hook-cmd', 'test-ctxkit'], { encoding: 'utf8' });
+    const left = JSON.parse(readFileSync(file, 'utf8'));
+    if (un2.status !== 0 || left.policies || left.created_by || left.rules?.[0] !== 'my own rule of five words' || !un2.stdout.includes('kept your keys: rules')) return `uninstall keeps: ${un2.stdout}`;
+    return spawnSync(exe, ['setup', '--uninstall', '--policy', 'none', '--profile', profile], { encoding: 'utf8' }).status === 2;
+  }],
 ];
 
 let failed = 0;
@@ -971,6 +1010,7 @@ try {
   });
 } finally {
   rmSync(dir, { recursive: true, force: true });
+  rmSync(isoProfile, { recursive: true, force: true });
 }
 
 console.log(failed ? `${failed} of ${cases.length} FAILED` : `ALL ${cases.length} PASSED`);

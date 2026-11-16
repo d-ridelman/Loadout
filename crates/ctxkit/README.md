@@ -100,6 +100,7 @@ Before it copies the binary or writes anything, `setup` reads every file it is g
 | `--with-rules` | Insert or update the compact rule block in `CLAUDE.md` between `ctxkit` markers |
 | `--force-agents` | Overwrite existing `Explore.md` and `checker.md` |
 | `--no-stop-gate` | Do not wire the Stop gate and remove ours if present. By default `setup` adds a `Stop` hook: when a turn edited two or more code files (or made five or more edits) and neither `checker` nor the advisor ran after the last edit, the model is sent back once. Never twice in a row; `CTXKIT_GATE=0` mutes it per session. The message names only what exists: `checker` (`agents/checker.md` in the profile or the project) and/or the advisor (`advisorModel` in `settings.json`); with neither (for example `--advisor none --no-agents`) the gate stays silent |
+| `--policy <list>` | Which policies of `ctxkit.json` are on (`commit-hygiene`, `confirm-irreversible`, `stray-files`, `build-slots=N`; `none` turns all off). Not changed without the flag; see "Policies" |
 | `--lang <en\|ru>` | Language for prompts, rules, and hooks (`en` default; `ru` sets `CTXKIT_LANG=ru` in `settings.json` and adds `--lang ru` in `hooks.json`) |
 
 Hooks read `CTXKIT_LANG` (`en` default, `ru` for Russian messages) or `--lang en|ru`. Run `ctxkit setup --help` for the complete option list. Manual config templates sit in [`examples/`](examples/) using POSIX placeholder paths; run `ctxkit setup` to resolve OS-specific absolute paths automatically.
@@ -114,6 +115,32 @@ ctxkit setup --uninstall               # remove it (add the same --profile / --a
 `--uninstall` removes only what `ctxkit setup` added: our elements in the `PreToolUse` / `PostToolUse` / `Stop` hooks of `settings.json` (a hook is ours when its command runs a file named `ctxkit`, `claude-guard` or `no-inline-backslash`: the first word, or the second one after `node`/`bun`/`deno`/`npx`/`python`; so `node C:/x/no-inline-backslash.mjs` is ours while `node C:/tools/ctxkit-helper/stop.js` and `logger.exe ctxkit` are not; other people's hooks in the same group stay; a hook you wrote yourself that calls `ctxkit`, such as `ctxkit report` in a Stop hook, is also treated as ours, so keep such commands in a script with another name), `env.CTXKIT_LANG`, the rules block between the `ctxkit` markers in `CLAUDE.md`, and our binary `hooks/ctxkit` (last, so no hook is left pointing at a missing file). With `--antigravity` / `--agy-file` it removes the `ctxkit` entry from `hooks.json`; with `--dsh` / `--dsh-home` it removes `ctxkit-hooks.json`, the ctxkit block in `cordis.patch.yml` and the rules block in `AGENTS.md`. Every file is backed up first; a second run changes nothing. When a backup holds the file as it was before setup (no ctxkit block or hook in it) and the file has not changed otherwise since (the rest of the content is the same), the rollback puts that backup's bytes back: CRLF line breaks, a missing final newline, extra blank lines, the key order and an empty `"hooks": {}` come back exactly (this covers `settings.json`, `CLAUDE.md`, `AGENTS.md` and the DeepSeek Harness `cordis.patch.yml`). If you changed the file since (a model, a line of text), only our parts are cut out, with the file's own line breaks. A `CLAUDE.md`, `AGENTS.md` or `settings.json` that setup created itself (no backup of it, or only backups holding nothing but our parts) is deleted after a backup, not left as an empty file or `{}`; a `settings.json` that was `{}` before setup stays `{}`. `~/.local/bin/ctxkit` is deleted only when it is a byte copy of the current binary or of `hooks/ctxkit`, otherwise its path is printed. If the running binary cannot delete itself (Windows), it prints `remove manually: <path>` and still exits `0`.
 
 It does **not** touch `model`, `advisorModel`, `effortLevel`, `modelSettings`, `env.CLAUDE_CODE_SUBAGENT_MODEL`, Claude Desktop presets or the `Explore.md` / `checker.md` agent files: the previous values are not known, and `modelSettings` can hold entries written by Claude Code itself. It prints their current values and the path to the latest and earliest `backups/settings.json.*.bak` (the earliest is most likely the state before the first setup; a backup the rollback itself made is marked "made by this run" and is the state before the rollback) so you can copy the old values back by hand. Setup-only options (`--no-agents`, `--effort`, `--main-model`, ...) are rejected together with `--uninstall`.
+
+## Policies
+
+Rules the owner keeps as prose in `CLAUDE.md` ("no `Co-Authored-By` in commits", "ask before `git push`") can be enforced by the hooks instead. Policies are **off until you turn them on**: nothing is enabled silently, and `setup` without `--policy` never creates or changes the file.
+
+```powershell
+ctxkit setup --policy commit-hygiene,confirm-irreversible,stray-files,build-slots=2   # exactly these are on
+ctxkit setup --policy none                                                           # all off
+```
+
+The choice lives in `<profile>/ctxkit.json` (`CLAUDE_CONFIG_DIR`, else `~/.claude`), which hooks and `ctxkit check` read on each call:
+
+```json
+{
+  "policies": { "commit_hygiene": true, "confirm_irreversible": true, "stray_files": true, "build_slots": 2 },
+  "stray_patterns": ["draft*.md"],
+  "rules": ["Субагентам, которые правят код, задавай model: \"sonnet\", никогда haiku"]
+}
+```
+
+`--policy` lists the policies that are on; every unlisted one goes off, and `setup` prints "was -> became" for each (also with `--dry-run`). The file is written atomically after a backup; keys you added yourself (`stray_patterns`, `rules`, anything else) are kept, but `serde_json` sorts keys alphabetically, so the order in the file changes. Before it writes, `setup` refuses a `ctxkit.json` that does not parse (`--policy` and `--with-rules` both read it). A missing or broken file means every policy is off and the hooks stay silent; `doctor` reports a broken one (`policies`, `warn`). `--with-rules` puts one line per policy that is on, and your own `rules` items as they are, into the rules block (see "Setup Flags"). A policy that blocks does so by `deny`; one that asks returns `ask`, so Claude Code shows its normal permission prompt.
+
+| Policy | What it does | Turn on | Turn off | Checked by |
+|---|---|---|---|---|
+
+Roll back: `ctxkit setup --policy none` switches every policy off and keeps the file; `ctxkit setup --uninstall` removes the `policies` section, and the whole file only when `setup` created it (it marks such a file with `"created_by": "ctxkit setup"`) and nothing of yours is in it. Otherwise your keys stay and the output names them.
 
 ## Failure safety
 

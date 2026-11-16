@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod policies;
 mod uninstall;
+
+use crate::policy;
 
 const MARKER_START: &str = "<!-- ctxkit:start -->";
 const MARKER_END: &str = "<!-- ctxkit:end -->";
@@ -47,6 +50,10 @@ struct SetupOpts {
     on_failure: bool,
     /// `--uninstall`: take out what setup added (see `uninstall.rs`).
     uninstall: bool,
+    /// `--policy`: which policies of `ctxkit.json` are on. Absent: the file is not touched.
+    policy: Option<policy::Selection>,
+    /// The policies after this run (from `ctxkit.json`); the rules block lists the ones that are on.
+    config: policy::Config,
     lang: Lang,
 }
 
@@ -76,6 +83,8 @@ impl Default for SetupOpts {
             no_stop_gate: false,
             on_failure: true,
             uninstall: false,
+            policy: None,
+            config: policy::Config::default(),
             lang: Lang::En,
         }
     }
@@ -102,7 +111,7 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--uninstall" => opts.uninstall = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
             | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home"
-            | "--hook-cmd" | "--claude-json" | "--lang") => {
+            | "--hook-cmd" | "--claude-json" | "--lang" | "--policy") => {
                 let Some(val) = args.get(i + 1) else {
                     eprintln!("ERR: missing value for {flag}");
                     return 2;
@@ -122,6 +131,13 @@ pub fn run_setup(args: &[String]) -> i32 {
                     "--dsh-home" => opts.dsh_home = Some(PathBuf::from(val)),
                     "--hook-cmd" => opts.hook_cmd = Some(val.clone()),
                     "--claude-json" => opts.claude_json = Some(PathBuf::from(val)),
+                    "--policy" => match policy::parse_selection(val) {
+                        Ok(sel) => opts.policy = Some(sel),
+                        Err(e) => {
+                            eprintln!("ERR: {e}");
+                            return 2;
+                        }
+                    },
                     "--lang" => {
                         let Some(parsed) = parse_lang(val) else {
                             eprintln!("ERR: unsupported --lang '{val}' (use en or ru)");
@@ -206,6 +222,10 @@ pub fn run_setup(args: &[String]) -> i32 {
     };
     let preflight = || -> Result<(), String> {
         preflight_settings(&profile.join("settings.json"), true)?;
+        // `ctxkit.json` feeds the rules block and `--policy` rewrites it: a file that does not parse stops both.
+        if opts.policy.is_some() || opts.with_rules {
+            policies::preflight(&profile)?;
+        }
         if opts.with_rules {
             preflight_rules_file(&profile.join("CLAUDE.md"))?;
             if opts.dsh {
@@ -264,6 +284,17 @@ pub fn run_setup(args: &[String]) -> i32 {
                 return 1;
             }
         };
+
+    opts.config = match policies::run(&profile, &backup_dir, opts.policy.as_ref(), opts.dry_run) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("ERR: {e}");
+            return 1;
+        }
+    };
+    if opts.policy.is_some() && !opts.with_rules {
+        println!("  [note] the rules block in CLAUDE.md is not refreshed: run setup with --with-rules to add or drop the policy lines");
+    }
 
     if !opts.no_agents {
         let agents_dir = profile.join("agents");
@@ -2073,8 +2104,9 @@ fn print_help() {
            --dsh                  Wire ctxkit into DeepSeek Harness Desktop (dsh-hooks-claude-code bridge)\n\
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --hook-cmd <cmd>       Override hook command path\n\
+           --policy <list>        Policies of <profile>/ctxkit.json that hooks enforce; exactly the listed ones are on, the rest off (not changed without this flag): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (comma separated; `none` turns all off). Prints \"was -> became\" per policy; keys of the file you wrote yourself are kept; the rules block lists the policies that are on after --with-rules\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
-           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries) and the hooks/ctxkit binary; a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
+           --uninstall            Roll back: remove our hook elements, CTXKIT_LANG, the CLAUDE.md rules block (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries), the policies section of ctxkit.json (the file is deleted only when setup created it and holds nothing of yours; otherwise your keys stay and are named) and the hooks/ctxkit binary; a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
     );
 }
 

@@ -5,7 +5,8 @@ use super::*;
 use crate::t;
 
 /// Flags that only make sense for an install; passing them with `--uninstall` is an error, not a no-op.
-pub(super) const SETUP_ONLY_FLAGS: [&str; 9] = [
+pub(super) const SETUP_ONLY_FLAGS: [&str; 10] = [
+    "--policy",
     "--no-agents",
     "--force-agents",
     "--with-rules",
@@ -269,6 +270,56 @@ fn settings_outcome(next: &Value, backups: &[Saved], hook_cmd: &str) -> Settings
         return SettingsOutcome::Delete;
     }
     SettingsOutcome::Write
+}
+
+/// Takes the `policies` section out of `ctxkit.json`. The file goes only when setup created it and nothing
+/// of the owner's is in it; otherwise the owner's keys stay and the output says which.
+fn remove_policies(profile: &Path, backup_dir: &Path, dry_run: bool) -> Result<(), String> {
+    let path = policies::path(profile);
+    if !path.exists() {
+        println!("  ok ctxkit.json (not present): {}", path.display());
+        return Ok(());
+    }
+    let orig = match read_json_object(&path) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("  [warn] {e}; ctxkit.json left as it is");
+            return Ok(());
+        }
+    };
+    let Some(root) = orig.as_object().filter(|r| r.contains_key("policies")) else {
+        println!("  ok ctxkit.json (no policies section): {}", path.display());
+        return Ok(());
+    };
+    let created = root.get("created_by") == Some(&json!(policy::CREATED_BY));
+    let mut next = root.clone();
+    next.remove("policies");
+    next.remove("created_by");
+    let mut left: Vec<&str> = next.keys().map(String::as_str).collect();
+    left.sort_unstable();
+    if created && left.is_empty() {
+        return delete_created(
+            &path,
+            backup_dir,
+            "removed ctxkit.json (setup had created it)",
+            dry_run,
+        );
+    }
+    let note = if left.is_empty() {
+        "kept the file, now empty: setup did not create it".to_string()
+    } else {
+        format!("kept your keys: {}", left.join(", "))
+    };
+    write_json_if_changed(
+        &path,
+        Some(backup_dir),
+        &orig,
+        &Value::Object(next),
+        dry_run,
+        "ctxkit.json (policies section removed)",
+    )?;
+    println!("  {note}");
+    Ok(())
 }
 
 fn remove_antigravity_hooks(path: &Path, dry_run: bool) -> Result<(), String> {
@@ -604,6 +655,7 @@ pub(super) fn run(
             )?,
         }
         remove_rules_block(&profile.join("CLAUDE.md"), &backup_dir, opts.dry_run)?;
+        remove_policies(profile, &backup_dir, opts.dry_run)?;
         let dsh_home = || {
             opts.dsh_home
                 .clone()
@@ -897,11 +949,58 @@ mod tests {
     }
 
     #[test]
+    fn the_policies_section_goes_and_the_file_only_when_setup_made_it_and_it_holds_nothing_else() {
+        let d = policies::temp_profile("rollback");
+        let (file, bak) = (policies::path(&d), d.join("backups"));
+        let read = || serde_json::from_str::<Value>(&fs::read_to_string(&file).unwrap()).unwrap();
+        // absent file and a file without the section: nothing happens
+        remove_policies(&d, &bak, false).unwrap();
+        fs::write(&file, r#"{"rules":["a b c d e"]}"#).unwrap();
+        remove_policies(&d, &bak, false).unwrap();
+        assert_eq!(read(), json!({"rules":["a b c d e"]}));
+        // broken file: left as it is
+        fs::write(&file, "{ nope").unwrap();
+        remove_policies(&d, &bak, false).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "{ nope");
+        // made by setup, nothing of the owner's: deleted (after a backup), also with --dry-run first
+        let ours = r#"{"created_by":"ctxkit setup","policies":{"stray_files":true}}"#;
+        fs::write(&file, ours).unwrap();
+        remove_policies(&d, &bak, true).unwrap();
+        assert!(file.exists(), "dry run");
+        remove_policies(&d, &bak, false).unwrap();
+        assert!(!file.exists());
+        assert_eq!(fs::read_dir(&bak).unwrap().count(), 1);
+        // made by setup but the owner added a key: only the section (and the marker) go
+        fs::write(
+            &file,
+            r#"{"created_by":"ctxkit setup","policies":{"stray_files":true},"rules":["a b c d e"],"stray_patterns":["x*"]}"#,
+        )
+        .unwrap();
+        remove_policies(&d, &bak, false).unwrap();
+        assert_eq!(
+            read(),
+            json!({"rules":["a b c d e"],"stray_patterns":["x*"]})
+        );
+        // not made by setup (no marker): the file stays, even when only the section was in it
+        fs::write(&file, r#"{"policies":{"stray_files":true}}"#).unwrap();
+        remove_policies(&d, &bak, false).unwrap();
+        assert_eq!(read(), json!({}));
+        // a second run changes nothing
+        remove_policies(&d, &bak, false).unwrap();
+        assert_eq!(read(), json!({}));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn setup_only_flags_are_rejected() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
             reject_setup_only_flags(&a(&["--uninstall", "--no-agents"])),
             Some("--no-agents")
+        );
+        assert_eq!(
+            reject_setup_only_flags(&a(&["--uninstall", "--policy", "none"])),
+            Some("--policy")
         );
         assert_eq!(
             reject_setup_only_flags(&a(&["--uninstall", "--dry-run", "--dsh"])),
