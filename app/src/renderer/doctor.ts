@@ -8,8 +8,14 @@ export type Severity = 'error' | 'warn' | 'info'
 export interface Finding {
   id: string
   severity: Severity
+  /** A short headline: whose and what kind of problem. */
   title: string
-  detail: string
+  /** What is wrong: the observed fact. */
+  what: string
+  /** Why it matters or where it comes from. */
+  why: string
+  /** The client the finding belongs to; scanner warnings have none. The Radar counts problems by this field. */
+  client?: ClientId
   /** The entity that "Show" leads to. */
   entity?: Entity
 }
@@ -28,14 +34,17 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
 
   // Backups piled up by third-party installers: only the count, the core does not return file names.
   for (const b of facts.backups) {
+    const copies = `${b.count} ${plural(b.count, ['резервная копия', 'резервные копии', 'резервных копий'], ['backup', 'backups'])}`
     out.push({
       id: `backups:${b.client}:${b.dir}`,
       severity: 'info',
-      title: t(
-        `${clientName(b.client)}: ${b.count} ${plural(b.count, ['резервная копия', 'резервные копии', 'резервных копий'], ['backup', 'backups'])} в ${b.dir}`,
-        `${clientName(b.client)}: ${b.count} ${plural(b.count, ['резервная копия', 'резервные копии', 'резервных копий'], ['backup', 'backups'])} in ${b.dir}`,
+      client: b.client,
+      title: t(`${clientName(b.client)}: ${copies} в ${b.dir}`, `${clientName(b.client)}: ${copies} in ${b.dir}`),
+      what: t(
+        `В ${b.dir} лежат файлы *.bak, *.backup, *.recovery: ${b.count}.`,
+        `${b.dir} holds *.bak, *.backup, *.recovery files: ${b.count}.`,
       ),
-      detail: t(
+      why: t(
         `Их оставляют установщики сторонних инструментов при правке конфигов. Loadout рядом с конфигами копий не создаёт и эти не трогает: свои бэкапы он хранит отдельно, в ${BACKUP_DIR_HINT}.`,
         `Third-party installers leave these when they edit configs. Loadout makes no copies next to the configs and leaves these alone: it keeps its own backups separately, in ${BACKUP_DIR_HINT}.`,
       ),
@@ -48,13 +57,15 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     out.push({
       id: `links:${l.client}:${l.dir}`,
       severity: l.broken === l.total ? 'error' : 'warn',
+      client: l.client,
       title: t(
         `${clientName(l.client)}: ${l.broken} из ${l.total} ссылок на пакеты ведут в никуда`,
         `${clientName(l.client)}: ${l.broken} of ${l.total} package links point to nothing`,
       ),
-      detail: t(
-        `Каталог ${l.dir}. Цель ссылок (кеш npx) удалена; пакеты, пока их не скачают заново, не запустятся.`,
-        `Directory ${l.dir}. The link target (npx cache) was deleted; the packages will not start until they are downloaded again.`,
+      what: t(`В каталоге ${l.dir} ссылки (junction) указывают на удалённые папки.`, `In ${l.dir} the links (junctions) point to deleted folders.`),
+      why: t(
+        'Цель ссылок (кеш npx) удалена; пакеты, пока их не скачают заново, не запустятся.',
+        'The link target (npx cache) was deleted; the packages will not start until they are downloaded again.',
       ),
     })
   }
@@ -69,10 +80,15 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     out.push({
       id: `orphan:${e.id}`,
       severity: 'info',
+      client: e.client,
       title: t(`${e.name}: маркетплейс без плагинов (${clientName(e.client)})`, `${e.name}: marketplace without plugins (${clientName(e.client)})`),
-      detail: t(
+      what: t(
         'Ни один найденный плагин этого клиента не установлен из этого маркетплейса.',
         'None of the plugins found for this client were installed from this marketplace.',
+      ),
+      why: t(
+        'Обычно он остаётся после удаления плагинов или добавлен заранее.',
+        'It usually remains after its plugins were removed, or was added in advance.',
       ),
       entity: e,
     })
@@ -90,15 +106,20 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     out.push({
       id: `${e.state}:${e.id}`,
       severity: broken ? 'error' : 'warn',
+      client: e.client,
       title: t(
         `${e.name}: ${broken ? 'сломано' : 'расхождение'} в ${clientName(e.client)}`,
         `${e.name}: ${broken ? 'broken' : 'mismatch'} in ${clientName(e.client)}`,
       ),
-      detail:
+      // the core note is the observed fact; the reason is the same for every entry of this state
+      what:
         e.note ??
         (broken
           ? t('запись есть, но указывает на отсутствующее', 'the entry exists but points to something missing')
           : t('версии расходятся', 'versions differ')),
+      why: broken
+        ? t('Клиент не сможет загрузить эту запись, пока то, на что она указывает, не появится на месте.', 'The client cannot load this entry until what it points to is back in place.')
+        : t('В одной области записано несколько версий: какая из них загрузится, решает клиент.', 'Several versions are recorded in one scope: which one loads is up to the client.'),
       entity: e,
     })
   }
@@ -117,35 +138,34 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       out.push({
         id: `dup:${k}`,
         severity: 'warn',
+        client: first.client,
         title: t(
           `${first.logicalKey}: есть в нескольких областях (${clientName(first.client)})`,
           `${first.logicalKey}: present in several scopes (${clientName(first.client)})`,
         ),
-        detail: t(
-          `области: ${scopes.join(', ')}. Какая запись действует, зависит от клиента.`,
-          `scopes: ${scopes.join(', ')}. Which entry applies depends on the client.`,
-        ),
+        what: t(`Одна и та же запись найдена в областях: ${scopes.join(', ')}.`, `The same entry is found in scopes: ${scopes.join(', ')}.`),
+        why: t('Какая из них действует, решает клиент: правка одной может ничего не изменить.', 'Which one applies is up to the client: editing one of them may change nothing.'),
         entity: first,
       })
     }
   }
 
-  // project/local plugins: the enable flag lives in project settings, which the core does not read.
+  // Plugins whose enable flag is in settings the core did not read (managed, or a project that is gone).
   const unknownByClient = new Map<ClientId, number>()
   for (const e of entities) {
     if (e.kind === 'plugin' && e.state === 'unknown') unknownByClient.set(e.client, (unknownByClient.get(e.client) ?? 0) + 1)
   }
   for (const [client, n] of unknownByClient) {
+    const plugins = `${n} ${plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins'])}`
     out.push({
       id: `unknown:${client}`,
       severity: 'info',
-      title: t(
-        `${clientName(client)}: у ${n} ${plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins'])} состояние не определено`,
-        `${clientName(client)}: state unknown for ${n} ${plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins'])}`,
-      ),
-      detail: t(
-        'Флаг включения лежит в настройках проекта (project/local), а их Loadout пока не читает.',
-        'The enabled flag lives in the project settings (project/local), which Loadout does not read yet.',
+      client,
+      title: t(`${clientName(client)}: у ${plugins} состояние не определено`, `${clientName(client)}: state unknown for ${plugins}`),
+      what: t('Включены они или нет, по прочитанным файлам сказать нельзя.', 'Whether they are on cannot be told from the files read.'),
+      why: t(
+        'Их флаг включения лежит там, куда Loadout не заглядывает: в управляемых настройках, в проекте, которого уже нет на диске, или в конфиге без ключа enabled. Причина у каждой записи — в инспекторе.',
+        'Their enable flag is where Loadout does not look: in managed settings, in a project that is no longer on disk, or in a config without an enabled key. Each entry states its reason in the inspector.',
       ),
     })
   }
@@ -158,10 +178,12 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       out.push({
         id: `secret:${e.id}`,
         severity: 'info',
+        client: e.client,
         title: t(`${e.name} (${clientName(e.client)}): в конфиге есть ключи секретов`, `${e.name} (${clientName(e.client)}): the config has secret keys`),
-        detail: t(
-          `Ключи: ${keys.slice(0, 5).join(', ')}. Значения лежат в файле клиента, Loadout их не читает и не показывает.`,
-          `Keys: ${keys.slice(0, 5).join(', ')}. The values sit in the client's file; Loadout neither reads nor shows them.`,
+        what: t(`Ключи: ${keys.slice(0, 5).join(', ')}.`, `Keys: ${keys.slice(0, 5).join(', ')}.`),
+        why: t(
+          'Значения лежат в файле клиента; Loadout показывает только имена ключей, не значения.',
+          "The values sit in the client's file; Loadout shows only the key names, not the values.",
         ),
         entity: e,
       })
@@ -169,7 +191,13 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
   }
 
   warnings.forEach((w, i) =>
-    out.push({ id: `warn:${i}`, severity: 'warn', title: t('Предупреждение сканера', 'Scanner warning'), detail: w }),
+    out.push({
+      id: `warn:${i}`,
+      severity: 'warn',
+      title: t('Предупреждение сканера', 'Scanner warning'),
+      what: w,
+      why: t('Файл или его часть не прочитаны: записей оттуда в списке нет.', 'A file or part of it was not read: its entries are missing from the list.'),
+    }),
   )
 
   const rank: Record<Severity, number> = { error: 0, warn: 1, info: 2 }

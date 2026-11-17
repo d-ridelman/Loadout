@@ -1,5 +1,6 @@
 import { getLang, t } from '../shared/i18n'
 import type { ClientId, Entity, EntityState, Kind } from '../shared/model'
+import type { Finding } from './doctor'
 
 /**
  * Matrix row groups. Plugins and MCP servers are split into separate rows and filters (more convenient: they have different
@@ -51,6 +52,8 @@ export interface Row {
   group: Group
   /** Display name without the `@marketplace` suffix. */
   name: string
+  /** The entry's own name when `name` is a human name from its manifest (a Codex `app-<hex>`): shown as a hint. */
+  hint?: string
   kinds: Kind[]
   cells: Partial<Record<ClientId, Cell>>
 }
@@ -67,7 +70,9 @@ export function buildRows(entities: readonly Entity[]): Row[] {
       // strip the `@marketplace` suffix, keep the leading `@` of a scoped package (`@scope/name`)
       const at = e.name.lastIndexOf('@')
       const name = DISPLAY_NAME_KINDS.has(e.kind) ? (at > 0 ? e.name.slice(0, at) : e.name) : e.logicalKey
-      row = { key, group, name, kinds: [], cells: {} }
+      // a cached connector is named by its id (`app-69f0dc45…`); the core passes the manifest name in `displayName`
+      const shown = e.kind === 'connector' && typeof e.detail['displayName'] === 'string' ? e.detail['displayName'] : null
+      row = shown ? { key, group, name: shown, hint: name, kinds: [], cells: {} } : { key, group, name, kinds: [], cells: {} }
       rows.set(key, row)
     }
     if (!row.kinds.includes(e.kind)) row.kinds.push(e.kind)
@@ -88,7 +93,25 @@ export function buildRows(entities: readonly Entity[]): Row[] {
   )
 }
 
-/** A row made only of undetermined cells (the enable flag lives in project settings, which M1 does not read). */
+export interface ClientStat {
+  /** Matrix cells of the client: what its column shows, one per row however many scopes it has. */
+  cells: number
+  /** The Doctor's errors and warnings about the client, facts without an entry included (dead dsh links). */
+  issues: number
+  worst: 'error' | 'warn' | null
+}
+
+/** The Radar's per-client counters from the same rows as the matrix and the same findings as the Doctor. */
+export function clientStat(rows: readonly Row[], findings: readonly Finding[], client: ClientId): ClientStat {
+  const own = findings.filter((f) => f.client === client && f.severity !== 'info')
+  return {
+    cells: rows.filter((r) => r.cells[client]).length,
+    issues: own.length,
+    worst: own.some((f) => f.severity === 'error') ? 'error' : own.length > 0 ? 'warn' : null,
+  }
+}
+
+/** A row made only of undetermined cells (the enable flag is in settings the core did not read). */
 export function onlyUnknown(row: Row): boolean {
   const cells = Object.values(row.cells)
   return cells.length > 0 && cells.every((c) => c.state === 'unknown')

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CtxkitDoctor, Entity, FindingSeverity } from '../shared/model'
 import { policiesNow, stopGateOff } from './ctxkit-stats'
-import { buildRows, onlyUnknown, scopeRank } from './aggregate'
+import { buildRows, clientStat, onlyUnknown, scopeRank } from './aggregate'
 import { plural } from '../shared/i18n'
 import { diagnose } from './doctor'
 import { nameTaken } from './views/AddDialog'
@@ -197,7 +197,58 @@ describe('doctor', () => {
   it('MCP secret keys are mentioned by name only', () => {
     const f = diagnose([ent({ kind: 'mcp', name: 'srv', detail: { envKeys: ['API_KEY', 'LANG'] } })], [])
     expect(f).toHaveLength(1)
-    expect(f[0]?.detail).toContain('API_KEY')
-    expect(f[0]?.detail).not.toContain('LANG')
+    expect(f[0]?.what).toContain('API_KEY')
+    expect(f[0]?.what).not.toContain('LANG')
+  })
+
+  it('every finding says separately what is wrong and why; the core note is the "what"', () => {
+    const f = diagnose(
+      [
+        ent({ name: 'lost@mp', state: 'broken', note: 'installPath не существует на диске' }),
+        ent({ kind: 'marketplace', name: 'lonely', logicalKey: 'lonely' }),
+        ent({ kind: 'plugin', name: 'p@x', state: 'unknown', client: 'codex' }),
+      ],
+      ['~/x: не JSON'],
+      { backups: [{ client: 'codex', dir: '~/.codex', count: 2 }], brokenLinks: [{ client: 'deepseek', dir: '~/.dsh/x', broken: 1, total: 2 }] },
+    )
+    expect(f.length).toBe(6)
+    for (const x of f) {
+      expect(x.what.length, x.id).toBeGreaterThan(0)
+      expect(x.why.length, x.id).toBeGreaterThan(0)
+      expect(x.why, x.id).not.toBe(x.what)
+    }
+    expect(f.find((x) => x.id.startsWith('broken'))?.what).toBe('installPath не существует на диске')
+    expect(f.filter((x) => !x.client).map((x) => x.id)).toEqual(['warn:0'])
+  })
+})
+
+describe('radar', () => {
+  it('counts the matrix cells and the Doctor problems of a client, facts without an entry included', () => {
+    const entities = [
+      // one dsh plugin read from the user patch and a profile: one matrix cell, not two entries
+      ent({ client: 'deepseek', logicalKey: 'dsh-x', scope: 'user' }),
+      ent({ client: 'deepseek', logicalKey: 'dsh-x', scope: 'profile:default' }),
+      ent({ client: 'codex', logicalKey: 'y', state: 'broken', note: 'нет' }),
+    ]
+    const rows = buildRows(entities)
+    const findings = diagnose(entities, [], { backups: [], brokenLinks: [{ client: 'deepseek', dir: '~/.dsh/x', broken: 3, total: 3 }] })
+    expect(clientStat(rows, findings, 'deepseek')).toEqual({ cells: 1, issues: 1, worst: 'error' })
+    expect(clientStat(rows, findings, 'codex')).toEqual({ cells: 1, issues: 1, worst: 'error' })
+    expect(clientStat(rows, findings, 'antigravity')).toEqual({ cells: 0, issues: 0, worst: null })
+  })
+})
+
+describe('Codex connectors', () => {
+  it('a cached app shows its manifest name, its id stays as the hint', () => {
+    const rows = buildRows([
+      ent({ kind: 'connector', client: 'codex', scope: 'cloud', name: 'app-69f0dc45', logicalKey: 'app-69f0dc45', detail: { displayName: 'GitHub' } }),
+      ent({ kind: 'connector', client: 'codex', scope: 'cloud', name: 'app-0b1c2d3e', logicalKey: 'app-0b1c2d3e', detail: { displayName: null } }),
+      ent({ kind: 'plugin', client: 'antigravity', name: 'p1', logicalKey: 'p1', detail: { displayName: 'Плагин один' } }),
+    ])
+    expect(rows.map((r) => [r.name, r.hint])).toEqual([
+      ['p1', undefined],
+      ['app-0b1c2d3e', undefined],
+      ['GitHub', 'app-69f0dc45'],
+    ])
   })
 })

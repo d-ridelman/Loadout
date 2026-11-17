@@ -145,7 +145,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
               <tr key={r.key} role="row">
                 <td className="name" role="rowheader">
                   <KindBadge kinds={r.kinds} />
-                  <b title={r.name}>{r.name}</b>
+                  <b title={r.hint ?? r.name}>{r.name}</b>
                 </td>
                 {CLIENTS.map((c, ci) => {
                   const cell = r.cells[c.id]

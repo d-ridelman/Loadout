@@ -1,31 +1,25 @@
 import { t } from '../../shared/i18n'
 import { CLIENTS } from '../../shared/model'
-import type { ClientId, Entity } from '../../shared/model'
+import type { ClientId } from '../../shared/model'
+import { clientStat, GROUPS } from '../aggregate'
+import type { Row } from '../aggregate'
 import type { Finding } from '../doctor'
 import { Panel } from '../ui'
 
 const POS: readonly [number, number][] = [
   [50, 6], [91, 40], [76, 90], [24, 90], [9, 40],
 ]
-const KINDS = ['plugin', 'mcp', 'skill', 'hook', 'agent', 'command', 'marketplace', 'connector'] as const
 
 interface Props {
-  entities: Entity[]
+  /** The matrix rows: the Radar counts what the matrix shows. */
+  rows: Row[]
   findings: Finding[]
   activeClient: ClientId | null
   onClient: (c: ClientId) => void
   onDoctor: () => void
 }
 
-export function Radar({ entities, findings, activeClient, onClient, onDoctor }: Props) {
-  const stat = (id: ClientId) => {
-    const own = entities.filter((e) => e.client === id)
-    return {
-      n: own.length,
-      bad: own.filter((e) => e.state === 'broken').length,
-      warn: own.filter((e) => e.state === 'stale').length,
-    }
-  }
+export function Radar({ rows, findings, activeClient, onClient, onDoctor }: Props) {
   return (
     <div className="radar">
       <Panel title={t('Радар клиентов', 'Client radar')}>
@@ -33,25 +27,26 @@ export function Radar({ entities, findings, activeClient, onClient, onDoctor }: 
           <div className="rcirc" />
           <div className="beam fx" />
           <div className="rcenter">
-            <div className="mono big">{entities.length}</div>
-            <div className="mute mono small">{t('записей', 'entries')}</div>
+            <div className="mono big">{rows.length}</div>
+            <div className="mute mono small">{t('строк матрицы', 'matrix rows')}</div>
           </div>
           {CLIENTS.map((c, i) => {
-            const s = stat(c.id)
-            const colour = s.bad ? 'var(--red)' : s.warn ? 'var(--orange)' : 'var(--green)'
+            const s = clientStat(rows, findings, c.id)
+            const colour = s.worst === 'error' ? 'var(--red)' : s.worst === 'warn' ? 'var(--orange)' : 'var(--green)'
             return (
               <button
                 key={c.id}
                 className="node"
                 style={{ left: `${POS[i]?.[0] ?? 50}%`, top: `${POS[i]?.[1] ?? 50}%` }}
                 aria-pressed={activeClient === c.id}
-                aria-label={t(`${c.name}: записей ${s.n}, проблем ${s.bad + s.warn}`, `${c.name}: ${s.n} entries, ${s.bad + s.warn} issues`)}
+                aria-label={t(`${c.name}: строк в матрице ${s.cells}, проблем ${s.issues}`, `${c.name}: ${s.cells} matrix rows, ${s.issues} issues`)}
                 onClick={() => onClient(c.id)}
               >
                 <b>{c.name}</b>
                 <span className="mute mono small">
                   <span className="dot pulse" style={{ background: colour }} />
-                  {s.n} · ⚠ {s.bad + s.warn}
+                  {s.cells}
+                  {s.issues > 0 ? ` · ⚠ ${s.issues}` : null}
                 </span>
               </button>
             )
@@ -61,10 +56,10 @@ export function Radar({ entities, findings, activeClient, onClient, onDoctor }: 
       <div>
         <Panel title={t('По типам', 'By type')}>
           <dl className="kv">
-            {KINDS.map((k) => (
-              <div key={k} className="kvrow">
-                <dt><span className={`badge k-${k}`}>{k}</span></dt>
-                <dd>{entities.filter((e) => e.kind === k).length}</dd>
+            {GROUPS.map((g) => (
+              <div key={g.id} className="kvrow">
+                <dt><span className={`badge k-${g.id}`}>{g.id}</span></dt>
+                <dd>{rows.filter((r) => r.group === g.id).length}</dd>
               </div>
             ))}
           </dl>

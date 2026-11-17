@@ -25,7 +25,12 @@ export function Doctor({ findings, onShow }: { findings: Finding[]; onShow: (e: 
           </span>
           <div>
             <b>{f.title}</b>
-            <p>{f.detail}</p>
+            <dl className="kv">
+              <dt>{t('что не так', 'what is wrong')}</dt>
+              <dd>{f.what}</dd>
+              <dt>{t('почему', 'why')}</dt>
+              <dd>{f.why}</dd>
+            </dl>
           </div>
           {f.entity ? <button onClick={() => onShow(f.entity!)}>{t('Показать', 'Show')}</button> : null}
         </div>

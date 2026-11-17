@@ -419,7 +419,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         ) : view === 'matrix' ? (
           <Matrix rows={visible} total={rows.length} filters={filters} setFilters={setFilters} sel={sel} onSelect={setSel} searchRef={searchRef} fresh={fresh} />
         ) : view === 'radar' ? (
-          <Radar entities={entities} findings={findings} activeClient={filters.client} onClient={filterClient} onDoctor={() => setView('doctor')} />
+          <Radar rows={rows} findings={findings} activeClient={filters.client} onClient={filterClient} onDoctor={() => setView('doctor')} />
         ) : view === 'hooks' ? (
           <Hooks hooks={hooks} onShow={showEntity} />
         ) : view === 'doctor' ? (
