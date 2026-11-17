@@ -563,6 +563,8 @@ const cases = [
     // a normal edit of a source file that holds `.write(` and `.replace("...\n")` passes: apply_patch is Codex's only edit tool
     const edit = `*** Begin Patch\n*** Update File: src/util.py\n@@\n s = open(p).read()\n-s = s.replace("a${B}n", "b")\n+s = s.replace("a${B}n", "c")\n open(p, 'w').write(s)\n*** End Patch\n`;
     if (cx('apply_patch', { command: edit }) !== '') return 'an ordinary source edit was blocked';
+    // the same rewrite as a new file in a relative scratch folder is a throwaway script (Codex writes relative paths)
+    if (decisionOf(cx('apply_patch', { command: edit.replace('*** Update File: src/util.py', '*** Add File: tmp/convert.py') })) !== 'deny') return 'a relative tmp/ patch passed';
     // the patch text is file content, not a shell command: `cat <big file>` inside it is not a read
     if (cx('apply_patch', { command: `*** Begin Patch\n*** Add File: ${TMP}notes.md\n+cat "${bigFile}"\n*** End Patch\n` }) !== '') return 'patch text taken for a command';
     const on = P('codex', { commit_hygiene: true, confirm_irreversible: true });

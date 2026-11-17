@@ -365,7 +365,8 @@ fn write_reason(path: &str, content: &str, lang: Lang) -> Option<&'static str> {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-        re_dir.is_match(p) || re_base.is_match(b)
+        // patch paths are often relative (`tmp/x.py`): the folder pattern needs a separator before the folder name
+        re_dir.is_match(&format!("/{p}")) || re_base.is_match(b)
     };
     let throwaway = if path.is_empty() {
         content.lines().any(|l| {
