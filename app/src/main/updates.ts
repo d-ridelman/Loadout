@@ -1,7 +1,6 @@
 // App updates from GitHub releases: the decisions and the schedule. No electron here, so vitest covers it (updates.test.ts);
 // index.ts passes in electron-updater's `autoUpdater` (or a stand-in in QA mode) and the setting.
-import { t } from '../shared/i18n'
-import type { UpdateState } from '../shared/model'
+import type { UpdateErrorReason, UpdateState } from '../shared/model'
 
 /** First automatic check: a short while after start, so it does not compete with the first scan. */
 export const FIRST_CHECK_MS = 10_000
@@ -32,27 +31,25 @@ export const notesUrl = (version: string): string => `https://github.com/d-ridel
 /** On unless the person turned it off. */
 export const autoCheckOn = (settings: Record<string, unknown>): boolean => settings['autoUpdate'] !== false
 
-export function checkDue(now: number, startedAt: number, lastCheckAt: number | undefined): boolean {
-  return lastCheckAt === undefined ? now - startedAt >= FIRST_CHECK_MS : now - lastCheckAt >= CHECK_EVERY_MS
+/** Never checked (or the last check failed), or a day since the last one. */
+export function checkDue(now: number, lastCheckAt: number | undefined): boolean {
+  return lastCheckAt === undefined || now - lastCheckAt >= CHECK_EVERY_MS
 }
 
 const NET_RE =
   /net::|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|socket hang up|ERR_INTERNET|ERR_NETWORK|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION|ERR_PROXY|ERR_TIMED_OUT/i
 
-/** A fixed, calm line for the window: the raw message (stack, addresses, paths) stays in main. */
-export function updateErrorText(err: unknown, phase: 'check' | 'download'): string {
+type Phase = 'check' | 'download' | 'install'
+
+/** Only the reason goes to the window; the raw message (stack, addresses, paths) stays in main. */
+export function errorReason(err: unknown, phase: Phase): UpdateErrorReason {
+  if (phase === 'install') return 'install'
   const code = typeof err === 'object' && err !== null && 'code' in err ? String((err as { code: unknown }).code) : ''
   const s = `${code} ${err instanceof Error ? err.message : String(err)}`
-  if (/ERR_CHECKSUM_MISMATCH|sha512 checksum mismatch|ERR_UPDATER_INVALID_SIGNATURE/.test(s)) {
-    return t('Скачанный файл не прошёл проверку целостности, обновление не установлено. Попробуйте позже.', 'The downloaded file failed the integrity check, the update was not installed. Try again later.')
-  }
-  if (/ERR_UPDATER_LATEST_VERSION_NOT_FOUND|ERR_UPDATER_CHANNEL_FILE_NOT_FOUND|No published versions|\b404\b/.test(s)) {
-    return t('На GitHub нет сведений об обновлении: возможно, релиз ещё готовится. Проверим позже.', 'GitHub has no update information yet: the release may still be in preparation. We will check later.')
-  }
-  if (NET_RE.test(s)) return t('Нет связи с GitHub. Проверим позже, работе это не мешает.', 'No connection to GitHub. We will check later; this does not affect your work.')
-  return phase === 'download'
-    ? t('Не удалось скачать обновление. Попробуйте позже.', 'Could not download the update. Try again later.')
-    : t('Не удалось проверить обновления. Проверим позже.', 'Could not check for updates. We will check later.')
+  if (/ERR_CHECKSUM_MISMATCH|sha512 checksum mismatch|ERR_UPDATER_INVALID_SIGNATURE/.test(s)) return 'corrupt'
+  if (/ERR_UPDATER_LATEST_VERSION_NOT_FOUND|ERR_UPDATER_CHANNEL_FILE_NOT_FOUND|No published versions|\b404\b/.test(s)) return 'missing'
+  if (NET_RE.test(s)) return 'offline'
+  return phase
 }
 
 /** The part of electron-updater's `AppUpdater` that is used. */
@@ -76,17 +73,15 @@ interface Options {
 /** Turns updater events into `UpdateState` and allows each action only in its state. */
 export class Updates {
   state: UpdateState = { status: 'idle' }
-  private phase: 'check' | 'download' = 'check'
+  private phase: Phase = 'check'
   private manual = false
   private lastCheckAt: number | undefined
-  private startedAt: number
   private readonly o: Options
   private readonly now: () => number
 
   constructor(o: Options) {
     this.o = o
     this.now = o.now ?? Date.now
-    this.startedAt = this.now()
     const u = o.updater
     // the person decides: a found version is only offered, the download starts on the button
     u.autoDownload = false
@@ -119,8 +114,9 @@ export class Updates {
   }
 
   private fail(e: unknown): void {
-    if (this.state.status === 'ready') return // an update is already downloaded and checked: keep offering it
-    this.set({ status: 'error', message: updateErrorText(e, this.phase), quiet: this.phase === 'check' && !this.manual })
+    // a failed check is not a check: the next hourly tick tries again instead of waiting a day
+    if (this.phase === 'check') this.lastCheckAt = undefined
+    this.set({ status: 'error', reason: errorReason(e, this.phase), quiet: this.phase === 'check' && !this.manual })
   }
 
   async check(manual: boolean): Promise<void> {
@@ -150,17 +146,21 @@ export class Updates {
   /** Silent install, then the new version starts by itself. */
   install(): boolean {
     if (this.state.status !== 'ready') return false
+    // an error from here on (the installer file is gone, it cannot start) is shown instead of a button that does nothing
+    this.phase = 'install'
     this.o.updater.quitAndInstall(true, true)
     return true
   }
 
-  /** An automatic check, if the setting is on and it is due. Also called right after the setting is turned on. */
+  /**
+   * An automatic check, if the setting is on and it is due; also right after the setting is turned on. A found version
+   * stays offered until the person acts on it: the background does not re-check it away.
+   */
   tick(): void {
-    if (this.o.isAuto() && checkDue(this.now(), this.startedAt, this.lastCheckAt)) void this.check(false)
+    if (this.o.isAuto() && this.state.status !== 'available' && checkDue(this.now(), this.lastCheckAt)) void this.check(false)
   }
 
   start(): () => void {
-    this.startedAt = this.now()
     const first = setTimeout(() => this.tick(), FIRST_CHECK_MS)
     const every = setInterval(() => this.tick(), TICK_MS)
     return () => {

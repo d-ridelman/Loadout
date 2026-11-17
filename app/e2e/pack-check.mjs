@@ -96,7 +96,7 @@ try {
   must((await page.getByLabel('Уровень записи').inputValue()) === 'R0', 'the default write level must be R0')
   must((await page.locator('#scanlines').count()) === 0, 'scanlines are left in the build')
   // the build knows its version and keeps the switched-off update setting (no request goes to GitHub during this check)
-  await page.getByRole('button', { name: `Обновления, установлена версия ${version}` }).click()
+  await page.getByRole('button', { name: `v${version} — обновления`, exact: true }).click()
   must(!(await page.getByRole('checkbox', { name: 'Проверять обновления автоматически' }).isChecked()), 'the build ignored autoUpdate: false from settings.json')
   must((await page.locator('#updates').innerText()).includes('Ещё не проверялось'), 'the build checked for updates with the setting off')
   await page.keyboard.press('Escape')

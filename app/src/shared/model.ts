@@ -299,8 +299,11 @@ export type ScanResponse =
   | { ok: true; data: ScanResult; ms: number }
   | { ok: false; error: string }
 
+/** Why an update step failed; the window turns it into a fixed line in its own language (no raw messages from the network). */
+export type UpdateErrorReason = 'offline' | 'missing' | 'corrupt' | 'check' | 'download' | 'install'
+
 /**
- * App update state, as main sends it to the window: only a checked version, a percent and a fixed error text
+ * App update state, as main sends it to the window: only a checked version, a percent and an error reason
  * (no release notes or raw error messages from the network). `quiet`: an error of a background check, shown only in the panel.
  */
 export type UpdateState =
@@ -310,7 +313,7 @@ export type UpdateState =
   | { status: 'available'; version: string }
   | { status: 'downloading'; version: string; percent: number }
   | { status: 'ready'; version: string }
-  | { status: 'error'; message: string; quiet: boolean }
+  | { status: 'error'; reason: UpdateErrorReason; quiet: boolean }
 
 export interface UpdatesInfo {
   /** The installed version. */

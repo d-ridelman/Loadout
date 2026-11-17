@@ -1255,7 +1255,9 @@ try {
     }
     const version = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8')).version
     must((await up.locator('#privacy').innerText()).includes('только проверка обновлений (GitHub)'), 'the footer does not say that the update check goes online')
-    const btn = up.getByRole('button', { name: `Обновления, установлена версия ${version}` })
+    // the visible "vX.Y.Z" starts the accessible name; a new version is added in words
+    const btn = up.getByRole('button', { name: new RegExp(`^v${version} — обновления`) })
+    must((await btn.getAttribute('aria-label')) === `v${version} — обновления`, 'the version button name')
     await btn.click()
     const pop = up.getByRole('dialog', { name: 'Обновления' })
     const auto = pop.getByRole('checkbox', { name: 'Проверять обновления автоматически' })
@@ -1301,8 +1303,11 @@ try {
     await waitFor(async () => (await calls()).includes('install:true:true'), '"Restart and update": a silent install that starts the new version')
     await card.getByRole('button', { name: 'Скрыть' }).click()
     await card.waitFor({ state: 'detached', timeout: 5000 })
+    // with the card hidden the ready update is still announced by the button name, not only by its dot and colour
+    must((await btn.getAttribute('aria-label')).endsWith('есть новая версия'), 'the version button does not say a new version is ready')
     // the setting turns off, is saved and survives a restart; the footer then says nothing is sent
     await btn.click()
+    must(await auto.evaluate((el) => el === document.activeElement), 'focus did not move into the update panel')
     const vp = await axeCheck(up, 'update panel')
     must(vp.length === 0, `axe found violations on the update panel: ${vp.map((x) => x.id).join(', ')}`)
     await auto.uncheck()
@@ -1313,7 +1318,7 @@ try {
   await close(session)
   session = await launch({ LOADOUT_HOME: home })
   await session.page.waitForSelector('#grid', { timeout: 20000 })
-  await session.page.getByRole('button', { name: /^Обновления, установлена версия/ }).click()
+  await session.page.getByRole('button', { name: /— обновления/ }).click()
   must(!(await session.page.getByRole('checkbox', { name: 'Проверять обновления автоматически' }).isChecked()), 'the switched-off setting did not survive a restart')
   await close(session)
 

@@ -1,8 +1,22 @@
 import { useEffect, useState } from 'react'
 import { getLang, t } from '../../shared/i18n'
-import type { UpdatesInfo, UpdateState } from '../../shared/model'
+import type { UpdateErrorReason, UpdatesInfo, UpdateState } from '../../shared/model'
 
 const api = () => window.loadout
+
+/** A calm fixed line per reason; main never sends raw error text. */
+const errorText = (r: UpdateErrorReason): string =>
+  r === 'offline'
+    ? t('Нет связи с GitHub. Проверим позже, работе это не мешает.', 'No connection to GitHub. We will check later; this does not affect your work.')
+    : r === 'missing'
+      ? t('На GitHub нет сведений об обновлении: возможно, релиз ещё готовится. Проверим позже.', 'GitHub has no update information yet: the release may still be in preparation. We will check later.')
+      : r === 'corrupt'
+        ? t('Скачанный файл не прошёл проверку целостности, обновление не установлено. Попробуйте позже.', 'The downloaded file failed the integrity check, the update was not installed. Try again later.')
+        : r === 'download'
+          ? t('Не удалось скачать обновление. Попробуйте позже.', 'Could not download the update. Try again later.')
+          : r === 'install'
+            ? t('Не удалось запустить установку. Проверьте ещё раз и повторите.', 'Could not start the installation. Check again and retry.')
+            : t('Не удалось проверить обновления. Проверим позже.', 'Could not check for updates. We will check later.')
 
 /** The state line and its buttons: the same in the notification card and in the panel. */
 function Status({ s, onNote, panel = false }: { s: UpdateState; onNote: (m: string | null) => void; panel?: boolean }) {
@@ -32,7 +46,11 @@ function Status({ s, onNote, panel = false }: { s: UpdateState; onNote: (m: stri
     case 'downloading':
       return (
         <>
-          <p>{t(`Скачивается версия ${s.version}: ${s.percent}%`, `Downloading version ${s.version}: ${s.percent}%`)}</p>
+          {/* the percent is not announced by a screen reader on every step: it reads the progress bar on demand */}
+          <p>
+            {t(`Скачивается версия ${s.version}`, `Downloading version ${s.version}`)}
+            <span aria-hidden="true">: {s.percent}%</span>
+          </p>
           <progress max={100} value={s.percent} aria-label={t('Скачивание обновления', 'Update download')} />
         </>
       )
@@ -49,7 +67,7 @@ function Status({ s, onNote, panel = false }: { s: UpdateState; onNote: (m: stri
     case 'error':
       return (
         <>
-          <p>{s.message}</p>
+          <p>{errorText(s.reason)}</p>
           {/* the panel has its own "Check now" */}
           {panel ? null : (
             <div className="upd-actions">
@@ -65,7 +83,7 @@ const cardKey = (s: UpdateState): string | null =>
   s.status === 'available' || s.status === 'downloading' || s.status === 'ready'
     ? `${s.status}:${s.version}`
     : s.status === 'error' && !s.quiet
-      ? `error:${s.message}`
+      ? `error:${s.reason}`
       : null
 
 /**
@@ -84,7 +102,8 @@ export function Updates() {
   }, [])
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    // a dialog or the palette above the window takes Escape for itself (App.tsx)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !document.querySelector('.modal, .palette') && setOpen(false)
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [open])
@@ -111,17 +130,19 @@ export function Updates() {
         className={`upd-btn${fresh ? ' s-on' : ''}`}
         aria-expanded={open}
         aria-controls="updates"
-        aria-label={t(`Обновления, установлена версия ${info.version}`, `Updates, installed version ${info.version}`)}
+        // the visible "vX.Y.Z" starts the name (WCAG 2.5.3); a new version is said in words, not only by the dot and colour
+        aria-label={t(`v${info.version} — обновления${fresh ? ', есть новая версия' : ''}`, `v${info.version} — updates${fresh ? ', a new version is available' : ''}`)}
         onClick={() => setOpen((o) => !o)}
       >
-        {fresh ? '● ' : ''}v{info.version}
+        {fresh ? <span aria-hidden="true">● </span> : null}v{info.version}
       </button>
       {open ? (
         <section id="updates" className="hud upd-pop" role="dialog" aria-label={t('Обновления', 'Updates')}>
           <h2>{t('Обновления', 'Updates')}</h2>
           <p>{t(`Установлена версия ${info.version}`, `Installed version ${info.version}`)}</p>
           <label className="upd-auto">
-            <input type="checkbox" checked={info.auto} onChange={(e) => toggle(e.target.checked)} />
+            {/* focus moves into the panel when it opens */}
+            <input type="checkbox" autoFocus checked={info.auto} onChange={(e) => toggle(e.target.checked)} />
             {t('Проверять обновления автоматически', 'Check for updates automatically')}
           </label>
           <p className="mute small">

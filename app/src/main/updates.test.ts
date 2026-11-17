@@ -1,8 +1,7 @@
 import { EventEmitter } from 'node:events'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { setLang } from '../shared/i18n'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { UpdateState } from '../shared/model'
-import { CHECK_EVERY_MS, FIRST_CHECK_MS, TICK_MS, autoCheckOn, checkDue, isNewer, notesUrl, parseVersion, Updates, updateErrorText } from './updates'
+import { CHECK_EVERY_MS, FIRST_CHECK_MS, TICK_MS, autoCheckOn, checkDue, errorReason, isNewer, notesUrl, parseVersion, Updates } from './updates'
 
 describe('version decision', () => {
   it('accepts only a plain X.Y.Z version', () => {
@@ -37,28 +36,27 @@ describe('setting', () => {
 })
 
 describe('schedule', () => {
-  it('first check a short while after start, then once a day', () => {
-    const start = 1_000_000
-    expect(checkDue(start + FIRST_CHECK_MS - 1, start, undefined)).toBe(false)
-    expect(checkDue(start + FIRST_CHECK_MS, start, undefined)).toBe(true)
-    expect(checkDue(start + CHECK_EVERY_MS - 1, start, start)).toBe(false)
-    expect(checkDue(start + CHECK_EVERY_MS, start, start)).toBe(true)
+  it('never checked, or a day since the last check', () => {
+    const at = 1_000_000
+    expect(checkDue(at, undefined)).toBe(true)
+    expect(checkDue(at + CHECK_EVERY_MS - 1, at)).toBe(false)
+    expect(checkDue(at + CHECK_EVERY_MS, at)).toBe(true)
   })
 })
 
-describe('error text', () => {
-  beforeEach(() => setLang('en'))
-  afterEach(() => setLang('ru'))
-  it('a network failure gives a calm line without the stack or the address', () => {
+describe('error reason', () => {
+  it('a network failure is "offline", whatever the stack and address around it', () => {
     const e = new Error('net::ERR_INTERNET_DISCONNECTED\n    at SimpleURLLoaderWrapper.<anonymous> (node:electron/js2c/browser_init:2:1)')
-    const text = updateErrorText(e, 'check')
-    expect(text).toMatch(/GitHub/)
-    expect(text).not.toMatch(/net::|at |\n/)
+    expect(errorReason(e, 'check')).toBe('offline')
+    expect(errorReason(new Error('getaddrinfo ENOTFOUND github.com'), 'download')).toBe('offline')
   })
-  it('a missing release and a broken file have their own lines', () => {
-    expect(updateErrorText(Object.assign(new Error('x'), { code: 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND' }), 'check')).toMatch(/no update information/)
-    expect(updateErrorText(Object.assign(new Error('sha512 checksum mismatch'), { code: 'ERR_CHECKSUM_MISMATCH' }), 'download')).toMatch(/integrity/)
-    expect(updateErrorText('weird', 'download')).toMatch(/download/)
+  it('a missing release, a broken file and the rest have their own reasons', () => {
+    expect(errorReason(Object.assign(new Error('x'), { code: 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND' }), 'check')).toBe('missing')
+    expect(errorReason(Object.assign(new Error('x'), { code: 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' }), 'check')).toBe('missing')
+    expect(errorReason(Object.assign(new Error('sha512 checksum mismatch'), { code: 'ERR_CHECKSUM_MISMATCH' }), 'download')).toBe('corrupt')
+    expect(errorReason('weird', 'download')).toBe('download')
+    expect(errorReason('weird', 'check')).toBe('check')
+    expect(errorReason(new Error('spawn EACCES'), 'install')).toBe('install')
   })
 })
 
@@ -141,15 +139,39 @@ describe('Updates', () => {
     updater.emit('update-available', { version: '2.0.0' })
     await u.download()
     updater.emit('error', new Error('boom'))
-    expect(u.state).toMatchObject({ status: 'error', quiet: false })
-    expect(JSON.stringify(u.state)).not.toMatch(/boom|ENOTFOUND/)
+    expect(u.state).toEqual({ status: 'error', reason: 'download', quiet: false })
+  })
+
+  it('events out of turn change nothing: a new feed version during a download, a second check while checking', async () => {
+    const { updater, u } = setup()
+    updater.emit('update-available', { version: '2.0.0' })
+    await u.download()
+    updater.emit('update-available', { version: '3.0.0' })
+    updater.emit('update-not-available', {})
+    expect(u.state).toMatchObject({ status: 'downloading', version: '2.0.0' })
+    const fresh = setup()
+    await fresh.u.check(false)
+    await fresh.u.check(true)
+    expect(fresh.u.state).toEqual({ status: 'checking', manual: true })
+    fresh.updater.emit('update-available', { version: '1.0.1' })
+    expect(fresh.u.state).toEqual({ status: 'available', version: '1.0.1' })
+  })
+
+  it('a failed install start (the updater reports an error once ready) is shown, not swallowed', () => {
+    const { updater, u } = setup()
+    updater.emit('update-available', { version: '2.0.0' })
+    void u.download()
+    updater.emit('update-downloaded', {})
+    expect(u.install()).toBe(true)
+    updater.emit('error', new Error("No update filepath provided, can't quit and install"))
+    expect(u.state).toEqual({ status: 'error', reason: 'install', quiet: false })
   })
 
   it('a rejected promise also ends in an error state, not an unhandled rejection', async () => {
     const { updater, u } = setup()
     updater.checkForUpdates = () => Promise.reject(new Error('ETIMEDOUT'))
     await u.check(true)
-    expect(u.state).toMatchObject({ status: 'error', quiet: false })
+    expect(u.state).toEqual({ status: 'error', reason: 'offline', quiet: false })
   })
 
   it('a check does not interrupt a download or a ready update', async () => {
@@ -186,6 +208,42 @@ describe('Updates', () => {
     setAuto(true)
     vi.advanceTimersByTime(3 * CHECK_EVERY_MS)
     expect(updater.calls).toHaveLength(2)
+  })
+
+  it('a failed check is retried on the next hourly tick, not a day later', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const { updater, u } = setup()
+    u.start()
+    vi.advanceTimersByTime(FIRST_CHECK_MS)
+    updater.emit('error', new Error('getaddrinfo ENOTFOUND github.com'))
+    expect(u.state).toMatchObject({ status: 'error', reason: 'offline', quiet: true })
+    vi.advanceTimersByTime(TICK_MS)
+    expect(updater.calls).toEqual(['check', 'check'])
+  })
+
+  it('a found version stays offered: the background schedule does not check it away', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const { updater, u } = setup()
+    u.start()
+    vi.advanceTimersByTime(FIRST_CHECK_MS)
+    updater.emit('update-available', { version: '2.0.0' })
+    vi.advanceTimersByTime(3 * CHECK_EVERY_MS)
+    expect(updater.calls).toEqual(['check'])
+    expect(u.state).toEqual({ status: 'available', version: '2.0.0' })
+  })
+
+  it('turning the setting on checks at once (tick), turned off nothing runs', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const { updater, u, setAuto } = setup(false)
+    u.start()
+    vi.advanceTimersByTime(2 * CHECK_EVERY_MS)
+    expect(updater.calls).toEqual([])
+    setAuto(true)
+    u.tick()
+    expect(updater.calls).toEqual(['check'])
   })
 
   it('a manual check counts: the daily check waits a day after it', async () => {
