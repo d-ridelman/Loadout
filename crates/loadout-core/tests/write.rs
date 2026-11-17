@@ -1851,3 +1851,171 @@ fn claude_code_plugin_plan_names_settings_json_and_enabled_plugins() {
         ("~/.claude/settings.json", "")
     );
 }
+
+fn oc_cfg(e: &Env) -> PathBuf {
+    e.home.join(".config/opencode/opencode.jsonc")
+}
+
+fn read_jsonc(p: &Path) -> serde_json::Value {
+    jsonc_parser::parse_to_serde_value(&fs::read_to_string(p).unwrap(), &Default::default())
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn opencode_v2_toggle_writes_the_inverse_disabled_key_keeps_comments_and_rolls_back() {
+    let e = env();
+    let cfg = oc_cfg(&e);
+    let original = fs::read_to_string(&cfg).unwrap();
+    let id = id_in(&e, Client::OpenCode, "tool-a");
+    let p = plan_s(&e, &tog(&id, false)).unwrap();
+    assert_eq!(p.level, "R1");
+    assert_eq!(p.pointer, "/mcp/servers/tool-a/disabled");
+    let done = apply_i(&e, &tog(&id, false)).unwrap();
+    let after = fs::read_to_string(&cfg).unwrap();
+    let (gone, added) = middle(&original, &after);
+    assert!(
+        gone.is_empty() && added.contains("\"disabled\": true"),
+        "{added:?}"
+    );
+    assert!(after.contains("// the same server as in Antigravity"));
+    assert_eq!(state_in(&e, &id), Some(State::Off));
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), original);
+
+    // the server that is off by `disabled: true` turns on by that very value
+    let remote = id_in(&e, Client::OpenCode, "oc-remote");
+    apply_i(&e, &tog(&remote, true)).unwrap();
+    assert_eq!(
+        middle(&original, &fs::read_to_string(&cfg).unwrap()),
+        ("tru".to_owned(), "fals".to_owned())
+    );
+    assert_eq!(state_in(&e, &remote), Some(State::On));
+}
+
+#[test]
+fn opencode_v1_toggle_uses_enabled_in_a_plain_json_file() {
+    let e = env();
+    let cfg = e.home.join(".config/opencode/opencode.json");
+    fs::remove_file(oc_cfg(&e)).unwrap();
+    let text = "{\r\n  \"mcp\": {\r\n    \"a\": { \"type\": \"local\", \"command\": [\"x\"], \"enabled\": true },\r\n  },\r\n}\r\n";
+    fs::write(&cfg, text).unwrap();
+    let id = id_in(&e, Client::OpenCode, "a");
+    let done = apply_i(&e, &tog(&id, false)).unwrap();
+    assert_eq!(
+        middle(text, &fs::read_to_string(&cfg).unwrap()),
+        ("tru".to_owned(), "fals".to_owned())
+    );
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert_eq!(fs::read_to_string(&cfg).unwrap(), text);
+}
+
+#[test]
+fn opencode_edit_writes_one_command_array_and_keeps_environment() {
+    let e = env();
+    let cfg = oc_cfg(&e);
+    let original = fs::read(&cfg).unwrap();
+    let id = id_in(&e, Client::OpenCode, "tool-a");
+    let i = Intent::Edit {
+        entity: id,
+        command: "node".into(),
+        args: vec!["srv.js".into(), "--token".into(), "FAKE-SECRET-NEW".into()],
+    };
+    let p = plan_s(&e, &i).unwrap();
+    assert!(!format!("{p:?}").contains("FAKE-SECRET"), "{p:?}");
+    assert!(p.from.starts_with("npx"), "{}", p.from);
+    let done = apply_i(&e, &i).unwrap();
+    let s = &read_jsonc(&cfg)["mcp"]["servers"]["tool-a"];
+    assert_eq!(
+        s["command"],
+        serde_json::json!(["node", "srv.js", "--token", "FAKE-SECRET-NEW"])
+    );
+    assert!(s.get("args").is_none(), "OpenCode has no args key");
+    assert_eq!(s["environment"]["API_KEY"], "FAKE-SECRET-OCENV");
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert_eq!(fs::read(&cfg).unwrap(), original);
+}
+
+#[test]
+fn opencode_copy_translates_both_ways() {
+    let e = env();
+    // OpenCode → Claude Code: the command array splits into command + args, environment becomes env
+    let id = id_in(&e, Client::OpenCode, "tool-a");
+    let i = Intent::Copy {
+        entity: id,
+        to: "claude-code".into(),
+    };
+    let p = plan_s(&e, &i).unwrap();
+    assert!(
+        p.notes.iter().any(|n| n.contains("API_KEY")),
+        "{:?}",
+        p.notes
+    );
+    assert!(!format!("{p:?}").contains("FAKE-SECRET"), "{p:?}");
+    apply_i(&e, &i).unwrap();
+    let s = &read_json(&e.home.join(".claude.json"))["mcpServers"]["tool-a"];
+    assert_eq!(s["command"], "npx");
+    assert_eq!(s["args"][0], "-y");
+    assert_eq!(s["env"]["API_KEY"], "FAKE-SECRET-OCENV");
+    assert!(s.get("environment").is_none() && s.get("type").is_none());
+
+    // Antigravity → OpenCode (V2 file): `mcp.servers`, type local, one command array
+    let cfg = oc_cfg(&e);
+    let original = fs::read(&cfg).unwrap();
+    let from = id_in(&e, Client::Antigravity, "tool-b");
+    let i = Intent::Copy {
+        entity: from,
+        to: "opencode".into(),
+    };
+    let p = plan_s(&e, &i).unwrap();
+    assert_eq!(
+        (p.file.as_str(), p.pointer.as_str()),
+        ("~/.config/opencode/opencode.jsonc", "/mcp/servers/tool-b")
+    );
+    let done = apply_i(&e, &i).unwrap();
+    let text = fs::read_to_string(&cfg).unwrap();
+    assert!(text.contains("// OpenCode global config"), "comments stay");
+    let s = &read_jsonc(&cfg)["mcp"]["servers"]["tool-b"];
+    assert_eq!(s["type"], "local");
+    assert_eq!(s["command"][0], "node");
+    assert_eq!(s["command"][2], "--token");
+    assert_eq!(s["environment"]["API_KEY"], "FAKE-SECRET-AG-ENV");
+    rollback(&e.home, &e.store, &done.op).unwrap();
+    assert_eq!(fs::read(&cfg).unwrap(), original);
+}
+
+#[test]
+fn opencode_add_follows_the_file_generation_and_refuses_an_unclear_one() {
+    let e = env();
+    let cfg = oc_cfg(&e);
+    apply_i(&e, &add_local("opencode", "oc-new")).unwrap();
+    let s = &read_jsonc(&cfg)["mcp"]["servers"]["oc-new"];
+    assert_eq!(s["command"], serde_json::json!(["npx", "-y", "some-mcp"]));
+    assert_eq!(s["environment"]["API_TOKEN"], "FAKE-SECRET-ADDED");
+    let remote = Intent::Add {
+        to: "opencode".into(),
+        name: "oc-hosted".into(),
+        command: String::new(),
+        args: Vec::new(),
+        url: "https://example.com/mcp".into(),
+        env: Vec::new(),
+    };
+    apply_i(&e, &remote).unwrap();
+    let s = &read_jsonc(&cfg)["mcp"]["servers"]["oc-hosted"];
+    assert_eq!(
+        (s["type"].as_str(), s["url"].as_str()),
+        (Some("remote"), Some("https://example.com/mcp"))
+    );
+    assert!(plan_s(&e, &add_local("opencode", "oc-new"))
+        .unwrap_err()
+        .contains("уже есть"));
+
+    // V1 file: straight under `mcp`
+    fs::write(&cfg, "{ \"plugin\": [] }").unwrap();
+    let p = plan_s(&e, &add_local("opencode", "v1-new")).unwrap();
+    assert_eq!(p.pointer, "/mcp/v1-new");
+    // a file that names neither generation: nothing is guessed
+    fs::write(&cfg, "{ \"model\": \"a/b\" }").unwrap();
+    let err = plan_s(&e, &add_local("opencode", "x")).unwrap_err();
+    assert!(err.contains("mcp.servers"), "{err}");
+}

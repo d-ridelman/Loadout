@@ -36,7 +36,7 @@ fn collect(node: &Value, out: &mut Secrets) {
             for (k, v) in o {
                 let container = matches!(
                     k.as_str(),
-                    "env" | "headers" | "http_headers" | "env_http_headers"
+                    "env" | "environment" | "headers" | "http_headers" | "env_http_headers"
                 );
                 match v {
                     Value::String(s) if is_secret_key(k) => {
@@ -90,6 +90,16 @@ fn no_secret_value_reaches_the_scan_output() {
             }
         }
     }
+    for rel in [
+        ".config/opencode/opencode.json",
+        ".config/opencode/opencode.jsonc",
+    ] {
+        if let Ok(text) = std::fs::read_to_string(home.join(rel)) {
+            if let Ok(Some(v)) = jsonc_parser::parse_to_serde_value(&text, &Default::default()) {
+                collect(&v, &mut secrets);
+            }
+        }
+    }
     if let Ok(text) = std::fs::read_to_string(home.join(".codex/config.toml")) {
         if let Ok(t) = text.parse::<toml::Table>() {
             if let Ok(v) = serde_json::to_value(&t) {
@@ -122,6 +132,7 @@ fn no_secret_value_reaches_the_scan_output() {
         (".codex", "codex"),
         (".gemini/config", "antigravity"),
         (".dsh", "deepseek"),
+        (".config/opencode", "opencode"),
     ] {
         if home.join(dir).is_dir() {
             let n = result

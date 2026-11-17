@@ -832,6 +832,75 @@ fn skill_overrides_in_settings_local_outrank_user_settings() {
 }
 
 #[test]
+fn opencode_inventory_from_a_jsonc_v2_config() {
+    let h = fixture_home();
+    let r = loadout_core::scan(&h.0);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let c = Client::OpenCode;
+    let one = |kind: Kind, name: &str| {
+        r.entities
+            .iter()
+            .find(|e| e.client == c && e.kind == kind && e.name == name)
+            .unwrap_or_else(|| panic!("{kind:?} {name}"))
+    };
+    let tool = one(Kind::Mcp, "tool-a");
+    assert_eq!(tool.state, State::On);
+    assert_eq!(tool.origin.pointer, "/mcp/servers/tool-a");
+    assert_eq!(
+        tool.toggle_level.as_deref(),
+        Some("R1"),
+        "a flag, not the trash"
+    );
+    assert!(tool.can_edit);
+    assert_eq!(tool.detail["command"], "npx");
+    assert_eq!(tool.detail["envKeys"], serde_json::json!(["API_KEY"]));
+    assert!(
+        r.entities
+            .iter()
+            .any(|e| e.client == Client::Antigravity && e.logical_key == tool.logical_key),
+        "one row with the Antigravity server"
+    );
+    let remote = one(Kind::Mcp, "oc-remote");
+    assert_eq!(remote.state, State::Off, "`disabled: true`");
+    assert_eq!(remote.detail["transport"], "http");
+    assert_eq!(
+        remote.detail["headerKeys"],
+        serde_json::json!(["Authorization"])
+    );
+    assert_eq!(one(Kind::Agent, "reviewer").state, State::Off);
+    let planner = one(Kind::Agent, "planner");
+    assert_eq!(planner.state, State::On);
+    assert_eq!(planner.detail["model"], "anthropic/claude-sonnet-5-5");
+    one(Kind::Command, "ship");
+    one(Kind::Command, "review");
+    let p = one(Kind::Plugin, "opencode-acme-plugin");
+    assert_eq!(p.version.as_deref(), Some("1.2.0"));
+    one(Kind::Plugin, "@acme/opencode-plugin");
+    one(Kind::Plugin, "status");
+    one(Kind::Skill, "oc-skill");
+    assert_eq!(r.entities.iter().filter(|e| e.client == c).count(), 10);
+}
+
+#[test]
+fn opencode_v1_config_uses_enabled_and_singular_keys() {
+    let h = synthetic_home(&[(
+        ".config/opencode/opencode.json",
+        r#"{ "mcp": { "a": { "type": "local", "command": ["x"], "enabled": false }, "b": { "type": "remote", "url": "https://h.example.com/mcp" } },
+             "agent": { "old": { "disable": true } }, "command": { "c": { "template": "t" } }, "plugin": [["./plugin/local.ts", { "k": 1 }]] }"#,
+    )]);
+    let r = loadout_core::scan(&h.0);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let c = Client::OpenCode;
+    assert_eq!(state_of(&r, c, Kind::Mcp, "a"), vec![State::Off]);
+    assert_eq!(state_of(&r, c, Kind::Mcp, "b"), vec![State::On]);
+    assert_eq!(state_of(&r, c, Kind::Agent, "old"), vec![State::Off]);
+    assert_eq!(state_of(&r, c, Kind::Command, "c"), vec![State::On]);
+    assert_eq!(state_of(&r, c, Kind::Plugin, "local"), vec![State::On]);
+    let a = r.entities.iter().find(|e| e.name == "a").unwrap();
+    assert_eq!(a.origin.pointer, "/mcp/a");
+}
+
+#[test]
 fn missing_home_is_not_an_error() {
     let r = loadout_core::scan(Path::new("Z:/definitely/not/here"));
     assert!(r.entities.is_empty() && r.warnings.is_empty());

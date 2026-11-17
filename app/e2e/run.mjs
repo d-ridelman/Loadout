@@ -408,7 +408,7 @@ try {
   const rowCount = await page.locator('tbody tr').count()
   log('rows in the matrix:', rowCount)
   must(rowCount > 10, 'too few rows in the matrix')
-  must((await page.locator('thead th').count()) === 6, 'the header must have 6 columns (entity + 5 clients)')
+  must((await page.locator('thead th').count()) === 7, 'the header must have 7 columns (entity + 6 clients)')
 
   // keyboard: j, l → the selected cell and the inspector
   await page.locator('#grid').focus()
@@ -446,7 +446,7 @@ try {
   must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'the palette did not close')
   must((await page.locator('aside').innerText()).includes('tool-b'), 'the palette did not select tool-b')
   // The palette returns focus to the table on the next frame. If it is opened again sooner, the second time it remembers
-  // the previous field (search), returns focus there, and the digit `2` goes into the search: the radar does not open ("the radar must have 5 clients").
+  // the previous field (search), returns focus there, and the digit `2` goes into the search: the radar does not open ("the radar must have 6 clients").
   await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after the palette focus returned to the table')
   await page.keyboard.press('Control+k')
   await page.getByRole('combobox', { name: 'Команда' }).waitFor() // Esc is handled by the input field: wait until it gets focus
@@ -474,7 +474,14 @@ try {
   // sections by digits
   await page.keyboard.press('2')
   // a section is not drawn instantly: count with a wait, not right after the key press
-  await waitFor(async () => (await page.locator('.node').count()) === 5, 'the radar must have 5 clients')
+  await waitFor(async () => (await page.locator('.node').count()) === 6, 'the radar must have 6 clients')
+  // every client has its own place: no node covers another one or the row counter in the middle
+  const radarHits = await page.evaluate(() => {
+    const boxes = [...document.querySelectorAll('.node'), document.querySelector('.rcenter .big')].map((e) => e.getBoundingClientRect())
+    const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+    return boxes.flatMap((a, i) => boxes.slice(i + 1).map((b, j) => (hit(a, b) ? `${i}/${i + 1 + j}` : null))).filter(Boolean)
+  })
+  must(radarHits.length === 0, `radar nodes overlap: ${radarHits.join(', ')}`)
   // a client without Doctor problems shows no warning sign, and the sign counts the same problems as the "Issues" panel
   const radarText = await page.locator('.radar').innerText()
   must(!radarText.includes('⚠ 0'), `the radar shows a zero warning: ${radarText}`)
@@ -545,7 +552,8 @@ try {
   // ---- live update: editing a config on disk changes the matrix without a "Scan" button and without a "loading" screen ----
   await resize(app, 1100, 700) // the minimum window size: the header is still on one line
   await page.waitForTimeout(250)
-  await headerLayout(page, 'ru@1100')
+  // six client columns at the minimum width: no clipped names, no sideways scroll, header and cells aligned (layout() checks the header too)
+  await layout(page, 'matrix@1100')
   // the filter bar stays within two rows at the narrowest window (it took three before the rarer kinds became one list)
   // rows by item centres (items of one row differ in height), a new row starts more than 12px below the previous centre
   const barRows = await page.evaluate(() => [...document.querySelector('main .bar').children].map((c) => { const r = c.getBoundingClientRect(); return r.top + r.height / 2 }).sort((a, b) => a - b).filter((y, i, a) => i === 0 || y - a[i - 1] > 12).length)
@@ -864,6 +872,34 @@ try {
   must(plugText.includes('~/.claude/settings.json') && plugText.includes('/enabledPlugins/alpha@mp') && !plugText.includes('installed_plugins'), `the plugin preview names another file: ${plugText}`)
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'detached', timeout: 8000 })
+  // OpenCode (the sixth column): a V2 server is switched by the inverse `disabled` key (R1) in a JSONC file whose comments stay;
+  // the journal rollback brings the file back byte for byte
+  {
+    must((await page.locator('thead th').allInnerTexts()).some((h) => h.toUpperCase().includes('OPENCODE')), 'the matrix has no OpenCode column')
+    const ocFile = join(home, '.config', 'opencode', 'opencode.jsonc')
+    const ocOrig = readFileSync(ocFile, 'utf8')
+    await clickCell('tool-a', 5)
+    await page.keyboard.press('Space')
+    await dialog.waitFor({ timeout: 8000 })
+    await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
+    const ocText = await dialog.innerText()
+    must(ocText.includes('~/.config/opencode/opencode.jsonc') && ocText.includes('/mcp/servers/tool-a/disabled') && ocText.includes('R1') && !ocText.includes('FAKE-SECRET'), `OpenCode toggle preview: ${ocText}`)
+    await shot(page, 'm7-opencode-dialog-1280')
+    await dialog.getByRole('button', { name: APPLY }).click()
+    await waitFor(async () => String(await cellLabel(page, 'tool-a', 5)).includes('выключено'), 'after the write the OpenCode tool-a glyph is "disabled"')
+    const ocAfter = readFileSync(ocFile, 'utf8')
+    must(ocAfter.includes('"disabled": true') && ocAfter.includes('// the same server as in Antigravity') && String(await cellLabel(page, 'tool-a', 3)).includes('включено'), 'the OpenCode write lost a comment or touched the Antigravity cell')
+    await page.keyboard.press('5')
+    const ocRow = page.locator('table[aria-label="Журнал операций"] tbody tr', { hasText: 'tool-a' }).first()
+    await ocRow.waitFor({ timeout: 8000 })
+    await ocRow.getByRole('button', { name: 'Откатить', exact: true }).click()
+    await dialog.waitFor({ timeout: 8000 })
+    await dialog.getByRole('button', { name: 'Откатить', exact: true }).click()
+    await dialog.waitFor({ state: 'detached', timeout: 8000 })
+    await waitFor(() => readFileSync(ocFile, 'utf8') === ocOrig, 'the OpenCode rollback restored opencode.jsonc byte for byte')
+    await page.keyboard.press('1')
+    await waitFor(async () => String(await cellLabel(page, 'tool-a', 5)).includes('включено'), 'after the rollback the OpenCode tool-a glyph came back')
+  }
   // ---- R2: trash, edit, copy, profiles (also on a fixture copy) ----
   // most MCP servers have no flag: at R1 their "Disable (move to trash)" asks for R2 itself, once, and opens the trash preview
   await stubDialog(1)
@@ -955,7 +991,7 @@ try {
     return e ? { name: e.name, client: e.client, command: e.detail.command } : null
   })
   must(plain !== null, 'fixture: no editable MCP without masked values')
-  await clickCell(plain.name, ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek'].indexOf(plain.client))
+  await clickCell(plain.name, ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek', 'opencode'].indexOf(plain.client))
   await page.getByRole('button', { name: 'Править команду…' }).click()
   must((await dialog.getByLabel('Команда').inputValue()) === plain.command, `the Edit command form is not filled with the current command of ${plain.name}`)
   await page.keyboard.press('Escape')

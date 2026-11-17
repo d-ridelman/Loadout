@@ -7,7 +7,7 @@ import type { Finding } from '../doctor'
 import { PageHead, Panel } from '../ui'
 
 const POS: readonly [number, number][] = [
-  [50, 6], [91, 40], [76, 90], [24, 90], [9, 40],
+  [50, 6], [88, 28], [88, 72], [50, 94], [12, 72], [12, 28],
 ]
 
 interface Props {

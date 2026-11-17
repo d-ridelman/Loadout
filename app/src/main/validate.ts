@@ -18,7 +18,7 @@ import type {
 } from '../shared/model'
 import { t } from '../shared/i18n'
 
-const CLIENTS = ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek']
+const CLIENTS = ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek', 'opencode']
 const KINDS = ['plugin', 'mcp', 'skill', 'hook', 'agent', 'command', 'marketplace', 'connector']
 const STATES = ['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
 

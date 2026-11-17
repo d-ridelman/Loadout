@@ -19,7 +19,9 @@ pub struct Target {
 }
 
 /// File names whose change alters the scan result.
-const KNOWN_NAMES: [&str; 12] = [
+const KNOWN_NAMES: [&str; 14] = [
+    "opencode.json",
+    "opencode.jsonc",
     ".claude.json",
     "settings.json",
     "settings.local.json",
@@ -35,7 +37,16 @@ const KNOWN_NAMES: [&str; 12] = [
 ];
 
 /// (directory relative to home, recursive, any descendant is significant)
-const FIXED: [(&str, bool, bool); 19] = [
+const FIXED: [(&str, bool, bool); 28] = [
+    (".config/opencode", false, false),
+    (".config/opencode/agent", false, true),
+    (".config/opencode/agents", false, true),
+    (".config/opencode/command", false, true),
+    (".config/opencode/commands", false, true),
+    (".config/opencode/plugin", false, true),
+    (".config/opencode/plugins", false, true),
+    (".config/opencode/skill", true, false),
+    (".config/opencode/skills", true, false),
     (".", false, false), // `.claude.json` lives in the home root: events are filtered by file name
     (".claude", false, false),
     (".claude/plugins", false, false),
