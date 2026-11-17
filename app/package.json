@@ -1,6 +1,6 @@
 {
   "name": "loadout-app",
-  "version": "0.0.7",
+  "version": "1.0.0",
   "private": true,
   "description": "Plugins, MCP servers, skills and hooks of five AI coding clients in one matrix, with safe config edits",
   "license": "MIT",
