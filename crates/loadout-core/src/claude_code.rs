@@ -4,8 +4,8 @@ use crate::mask::{self, mcp_detail};
 use crate::model::{Client, Entity, Format, Kind, Source, Src, State, Target, TargetKind};
 use crate::{esc_ptr, frontmatter, scan_hooks, scan_skills, Ctx};
 use serde_json::{json, Value};
-use std::collections::HashSet;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path, PathBuf};
 
 const CLIENT: Client = Client::ClaudeCode;
 /// Top-level keys of `~/.claude.json` that hold "disabled" MCP servers (the owner's stash, not an official Claude Code mechanism).
@@ -34,11 +34,48 @@ pub fn scan(c: &mut Ctx) {
         .collect();
     mcp(c, connectors_off, &denied);
     let skills = c.home.join(".claude/skills");
+    let first = c.entities.len();
     scan_skills(c, CLIENT, &skills, "user");
+    if let Some(o) = settings
+        .as_ref()
+        .and_then(|s| s.get("skillOverrides"))
+        .and_then(Value::as_object)
+    {
+        skill_overrides(&mut c.entities[first..], o);
+    }
     md_dir(c, "agents", Kind::Agent);
     md_dir(c, "commands", Kind::Command);
     if let Some(h) = settings.as_ref().and_then(|s| s.get("hooks")) {
         scan_hooks(c, CLIENT, "~/.claude/settings.json", "/hooks", "user", h);
+    }
+}
+
+/// `skillOverrides` of `~/.claude/settings.json`: skill name → `on` | `name-only` | `user-invocable-only` | `off`
+/// (Claude Code docs, settings-reference). Only `off` hides the skill from both Claude and the `/` menu.
+fn skill_overrides(skills: &mut [Entity], o: &serde_json::Map<String, Value>) {
+    for e in skills {
+        let note = match o.get(&e.name).and_then(Value::as_str) {
+            Some("off") => {
+                e.state = State::Off;
+                crate::tr!(
+                    "выключен в skillOverrides (\"off\"): Claude его не видит, в меню / его нет",
+                    "turned off in skillOverrides (\"off\"): Claude does not see it, it is not in the / menu"
+                )
+            }
+            Some("name-only") => crate::tr!(
+                "skillOverrides: \"name-only\" — Claude видит только имя, без описания",
+                "skillOverrides: \"name-only\" — Claude sees the name only, without the description"
+            ),
+            Some("user-invocable-only") => crate::tr!(
+                "skillOverrides: \"user-invocable-only\" — Claude его не видит, вызвать можно только вручную через /",
+                "skillOverrides: \"user-invocable-only\" — Claude does not see it, it can only be invoked by hand via /"
+            ),
+            _ => continue,
+        };
+        e.note = Some(match e.note.take() {
+            Some(n) => format!("{n}; {note}"),
+            None => note,
+        });
     }
 }
 
@@ -60,6 +97,8 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
         .and_then(|s| s.get("enabledPlugins"))
         .and_then(Value::as_object);
     let mut seen = HashSet::new();
+    // many plugins share one project: each settings file is read (and warned about) once
+    let mut project_files: HashMap<PathBuf, Option<Value>> = HashMap::new();
 
     let records = installed
         .as_ref()
@@ -96,11 +135,22 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                 None => "user".to_owned(),
             };
             let is_user = scope == "user";
-            let path_ok = r
-                .get("installPath")
-                .and_then(Value::as_str)
-                .is_some_and(|p| Path::new(p).exists());
+            let install = r.get("installPath").and_then(Value::as_str).map(Path::new);
+            let path_ok = install.is_some_and(Path::exists);
             let flag = enabled.and_then(|m| m.get(key)).and_then(Value::as_bool);
+            let by_default = |c: &mut Ctx| {
+                let on = install
+                    .and_then(|p| c.read_json(&p.join(".claude-plugin/plugin.json")))
+                    .and_then(|m| m.get("defaultEnabled").and_then(Value::as_bool))
+                    .unwrap_or(true);
+                (
+                    if on { State::On } else { State::Off },
+                    Some(crate::tr!(
+                        "нет записи в enabledPlugins: действует defaultEnabled = {on} (из манифеста плагина или по умолчанию; запись маркетплейса Loadout не читает)",
+                        "no entry in enabledPlugins: defaultEnabled = {on} applies (from the plugin manifest or the default; Loadout does not read the marketplace entry)"
+                    )),
+                )
+            };
             let (state, note) = if !path_ok {
                 (
                     State::Broken,
@@ -109,12 +159,44 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                         "installPath does not exist on disk"
                     )),
                 )
+            } else if scope.starts_with("project:") || scope == "local" {
+                let raw = r.get("projectPath").and_then(Value::as_str);
+                match raw.and_then(project_dir) {
+                    None => (
+                        State::Unknown,
+                        Some(crate::tr!(
+                            "projectPath не указан или не принят (относительный, с `..` или сетевой): настройки проекта не прочитаны",
+                            "projectPath is missing or not accepted (relative, with `..` or a network path): project settings were not read"
+                        )),
+                    ),
+                    Some(dir) if !dir.is_dir() => (
+                        State::Unknown,
+                        Some(crate::tr!(
+                            "каталог проекта {} не найден",
+                            "project directory {} not found",
+                            c.tilde(&dir)
+                        )),
+                    ),
+                    Some(dir) => {
+                        let user_flag = flag.map(|b| (b, "~/.claude/settings.json".to_owned()));
+                        match project_flag(c, &mut project_files, &dir, key).or(user_flag) {
+                            Some((on, from)) => (
+                                if on { State::On } else { State::Off },
+                                Some(crate::tr!(
+                                    "флаг включения взят из {from}",
+                                    "the enable flag comes from {from}"
+                                )),
+                            ),
+                            None => by_default(c),
+                        }
+                    }
+                }
             } else if !is_user {
                 (
                     State::Unknown,
                     Some(crate::tr!(
-                        "флаг включения лежит в настройках области «{scope}», M0 их не читает",
-                        "the enable flag is in the settings of scope “{scope}”, M0 does not read them"
+                        "флаг включения лежит в настройках области «{scope}», Loadout их не читает",
+                        "the enable flag is in the settings of scope “{scope}”, Loadout does not read them"
                     )),
                 )
             } else {
@@ -136,13 +218,7 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                     ),
                     Some(true) => (State::On, None),
                     Some(false) => (State::Off, None),
-                    None => (
-                        State::Unknown,
-                        Some(crate::tr!(
-                            "нет записи в enabledPlugins",
-                            "no entry in enabledPlugins"
-                        )),
-                    ),
+                    None => by_default(c),
                 }
             };
             let mut e = Entity::new(
@@ -189,6 +265,39 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
             c.push(e);
         }
     }
+}
+
+/// `projectPath` from `installed_plugins.json`: only an absolute local path without `..` is read.
+fn project_dir(raw: &str) -> Option<PathBuf> {
+    let p = PathBuf::from(raw);
+    let network = raw.starts_with("\\\\") || raw.starts_with("//");
+    (p.is_absolute() && !network && !p.components().any(|x| x == Component::ParentDir)).then_some(p)
+}
+
+/// The project's own `enabledPlugins` value: `.claude/settings.local.json` over `.claude/settings.json`
+/// (Claude Code docs, plugins/loading, "Find where a plugin is enabled"). Returns the value and the file it came from.
+fn project_flag(
+    c: &mut Ctx,
+    files: &mut HashMap<PathBuf, Option<Value>>,
+    dir: &Path,
+    key: &str,
+) -> Option<(bool, String)> {
+    for name in ["settings.local.json", "settings.json"] {
+        let p = dir.join(".claude").join(name);
+        if !files.contains_key(&p) {
+            let v = c.read_json(&p);
+            files.insert(p.clone(), v);
+        }
+        let flag = files[&p]
+            .as_ref()
+            .and_then(|v| v.get("enabledPlugins"))
+            .and_then(|m| m.get(key))
+            .and_then(Value::as_bool);
+        if let Some(b) = flag {
+            return Some((b, c.tilde(&p)));
+        }
+    }
+    None
 }
 
 fn marketplaces(c: &mut Ctx) {

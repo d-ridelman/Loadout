@@ -41,8 +41,8 @@ pub fn why_not(e: &Entity) -> String {
         }
         (Client::ClaudeCode, Kind::Plugin) => {
             crate::tr!(
-                "флаг включения лежит в настройках проекта, а проекты Loadout не читает",
-                "the enable flag is in project settings, and Loadout does not read projects"
+                "плагин установлен не в области user: его флаг включения лежит в настройках проекта (или в управляемых), а их Loadout только читает",
+                "the plugin is not installed in scope user: its enable flag is in the project (or managed) settings, which Loadout only reads"
             )
         }
         (Client::Codex, Kind::Connector) => {

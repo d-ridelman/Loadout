@@ -89,7 +89,7 @@ fn claude_code_inventory() {
     assert_eq!(
         state_of(&r, c, Kind::Plugin, "proj@mp"),
         [State::Unknown],
-        "M0 does not read the project flag"
+        "the project directory does not exist: its settings cannot be read"
     );
     assert_eq!(count(&r, c, Kind::Marketplace, State::On), 1);
 
@@ -446,6 +446,161 @@ fn secret_looking_names_from_files_do_not_reach_output() {
         !json.contains(token),
         "token from the name leaked into the output"
     );
+}
+
+/// A home built inside the test: `(relative path, content)`, `{HOME}` is replaced with the real path.
+fn synthetic_home(files: &[(&str, &str)]) -> Home {
+    let tmp = std::env::temp_dir().join(format!(
+        "loadout-syn-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::SeqCst)
+    ));
+    let _ = fs::remove_dir_all(&tmp);
+    let home = tmp.to_string_lossy().replace('\\', "/");
+    for (rel, text) in files {
+        let p = tmp.join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text.replace("{HOME}", &home)).unwrap();
+    }
+    Home(tmp)
+}
+
+fn plugin<'a>(r: &'a ScanResult, name: &str) -> &'a loadout_core::model::Entity {
+    r.entities
+        .iter()
+        .find(|e| e.client == Client::ClaudeCode && e.kind == Kind::Plugin && e.name == name)
+        .unwrap_or_else(|| panic!("{name}"))
+}
+
+/// The enable flag of a project/local plugin merges user < project < local settings of its `projectPath`
+/// (Claude Code docs, plugins/loading: "Find where a plugin is enabled"); no entry anywhere means `defaultEnabled`.
+#[test]
+fn project_and_local_plugins_read_the_project_settings() {
+    let rec = |scope: &str, project: &str, dir: &str| {
+        format!(
+            r#"[{{ "scope": "{scope}", "projectPath": "{project}", "installPath": "{{HOME}}/.claude/plugins/cache/mp/{dir}/1", "version": "1" }}]"#
+        )
+    };
+    let installed = format!(
+        r#"{{ "version": 2, "plugins": {{
+            "pa@mp": {}, "pb@mp": {}, "pc@mp": {}, "pd@mp": {}, "pe@mp": {}, "pf@mp": {}, "pg@mp": {},
+            "pu@mp": [{{ "scope": "user", "installPath": "{{HOME}}/.claude/plugins/cache/mp/pu/1", "version": "1" }}]
+        }} }}"#,
+        rec("project", "{HOME}/work/a", "pa"),
+        rec("local", "{HOME}/work/a", "pb"),
+        rec("project", "{HOME}", "pc"),
+        rec("local", "{HOME}/work/a", "pd"),
+        rec("project", "{HOME}/work/a", "pe"),
+        rec("project", "../work/a", "pf"),
+        rec("project", "{HOME}/work/gone", "pg"),
+    );
+    let h = synthetic_home(&[
+        (".claude/plugins/installed_plugins.json", &installed),
+        (
+            ".claude/settings.json",
+            r#"{ "enabledPlugins": { "pc@mp": false, "pu@mp": true, "pa@mp": false } }"#,
+        ),
+        (
+            "work/a/.claude/settings.json",
+            r#"{ "enabledPlugins": { "pa@mp": true, "pb@mp": true, "pu@mp": false } }"#,
+        ),
+        (
+            "work/a/.claude/settings.local.json",
+            r#"{ "enabledPlugins": { "pb@mp": false } }"#,
+        ),
+        (".claude/plugins/cache/mp/pa/1/.keep", ""),
+        (".claude/plugins/cache/mp/pb/1/.keep", ""),
+        (".claude/plugins/cache/mp/pc/1/.keep", ""),
+        (
+            ".claude/plugins/cache/mp/pd/1/.claude-plugin/plugin.json",
+            r#"{ "name": "pd", "defaultEnabled": false }"#,
+        ),
+        (".claude/plugins/cache/mp/pe/1/.keep", ""),
+        (".claude/plugins/cache/mp/pf/1/.keep", ""),
+        (".claude/plugins/cache/mp/pg/1/.keep", ""),
+        (".claude/plugins/cache/mp/pu/1/.keep", ""),
+    ]);
+    let r = loadout_core::scan(&h.0);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    let st = |n: &str| plugin(&r, n).state;
+    assert_eq!(
+        st("pa@mp"),
+        State::On,
+        "project settings override user settings"
+    );
+    assert_eq!(
+        st("pb@mp"),
+        State::Off,
+        "local settings override project settings"
+    );
+    assert_eq!(
+        st("pc@mp"),
+        State::Off,
+        "projectPath = home: the project file is ~/.claude/settings.json"
+    );
+    assert_eq!(
+        st("pd@mp"),
+        State::Off,
+        "no entry: defaultEnabled from the manifest"
+    );
+    assert_eq!(
+        st("pe@mp"),
+        State::On,
+        "no entry, no manifest: defaultEnabled is true"
+    );
+    assert_eq!(
+        st("pf@mp"),
+        State::Unknown,
+        "a relative projectPath is not read"
+    );
+    assert_eq!(st("pg@mp"), State::Unknown, "the project directory is gone");
+    assert_eq!(st("pu@mp"), State::On, "a user plugin shows the user flag");
+    let pb = plugin(&r, "pb@mp");
+    assert!(
+        pb.note
+            .as_deref()
+            .is_some_and(|n| n.contains("~/work/a/.claude/settings.local.json")),
+        "the note names the file the flag came from: {:?}",
+        pb.note
+    );
+    for n in ["pa@mp", "pb@mp", "pc@mp", "pd@mp", "pe@mp"] {
+        assert!(
+            !plugin(&r, n).can_toggle,
+            "{n}: project/local is display only"
+        );
+    }
+}
+
+/// `skillOverrides` (Claude Code docs, settings-reference): `"off"` hides the skill, the other three values keep it.
+#[test]
+fn skill_overrides_turn_user_skills_off() {
+    let skill = |n: &str| {
+        (
+            format!(".claude/skills/{n}/SKILL.md"),
+            format!("---\nname: {n}\n---\n"),
+        )
+    };
+    let s = ["s-off", "s-name", "s-user", "s-on", "s-free"].map(skill);
+    let mut files: Vec<(&str, &str)> = s.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    files.push((
+        ".claude/settings.json",
+        r#"{ "skillOverrides": { "s-off": "off", "s-name": "name-only", "s-user": "user-invocable-only", "s-on": "on" } }"#,
+    ));
+    let h = synthetic_home(&files);
+    let r = loadout_core::scan(&h.0);
+    let get = |n: &str| {
+        r.entities
+            .iter()
+            .find(|e| e.client == Client::ClaudeCode && e.kind == Kind::Skill && e.name == n)
+            .unwrap_or_else(|| panic!("{n}"))
+    };
+    assert_eq!(get("s-off").state, State::Off);
+    assert!(get("s-off").note.is_some());
+    for n in ["s-name", "s-user", "s-on", "s-free"] {
+        assert_eq!(get(n).state, State::On, "{n}");
+    }
+    assert!(get("s-name").note.is_some() && get("s-user").note.is_some());
+    assert!(get("s-on").note.is_none() && get("s-free").note.is_none());
 }
 
 #[test]
