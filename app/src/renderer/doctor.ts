@@ -168,10 +168,7 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
         ),
         what: t(`Одна и та же запись найдена в областях: ${scopes.join(', ')}.`, `The same entry is found in scopes: ${scopes.join(', ')}.`),
         why: t('Какая из них действует, решает клиент: правка одной может ничего не изменить.', 'Which one applies is up to the client: editing one of them may change nothing.'),
-        fix: t(
-          'Нажмите «Показать»: в инспекторе перечислены все копии и их файлы. Лишнюю выключите, а если нужны обе, правьте ту, что действует.',
-          'Press “Show”: the inspector lists every copy and its file. Disable the spare one; if you need both, edit the one that takes effect.',
-        ),
+        fix: dupFix(list, scopes),
         entity: first,
       })
     }
@@ -248,6 +245,53 @@ const RANK: Record<Severity, number> = { error: 0, warn: 1, info: 2 }
 /** Findings by severity, most serious first; empty groups are left out. */
 export function groupFindings(list: readonly Finding[]): { severity: Severity; items: Finding[] }[] {
   return (['error', 'warn', 'info'] as const).map((severity) => ({ severity, items: list.filter((f) => f.severity === severity) })).filter((g) => g.items.length > 0)
+}
+
+/** How to fix copies in several scopes: promise "disable" only where Loadout can toggle a copy. */
+function dupFix(list: readonly Entity[], scopes: readonly string[]): string {
+  // a copy that came with a plugin goes away with the plugin, deleting its file by hand does not last
+  const plug = scopes.some((s) => s.startsWith('plugin:'))
+    ? t(' Копию из плагина убирают, отключив плагин.', ' A copy from a plugin goes away when you disable the plugin.')
+    : ''
+  if (list.every((e) => e.canToggle)) {
+    return t(
+      'Нажмите «Показать»: в инспекторе перечислены все копии и их файлы. Лишнюю выключите, а если нужны обе, правьте ту, что действует.',
+      'Press “Show”: the inspector lists every copy and its file. Disable the spare one; if you need both, edit the one that takes effect.',
+    )
+  }
+  const togglable = [...new Set(list.filter((e) => e.canToggle).map((e) => e.scope))]
+  if (togglable.length > 0) {
+    const one = togglable.length === 1
+    return t(
+      `Нажмите «Показать»: в инспекторе перечислены все копии и их файлы. Loadout выключает только ${one ? 'копию из области' : 'копии из областей'}: ${togglable.join(', ')}. Если лишняя копия в другой области, уберите её вручную; если нужны обе, правьте ту, что действует.${plug}`,
+      `Press “Show”: the inspector lists every copy and its file. Loadout can disable only the ${one ? 'copy of the scope' : 'copies of the scopes'}: ${togglable.join(', ')}. If the spare copy is in another scope, remove it by hand; if you need both, edit the one that takes effect.${plug}`,
+    )
+  }
+  // your own copies are those you can delete: not the built-in one, not one that a plugin brings
+  const own = scopes.filter((s) => s !== 'builtin' && !s.startsWith('plugin:'))
+  if (own.length === 0) {
+    const builtin = scopes.includes('builtin')
+      ? t('Встроенную копию ставит сам клиент, убрать её нельзя. ', 'The built-in copy comes with the client and cannot be removed. ')
+      : ''
+    const plugins = scopes.filter((s) => s.startsWith('plugin:')).map((s) => s.slice('plugin:'.length))
+    return (
+      builtin +
+      (plugins.length > 1
+        ? t(`Копии принесли плагины (${plugins.join(', ')}): отключите тот, чья копия лишняя.`, `The copies come with the plugins (${plugins.join(', ')}): disable the one whose copy is not needed.`)
+        : t('Если копия из плагина не нужна, отключите плагин.', 'If the copy from the plugin is not needed, disable the plugin.'))
+    )
+  }
+  if (scopes.includes('builtin')) {
+    const many = own.length > 1
+    return t(
+      `Встроенную копию ставит сам клиент, убрать её нельзя. Если ${many ? 'ваши копии' : 'ваша копия'} (${own.join(', ')}) ${many ? 'сделаны' : 'сделана'} намеренно, ничего делать не нужно. Если нет, удалите ${many ? 'лишние папки' : 'её папку'} вручную: путь — в инспекторе по кнопке «Показать». Loadout такие записи не переключает.${plug}`,
+      `The built-in copy comes with the client and cannot be removed. If your ${many ? 'copies' : 'copy'} (${own.join(', ')}) ${many ? 'are' : 'is'} there on purpose, nothing needs doing. If not, delete ${many ? 'the spare folders' : 'its folder'} by hand: the path is in the inspector under “Show”. Loadout does not toggle such entries.${plug}`,
+    )
+  }
+  return t(
+    `Loadout такие записи не переключает. Нажмите «Показать»: в инспекторе перечислены все копии и их файлы. Лишнюю удалите вручную, а если нужны обе, правьте ту, что действует.${plug}`,
+    `Loadout does not toggle such entries. Press “Show”: the inspector lists every copy and its file. Delete the spare one by hand; if you need both, edit the one that takes effect.${plug}`,
+  )
 }
 
 export function asStrings(v: unknown): string[] {

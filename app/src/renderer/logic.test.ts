@@ -175,6 +175,54 @@ describe('doctor', () => {
     expect(f.find((x) => x.id.startsWith('orphan'))?.title).toContain('lonely')
   })
 
+  it('the fix for copies in several scopes promises disabling only when a copy can be toggled', () => {
+    const fixOf = (list: Entity[]) => diagnose(list, []).find((x) => x.id.startsWith('dup:'))?.fix ?? ''
+    const togglable = fixOf([
+      ent({ kind: 'mcp', logicalKey: 'p', scope: 'user', canToggle: true }),
+      ent({ kind: 'mcp', logicalKey: 'p', scope: 'project:~', canToggle: true }),
+    ])
+    expect(togglable).toContain('выключите')
+    const builtin = fixOf([
+      ent({ kind: 'skill', logicalKey: 's', client: 'codex', scope: 'user' }),
+      ent({ kind: 'skill', logicalKey: 's', client: 'codex', scope: 'builtin' }),
+    ])
+    expect(builtin).not.toContain('выключите')
+    expect(builtin).toContain('Встроенную копию')
+    expect(builtin).toContain('user')
+    const manual = fixOf([
+      ent({ kind: 'skill', logicalKey: 'm', scope: 'user' }),
+      ent({ kind: 'skill', logicalKey: 'm', scope: 'project:~/w' }),
+    ])
+    expect(manual).not.toContain('выключите')
+    expect(manual).toContain('не переключает')
+    const several = fixOf([
+      ent({ kind: 'skill', logicalKey: 'v', scope: 'user' }),
+      ent({ kind: 'skill', logicalKey: 'v', scope: 'project:~/w' }),
+      ent({ kind: 'skill', logicalKey: 'v', scope: 'builtin' }),
+    ])
+    expect(several).toContain('ваши копии (user, project:~/w)')
+    const part = fixOf([
+      ent({ kind: 'mcp', logicalKey: 'q', scope: 'user', canToggle: true }),
+      ent({ kind: 'mcp', logicalKey: 'q', scope: 'plugin:kit' }),
+    ])
+    expect(part).toContain('только копию из области: user')
+    expect(part).toContain('правьте ту, что действует')
+    expect(part).toContain('отключив плагин')
+    const fromPlugin = fixOf([
+      ent({ kind: 'skill', logicalKey: 'w', scope: 'plugin:kit' }),
+      ent({ kind: 'skill', logicalKey: 'w', scope: 'builtin' }),
+    ])
+    expect(fromPlugin).not.toContain('удалите')
+    expect(fromPlugin).toContain('отключите плагин')
+    const twoPlugins = fixOf([
+      ent({ kind: 'skill', logicalKey: 'z', client: 'antigravity', scope: 'plugin:a' }),
+      ent({ kind: 'skill', logicalKey: 'z', client: 'antigravity', scope: 'plugin:b' }),
+    ])
+    expect(twoPlugins).not.toContain('удалите')
+    expect(twoPlugins).not.toContain('Встроенную')
+    expect(twoPlugins).toContain('плагины (a, b)')
+  })
+
   it('a skill in two scopes of one client is a finding, in different clients it is not', () => {
     const dup = diagnose(
       [

@@ -254,6 +254,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
       setFilters({ ...DEFAULT_FILTERS, hideUnknown: e.state !== 'unknown' })
       setSel({ rowKey: key, client: e.client, id: row?.cells[e.client]?.instances.some((x) => x.id === e.id) ? e.id : null })
       setView('matrix')
+      // the arrows go on from the shown cell; the matrix itself scrolls the cell into view
+      requestAnimationFrame(() => document.getElementById('grid')?.focus({ preventScroll: true }))
     },
     [rows],
   )

@@ -421,6 +421,25 @@ try {
   await waitFor(async () => (await page.locator('.pipe .hk').count()) > 0, 'no hooks in the pipeline')
   await page.keyboard.press('4')
   await waitFor(async () => (await page.locator('.find').count()) > 0, 'the Doctor found nothing on the fixture with breakages')
+  // "Show" opens the matrix with the entry's cell selected, scrolled into view below the sticky header, and the table focused
+  for (const n of [0, -1]) {
+    const shows = page.getByRole('button', { name: /^Показать в матрице:/ })
+    must((await shows.count()) > 0, 'the Doctor has no "Show" buttons on the fixture')
+    await (n === 0 ? shows.first() : shows.last()).click()
+    await waitFor(async () => (await page.locator('#grid td[aria-selected="true"]').count()) === 1, 'Doctor "Show" selects no cell')
+    await waitFor(() => page.evaluate(() => document.activeElement?.id === 'grid'), 'after Doctor "Show" the table is not focused')
+    const seen = await page.evaluate(() => {
+      const c = document.querySelector('#grid td[aria-selected="true"]').getBoundingClientRect()
+      const main = document.querySelector('main')
+      const m = main.getBoundingClientRect()
+      const h = document.querySelector('#grid thead').getBoundingClientRect()
+      return { top: Math.round(c.top), bottom: Math.round(c.bottom), headBottom: Math.round(h.bottom), mainBottom: Math.round(m.bottom), taller: main.scrollHeight > main.clientHeight }
+    })
+    // the check means something only if the table does not fit: then a cell further down needs scrolling
+    must(seen.taller, `the fixture matrix fits the window, the "Show" scroll check proves nothing: ${JSON.stringify(seen)}`)
+    must(seen.top >= seen.headBottom - 1 && seen.bottom <= seen.mainBottom + 1, `the cell shown from the Doctor is out of view: ${JSON.stringify(seen)}`)
+    await page.keyboard.press('4')
+  }
   await page.keyboard.press('1')
 
   // screenshots by size and section

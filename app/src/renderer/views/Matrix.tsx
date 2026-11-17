@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { KeyboardEvent, RefObject } from 'react'
 import { t } from '../../shared/i18n'
 import { CLIENTS } from '../../shared/model'
@@ -63,6 +64,25 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
   const foundRow = sel ? rows.findIndex((r) => r.key === sel.rowKey) : -1
   const curRow = Math.max(0, foundRow)
   const curCol = Math.max(0, sel ? CLIENTS.findIndex((c) => c.id === sel.client) : 0)
+
+  // the selected cell is always on screen: a jump from the Doctor, Hooks or the palette centres it, a step with the arrows scrolls as little as it can;
+  // a cell already in view (a mouse click) does not move; only a new selection scrolls, not rows shifting under it (a live update, a filter)
+  const lastRow = useRef(-1)
+  useEffect(() => {
+    if (foundRow < 0) return
+    const jump = lastRow.current < 0 || Math.abs(foundRow - lastRow.current) > 1
+    const cell = document.getElementById(`cell-${foundRow}-${curCol}`)
+    const box = cell?.closest('main')?.getBoundingClientRect()
+    if (!cell || !box) return
+    const head = document.querySelector('#grid thead')?.getBoundingClientRect().height ?? 0
+    const r = cell.getBoundingClientRect()
+    if (r.top >= box.top + head && r.bottom <= box.bottom) return
+    cell.style.scrollMarginTop = `${head}px` // the sticky header must not cover the cell
+    cell.scrollIntoView({ block: jump ? 'center' : 'nearest', inline: 'nearest' })
+  }, [sel?.rowKey, sel?.client]) // keyed on the selection, not on the row index
+  useEffect(() => {
+    lastRow.current = foundRow
+  })
 
   const pick = (ri: number, ci: number) => {
     const row = rows[Math.min(Math.max(ri, 0), rows.length - 1)]
