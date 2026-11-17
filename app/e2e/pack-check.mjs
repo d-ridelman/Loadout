@@ -3,7 +3,7 @@
 // variables are ignored, idle memory and CPU are measured. Reads the real configs (read-only, level R0).
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
@@ -59,6 +59,9 @@ try {
   const updYml = readFileSync(join(unpacked, 'resources', 'app-update.yml'), 'utf8')
   must(/^provider: github$/m.test(updYml) && /^owner: d-ridelman$/m.test(updYml) && /^repo: Loadout$/m.test(updYml), `app-update.yml does not point to the GitHub releases:\n${updYml}`)
   must(!/publisherName/.test(updYml), 'app-update.yml has publisherName: updates of an unsigned build would be rejected')
+  // the window speaks Russian and English only: Chromium's other 50-odd locale files (~47 MB unpacked) are left out
+  const locales = readdirSync(join(unpacked, 'locales')).sort()
+  must(JSON.stringify(locales) === JSON.stringify(['en-US.pak', 'ru.pak']), `unexpected Chromium locales in the build: ${locales.join(', ')}`)
   // after `npm run dist`: latest.yml must describe exactly the installer next to it (name, size, sha512), or the update gets a 404 or a mismatch
   const { version } = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8'))
   const setup = join(appDir, 'dist', `Loadout.Setup.${version}.exe`)

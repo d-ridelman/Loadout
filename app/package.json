@@ -32,6 +32,7 @@
       { "from": "build/context-toolkit.exe", "to": "context-toolkit.exe" }
     ],
     "asar": true,
+    "electronLanguages": ["en-US", "ru"],
     "publish": { "provider": "github", "owner": "d-ridelman", "repo": "Loadout" },
     "win": {
       "icon": "build/icon.png",
