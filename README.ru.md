@@ -101,7 +101,7 @@ Loadout читает все пять клиентов, показывает вс
 
 Для установки плагинов нужен CLI `claude` (Claude Code), для установки скилов из GitHub нужен `git` в `PATH`.
 
-**Удаление**: через «Параметры Windows» → «Приложения» или тихо: `& "$env:LOCALAPPDATA\Programs\Loadout\Uninstall Loadout.exe" /S`. Данные при этом остаются. Чтобы убрать и их, закройте Loadout и удалите `%APPDATA%\loadout-app`. Если удалить только `%APPDATA%\loadout-app\backups`, пропадут копии, журнал, корзина и профили. Чтобы лишь подрезать старые копии, выполните `& "$env:LOCALAPPDATA\Programs\Loadout\resources\loadout.exe" prune`.
+**Удаление**: через «Параметры Windows» → «Приложения» или тихо: `& "$env:LOCALAPPDATA\Programs\Loadout\Uninstall Loadout.exe" /S`. Данные при этом остаются. Чтобы убрать и их, закройте Loadout и удалите `%APPDATA%\loadout-app` и `%LOCALAPPDATA%\loadout-app-updater` (туда скачиваются обновления). Если удалить только `%APPDATA%\loadout-app\backups`, пропадут копии, журнал, корзина и профили. Чтобы лишь подрезать старые копии, выполните `& "$env:LOCALAPPDATA\Programs\Loadout\resources\loadout.exe" prune`.
 
 ## Сборка из исходников
 

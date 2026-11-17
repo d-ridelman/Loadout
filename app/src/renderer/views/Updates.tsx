@@ -146,7 +146,10 @@ export function Updates() {
             {t('Проверять обновления автоматически', 'Check for updates automatically')}
           </label>
           <p className="mute small">
-            {t('При запуске и раз в сутки, пока окно открыто. Скачивание и установка — только по вашей кнопке.', 'At startup and once a day while the window is open. Download and install happen only on your click.')}
+            {t(
+              'При запуске и раз в сутки, пока окно открыто. Скачивание — только по кнопке, установка — по «Перезапустить и обновить» или при выходе после скачивания.',
+              'At startup and once a day while the window is open. Download only on your click; install on “Restart and update” or when you quit after the download.',
+            )}
           </p>
           {info.supported ? (
             <div className="upd-state" aria-live="polite">

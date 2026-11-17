@@ -101,7 +101,7 @@ The window starts only the `context-toolkit.exe` shipped with it, never one from
 
 Installing plugins needs the `claude` CLI (Claude Code); installing skills from GitHub needs `git` in `PATH`.
 
-**Uninstall** through Windows Settings → Apps, or silently: `& "$env:LOCALAPPDATA\Programs\Loadout\Uninstall Loadout.exe" /S`. The uninstaller leaves your data alone. To remove it, close Loadout and delete `%APPDATA%\loadout-app`. Deleting only `%APPDATA%\loadout-app\backups` removes the copies, the journal, the trash and the profiles. To trim old copies instead, run `& "$env:LOCALAPPDATA\Programs\Loadout\resources\loadout.exe" prune`.
+**Uninstall** through Windows Settings → Apps, or silently: `& "$env:LOCALAPPDATA\Programs\Loadout\Uninstall Loadout.exe" /S`. The uninstaller leaves your data alone. To remove it, close Loadout and delete `%APPDATA%\loadout-app` and `%LOCALAPPDATA%\loadout-app-updater` (where downloaded updates are kept). Deleting only `%APPDATA%\loadout-app\backups` removes the copies, the journal, the trash and the profiles. To trim old copies instead, run `& "$env:LOCALAPPDATA\Programs\Loadout\resources\loadout.exe" prune`.
 
 ## Build from source
 
