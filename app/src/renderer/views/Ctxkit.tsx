@@ -124,8 +124,9 @@ export function Ctxkit({ level, onNotice }: Props) {
   // policies on now (from the doctor): what the checkboxes show under "keep", and where a first tick starts from
   const nowPolicies = doctor.status === 'ready' ? policySet(doctor.data) : null
   const shownPolicies: PolicySet = opts.policyMode === 'on' ? opts : opts.policyMode === 'off' ? NO_POLICIES : (nowPolicies ?? opts)
-  // under "keep" a tick must start from the real state: until the doctor answers, the checkboxes wait
-  const policyWait = opts.policyMode === 'keep' && doctor.status !== 'ready'
+  // under "keep" a tick must start from the real state: while the doctor is answering, the checkboxes wait
+  // (if it failed, they start from nothing on: setup itself refuses a broken policy file)
+  const policyWait = opts.policyMode === 'keep' && doctor.status === 'loading'
   const tick = (patch: Partial<PolicySet>) => {
     setOpts(tickPolicy(opts, patch, nowPolicies))
     setPreviewKey(null)

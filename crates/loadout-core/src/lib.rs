@@ -412,6 +412,17 @@ fn scrub(v: &mut Value, forms: &[String]) {
     }
 }
 
+/// `scrub` for an entry's `detail`. `exact` (set by `mask::mcp_detail`) promises the window the command as the file holds it;
+/// a home path turned into `~` breaks that promise (a server is started without a shell, nobody expands `~`).
+fn scrub_detail(detail: &mut Value, forms: &[String]) {
+    let shown = |d: &Value| (d.get("command").cloned(), d.get("args").cloned());
+    let before = shown(detail);
+    scrub(detail, forms);
+    if detail.get("exact") == Some(&Value::Bool(true)) && shown(detail) != before {
+        detail["exact"] = Value::Bool(false);
+    }
+}
+
 /// The home directory path in a string (in all `home_forms` forms) is replaced with `~`: for plans and the write journal,
 /// where user-entered commands and copied arguments end up.
 pub(crate) fn scrub_home(home: &Path, s: &str) -> String {
@@ -551,7 +562,7 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
         if let Some(s) = e.version.as_mut() {
             scrub_str(s, &forms);
         }
-        scrub(&mut e.detail, &forms);
+        scrub_detail(&mut e.detail, &forms);
         // the id is unique within one scan, even if one entry is read from two places (a patch and a dsh profile).
         let n = seen_ids.entry(e.id.clone()).or_insert(0);
         *n += 1;
@@ -575,6 +586,18 @@ mod tests {
 
     fn label(cmd: &str) -> String {
         hook_label(&mask::mask_args(&mask::split_shell(cmd)))
+    }
+
+    #[test]
+    fn a_home_path_turned_into_tilde_is_not_an_exact_command() {
+        let forms = home_forms(Path::new(r"C:\Users\me"));
+        let mut inside = mask::mcp_detail(&serde_json::json!({"command":"node","args":[r"C:\Users\me\mcp\server.js"]}));
+        assert_eq!(inside["exact"], serde_json::json!(true), "masking alone keeps a plain path");
+        scrub_detail(&mut inside, &forms);
+        assert_eq!(inside["exact"], serde_json::json!(false), "{inside}");
+        let mut outside = mask::mcp_detail(&serde_json::json!({"command":"node","args":[r"D:\tools\server.js"]}));
+        scrub_detail(&mut outside, &forms);
+        assert_eq!(outside["exact"], serde_json::json!(true), "{outside}");
     }
 
     #[test]
