@@ -512,9 +512,18 @@ fn mcp(home: &Path, scan: &ScanResult, e: &Entity, dest: Client) -> Result<Prepa
     if dest == Client::ClaudeCode {
         let scope = if place.is_some() { "local" } else { "user" };
         let key = mask::scrub_words(&key);
+        // the local scope belongs to the folder `claude` runs in
+        let (from, from_en) = if place.is_some() {
+            (
+                ", запущенной из папки проекта",
+                ", run from the project folder",
+            )
+        } else {
+            ("", "")
+        };
         plan.notes.push(crate::tr!(
-            "Claude Code часто сам переписывает ~/.claude.json: откат из журнала пройдёт, только пока файл не менялся. Иначе уберите запись командой claude mcp remove {key} -s {scope}.",
-            "Claude Code often rewrites ~/.claude.json itself: the journal rollback works only while the file is unchanged. Otherwise remove the entry with claude mcp remove {key} -s {scope}."
+            "Claude Code часто сам переписывает ~/.claude.json: откат из журнала пройдёт, только пока файл не менялся. Иначе уберите запись командой claude mcp remove {key} -s {scope}{from}.",
+            "Claude Code often rewrites ~/.claude.json itself: the journal rollback works only while the file is unchanged. Otherwise remove the entry with claude mcp remove {key} -s {scope}{from_en}."
         ));
     }
     if let Some(p) = &place {
@@ -775,8 +784,8 @@ fn hook(home: &Path, e: &Entity, dest: Client) -> Result<Prepared, String> {
     }
     // Claude Code on Windows runs a hook command in Git Bash (or PowerShell), Codex in `cmd /C` (codex-rs/hooks command_runner.rs)
     plan.warn.push(tr(
-        "Оболочка другая: на Windows Claude Code запускает команду хука через Git Bash, а Codex — через cmd /C. Запись вида ИМЯ=значение перед командой, $HOME, %VAR% и одинарные кавычки в другой оболочке не сработают; проверьте команду после копирования.",
-        "Another shell: on Windows Claude Code runs a hook command in Git Bash, Codex in cmd /C. A NAME=value prefix, $HOME, %VAR% and single quotes do not work in the other shell; check the command after copying.",
+        "Оболочка другая: на Windows Claude Code запускает команду хука через Git Bash (или PowerShell, если так задано у хука), а Codex — через cmd /C. Запись вида ИМЯ=значение перед командой, $HOME, %VAR% и одинарные кавычки в другой оболочке не сработают; проверьте команду после копирования.",
+        "Another shell: on Windows Claude Code runs a hook command in Git Bash (or PowerShell when the hook says so), Codex in cmd /C. A NAME=value prefix, $HOME, %VAR% and single quotes do not work in the other shell; check the command after copying.",
     ));
     if h.contains_key("timeout") {
         plan.notes.push(tr(

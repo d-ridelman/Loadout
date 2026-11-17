@@ -63,7 +63,7 @@ serves all four.
 | between Claude Code, Claude Desktop, Codex, Antigravity, OpenCode | `command`, `args`, `env`, `url`, headers carry over; JSON ⇄ TOML and the OpenCode `command` array are converted. **Losses:** any other key (`cwd`, timeouts, `oauth`, `enabled_tools` …) is named in the preview and not copied. `${VAR}` placeholders are a Claude Code feature: Codex and OpenCode (`{env:VAR}`) would get them as literal text. An `sse` or `ws` transport has no counterpart in the others |
 | remote server → Claude Desktop | **refused:** the documentation shows only local servers in this file; remote ones are added in the app as connectors |
 | any → DeepSeek | **not done by Loadout:** the entry lives in tagged YAML (`!!js`) that Loadout only cuts and restores |
-| into Claude Code | the copy lands in `~/.claude.json`, which a running Claude Code rewrites often: the journal rollback works only while the file is unchanged, otherwise `claude mcp remove <name> -s user` (or `-s local`) removes the entry; the preview says so |
+| into Claude Code | the copy lands in `~/.claude.json`, which a running Claude Code rewrites often: the journal rollback works only while the file is unchanged, otherwise `claude mcp remove <name> -s user` (or `-s local`, run from the project folder) removes the entry; the preview says so |
 | into a project | Claude Code: the private local scope `~/.claude.json` → `projects.<p>.mcpServers` (not the shared `.mcp.json`); Codex: `<p>/.codex/config.toml` (created if missing; Codex reads it only in a trusted project); OpenCode: an existing `<p>/opencode.json(c)` (without one the schema generation is unknown). Antigravity, Claude Desktop and DeepSeek have no verified project file |
 
 ### Hooks

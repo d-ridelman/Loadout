@@ -737,8 +737,8 @@ pub(super) fn rollback(
     // the manifest lives in the user's directory: recompute the target from the verified name, client and project
     let target = target_of(home, m).ok_or_else(|| {
         bad(
-            "манифест повреждён или проекта больше нет в списке известных",
-            "the manifest is corrupted, or the project is no longer among the known ones",
+            "манифест повреждён, проекта больше нет в списке известных или его папка ведёт за пределы проекта (ссылка или junction)",
+            "the manifest is corrupted, the project is no longer among the known ones, or its folder leads outside the project (a link or junction)",
         )
     })?;
     let files = walk(&target).map_err(|_| {

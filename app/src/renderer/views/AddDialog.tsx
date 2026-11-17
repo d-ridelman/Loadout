@@ -39,7 +39,7 @@ export function AddDialog({ entities, draft, onSubmit, onClose }: Props) {
   const [url, setUrl] = useState(draft?.url ?? '')
   const [env, setEnv] = useState(draft?.env.map((p) => `${p.key}=${p.value}`).join('\n') ?? '')
   const taken = nameTaken(entities, to, name)
-  // the remote-server form has been checked only for Claude Code, Codex and OpenCode (the same list as the core's `prep_add`)
+  // the remote-server form is verified for Claude Code, Codex, OpenCode and Antigravity (the same list as the core's `prep_add`)
   const remoteOk = to === 'claude-code' || to === 'codex' || to === 'opencode' || to === 'antigravity'
   const remote = wantRemote && remoteOk
   const lines = args.split('\n').filter((l) => l !== '')

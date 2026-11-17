@@ -69,7 +69,16 @@ export function TransferDialog({ entities, onClose, onDone }: Props) {
     setProjectEntities(null)
     setLoadError(null)
     if (place === '') return
-    void window.loadout.projectScan(place).then((r) => (r.ok ? setProjectEntities(r.data.entities) : setLoadError(r.error)))
+    // a late answer for a project chosen before this one is dropped
+    let current = true
+    void window.loadout.projectScan(place).then((r) => {
+      if (!current) return
+      if (r.ok) setProjectEntities(r.data.entities)
+      else setLoadError(r.error)
+    })
+    return () => {
+      current = false
+    }
   }, [place])
 
   const inProject = place !== ''
@@ -79,7 +88,7 @@ export function TransferDialog({ entities, onClose, onDone }: Props) {
   // A new place, source or target starts with every entry the target can take. Not on every rescan: a running client
   // rewrites its files often, and the boxes the person unticked must stay unticked.
   const resetKey = `${place}|${from ?? ''}|${to ?? ''}|${inProject && projectEntities === null ? 'loading' : 'ready'}`
-  useEffect(() => setPicked(new Set(rows.filter((r) => !r.why).map((r) => r.entity.id))), [resetKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => setPicked(new Set(rows.filter((r) => !r.why).map((r) => r.entity.id))), [resetKey])
 
   const items: Intent[] = rows.filter((r) => !r.why && picked.has(r.entity.id)).map((r) => copyIntent(r.entity, to as ClientId))
   const build = async () => {
