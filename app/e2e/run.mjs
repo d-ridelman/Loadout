@@ -178,9 +178,21 @@ async function layout(page, label) {
       ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
       return ctx.measureText(i.placeholder).width > i.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) + 1
     }).map((i) => i.placeholder)
-    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length, cutHints }
+    // a name broken over lines though it would fit the cell whole ("p1- / server" at 1100 with six columns)
+    const brokenNames = [...document.querySelectorAll('td.name b')].filter((b) => {
+      const r = document.createRange()
+      r.selectNodeContents(b)
+      if (new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size < 2) return false
+      const cs = getComputedStyle(b)
+      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+      const td = b.closest('td')
+      const room = td.clientWidth - parseFloat(getComputedStyle(td).paddingLeft) - parseFloat(getComputedStyle(td).paddingRight)
+      return ctx.measureText(b.textContent).width < room
+    }).map((b) => b.textContent)
+    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length, cutHints, brokenNames }
   })
   log(`  measurement ${label}:`, JSON.stringify(m))
+  must(m.brokenNames.length === 0, `${label}: names broken though they fit: ${JSON.stringify(m.brokenNames)}`)
   must(m.cutHints.length === 0, `${label}: placeholders cut: ${JSON.stringify(m.cutHints)}`)
   await typeCheck(page, label)
   await headerLayout(page, label)

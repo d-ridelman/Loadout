@@ -114,6 +114,26 @@ fn nearest_existing_ancestor(
 }
 
 impl Targets {
+    /// A config directory outside home (the OpenCode system config): watched when it exists, otherwise through its parent, so a
+    /// directory and a file created later are seen too, not only edits of a file that already had entries. Only `names` count.
+    pub fn watch_config_dir(&mut self, dir: &Path, names: &[&str]) {
+        self.fixed.insert(norm(dir));
+        for n in names {
+            self.files.insert(norm(&dir.join(n)));
+        }
+        let at = if dir.is_dir() {
+            dir.to_path_buf()
+        } else if let Some(p) = dir.parent().filter(|p| p.is_dir()) {
+            p.to_path_buf()
+        } else {
+            return;
+        };
+        self.dirs.entry(at).or_insert(Target {
+            recursive: false,
+            any_child: false,
+        });
+    }
+
     /// Directories and files from a scan result: the permanent set plus parents of all files the entries are built from.
     pub fn from_scan(home: &Path, scan: &ScanResult) -> Self {
         let mut t = Targets::default();
@@ -330,6 +350,33 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&h);
         let _ = fs::remove_dir_all(&sys);
+    }
+
+    #[test]
+    fn a_system_config_dir_created_later_is_seen() {
+        let h = home();
+        let parent = h.with_extension("programdata");
+        let _ = fs::remove_dir_all(&parent);
+        fs::create_dir_all(&parent).unwrap();
+        let sys = parent.join("opencode");
+        let mut t = Targets::from_scan(&h, &ScanResult::default());
+        t.watch_config_dir(&sys, &["opencode.json", "opencode.jsonc"]);
+        assert!(
+            t.dirs.contains_key(&parent),
+            "a missing system dir is watched through its parent"
+        );
+        assert!(t.is_fixed(&sys), "creating the system dir is significant");
+        fs::create_dir_all(&sys).unwrap();
+        let mut t = Targets::from_scan(&h, &ScanResult::default());
+        t.watch_config_dir(&sys, &["opencode.json", "opencode.jsonc"]);
+        assert!(t.dirs.contains_key(&sys));
+        assert!(
+            t.is_relevant(&sys.join("opencode.json")),
+            "a new system config file is significant"
+        );
+        assert!(!t.is_relevant(&sys.join("notes.txt")));
+        let _ = fs::remove_dir_all(&h);
+        let _ = fs::remove_dir_all(&parent);
     }
 
     #[test]

@@ -47,6 +47,15 @@ fn send(v: &Value) {
     }
 }
 
+/// What to watch: the paths of the scan plus the OpenCode system config directory, even before it or its file exists.
+fn targets_of(home: &Path, scan: &ScanResult, system: Option<&Path>) -> Targets {
+    let mut t = Targets::from_scan(home, scan);
+    if let Some(dir) = system {
+        t.watch_config_dir(dir, &loadout_core::opencode::FILES);
+    }
+    t
+}
+
 struct Server {
     home: PathBuf,
     last: ScanResult,
@@ -68,7 +77,7 @@ impl Server {
         watcher: Option<RecommendedWatcher>,
     ) -> Self {
         let last = loadout_core::scan_all(home, backups.as_deref(), system.as_deref());
-        let targets = Targets::from_scan(home, &last);
+        let targets = targets_of(home, &last, system.as_deref());
         let mut s = Server {
             home: home.to_path_buf(),
             last,
@@ -155,7 +164,7 @@ impl Server {
         let new =
             loadout_core::scan_all(&self.home, self.backups.as_deref(), self.system.as_deref());
         // the set of paths is rebuilt on every scan, even without semantic changes: a directory may have appeared or vanished
-        self.targets = Targets::from_scan(&self.home, &new);
+        self.targets = targets_of(&self.home, &new, self.system.as_deref());
         self.sync_watches(reset);
         let d = diff(&self.last, &new);
         if d.is_empty() {

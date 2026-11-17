@@ -1,4 +1,4 @@
-//! `loadout scan [--json] [--pretty] [--home PATH] [--client claude-code|claude-desktop|codex|antigravity|deepseek|opencode]` — read-only.
+//! `loadout scan [--json] [--pretty] [--home PATH] [--opencode-system DIR] [--client claude-code|claude-desktop|codex|antigravity|deepseek|opencode]` — read-only.
 
 mod serve;
 
@@ -135,8 +135,8 @@ fn main() -> ExitCode {
         eprintln!(
             "{}",
             loadout_core::tr!(
-                "использование: loadout scan [--json] [--pretty] [--lang ru|en] [--home ПУТЬ] [--client claude-code|claude-desktop|codex|antigravity|deepseek|opencode]",
-                "usage: loadout scan [--json] [--pretty] [--lang ru|en] [--home PATH] [--client claude-code|claude-desktop|codex|antigravity|deepseek|opencode]"
+                "использование: loadout scan [--json] [--pretty] [--lang ru|en] [--home ПУТЬ] [--opencode-system КАТАЛОГ] [--client claude-code|claude-desktop|codex|antigravity|deepseek|opencode]",
+                "usage: loadout scan [--json] [--pretty] [--lang ru|en] [--home PATH] [--opencode-system DIR] [--client claude-code|claude-desktop|codex|antigravity|deepseek|opencode]"
             )
         );
         eprintln!(

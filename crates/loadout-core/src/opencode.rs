@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 const CLIENT: Client = Client::OpenCode;
 pub(crate) const DIR: &str = ".config/opencode";
 /// The `.jsonc` name goes first: a write lands in it when both files exist.
-pub(crate) const FILES: [&str; 2] = ["opencode.jsonc", "opencode.json"];
+pub const FILES: [&str; 2] = ["opencode.jsonc", "opencode.json"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Gen {

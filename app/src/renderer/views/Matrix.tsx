@@ -207,7 +207,8 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
               <tr key={r.key} role="row">
                 <td className="name" role="rowheader">
                   <KindBadge kinds={r.kinds} />
-                  <b title={r.hint ?? r.name}>{r.name}</b>
+                  {/* a whole word: with six columns at 1100 "p1-server" broke at its hyphen; a name longer than the cell still wraps */}
+                  <b className="tok" title={r.hint ?? r.name}>{r.name}</b>
                 </td>
                 {CLIENTS.map((c, ci) => {
                   const cell = r.cells[c.id]

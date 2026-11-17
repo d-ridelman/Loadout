@@ -614,7 +614,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             count(entities.length, ['запись', 'записи', 'записей'], ['entry', 'entries']),
             count(rows.length, ['строка', 'строки', 'строк'], ['row', 'rows']),
             // clients found on this computer, not the five Loadout knows: "5 clients" under "no client found" read as a contradiction
-            t(`клиентов найдено: ${new Set(entities.map((e) => e.client)).size} из ${CLIENTS.length}`, `clients found: ${new Set(entities.map((e) => e.client)).size} of ${CLIENTS.length}`),
+            // short: at 1100 a longer phrase pushed the privacy line into an ellipsis
+            t(`клиентов: ${new Set(entities.map((e) => e.client)).size} из ${CLIENTS.length}`, `clients: ${new Set(entities.map((e) => e.client)).size} of ${CLIENTS.length}`),
           ].join(' · ')}
         </span>
         {updatedAt ? (
