@@ -187,7 +187,10 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
         }
         const got = await window.loadout.setWriteLevel(need)
         setLevel(got)
-        if (levelOk(got, need)) return true
+        if (levelOk(got, need)) {
+          setNotice(null) // an earlier "writing was not allowed" must not stay under the preview that now opens
+          return true
+        }
         say(t(`Запись не разрешена, ничего не изменилось. Уровень записи: «${levelLabel(got)}»`, `Writing was not allowed, nothing changed. Write level: “${levelLabel(got)}”`), 'info')
       } catch {
         say(t('Не удалось сменить уровень записи', 'Could not change the write level'), 'error')
@@ -353,7 +356,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
       if (palette) return
       // Space toggles the selected entry only from the table (or with nothing focused); on a button, a summary or a term it does
       // what that control does; other keys do not depend on focus
-      const onTable = !(tg instanceof HTMLElement) || tg === document.body || tg.tagName === 'MAIN' || tg.closest('#grid') !== null
+      // the grid itself, not a control inside it ("Clear the filters" sits in the table and must not toggle a hidden entry)
+      const onTable = !(tg instanceof HTMLElement) || tg === document.body || tg.tagName === 'MAIN' || tg.id === 'grid'
       if (e.key === ' ' && view === 'matrix' && selEntity && onTable) {
         e.preventDefault() // otherwise Space would scroll the page
         requestToggle(selEntity, selEntity.state === 'off' || selEntity.state === 'unknown')
@@ -406,7 +410,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
   const problems = findings.filter((f) => f.severity === 'error').length
   const cautions = findings.filter((f) => f.severity === 'warn').length
   const scanText =
-    scan.status === 'ready' ? t(`скан: ${scan.ms} мс`, `scan: ${scan.ms} ms`) : scan.status === 'loading' ? t('скан…', 'scan…') : t('скан не удался', 'scan failed')
+    scan.status === 'ready' ? t(`прочитано за ${scan.ms} мс`, `read in ${scan.ms} ms`) : scan.status === 'loading' ? t('читаю конфиги…', 'reading configs…') : t('конфиги не прочитаны', 'configs not read')
 
   return (
     <div id="app" className={view === 'matrix' ? undefined : 'noaside'}>
@@ -501,7 +505,9 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             <span className="navtext">
               <span>
                 {v.label}
-                {v.id === 'doctor' && problems > 0 ? <span className="navcount s-broken"> · {problems}</span> : null}
+                {v.id === 'doctor' && problems > 0 ? (
+                  <span className="navcount" title={t(`сломано: ${problems}`, `broken: ${problems}`)}> · <span aria-hidden="true">✕ </span>{problems}<span className="vh"> {t('сломано', 'broken')}</span></span>
+                ) : null}
               </span>
               <span className="navsub">{navSub(v.id)}</span>
             </span>

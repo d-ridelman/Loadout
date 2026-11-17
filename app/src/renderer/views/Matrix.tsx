@@ -229,7 +229,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
                   {total === 0 ? (
                     <>
                       <p>{t('Не найдено ни одного клиента: в домашней папке нет конфигов Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity и DeepSeek, или они пусты.', 'No client found: the home folder has no configs of Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity or DeepSeek, or they are empty.')}</p>
-                      <p>{t('Установите клиент или добавьте в него MCP-сервер, затем пересканируйте.', 'Install a client or add an MCP server to one, then rescan.')}</p>
+                      <p>{t('Установите клиент или добавьте в него MCP-сервер, затем нажмите «Обновить».', 'Install a client or add an MCP server to one, then press Refresh.')}</p>
                       <div className="actions center">
                         <button className="primary" onClick={onRescan}>{t('Обновить', 'Refresh')}</button>
                         <button onClick={onAdd}>{t('Добавить MCP…', 'Add MCP…')}</button>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { BatchPlan, Entity, Profile, ProfileItem, WriteLevel } from '../../shared/model'
 import { count, t } from '../../shared/i18n'
-import { PageHead, pickLevel } from '../ui'
+import { kindLabel, PageHead, pickLevel } from '../ui'
 import type { Notify } from '../ui'
 import { levelOk } from './Inspector'
 import { Modal } from './Modal'
@@ -237,7 +237,7 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
                     {items.map((it, i) => (
                       <li key={`${it.client}|${it.kind}|${it.scope}|${it.name}`} className="pitem">
                         <span>
-                          <b>{it.name}</b> <span className="mute">· {clientName(it.client)} · {it.kind}</span>
+                          <b>{it.name}</b> <span className="mute">· {clientName(it.client)} · {kindLabel(it.kind)}</span>
                         </span>
                         <label className="check">
                           <input

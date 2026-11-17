@@ -495,10 +495,10 @@ export function Ctxkit({ level, onNotice }: Props) {
             <table className="left" aria-label={t('Ходы по дням', 'Turns by day')}>
               <thead>
                 <tr>
-                  <th scope="col">{t('ДЕНЬ', 'DAY')}</th>
-                  <th scope="col">{t('ХОДЫ ОСНОВНОЙ СЕССИИ ПО МОДЕЛЯМ', 'MAIN SESSION TURNS BY MODEL')}</th>
-                  <th scope="col">{t('СОВЕТНИК', 'ADVISOR')}</th>
-                  <th scope="col">{t('ОСТАНОВЛЕНО', 'BLOCKED')}</th>
+                  <th scope="col">{t('День', 'Day')}</th>
+                  <th scope="col">{t('Ходы основной сессии по моделям', 'Main session turns by model')}</th>
+                  <th scope="col">{t('Советник', 'Advisor')}</th>
+                  <th scope="col">{t('Остановлено', 'Blocked')}</th>
                 </tr>
               </thead>
               <tbody>

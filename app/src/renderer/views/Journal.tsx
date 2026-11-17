@@ -10,7 +10,7 @@ import { RollbackDialog } from './PlanDialog'
 
 // t() only during render, not when the module is imported
 const opLabel = (op: JournalEntry['op']): string =>
-  ({ toggle: t('запись', 'write'), edit: t('правка', 'edit'), copy: t('копия', 'copy'), add: t('добавление', 'add'), installSkill: t('установка скила', 'skill install'), rollback: t('откат', 'rollback') })[op]
+  ({ toggle: t('вкл/выкл', 'on/off'), edit: t('правка', 'edit'), copy: t('копия', 'copy'), add: t('добавление', 'add'), installSkill: t('установка скила', 'skill install'), rollback: t('откат', 'rollback') })[op]
 
 type State = { status: 'loading' } | { status: 'error'; error: string } | { status: 'ready'; rows: JournalEntry[] }
 
@@ -87,7 +87,7 @@ export function Journal({ level, refreshKey, onNotice, ensureLevel }: Props) {
         </div>
       ) : state.rows.length === 0 ? (
         <div className="hud card">
-          <p>{t('Операций пока не было. Сюда попадают переключения (кнопка в инспекторе или Space на ячейке), корзина, правка, копирование и добавление MCP, профили и скилы; каждую можно откатить после предпросмотра. Плагины ставит сам claude, их здесь нет; у Инструментов контекста свой откат.', 'No operations yet. Toggles (the Inspector button or Space on a cell), the trash, MCP edits, copies and additions, profiles and skills land here; each can be rolled back after a preview. Plugins are installed by claude itself and are not here; Context Toolkit has its own rollback.')}</p>
+          <p>{t('Операций пока не было. Сюда попадают переключения (кнопка в инспекторе или Space на ячейке), корзина, правка, копирование и добавление MCP, профили и скилы; каждую можно откатить после предпросмотра, если файл с тех пор не меняли. Плагины ставит сам claude, их здесь нет; у Инструментов контекста свой откат.', 'No operations yet. Toggles (the Inspector button or Space on a cell), the trash, MCP edits, copies and additions, profiles and skills land here; each can be rolled back after a preview if the file has not changed since. Plugins are installed by claude itself and are not here; Context Toolkit has its own rollback.')}</p>
         </div>
       ) : (
         <div className="hud tablewrap">

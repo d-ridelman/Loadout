@@ -641,6 +641,16 @@ try {
   must(await tech.evaluate((d) => d.open), 'Space on "Technical details" did not open them')
   must((await app.evaluate(() => globalThis.__asked)) === askedBefore, 'Space on "Technical details" toggled the selected entry')
   await tech.locator('summary').click()
+  // the same for a button inside the table: "Clear the filters" clears them and leaves the hidden selection alone
+  await page.locator('input[type=search]').fill('zzzz-no-such-entry')
+  const clearBtn = page.locator('#grid').getByRole('button', { name: 'Сбросить фильтры' })
+  await clearBtn.focus()
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400) // a negative check, as above
+  must((await page.locator('input[type=search]').inputValue()) === '', 'Space on "Clear the filters" did not clear them')
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore, 'Space on "Clear the filters" toggled the hidden selected entry')
+  await page.getByLabel('скрыть «не определено»').check() // "Clear the filters" also shows unknown rows: back to the default view
+  await clickCell('p1', 2)
   await page.locator('#grid').focus()
   await page.keyboard.press('Space')
   await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'Space at R0 did not ask for permission')

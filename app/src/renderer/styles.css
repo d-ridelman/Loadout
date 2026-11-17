@@ -225,7 +225,7 @@ html[data-fx='off'] .beam { display: none; }
 /* columns share the width: a long hook name or matcher wraps instead of widening every column (formerly to ~450px) */
 .pipe { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); width: 100%; }
 .pipe > div { background: var(--panel); padding: 6px 8px; min-height: 44px; min-width: 0; }
-.pipe .h { font: 600 12px var(--mono); color: var(--cyan); text-align: center; overflow-wrap: anywhere; padding: 6px 4px; }
+.pipe .h { font: 600 13px var(--sans); color: var(--cyan); text-align: center; overflow-wrap: anywhere; padding: 6px 4px; }
 .pipe .hk { overflow-wrap: anywhere; }
 .rowname { display: flex; align-items: flex-start; }
 .hk { display: block; font: 12px var(--mono); margin: 2px 0; padding: 1px 6px; border: 0; border-left: 2px solid var(--pink); border-radius: 0; background: rgba(255, 121, 198, 0.08); text-align: left; width: 100%; }
@@ -251,7 +251,8 @@ html[data-fx='off'] .beam { display: none; }
 .palette li[aria-selected='true'] { background: rgba(189, 147, 249, 0.22); }
 .palette li[aria-selected='true'] .mute { color: var(--fg); }
 .modal { position: fixed; inset: 0; background: rgba(33, 34, 44, 0.72); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 95; }
-.modal .box { width: 520px; max-width: 92vw; padding: 16px 18px; }
+/* a tall form (an error line, 14px text) scrolls inside instead of pushing its buttons below the window */
+.modal .box { width: 520px; max-width: 92vw; max-height: calc(88vh - 16px); overflow: auto; padding: 16px 18px; }
 .modal p { margin: 6px 0; }
 button.level { border-color: transparent; }
 button.level[aria-pressed='true'] { border-color: var(--orange); background: rgba(255, 184, 108, 0.12); }
