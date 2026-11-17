@@ -2,7 +2,8 @@
 // on its own profile (`--user-data-dir`, not %APPDATA%\Loadout), connects over CDP, the core is taken from resources, the LOADOUT_*
 // variables are ignored, idle memory and CPU are measured. Reads the real configs (read-only, level R0).
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
@@ -49,6 +50,25 @@ try {
   must(existsSync(exe), `${exe} not found: run npm run pack`)
   rmSync(profile, { recursive: true, force: true })
   mkdirSync(profile, { recursive: true })
+  // the check does not go to GitHub: the automatic update check is switched off in this profile
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ autoUpdate: false }))
+
+  // the updater reads its source from resources/app-update.yml. It has no `publisherName`, so electron-updater skips the
+  // signature check of the downloaded installer (the build is not signed) and relies on the sha512 from latest.yml.
+  // Once releases are signed this line has to change together with the docs (SECURITY.md, "Updates").
+  const updYml = readFileSync(join(unpacked, 'resources', 'app-update.yml'), 'utf8')
+  must(/^provider: github$/m.test(updYml) && /^owner: d-ridelman$/m.test(updYml) && /^repo: Loadout$/m.test(updYml), `app-update.yml does not point to the GitHub releases:\n${updYml}`)
+  must(!/publisherName/.test(updYml), 'app-update.yml has publisherName: updates of an unsigned build would be rejected')
+  // after `npm run dist`: latest.yml must describe exactly the installer next to it (name, size, sha512), or the update gets a 404 or a mismatch
+  const { version } = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8'))
+  const setup = join(appDir, 'dist', `Loadout.Setup.${version}.exe`)
+  if (existsSync(setup)) {
+    const latest = readFileSync(join(appDir, 'dist', 'latest.yml'), 'utf8')
+    const sha = createHash('sha512').update(readFileSync(setup)).digest('base64')
+    must(latest.includes(`version: ${version}`) && latest.includes(`path: Loadout.Setup.${version}.exe`) && latest.includes(`sha512: ${sha}`), `dist/latest.yml does not match ${setup}`)
+    must(existsSync(`${setup}.blockmap`), 'no .blockmap next to the installer: differential updates would download the whole file')
+    console.log('latest.yml matches the installer:', `Loadout.Setup.${version}.exe`)
+  }
   // LOADOUT_* and APP_QA must be ignored in the packaged build: the core and the home are not taken from there
   child = spawn(exe, [`--user-data-dir=${profile}`, `--remote-debugging-port=${port}`], {
     env: { ...process.env, LOADOUT_HOME: join(repo, 'state', 'no-such-home'), LOADOUT_BIN: 'C:/no/such/loadout.exe', APP_QA: '1', LOADOUT_USER_DATA: join(repo, 'state', 'no-such-profile') },
@@ -75,6 +95,11 @@ try {
   must(rows > 10, 'too few rows in the matrix: the core was not found in resources or LOADOUT_HOME was accepted')
   must((await page.getByLabel('Уровень записи').inputValue()) === 'R0', 'the default write level must be R0')
   must((await page.locator('#scanlines').count()) === 0, 'scanlines are left in the build')
+  // the build knows its version and keeps the switched-off update setting (no request goes to GitHub during this check)
+  await page.getByRole('button', { name: `v${version} — обновления`, exact: true }).click()
+  must(!(await page.getByRole('checkbox', { name: 'Проверять обновления автоматически' }).isChecked()), 'the build ignored autoUpdate: false from settings.json')
+  must((await page.locator('#updates').innerText()).includes('Ещё не проверялось'), 'the build checked for updates with the setting off')
+  await page.keyboard.press('Escape')
 
   // the built-in Context Toolkit from resources: version, diagnostics and a report on the real transcripts (read-only, nothing is applied)
   must(existsSync(join(unpacked, 'resources', 'context-toolkit.exe')), 'the build has no resources/context-toolkit.exe')

@@ -89,8 +89,11 @@ async function resize(app, w, h) {
   await app.evaluate(({ BrowserWindow }, [ww, hh]) => BrowserWindow.getAllWindows()[0].setSize(ww, hh), [w, h])
 }
 
+// `E2E_SHOTS` sends the screenshots to another directory (a temporary one), leaving the committed ones in state/ untouched
+const shotDir = process.env.E2E_SHOTS ?? stateDir
+
 async function shot(page, name) {
-  await page.screenshot({ path: join(stateDir, `${name}.png`) })
+  await page.screenshot({ path: join(shotDir, `${name}.png`) })
 }
 
 /** Header: every element on one line (no taller than 36 px) and centred on the line (±2 px); on the right nothing goes under the window buttons. */
@@ -954,8 +957,8 @@ try {
   // the whole diagnostics list, without internal scrolling that clipped the last finding
   const diag = await page.evaluate(() => { const u = document.querySelector('ul[aria-label="Находки диагностики"]'); return u.scrollHeight - u.clientHeight })
   must(diag <= 1, `the diagnostics list scrolls inside and clips rows: ${diag}`)
-  await page.locator('section[aria-label="Диагностика"]').screenshot({ path: join(stateDir, 'm5-ctxkit-diag-1280.png') })
-  await page.locator('section[aria-label="Эффективность"]').screenshot({ path: join(stateDir, 'm5-ctxkit-efficiency-1280.png') })
+  await page.locator('section[aria-label="Диагностика"]').screenshot({ path: join(shotDir, 'm5-ctxkit-diag-1280.png') })
+  await page.locator('section[aria-label="Эффективность"]').screenshot({ path: join(shotDir, 'm5-ctxkit-efficiency-1280.png') })
   const ctxLayout = await page.evaluate(() => ({ h: document.documentElement.scrollWidth - document.documentElement.clientWidth, m: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth }))
   must(ctxLayout.h <= 0 && ctxLayout.m <= 1, `horizontal scroll in the Context Toolkit section: ${JSON.stringify(ctxLayout)}`)
   const v4 = await axeCheck(page, 'Context Toolkit')
@@ -1054,7 +1057,7 @@ try {
   for (const line of ['политика commit_hygiene: выкл -> вкл', 'политика build_slots: выкл -> 3', 'политика stray_files: выкл (без изменений)']) must(polPreview.includes(line), `the policy preview lacks the line "${line}": ${polPreview.slice(0, 700)}`)
   must(englishLeft(polPreview).length === 0, `English phrases in the Russian policy preview: ${englishLeft(polPreview).slice(0, 5).join(' // ')}`)
   must(!existsSync(ctxkitJson), 'the policy preview created context-toolkit.json')
-  await page.locator('fieldset.choices', { has: page.locator('#ctx-policy') }).screenshot({ path: join(stateDir, 'm5-ctxkit-policies-1280.png') })
+  await page.locator('fieldset.choices', { has: page.locator('#ctx-policy') }).screenshot({ path: join(shotDir, 'm5-ctxkit-policies-1280.png') })
   await applyBtn.click()
   await waitFor(() => existsSync(ctxkitJson), 'apply created context-toolkit.json')
   const polCfg = JSON.parse(readFileSync(ctxkitJson, 'utf8'))
@@ -1193,7 +1196,7 @@ try {
   const legacyLine = 'Установлена прежняя версия (ctxkit): нажмите «Применить», чтобы перейти на «Инструменты контекста»'
   await waitFor(async () => (await page.locator('main').innerText()).includes(legacyLine), 'the section did not see the previous install (ctxkit)')
   await waitFor(async () => (await findings()).includes('старом имени ctxkit'), 'doctor: no finding about the old name')
-  await page.locator('section[aria-label="Установка"]').screenshot({ path: join(stateDir, 'm5-ctxkit-legacy-1280.png') })
+  await page.locator('section[aria-label="Установка"]').screenshot({ path: join(shotDir, 'm5-ctxkit-legacy-1280.png') })
   must((await axeCheck(page, 'Context Toolkit: previous version')).length === 0, 'axe: the previous version line')
   await page.getByRole('button', { name: 'Предпросмотр перехода', exact: true }).click()
   await waitFor(() => applyBtn.isEnabled(), 'the migration preview allowed "Apply"')
@@ -1217,7 +1220,7 @@ try {
   // ctxkit.json created by setup stays together with the old binary that reads it; the new file is its copy
   must(existsSync(join(claudeDir, 'ctxkit.json')) && JSON.parse(readFileSync(ctxkitJson, 'utf8')).policies?.stray_files === true, 'migration: the policy file was not copied or the old one was removed while the old binary is still needed')
   await waitFor(async () => { const m = await page.locator('main').innerText(); return !m.includes('Установлена прежняя версия') && m.includes('~/.claude/hooks/context-toolkit.exe: ● совпадает') }, 'after the migration the previous version line remained')
-  await page.locator('section[aria-label="Установка"]').screenshot({ path: join(stateDir, 'm5-ctxkit-legacy-left-1280.png') })
+  await page.locator('section[aria-label="Установка"]').screenshot({ path: join(shotDir, 'm5-ctxkit-legacy-left-1280.png') })
   await undoPreviewBtn.click()
   await waitFor(() => undoGoBtn.isEnabled(), 'rollback preview after the migration')
   await undoGoBtn.click()
@@ -1236,6 +1239,94 @@ try {
   must((await page.evaluate(() => document.documentElement.dataset.fx)) === 'off', 'FX did not turn off')
 
   must(pageErrors.length === 0, `page errors: ${pageErrors.join(' | ')}`)
+  await close(session)
+
+  // ---- app updates: main has a stand-in updater in QA mode (no network); the states come from its events ----
+  session = await launch({ LOADOUT_HOME: home })
+  {
+    const { app: ua, page: up } = session
+    const updErrors = []
+    up.on('pageerror', (e) => updErrors.push(`pageerror: ${e.message.slice(0, 200)}`))
+    up.on('console', (m) => m.type() === 'error' && updErrors.push(`console.error: ${m.text().slice(0, 200)}`))
+    await up.waitForSelector('#grid', { timeout: 20000 })
+    const emit = (event, arg) => ua.evaluate((_e, [ev, a]) => void globalThis.__loadoutUpdater.emit(ev, ev === 'error' ? new Error(a) : a), [event, arg])
+    const calls = () => ua.evaluate(() => [...globalThis.__loadoutUpdater.calls])
+    const both = async (name) => {
+      for (const [w, h] of SIZES) {
+        await resize(ua, w, h)
+        await up.waitForTimeout(150)
+        await shot(up, `${name}-${w}`)
+      }
+      await resize(ua, 1280, 800)
+    }
+    const version = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8')).version
+    must((await up.locator('#privacy').innerText()).includes('только проверка обновлений (GitHub)'), 'the footer does not say that the update check goes online')
+    // the visible "vX.Y.Z" starts the accessible name; a new version is added in words
+    const btn = up.getByRole('button', { name: new RegExp(`^v${version} — обновления`) })
+    must((await btn.getAttribute('aria-label')) === `v${version} — обновления`, 'the version button name')
+    await btn.click()
+    const pop = up.getByRole('dialog', { name: 'Обновления' })
+    const auto = pop.getByRole('checkbox', { name: 'Проверять обновления автоматически' })
+    must(await auto.isChecked(), 'automatic update checks must be on by default')
+    must((await pop.innerText()).includes(`Установлена версия ${version}`), 'the panel does not show the installed version')
+    await both('upd-panel')
+    await pop.getByRole('button', { name: 'Проверить сейчас' }).click()
+    await waitFor(async () => (await calls()).includes('check'), '"Check now" calls the updater')
+    await pop.getByText('Проверяем…').waitFor({ timeout: 5000 })
+    // a failed manual check: a calm line, no raw error or stack, the window keeps working
+    await emit('error', 'net::ERR_INTERNET_DISCONNECTED\n    at SimpleURLLoaderWrapper.<anonymous> (node:electron/js2c/browser_init:2:1)')
+    await pop.getByText(/^Нет связи с GitHub/).waitFor({ timeout: 5000 })
+    must(!/net::|SimpleURLLoader/.test(await up.locator('body').innerText()), 'the raw network error reached the window')
+    await both('upd-panel-error')
+    await up.keyboard.press('Escape')
+    await pop.waitFor({ state: 'detached', timeout: 5000 })
+    must(await btn.evaluate((el) => el === document.activeElement), 'Escape did not return focus to the version button')
+    const card = up.getByRole('status', { name: 'Обновление Loadout' })
+    await card.getByText(/^Нет связи с GitHub/).waitFor({ timeout: 5000 })
+    await both('upd-error')
+    await up.keyboard.press('2') // the card does not block the window: keys and sections work
+    await up.keyboard.press('1')
+    await up.waitForSelector('#grid', { timeout: 5000 })
+    // a new version: offered, nothing is downloaded by itself; release notes HTML from the feed never reaches the page
+    await emit('update-available', { version: '9.9.9', releaseNotes: '<img src=x onerror="document.title=1">' })
+    await card.getByText('Доступна версия 9.9.9').waitFor({ timeout: 5000 })
+    must((await up.locator('footer img').count()) === 0, 'release notes HTML reached the window')
+    must(!(await calls()).includes('download'), 'the update started downloading by itself')
+    await both('upd-available')
+    const va = await axeCheck(up, 'update card')
+    must(va.length === 0, `axe found violations on the update card: ${va.map((x) => x.id).join(', ')}`)
+    await card.getByRole('button', { name: 'Что нового (GitHub)' }).click()
+    await waitFor(async () => (await ua.evaluate(() => globalThis.__loadoutUpdater.opened)).includes('https://github.com/d-ridelman/Loadout/releases/tag/v9.9.9'), 'release notes open the GitHub release page')
+    await card.getByRole('button', { name: 'Скачать' }).click()
+    await waitFor(async () => (await calls()).includes('download'), '"Download" calls the updater')
+    await emit('download-progress', { percent: 42.4 })
+    await card.getByText('Скачивается версия 9.9.9: 42%').waitFor({ timeout: 5000 })
+    must(Number(await card.locator('progress').getAttribute('value')) === 42, 'the progress bar does not show 42%')
+    await both('upd-downloading')
+    await emit('update-downloaded', { version: '9.9.9' })
+    await card.getByRole('button', { name: 'Перезапустить и обновить' }).waitFor({ timeout: 5000 })
+    await both('upd-ready')
+    await card.getByRole('button', { name: 'Перезапустить и обновить' }).click()
+    await waitFor(async () => (await calls()).includes('install:true:true'), '"Restart and update": a silent install that starts the new version')
+    await card.getByRole('button', { name: 'Скрыть' }).click()
+    await card.waitFor({ state: 'detached', timeout: 5000 })
+    // with the card hidden the ready update is still announced by the button name, not only by its dot and colour
+    must((await btn.getAttribute('aria-label')).endsWith('есть новая версия'), 'the version button does not say a new version is ready')
+    // the setting turns off, is saved and survives a restart; the footer then says nothing is sent
+    await btn.click()
+    must(await auto.evaluate((el) => el === document.activeElement), 'focus did not move into the update panel')
+    const vp = await axeCheck(up, 'update panel')
+    must(vp.length === 0, `axe found violations on the update panel: ${vp.map((x) => x.id).join(', ')}`)
+    await auto.uncheck()
+    await waitFor(() => JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).autoUpdate === false, 'the "check automatically" setting was not saved')
+    must((await up.locator('#privacy').innerText()).includes('ничего не отправляется'), 'with checks off the footer must say nothing is sent')
+    must(updErrors.length === 0, `page errors (updates): ${updErrors.join(' | ')}`)
+  }
+  await close(session)
+  session = await launch({ LOADOUT_HOME: home })
+  await session.page.waitForSelector('#grid', { timeout: 20000 })
+  await session.page.getByRole('button', { name: /— обновления/ }).click()
+  must(!(await session.page.getByRole('checkbox', { name: 'Проверять обновления автоматически' }).isChecked()), 'the switched-off setting did not survive a restart')
   await close(session)
 
   // ---- "loading" state ----
@@ -1344,7 +1435,7 @@ try {
       await enOk('ctxkit: preview with policies')
       const pv2 = await en.locator('pre.out').innerText()
       must(pv2.includes('policy commit_hygiene: off -> on') && pv2.includes('policy stray_files: off -> on') && !existsSync(ctxJson), `policy lines of the preview in English: ${pv2.slice(0, 700)}`)
-      await en.locator('fieldset.choices', { has: en.locator('#ctx-policy') }).screenshot({ path: join(stateDir, 'en-ctxkit-policies-1280.png') })
+      await en.locator('fieldset.choices', { has: en.locator('#ctx-policy') }).screenshot({ path: join(shotDir, 'en-ctxkit-policies-1280.png') })
       await enApply.click()
       await waitFor(() => existsSync(ctxHook) && existsSync(ctxJson), 'Context Toolkit (EN): apply wrote the hook binary and context-toolkit.json')
       await waitFor(async () => (await en.locator('main').innerText()).includes('Applied.'), 'Context Toolkit (EN): no “Applied.” caption')

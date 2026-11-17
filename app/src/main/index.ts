@@ -1,7 +1,9 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -9,12 +11,14 @@ import { backupNotice } from '../shared/backups'
 import { getLang, isLang, langFromLocale, setLang, t } from '../shared/i18n'
 import type { Lang } from '../shared/i18n'
 import { LEVEL_RANK } from '../shared/model'
-import type { ChangedEvent, ClientId, Result, ScanResponse, WriteLevel } from '../shared/model'
+import type { ChangedEvent, ClientId, Result, ScanResponse, UpdatesInfo, WriteLevel } from '../shared/model'
 import * as ctxkit from './ctxkit'
 import { assertTrusted, grantedOf, parseBatch, parseLevel, parseOp, parseSha, trustedSender, validateIntent, validateName } from './gate'
 import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, localMarketplaceOk, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, remoteUrl, rmTree } from './install'
 import { Sidecar } from './sidecar'
 import { tidyHome } from './tidy'
+import { autoCheckOn, notesUrl, Updates } from './updates'
+import type { UpdaterLike } from './updates'
 import {
   validateApplied,
   validateBatchApplied,
@@ -163,7 +167,7 @@ function readSettings(): Record<string, unknown> {
 }
 
 /** Settings keys are written one at a time: writing one does not erase the others. */
-function saveSetting(key: 'writeLevel' | 'lang', value: string): void {
+function saveSetting(key: 'writeLevel' | 'lang' | 'autoUpdate', value: string | boolean): void {
   mkdirSync(app.getPath('userData'), { recursive: true })
   writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), [key]: value }))
 }
@@ -175,6 +179,36 @@ function readWriteLevel(): WriteLevel {
 
 function saveWriteLevel(level: WriteLevel): void {
   saveSetting('writeLevel', level)
+}
+
+/**
+ * Updates from GitHub releases (electron-updater, `publish` in package.json). They work in an installed build; a QA run gets
+ * a stand-in that e2e drives through `app.evaluate` (`globalThis.__loadoutUpdater`), so checks never touch the network.
+ */
+const updatesSupported = app.isPackaged || qa
+let updates: Updates | undefined
+
+function updatesInfo(): UpdatesInfo {
+  return { version: app.getVersion(), auto: autoCheckOn(readSettings()), supported: updatesSupported, state: updates?.state ?? { status: 'idle' } }
+}
+
+function sendUpdates(): void {
+  const win = lastWindow
+  if (win && !win.isDestroyed()) win.webContents.send('updates', updatesInfo())
+}
+
+function qaUpdater(): UpdaterLike & { calls: string[]; opened: string[] } {
+  const calls: string[] = []
+  const fake = Object.assign(new EventEmitter(), {
+    autoDownload: true,
+    calls,
+    opened: [] as string[],
+    checkForUpdates: async () => (calls.push('check'), null),
+    downloadUpdate: async () => (calls.push('download'), []),
+    quitAndInstall: (silent?: boolean, run?: boolean) => void calls.push(`install:${silent}:${run}`),
+  })
+  ;(globalThis as Record<string, unknown>)['__loadoutUpdater'] = fake
+  return fake
 }
 
 /** Language: the saved choice, otherwise by system locale (Russian locale gives Russian, any other gives English). `LOADOUT_LANG` is for development and checks only. */
@@ -693,6 +727,55 @@ void app.whenReady().then(() => {
         fetchBusy = false
       }
     })
+  })
+
+  // ---- app updates: the page asks, main checks the state; the page never gets the updater itself ----
+  const qaFake = qa ? qaUpdater() : undefined
+  if (updatesSupported) {
+    if (!qaFake) {
+      autoUpdater.disableWebInstaller = true // only the full installer whose sha512 is in latest.yml
+      // electron-updater sends a random id kept in `<profile>/.updaterId` with every request (for staged rollouts, unused here);
+      // a constant in its place keeps the checks from being linked to one installation
+      autoUpdater.requestHeaders = { 'x-user-staging-id': '00000000-0000-0000-0000-000000000000' }
+    }
+    const updater: UpdaterLike = qaFake ?? autoUpdater
+    updates = new Updates({ updater, currentVersion: app.getVersion(), isAuto: () => autoCheckOn(readSettings()), send: sendUpdates })
+    // QA runs have no schedule: e2e sets the states itself
+    if (!qaFake) updates.start()
+  }
+  ipcMain.handle('updates:get', (e) => (guard(e), updatesInfo()))
+  ipcMain.handle('updates:setAuto', (e, on: unknown) => {
+    guard(e)
+    if (typeof on !== 'boolean') throw new Error('invalid parameters')
+    saveSetting('autoUpdate', on)
+    if (on) updates?.tick()
+    return updatesInfo()
+  })
+  ipcMain.handle('updates:check', (e) => {
+    guard(e)
+    void updates?.check(true)
+  })
+  ipcMain.handle('updates:download', (e) => {
+    guard(e)
+    void updates?.download()
+  })
+  ipcMain.handle('updates:install', (e) => {
+    guard(e)
+    return guarded(async () => {
+      // quitting in the middle of a write (a profile batch) would leave it half applied
+      if (coreInFlight > 0 || setupBusy || claudeBusy || fetchBusy) {
+        throw new Error(t('идёт запись или установка: дождитесь окончания и повторите', 'a write or an install is in progress: wait for it to finish and try again'))
+      }
+      return updates?.install() ?? false
+    })
+  })
+  ipcMain.handle('updates:notes', (e) => {
+    guard(e)
+    const s = updates?.state
+    if (!s || !('version' in s)) return
+    const url = notesUrl(s.version)
+    if (qaFake) qaFake.opened.push(url)
+    else void shell.openExternal(url)
   })
   createWindow()
   app.on('activate', () => {

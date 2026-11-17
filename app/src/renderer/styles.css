@@ -252,3 +252,19 @@ html[data-fx='off'] .spin { animation: none; border-right-color: currentColor; o
 .choices .plist label { align-items: flex-start; }
 .choices .plist input[type='radio'] { margin-top: 3px; }
 .help { position: fixed; right: 364px; bottom: 40px; padding: 12px; z-index: 80; width: 280px; }
+/* app updates: the version button at the footer end, the panel and the notification card above it (views/Updates.tsx) */
+footer > #privacy { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+footer > .upd-btn { flex: none; padding: 0 8px; line-height: 18px; font: inherit; color: var(--mute); }
+footer > .upd-btn.s-on { color: var(--green); border-color: var(--green); }
+.upd-pop { position: fixed; right: 14px; bottom: 36px; width: 330px; padding: 12px 14px; z-index: 85; font: 13px/1.45 var(--sans); color: var(--fg); white-space: normal; }
+.upd-pop p { margin: 0 0 8px; }
+.upd-pop > :last-child { margin-bottom: 0; }
+.upd-pop .small { font-size: 12px; }
+.upd-card { border-color: var(--cyan); padding-right: 34px; }
+.upd-close { position: absolute; top: 6px; right: 6px; padding: 0 7px; line-height: 20px; border-color: transparent; background: none; color: var(--mute); }
+.upd-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 8px; }
+.upd-link { border-color: transparent; background: none; color: var(--cyan); text-decoration: underline; padding: 4px 2px; }
+button.upd-go { border-color: var(--green); color: var(--green); }
+.upd-auto { display: flex; gap: 8px; align-items: center; margin: 0 0 4px; }
+.upd-state { margin-top: 8px; }
+.upd-pop progress { display: block; width: 100%; height: 8px; margin: 0 0 8px; accent-color: var(--cyan); }
