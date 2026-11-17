@@ -534,6 +534,16 @@ pub(super) fn copy_check(
         )),
         _ => {}
     }
+    let from_claude = src
+        .to_string_lossy()
+        .replace('\\', "/")
+        .contains("/.claude/skills/");
+    if place.is_some() && dest != Client::ClaudeCode && from_claude {
+        notes.push(bad(
+            "OpenCode уже читает .claude/skills проекта: после копии в .agents/skills он увидит этот скил дважды.",
+            "OpenCode already reads the project's .claude/skills: after a copy into .agents/skills it sees this skill twice.",
+        ));
+    }
     notes.push(bad(
         "Это отдельная копия: правки исходного скила в неё не попадут.",
         "This is a separate copy: edits of the source skill do not reach it.",

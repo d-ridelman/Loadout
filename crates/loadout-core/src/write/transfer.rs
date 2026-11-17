@@ -508,6 +508,15 @@ fn mcp(home: &Path, scan: &ScanResult, e: &Entity, dest: Client) -> Result<Prepa
             "The file does not exist yet: Loadout creates it, and a rollback removes it."
         ));
     }
+    // the journal rollback restores the whole file only while it is unchanged, and a running Claude Code rewrites it often
+    if dest == Client::ClaudeCode {
+        let scope = if place.is_some() { "local" } else { "user" };
+        let key = mask::scrub_words(&key);
+        plan.notes.push(crate::tr!(
+            "Claude Code часто сам переписывает ~/.claude.json: откат из журнала пройдёт, только пока файл не менялся. Иначе уберите запись командой claude mcp remove {key} -s {scope}.",
+            "Claude Code often rewrites ~/.claude.json itself: the journal rollback works only while the file is unchanged. Otherwise remove the entry with claude mcp remove {key} -s {scope}."
+        ));
+    }
     if let Some(p) = &place {
         let secret = ["env", "headers", "http_headers"].iter().any(|k| {
             value
@@ -763,6 +772,17 @@ fn hook(home: &Path, e: &Entity, dest: Client) -> Result<Prepared, String> {
                 "The command relies on CLAUDE_… variables: Claude Code sets them; whether Codex does is not verified.",
             ));
         }
+    }
+    // Claude Code on Windows runs a hook command in Git Bash (or PowerShell), Codex in `cmd /C` (codex-rs/hooks command_runner.rs)
+    plan.warn.push(tr(
+        "Оболочка другая: на Windows Claude Code запускает команду хука через Git Bash, а Codex — через cmd /C. Запись вида ИМЯ=значение перед командой, $HOME, %VAR% и одинарные кавычки в другой оболочке не сработают; проверьте команду после копирования.",
+        "Another shell: on Windows Claude Code runs a hook command in Git Bash, Codex in cmd /C. A NAME=value prefix, $HOME, %VAR% and single quotes do not work in the other shell; check the command after copying.",
+    ));
+    if h.contains_key("timeout") {
+        plan.notes.push(tr(
+            "timeout переносится числом как есть; в каких единицах его считает Codex, не проверено (у Claude Code — секунды).",
+            "timeout is copied as the same number; which unit Codex reads it in is not verified (Claude Code: seconds).",
+        ));
     }
     plan.notes.push(tr(
         "Хук — команда, которую клиент запускает сам. Убедитесь, что скрипт понимает вход и ответ получателя: формы у Claude Code и Codex общие, но не во всём.",

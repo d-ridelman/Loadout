@@ -76,8 +76,10 @@ export function TransferDialog({ entities, onClose, onDone }: Props) {
   const list = inProject ? (projectEntities ?? []) : entities
   const fromChoices = useMemo(() => sources(list, inProject), [list, inProject])
   const rows = useMemo(() => (from ? candidates(list, from, to, inProject) : []), [list, from, to, inProject])
-  // a new source or target starts with every entry the target can take
-  useEffect(() => setPicked(new Set(rows.filter((r) => !r.why).map((r) => r.entity.id))), [rows])
+  // A new place, source or target starts with every entry the target can take. Not on every rescan: a running client
+  // rewrites its files often, and the boxes the person unticked must stay unticked.
+  const resetKey = `${place}|${from ?? ''}|${to ?? ''}|${inProject && projectEntities === null ? 'loading' : 'ready'}`
+  useEffect(() => setPicked(new Set(rows.filter((r) => !r.why).map((r) => r.entity.id))), [resetKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const items: Intent[] = rows.filter((r) => !r.why && picked.has(r.entity.id)).map((r) => copyIntent(r.entity, to as ClientId))
   const build = async () => {

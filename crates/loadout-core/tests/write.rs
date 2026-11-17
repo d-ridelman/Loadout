@@ -767,7 +767,9 @@ fn add_creates_a_server_in_json_and_toml_hides_env_values_and_rolls_back() {
     for bad in ["https://", "http://?x", "https://:80/x", "https://@h/"] {
         assert!(plan_s(&e, &remote("codex", bad)).is_err(), "{bad}");
     }
-    assert!(plan_s(&e, &remote("antigravity", "https://example.com/mcp")).is_err());
+    // Antigravity: `url` per the documentation shipped with its CLI (mcp_servers.md); Desktop shows only local servers
+    let ag = plan_s(&e, &remote("antigravity", "https://example.com/mcp")).unwrap();
+    assert_eq!(ag.pointer, "/mcpServers/hosted");
     assert!(plan_s(&e, &remote("claude-desktop", "https://example.com/mcp")).is_err());
 
     // a dot in the name: Codex itself writes such a key in quotes (checked against codex 0.159.3), and so does the plan pointer

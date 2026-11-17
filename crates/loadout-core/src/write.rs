@@ -811,12 +811,13 @@ fn prep_add(
         shown.extend(args.iter().cloned());
     } else {
         let u = url.trim();
-        // The remote server form is verified only for Claude Code (`type: http` + `url`), Codex (`url`) and OpenCode
-        // (`type: remote` + `url`); shortcut: Desktop and Antigravity, after checking against their documentation
-        if !matches!(dest, Client::ClaudeCode | Client::Codex | Client::OpenCode) {
+        // The remote server form is verified for Claude Code (`type: http` + `url`), Codex (`url`), OpenCode
+        // (`type: remote` + `url`) and Antigravity (`url`, mcp_servers.md shipped with its CLI); Claude Desktop documents
+        // only local servers in its file (remote ones are connectors in the app)
+        if dest == Client::ClaudeDesktop {
             return Err(crate::tr!(
-                "удалённый сервер можно добавить только в Claude Code, Codex и OpenCode: форма записи у остальных клиентов не проверена",
-                "a remote server can only be added to Claude Code, Codex and OpenCode: the entry format for other clients has not been verified"
+                "удалённый сервер в Claude Desktop добавляется в приложении как коннектор: в файле конфигурации документация показывает только локальные",
+                "a remote server is added to Claude Desktop in the app, as a connector: the documentation shows only local ones in the config file"
             ));
         }
         let host = u.split_once("://").map_or("", |(_, rest)| {

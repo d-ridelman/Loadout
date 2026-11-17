@@ -323,6 +323,7 @@ html[data-fx='off'] .spin { animation: none; border-right-color: currentColor; o
 .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
 .tfield { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .tfield select { align-self: flex-start; min-width: 260px; max-width: 100%; }
+.tlist { max-height: 340px; }
 .tlist .pitem { grid-template-columns: 1fr; align-items: start; }
 .tlist .alert-box { margin: 2px 0; }
 .choices .plist li { margin-bottom: 8px; }

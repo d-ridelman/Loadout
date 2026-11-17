@@ -141,6 +141,87 @@ fn a_skill_folder_copies_to_codex_and_the_rollback_removes_it() {
     assert!(left.is_empty());
 }
 
+/// Every skill of the fixture to every client it is not refused for: the folder lands where the plan says, with the same
+/// files, and the rollback takes it away again. A refusal at plan time may only be a taken name.
+#[test]
+fn every_skill_pair_that_is_not_refused_copies_and_rolls_back() {
+    let e = env();
+    let r = loadout_core::scan(&e.home);
+    let skills: Vec<Entity> = r
+        .entities
+        .iter()
+        .filter(|x| x.kind == Kind::Skill && x.can_copy)
+        .cloned()
+        .collect();
+    assert_eq!(
+        skills.len(),
+        6,
+        "two Claude Code skills and one of each other client but Desktop"
+    );
+    let (mut done, mut taken) = (0, 0);
+    for s in &skills {
+        for to in Client::ALL {
+            if to == s.client || s.copy_why.contains_key(to.slug()) {
+                continue;
+            }
+            let i = copy(&s.id, to.slug(), "");
+            let p = match write::plan(&e.home, Some(&e.store), &i) {
+                Ok(p) => p,
+                Err(err) => {
+                    assert!(err.contains("уже есть"), "{} → {to:?}: {err}", s.name);
+                    taken += 1;
+                    continue;
+                }
+            };
+            let op = write::apply(&e.home, &e.store, &i, &p.base_sha, ML)
+                .unwrap()
+                .op;
+            let dst = e
+                .home
+                .join(p.file.trim_start_matches("~/").trim_end_matches('/'));
+            let Some(loadout_core::model::CopyFrom::Dir(src)) = &s.copy_from else {
+                panic!("a copyable skill has a folder")
+            };
+            assert_eq!(tree(&dst), tree(src), "{} → {to:?}", s.name);
+            write::rollback(&e.home, &e.store, &op, ML).unwrap();
+            assert!(
+                !dst.exists(),
+                "{} → {to:?}: the rollback left the folder",
+                s.name
+            );
+            done += 1;
+        }
+    }
+    assert!(done >= 20 && taken <= 2, "copied {done}, taken {taken}");
+}
+
+#[test]
+fn a_project_server_copies_into_an_existing_opencode_json_of_the_project() {
+    let e = env();
+    let p = app(&e);
+    let s = projects::scan(&e.home, &p);
+    let m = find(&s, Client::ClaudeCode, Kind::Mcp, "shared-tool");
+    // without a project opencode.json the schema generation is unknown: a refusal that says so
+    let err = write::plan(&e.home, Some(&e.store), &copy(&m.id, "opencode", &p.id)).unwrap_err();
+    assert!(err.contains("opencode.json"), "{err}");
+    let file = p.dir.join("opencode.json");
+    let original = "{\r\n  \"$schema\": \"https://opencode.ai/config.json\",\r\n  \"mcp\": {\r\n    \"other\": { \"type\": \"local\", \"command\": [\"x\"] }\r\n  }\r\n}\r\n";
+    fs::write(&file, original).unwrap();
+    let (plan, op) = run(&e, &copy(&m.id, "opencode", &p.id)).unwrap();
+    assert_eq!(plan.file, "~/work/app/opencode.json");
+    assert!(!plan.warn.is_empty(), "env values go into a project file");
+    let v: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    let srv = &v["mcp"]["shared-tool"];
+    assert_eq!(srv["type"], "local");
+    assert_eq!(
+        srv["command"],
+        serde_json::json!(["npx", "-y", "shared-tool"])
+    );
+    assert_eq!(srv["environment"]["SHARED_KEY"], "FAKE-SECRET-PROJ");
+    write::rollback(&e.home, &e.store, &op, ML).unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), original);
+}
+
 #[test]
 fn a_skill_copy_is_refused_where_it_would_duplicate_or_be_lost() {
     let e = env();

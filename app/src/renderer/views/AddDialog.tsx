@@ -40,7 +40,7 @@ export function AddDialog({ entities, draft, onSubmit, onClose }: Props) {
   const [env, setEnv] = useState(draft?.env.map((p) => `${p.key}=${p.value}`).join('\n') ?? '')
   const taken = nameTaken(entities, to, name)
   // the remote-server form has been checked only for Claude Code, Codex and OpenCode (the same list as the core's `prep_add`)
-  const remoteOk = to === 'claude-code' || to === 'codex' || to === 'opencode'
+  const remoteOk = to === 'claude-code' || to === 'codex' || to === 'opencode' || to === 'antigravity'
   const remote = wantRemote && remoteOk
   const lines = args.split('\n').filter((l) => l !== '')
   const envLines = env.split('\n').filter((l) => l.trim() !== '')
@@ -95,7 +95,7 @@ export function AddDialog({ entities, draft, onSubmit, onClose }: Props) {
         <fieldset className="choices">
           <legend className="mute small">{t('Тип', 'Type')}</legend>
           <label><input type="radio" name="kind" checked={!remote} onChange={() => setRemote(false)} /> {t('локальный (команда)', 'local (command)')}</label>
-          <label title={remoteOk ? undefined : t('Только для Claude Code, Codex и OpenCode: у остальных клиентов форма записи не проверена', 'Only for Claude Code, Codex and OpenCode: the entry format is not verified for other clients')}>
+          <label title={remoteOk ? undefined : t('Не для Claude Desktop и DeepSeek: в Desktop удалённый сервер добавляется в приложении как коннектор, DeepSeek хранит записи в YAML с тегами', 'Not for Claude Desktop and DeepSeek: Desktop adds a remote server in the app as a connector, DeepSeek keeps entries in tagged YAML')}>
             <input type="radio" name="kind" checked={remote} disabled={!remoteOk} onChange={() => setRemote(true)} /> {t('удалённый (адрес)', 'remote (URL)')}
           </label>
         </fieldset>
