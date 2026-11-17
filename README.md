@@ -26,8 +26,9 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 
 ## Features
 
-- **First launch**: a card says what Loadout is, that it writes nothing without a preview and your confirmation, and that the only thing it does online by itself is the update check. Close it once and it does not come back.
-- **Matrix** of every entry across the five clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). "What the marks mean" above the table explains every mark, `+N`, the `Δ` of a fresh change and the FX switch. The inspector on the right shows the file, the key and the contents without secrets.
+- **First launch**: a card says what Loadout is, shows the first task in three steps (find an entry, click its mark, Enable or Disable), and says that it writes nothing without a preview and your confirmation and that the only thing it does online by itself is the update check. Close it once and it does not come back; Help can show it again.
+- **Help in the window** (`F1`, `?` or the Help button in the header): getting started, what each section is for, questions and answers, shortcuts and the animation setting. "More in Help" under every section title opens Help on that section; unfamiliar terms (write level, scope, pointer) explain themselves on hover and on keyboard focus. The sidebar gives each section a line on what it is for and its key.
+- **Matrix** of every entry across the five clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). "What the marks mean" above the table explains every mark, `+N` and the `Δ` of a fresh change. The inspector on the right shows the client, the state and the file, with the main action as a button; the scope, the key and the contents without secrets are under "Technical details".
 - **Radar, hooks, doctor.** A per-client overview, the hook pipeline by lifecycle event, and findings: broken entries, version mismatches, the same entry in several scopes, empty marketplaces, broken links to a cleaned cache, piles of third-party backups, MCP configs with secret keys. The Doctor groups findings by severity and says how to fix each one; the "broken: N" counter in the footer opens it.
 - **Messages** after an action pop up above the footer in colour (done, error, info) and in full; screen readers announce them.
 - **Toggle** an entry that has an on/off flag: plugins, connectors, Codex entries (write level R1). Most MCP servers have no such flag: disabling one **moves it to the Loadout trash**, and enabling puts it back in the same place (R2). **Edit an MCP command, copy it to another client** (R2); JSON, TOML and YAML are translated for you.
@@ -39,7 +40,7 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 - **Context Toolkit** built in: preview, apply, roll back, optional policies, and an "Efficiency" report (see below).
 - **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; core messages follow the choice too.
 - **Updates from GitHub releases.** Loadout checks for a new version about 10 seconds after start and once a day (hourly after a failed check), offers it in a small card, downloads it only on "Download" (just the changed blocks) and installs it on "Restart and update" or when you quit after the download. The check goes only to GitHub and carries nothing about you or your configs; turn it off in the update panel (the version button at the right end of the footer). Details: [SECURITY.md](SECURITY.md#network).
-- **Client files are read-only by default.** The write level in the header is named in words: "Read-only · R0", "On/off · R1" (toggles by flag), "All edits · R2" (the trash, edits, copies, installs, profiles, Context Toolkit). Raising it needs an OS confirmation dialog. Only one window runs at a time; a second launch brings the first one forward.
+- **Client files are read-only by default.** The write level in the header is named in words: "Read-only · R0", "On/off · R1" (toggles by flag), "All edits · R2" (the trash, edits, copies, installs, profiles, Context Toolkit). Raising it needs an OS confirmation dialog. You do not have to pick the level first: an action button (Disable, Add and so on) asks for the level it needs and, once you agree, shows the preview. Only one window runs at a time; a second launch brings the first one forward.
 
 ### Safe write pipeline
 
@@ -78,6 +79,10 @@ Operation backups and the Loadout trash keep client configs **in full and as pla
 | Context Toolkit: rollback preview | First launch |
 |---|---|
 | ![Context Toolkit rollback](docs/screenshots/en-context-toolkit-rollback.png) | ![Welcome card](docs/screenshots/en-welcome.png) |
+
+| Help: questions and answers | |
+|---|---|
+| ![Help](docs/screenshots/en-help.png) | |
 
 The screenshots are produced by `npm run docs-shots` in `app/` (window 1920×1080, fixtures only).
 
