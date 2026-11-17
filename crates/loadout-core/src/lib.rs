@@ -294,13 +294,8 @@ fn hook_label(tokens: &[String]) -> String {
     };
     let is_switch = |t: &str| t.len() == 2 && t.starts_with('/');
     let tokens = expand_nested(tokens, 0);
-    // a visible value of a long flag (`--client codex`) is not a program name; a file (`--login script.sh`) still is
-    let flag_value = |i: usize, t: &str| {
-        i > 0
-            && tokens[i - 1].starts_with("--")
-            && !tokens[i - 1].contains('=')
-            && !t.contains(['.', '/', '\\'])
-    };
+    // the value of a flag whose value the mask shows (`--client codex`) is not a program name
+    let flag_value = |i: usize, _: &str| i > 0 && mask::is_plain_flag(&tokens[i - 1]);
     tokens
         .iter()
         .enumerate()
@@ -348,7 +343,8 @@ fn agent_hooks_group(tokens: &[String]) -> Option<String> {
 fn expand_nested(tokens: &[String], depth: usize) -> Vec<String> {
     let mut out = Vec::new();
     for t in tokens {
-        if mask::is_nested_command(t) && depth < 3 {
+        // a program path with spaces stays whole (the mask kept it only in the program position)
+        if mask::is_nested_command(t) && !mask::is_spaced_path(t) && depth < 3 {
             out.extend(expand_nested(&mask::split_shell(t), depth + 1));
         } else {
             out.push(t.clone());
@@ -637,6 +633,12 @@ mod tests {
         assert_eq!(label("node --client codex guard.mjs"), "guard");
         assert_eq!(label("tool --client=codex"), "tool");
         assert_eq!(label("bash --login script.sh"), "script");
+        assert_eq!(label("sudo --preserve-env docker run"), "docker");
+        assert_eq!(
+            label(r#""C:\Program Files\Microsoft VS Code\bin\code.cmd" --wait"#),
+            "code"
+        );
+        assert_eq!(label(r#"cmd /c "C:\T\A.exe Pw1 X\o.txt""#), "A");
     }
 
     #[test]

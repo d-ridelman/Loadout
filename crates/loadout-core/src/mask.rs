@@ -359,7 +359,7 @@ const VALUE_FLAGS: &[&str] = &[
 ];
 
 /// `--name` (without `=`) from [`VALUE_FLAGS`]: the next token is its value.
-fn is_plain_flag(a: &str) -> bool {
+pub(crate) fn is_plain_flag(a: &str) -> bool {
     a.strip_prefix("--")
         .is_some_and(|n| VALUE_FLAGS.contains(&n))
 }
@@ -456,25 +456,30 @@ const MAX_DEPTH: usize = 3;
 
 /// An argument with a space that does not look like a path with spaces is a nested command line.
 pub(crate) fn is_nested_command(a: &str) -> bool {
-    a.contains(char::is_whitespace)
-        && !a.split_whitespace().all(|w| w.contains(['/', '\\']))
-        && !is_spaced_path(a)
+    a.contains(char::is_whitespace) && !a.split_whitespace().all(|w| w.contains(['/', '\\']))
 }
 
-/// A path whose directory names have spaces (`C:\Program Files\Microsoft VS Code\bin\code.cmd`). Arguments cannot hide
-/// in it: the file name has no space, and every word of a spaced directory name starts with a capital letter or `(`,
-/// as Windows folder names do (`tool secretpw rel` and `x.exe --pw y` do not pass).
-fn is_spaced_path(s: &str) -> bool {
+/// A program path whose directory names have spaces (`C:\Program Files\Microsoft VS Code\bin\code.cmd`). It is only
+/// trusted where a program is expected (the command position, an MCP `command`): there a line is not a nested command.
+/// Arguments cannot hide in it: the file name has no space, and every word of a spaced directory name is capitalised
+/// ASCII letters or `(x86)` / `(x64)` / `(arm64)` (no digits, dots or dashes: `Run.exe Hunter2 x` and `x.exe --pw y` do not pass).
+/// shortcut: a capitalised all-letter password between two path parts still passes; tighten if such a config turns up.
+pub(crate) fn is_spaced_path(s: &str) -> bool {
     let segs: Vec<&str> = s.split(['/', '\\']).collect();
     let (Some(last), Some(dirs)) = (segs.last(), segs.get(..segs.len().saturating_sub(1))) else {
         return false;
     };
+    let folder_word = |w: &str| {
+        let letters = w.starts_with(|c: char| c.is_ascii_uppercase())
+            && w.chars().all(|c| c.is_ascii_alphabetic());
+        letters || matches!(w, "(x86)" | "(x64)" | "(arm64)")
+    };
     s.contains(' ')
         && !last.contains(char::is_whitespace)
-        && dirs.iter().filter(|d| d.contains(' ')).all(|d| {
-            d.split(' ')
-                .all(|w| w.starts_with(|c: char| c.is_ascii_uppercase() || c == '('))
-        })
+        && dirs
+            .iter()
+            .filter(|d| d.contains(' '))
+            .all(|d| d.split(' ').all(folder_word))
         // each word is checked as a segment: `Program Files (x86)` as a whole mixes cases and digits like a key
         && is_path_like(&s.replace(' ', "/"))
 }
@@ -515,6 +520,9 @@ fn mask_args_ex(args: &[String], depth: usize, start: Pos) -> Vec<String> {
         if hide_next {
             out.push(MASK.to_owned());
             hide_next = false;
+            pos = Pos::default();
+        } else if pos.cmd && is_spaced_path(a) {
+            out.push(a.clone()); // the program itself: `"C:\Program Files\…\code.cmd" --wait`
             pos = Pos::default();
         } else if is_nested_command(a) {
             out.push(mask_nested(a, depth));
@@ -942,14 +950,32 @@ mod tests {
             let out = mask_line(line);
             assert!(!out.contains(secret), "{line} -> {out}");
         }
+        // checker's bypasses: a capitalised password between a program and a path, in a command or a nested line
+        for (line, secret) in [
+            (r#"cmd /c "C:\T\A.exe Pw1 X\o.txt""#, "Pw1"),
+            (r#"bash -c "/opt/Run Hunter2 X/o.txt""#, "Hunter2"),
+            (r#"bash -c "/opt/Run Hunterpw X/run.sh""#, "Hunterpw"),
+            (
+                r#""C:\Program Files\App\Run.exe Hunter2 More\x.js""#,
+                "Hunter2",
+            ),
+        ] {
+            let out = mask_line(line);
+            assert!(!out.contains(secret), "{line} -> {out}");
+        }
         for cmd in [
             r"C:\tools\x.exe hunter",
             "/usr/bin/tool --pw hunter",
             r"C:\x\tool secretpw rel\f.txt",
+            r"C:\Tools\Srv.exe Summer2024 Data\cfg.json",
+            r"C:\Program Files\App\Run.exe Hunter2 More\x.js",
+            "/opt/App/Server Hunter2pw Data/cfg.json",
         ] {
             let out = mcp_detail(&json!({ "command": cmd }))["command"].to_string();
             assert!(
-                !out.contains("hunter") && !out.contains("secretpw"),
+                !["hunter", "secretpw", "Summer2024", "Hunter2"]
+                    .iter()
+                    .any(|s| out.contains(s)),
                 "{cmd} -> {out}"
             );
         }
