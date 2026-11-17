@@ -46,7 +46,8 @@ export function Radar({ rows, findings, activeClient, onClient, onDoctor }: Prop
               <button
                 key={c.id}
                 className="node"
-                style={{ left: `${POS[i]?.[0] ?? 50}%`, top: `${POS[i]?.[1] ?? 50}%` }}
+                // clamped by half the card width: at 9 % / 91 % a 124 px card stuck out of the panel
+                style={{ left: `clamp(62px, ${POS[i]?.[0] ?? 50}%, calc(100% - 62px))`, top: `${POS[i]?.[1] ?? 50}%` }}
                 aria-pressed={activeClient === c.id}
                 aria-label={t(`${c.name}: строк в матрице ${s.cells}, проблем ${s.issues}`, `${c.name}: ${s.cells} matrix rows, ${s.issues} issues`)}
                 onClick={() => onClient(c.id)}

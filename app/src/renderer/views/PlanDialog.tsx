@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { Entity, Intent, JournalEntry, Plan } from '../../shared/model'
 import { count, plural, t } from '../../shared/i18n'
-import { Path } from '../ui'
+import { Cmd, Path } from '../ui'
 import { Modal } from './Modal'
 
 type PlanState =
@@ -33,8 +33,8 @@ function Change({ file, pointer, from, to }: { file: string; pointer: string; fr
           <dt>{t('ключ', 'key')}</dt><dd className="wrap">{pointer}</dd>
         </>
       ) : null}
-      <dt>{t('было', 'before')}</dt><dd className="wrap mono">{from}</dd>
-      <dt>{t('станет', 'after')}</dt><dd className="wrap mono"><b>{to}</b></dd>
+      <dt>{t('было', 'before')}</dt><dd className="wrap mono"><Cmd text={from} /></dd>
+      <dt>{t('станет', 'after')}</dt><dd className="wrap mono"><b><Cmd text={to} /></b></dd>
     </dl>
   )
 }

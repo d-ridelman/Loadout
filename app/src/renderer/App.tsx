@@ -427,8 +427,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
         <span className="mute levelbox">
           <Term
             tip={t(
-              'Что Loadout может менять. «Только чтение» — ничего; «Вкл/выкл» — включать и выключать по флагу; «Все правки» — ещё корзина, правка, добавление, профили и установка. Кнопки в инспекторе, «Добавить» и «Откатить» в журнале повышают уровень сами, после окна Windows; для профилей и Инструментов контекста уровень выбирается здесь.',
-              'What Loadout may change. Read-only: nothing; On/off: turn entries on and off by a flag; All edits: also the trash, edits, additions, profiles and installs. The inspector buttons, Add and Roll back in the journal raise the level themselves, after a Windows dialog; for profiles and Context Toolkit pick it here.',
+              'Что Loadout может менять. «Только чтение» — ничего; «Вкл/выкл» — включать и выключать по флагу; «Все правки» — ещё корзина, правка, добавление, профили и установка. Выбирать заранее не нужно: кнопка действия сама попросит нужный уровень в окне Windows.',
+              'What Loadout may change. Read-only: nothing; On/off: turn entries on and off by a flag; All edits: also the trash, edits, additions, profiles and installs. No need to pick it first: an action button asks for the level it needs in a Windows dialog.',
             )}
           >
             {t('Запись', 'Write')}
@@ -579,9 +579,9 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             ) : view === 'journal' ? (
               <Journal level={level} refreshKey={rev} onNotice={say} ensureLevel={ensureLevel} />
             ) : view === 'profiles' ? (
-              <Profiles level={level} refreshKey={rev} onNotice={say} entities={entities} />
+              <Profiles level={level} refreshKey={rev} onNotice={say} entities={entities} ensureLevel={ensureLevel} />
             ) : (
-              <Ctxkit level={level} onNotice={say} />
+              <Ctxkit level={level} onNotice={say} ensureLevel={ensureLevel} />
             )}
           </div>
         )}

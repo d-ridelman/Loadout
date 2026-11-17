@@ -3,7 +3,7 @@ import { CLIENTS } from '../../shared/model'
 import type { JournalEntry, Level, WriteLevel } from '../../shared/model'
 import { BACKUP_DIR_HINT, backupNotice } from '../../shared/backups'
 import { fmtDateTime, t } from '../../shared/i18n'
-import { levelLabel, PageHead } from '../ui'
+import { Cmd, levelLabel, PageHead } from '../ui'
 import type { Notify } from '../ui'
 import { levelOk } from './Inspector'
 import { RollbackDialog } from './PlanDialog'
@@ -119,7 +119,7 @@ export function Journal({ level, refreshKey, onNotice, ensureLevel }: Props) {
                       <b>{j.name}</b>
                       <div className="mute small">{CLIENTS.find((c) => c.id === j.client)?.name}{j.pointer ? ` · ${j.pointer}` : ''}</div>
                     </td>
-                    <td className="mono vcell wrap">{j.from} → {j.to}</td>
+                    <td className="mono vcell wrap"><Cmd text={`${j.from} → ${j.to}`} /></td>
                     <td className="nw">{j.rolledBack ? t('↺ откатано', '↺ rolled back') : j.op === 'rollback' ? t('откат записан', 'rollback recorded') : j.canRollback ? t('в силе', 'in effect') : t('уже менялось', 'changed since')}</td>
                     <td>
                       <div className="actions col">

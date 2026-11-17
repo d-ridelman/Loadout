@@ -33,6 +33,7 @@ export function withModifier(e: { ctrlKey: boolean; metaKey: boolean; altKey: bo
 }
 
 const STATES: EntityState[] = ['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
+const MAIN_GROUPS: readonly Group[] = ['plugin', 'mcp', 'skill']
 
 interface Props {
   rows: Row[]
@@ -126,11 +127,23 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
         <button className="chip" aria-pressed={filters.group === 'all'} onClick={() => setFilters({ ...filters, group: 'all' })}>
           {t('все типы', 'all types')}
         </button>
-        {GROUPS.map((g) => (
+        {/* the three kinds most people look for stay as buttons; the rarer ones are one list, so the bar fits two rows at 1100 */}
+        {GROUPS.filter((g) => MAIN_GROUPS.includes(g.id)).map((g) => (
           <button key={g.id} className="chip" aria-pressed={filters.group === g.id} onClick={() => setFilters({ ...filters, group: g.id })}>
             {g.label}
           </button>
         ))}
+        <select
+          aria-label={t('Другие типы', 'Other kinds')}
+          className={MAIN_GROUPS.includes(filters.group as Group) || filters.group === 'all' ? undefined : 'picked'}
+          value={MAIN_GROUPS.includes(filters.group as Group) ? 'all' : filters.group}
+          onChange={(e) => setFilters({ ...filters, group: e.target.value as Filters['group'] })}
+        >
+          <option value="all">{t('другие типы…', 'other kinds…')}</option>
+          {GROUPS.filter((g) => !MAIN_GROUPS.includes(g.id)).map((g) => (
+            <option key={g.id} value={g.id}>{g.label}</option>
+          ))}
+        </select>
         <select
           aria-label={t('Фильтр по состоянию', 'Filter by state')}
           value={filters.state}

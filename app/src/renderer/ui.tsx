@@ -12,8 +12,6 @@ export type Notify = (message: string, tone?: Tone) => void
 export const levelLabel = (l: WriteLevel): string =>
   l === 'R0' ? t('Только чтение · R0', 'Read-only · R0') : l === 'R1' ? t('Вкл/выкл · R1', 'On/off · R1') : t('Все правки · R2', 'All edits · R2')
 
-/** "Pick level X in the header" for a disabled button's hint. */
-export const pickLevel = (l: WriteLevel): string => t(`Выберите в шапке окна уровень записи «${levelLabel(l)}»`, `Pick the write level “${levelLabel(l)}” in the window header`)
 
 /** State as a glyph plus color: color alone carries no meaning (accessibility, CONCEPT.md §8). */
 export function Glyph({ state, pulse }: { state: EntityState | 'none'; pulse?: boolean }) {
@@ -116,6 +114,15 @@ export function Toast({ id, tone, text, onClose }: { id: string; tone: Tone; tex
       <span className="toast-text"><Rich text={text} /></span>
       <button className="toast-close" aria-label={t('Закрыть уведомление', 'Close the notification')} onClick={onClose}>×</button>
     </div>
+  )
+}
+
+/** A command or a value that wraps only between its words: "e2e-market" or "--scope" never break at a hyphen (a word longer than the line still breaks). */
+export function Cmd({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(\s+)/).map((w, i) => (i % 2 ? w : w ? <span key={i} className="tok">{w}</span> : null))}
+    </>
   )
 }
 

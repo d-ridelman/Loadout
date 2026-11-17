@@ -425,7 +425,11 @@ try {
   // states and filters
   await page.getByRole('button', { name: 'скилы' }).click()
   must((await page.locator('tbody tr').count()) < rowCount, 'the "skills" filter did not narrow the list')
+  // the rarer kinds are one list: picking hooks shows hook rows only
+  await page.getByLabel('Другие типы').selectOption('hook')
+  must((await page.locator('tbody td.name .badge').allInnerTexts()).every((b) => b === 'хук'), 'the "Other kinds: hooks" filter shows other kinds')
   await page.getByRole('button', { name: 'все типы' }).click()
+  must((await page.getByLabel('Другие типы').inputValue()) === 'all', '"all types" did not reset the other-kinds list')
   await page.getByLabel('Поиск').fill('tool-b')
   must((await page.locator('tbody tr').count()) >= 1, 'search for tool-b found nothing')
   await page.getByLabel('Поиск').fill('')
@@ -520,6 +524,14 @@ try {
         must(reach.over <= 0, `the hooks grid scrolls sideways at ${w}px: ${JSON.stringify(reach)}`)
         await page.evaluate(() => { document.querySelector('.tablewrap.scrollx').scrollLeft = 0 })
       }
+      if (name === 'radar') {
+        // every client card stays inside the radar panel (the side ones stuck out at 1280 and 1920)
+        const out = await page.evaluate(() => {
+          const p = document.querySelector('.rwrap').closest('.hud').getBoundingClientRect()
+          return [...document.querySelectorAll('.node')].filter((n) => { const r = n.getBoundingClientRect(); return r.left < p.left - 1 || r.right > p.right + 1 }).map((n) => n.querySelector('b')?.textContent)
+        })
+        must(out.length === 0, `radar cards stick out of the panel at ${w}: ${JSON.stringify(out)}`)
+      }
       if (w === 1920) {
         const v = await axeCheck(page, name)
         must(v.length === 0, `axe found violations on the "${name}" screen: ${v.map((x) => x.id).join(', ')}`)
@@ -533,6 +545,10 @@ try {
   await resize(app, 1100, 700) // the minimum window size: the header is still on one line
   await page.waitForTimeout(250)
   await headerLayout(page, 'ru@1100')
+  // the filter bar stays within two rows at the narrowest window (it took three before the rarer kinds became one list)
+  // rows by item centres (items of one row differ in height), a new row starts more than 12px below the previous centre
+  const barRows = await page.evaluate(() => [...document.querySelector('main .bar').children].map((c) => { const r = c.getBoundingClientRect(); return r.top + r.height / 2 }).sort((a, b) => a - b).filter((y, i, a) => i === 0 || y - a[i - 1] > 12).length)
+  must(barRows <= 2, `the matrix filter bar takes ${barRows} rows at 1100`)
   await shot(page, 'm1-matrix-1100')
   await resize(app, 1280, 800)
   await page.keyboard.press('1')
@@ -1004,6 +1020,11 @@ try {
   const vCat = await axeCheck(page, 'marketplace catalog')
   must(vCat.length === 0, `axe: marketplace catalog: ${vCat.map((x) => x.id).join(', ')}`)
   await shot(page, 'm4-plugin-dialog-1280')
+  // the smallest window (1100×640): the catalog dialog scrolls, its buttons stay in view (shot() measures that)
+  await resize(app, 1100, 640)
+  await page.waitForTimeout(150)
+  await shot(page, 'm4-plugin-dialog-1100x640')
+  await resize(app, 1280, 800)
   await dialog.getByRole('button', { name: 'Установить', exact: true }).click()
   const calls = () => (existsSync(claudeCalls) ? readFileSync(claudeCalls, 'utf8').trim().split('\n') : [])
   await waitFor(() => calls().join('|') === `plugin marketplace add --scope user ${marketDir}|plugin install hello-plugin@e2e-market --scope user`, 'claude was called with the exact add and install commands')
@@ -1054,7 +1075,7 @@ try {
   // profiles: capture the state, tweak, apply as a bundle, roll back the whole bundle
   await page.keyboard.press('6')
   await page.getByLabel('Имя профиля').fill('e2e')
-  await page.getByRole('button', { name: 'Снять с текущего состояния' }).click()
+  await page.getByRole('button', { name: 'Сохранить текущее состояние' }).click()
   const card = page.getByRole('region', { name: 'Профиль e2e' })
   await card.waitFor({ timeout: 8000 })
   await card.getByText('Записи профиля').click()
@@ -1241,7 +1262,7 @@ try {
   must(sNow.advisorModel === 'fable', `advisorModel from the form was not written: ${sNow.advisorModel}`)
   // the "Main model" and "Effort" selects: default "Do not change", an explicit Sonnet + high choice is visible in the preview and written after apply
   const mainSel = page.getByLabel('Основная модель', { exact: true })
-  const effortSel = page.getByLabel('Effort', { exact: true })
+  const effortSel = page.getByLabel('Усилие модели (effort)', { exact: true })
   must((await mainSel.inputValue()) === 'keep' && (await effortSel.inputValue()) === 'keep', 'the main model and effort selects must default to "Do not change"')
   must((await mainSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Sonnet|Opus|Haiku', 'main model options')
   must((await effortSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|low|medium|high|xhigh', 'effort options')
@@ -1838,6 +1859,11 @@ try {
     await enDialog.locator('[role=alert]').waitFor({ timeout: 8000 })
     await enOk('add: taken name')
     await shot(en, 'en-add-error-1280')
+    // the tallest form at the smallest window: Preview and Cancel stay in view while the form scrolls
+    await resize(enApp, 1100, 640)
+    await en.waitForTimeout(150)
+    await shot(en, 'en-add-error-1100x640')
+    await resize(enApp, 1280, 800)
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
     await addItem(en, 'MCP server')
     await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })

@@ -164,7 +164,7 @@ body.paused * { animation-play-state: paused !important; }
 /* matrix */
 .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
 /* one "selected" accent across the whole window: purple, like the section in the sidebar */
-.bar .chip[aria-pressed='true'] { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
+.bar .chip[aria-pressed='true'], .bar select.picked { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
 .check { display: inline-flex; gap: 6px; align-items: center; color: var(--mute); }
 /* `clip`, not `auto`: with `auto` the wrapper became the scrolling ancestor and the table header (sticky) did not stick when the page scrolled */
 .tablewrap { padding: 2px 8px 8px; overflow-x: clip; }
@@ -254,7 +254,7 @@ html[data-fx='off'] .beam { display: none; }
 /* a tall form (an error line, 14px text) scrolls inside instead of pushing its buttons below the window */
 .modal .box { width: 520px; max-width: 92vw; max-height: calc(92vh - 16px); overflow: auto; padding: 16px 18px; }
 /* the dialog's own buttons stay in view while a long form scrolls under them */
-.modal .box > .actions:last-child, .modal .box > form:last-child > .actions:last-child { position: sticky; bottom: -16px; margin-bottom: -16px; padding: 10px 0 16px; background: var(--panel); z-index: 1; }
+.modal .box > .actions:last-child, .modal .box > :last-child > .actions:last-child { position: sticky; bottom: -16px; margin-bottom: -16px; padding: 10px 0 16px; background: var(--panel); z-index: 1; }
 .modal p { margin: 6px 0; }
 button.level { border-color: transparent; }
 button.level[aria-pressed='true'] { border-color: var(--orange); background: rgba(255, 184, 108, 0.12); }
@@ -315,6 +315,8 @@ html[data-fx='off'] .spin { animation: none; border-right-color: currentColor; o
 .term:hover::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
 header .term { -webkit-app-region: no-drag; }
 .levelbox { display: inline-flex; align-items: center; gap: 6px; }
+/* a word of a command (ui.tsx `Cmd`): wraps as a whole */
+.tok { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
 /* text for screen readers only */
 .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* a text button inside a sentence ("More in Help") */

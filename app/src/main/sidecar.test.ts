@@ -127,10 +127,12 @@ describe('Sidecar', () => {
   })
 
   it('a request without a reply fails on timeout', async () => {
-    const { s } = setup({ requestTimeoutMs: 200 })
+    const { s, notes } = setup({ requestTimeoutMs: 200 })
     s.start()
-    await s.request('snapshot')
-    await expect(s.request('silent')).rejects.toThrow('нет ответа')
+    // wait for the core's own "ready", not for a first reply: under load the stand-in core starts slower than the 200 ms timeout,
+    // and a warm-up request timed out instead of the silent one (a flake under a parallel vitest)
+    await until(() => notes.some((n) => n.method === 'ready'))
+    await expect(s.request('silent')).rejects.toThrow('нет ответа на silent')
   })
 
   it('a request bound to a generation is not sent to a restarted process (the core version check cannot be bypassed)', async () => {
