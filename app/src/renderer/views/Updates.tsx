@@ -116,8 +116,8 @@ export function Updates() {
 
   const online = info ? info.supported && info.auto : false
   const privacy = online
-    ? t('? — клавиши · в сеть ходит только проверка обновлений (GitHub)', '? — shortcuts · only the update check goes online (GitHub)')
-    : t('? — клавиши · в сеть ничего не отправляется', '? — shortcuts · nothing is sent online')
+    ? t('? — клавиши · сам Loadout ходит в сеть только за обновлениями (GitHub)', '? — shortcuts · on its own, Loadout goes online only to check for updates (GitHub)')
+    : t('? — клавиши · сам Loadout в сеть ничего не отправляет', '? — shortcuts · on its own, Loadout sends nothing online')
   if (!info) return <span id="privacy">{privacy}</span>
 
   const s = info.state

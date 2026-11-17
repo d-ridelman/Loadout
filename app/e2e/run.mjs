@@ -1381,8 +1381,8 @@ try {
       await resize(ua, 1280, 800)
     }
     const version = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8')).version
-    must((await up.locator('#privacy').innerText()).includes('только проверка обновлений (GitHub)'), 'the footer does not say that the update check goes online')
-    const cut = await up.evaluate(() => [...document.querySelectorAll('footer > span, #privacy')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent))
+    must((await up.locator('#privacy').innerText()).includes('в сеть только за обновлениями (GitHub)'), 'the footer does not say that the update check goes online')
+    const cut = await up.evaluate(() => [...document.querySelectorAll('footer, footer > span, #privacy')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent))
     must(cut.length === 0, `footer text is cut at 1280: ${JSON.stringify(cut)}`)
     must((await up.locator('.welcome').count()) === 0, 'the welcome card came back after a restart')
     // the visible "vX.Y.Z" starts the accessible name; a new version is added in words
@@ -1466,7 +1466,7 @@ try {
     must(vp.length === 0, `axe found violations on the update panel: ${vp.map((x) => x.id).join(', ')}`)
     await auto.uncheck()
     await waitFor(() => JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).autoUpdate === false, 'the "check automatically" setting was not saved')
-    must((await up.locator('#privacy').innerText()).includes('ничего не отправляется'), 'with checks off the footer must say nothing is sent')
+    must((await up.locator('#privacy').innerText()).includes('ничего не отправляет'), 'with checks off the footer must say nothing is sent')
     must(updErrors.length === 0, `page errors (updates): ${updErrors.join(' | ')}`)
   }
   await close(session)
