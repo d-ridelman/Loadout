@@ -150,7 +150,7 @@ async function pass(lang) {
     await cell('tool-a', 3).click()
     await shot(page, lang, 'matrix')
     await page.keyboard.press('2')
-    await waitFor(async () => (await page.locator('.node').count()) === 5, 'radar')
+    await waitFor(async () => (await page.locator('.node').count()) === 6, 'radar')
     await shot(page, lang, 'radar')
     await page.keyboard.press('3')
     await waitFor(async () => (await page.locator('.pipe .hk').count()) > 0, 'hooks')
