@@ -327,6 +327,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
       // While a dialog is open (form, write or batch preview), other keys are disabled; Esc closes the dialog.
       if (flow || document.querySelector('.modal')) {
         if (e.key === 'Escape' && flow) closeFlow()
+        // a click on the help's text leaves focus on <body>, where the dialog's own Esc handler does not hear the key
+        else if (e.key === 'Escape' && help && !(document.activeElement instanceof Element && document.activeElement.closest('.modal'))) closeHelp()
         return
       }
       const k = keyOf(e)
@@ -374,7 +376,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [palette, view, load, flow, selEntity, requestToggle, closeFlow])
+  }, [palette, view, load, flow, selEntity, requestToggle, closeFlow, help, closeHelp, setHelp])
 
   const paletteItems = useMemo<PaletteItem[]>(
     () => [

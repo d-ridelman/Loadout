@@ -244,6 +244,8 @@ async function axeCheck(page, label) {
     return r.violations.map((v) => ({ id: v.id, impact: v.impact, count: v.nodes.length, sample: v.nodes[0]?.target?.join(' ') }))
   })
   for (const v of violations) log(`  axe ${label}: ${v.id} (${v.impact}) ×${v.count} ${v.sample}`)
+  // every screen axe sees also gets the crisp-text check (dialogs, journal, profiles, Context Toolkit, updates)
+  await typeCheck(page, label)
   return violations
 }
 
@@ -768,7 +770,22 @@ try {
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'detached', timeout: 8000 })
   // ---- R2: trash, edit, copy, profiles (also on a fixture copy) ----
+  // most MCP servers have no flag: at R1 their "Disable (move to trash)" asks for R2 itself, once, and opens the trash preview
   await stubDialog(1)
+  must(await levelIs('R1'), 'before the trash step the level must be R1')
+  await clickCell('tool-b', 3)
+  askedBefore = await app.evaluate(() => globalThis.__asked)
+  await page.locator('aside').getByRole('button', { name: 'Выключить (в корзину)', exact: true }).click()
+  await dialog.waitFor({ timeout: 8000 })
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'the trash button must ask the OS dialog exactly once')
+  await waitFor(() => levelIs('R2'), 'the trash button raised the level to R2')
+  await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
+  must((await dialog.innerText()).includes('в корзине Loadout'), 'the trash button did not open the trash preview')
+  await page.keyboard.press('Escape')
+  await dialog.waitFor({ state: 'detached', timeout: 8000 })
+  // the header list still raises the level after the OS dialog (lowering needs none)
+  await levelSel.selectOption('R1')
+  await waitFor(() => levelIs('R1'), 'the level went down to R1')
   await levelSel.selectOption('R2')
   await waitFor(() => levelIs('R2'), 'the level switched to R2')
   const agFile = join(home, '.gemini', 'config', 'mcp_config.json')
@@ -1454,6 +1471,12 @@ try {
     await help.waitFor({ timeout: 5000 })
     await page.keyboard.press('Escape')
     await help.waitFor({ state: 'detached', timeout: 5000 })
+    // a click on the help's plain text moves focus off the dialog: Esc must still close it
+    await page.keyboard.press('F1')
+    await help.waitFor({ timeout: 5000 })
+    await help.locator('h2').click()
+    await page.keyboard.press('Escape')
+    await help.waitFor({ state: 'detached', timeout: 5000 })
     await page.getByRole('button', { name: /^Справка/ }).click()
     await help.waitFor({ timeout: 5000 })
     const tab = (name) => help.getByRole('button', { name, exact: true })
@@ -1502,6 +1525,17 @@ try {
     await page.locator('header .term').focus()
     must(await page.locator('header .term .tip').isVisible(), 'the write level term shows no explanation on focus')
     await shot(page, 'h3-term-1280')
+    // a term inside the narrow inspector: its explanation stays inside the window
+    await page.keyboard.press('1')
+    await clickCell('tool-a', 3)
+    await page.locator('aside details.tech summary').click()
+    const scopeTerm = page.locator('aside details.tech .term').first()
+    await scopeTerm.focus()
+    const tipBox = await scopeTerm.locator('.tip').boundingBox()
+    const vw = await page.evaluate(() => innerWidth)
+    must(tipBox && tipBox.x >= 0 && tipBox.x + tipBox.width <= vw, `the scope explanation goes off the window: ${JSON.stringify(tipBox)} of ${vw}`)
+    await shot(page, 'h4-term-inspector-1280')
+    await page.locator('aside details.tech summary').click()
     await page.locator('#grid').focus()
   }
 
@@ -1666,7 +1700,7 @@ try {
   session = await launch({ LOADOUT_HOME: empty })
   await session.page.waitForSelector('#grid', { timeout: 20000 })
   must((await session.page.locator('td.empty').innerText()).includes('Не найдено ни одного клиента'), 'empty state')
-  must((await session.page.locator('td.empty').getByRole('button', { name: 'Пересканировать' }).count()) === 1, 'the empty matrix offers no next step')
+  must((await session.page.locator('td.empty').getByRole('button', { name: 'Обновить' }).count()) === 1, 'the empty matrix offers no next step')
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-empty-1280')
   // the other sections of an empty home say what to do too, and nothing is clipped at either width

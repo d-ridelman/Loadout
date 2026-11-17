@@ -41,7 +41,7 @@ h3 { margin: 0 0 8px; font: 600 14px/1.4 var(--sans); color: var(--cyan); }
 .pagehead { margin: 0 0 12px; }
 .pagehead h2 { margin-bottom: 2px; }
 .pagehead p { margin: 0; max-width: 80ch; }
-code { font: 0.92em var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; overflow-wrap: anywhere; }
+code { font: max(12px, 0.92em) var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; overflow-wrap: anywhere; }
 /* the main action of a form or dialog: filled; the rest stay outlined */
 button.primary { background: var(--cyan); border-color: var(--cyan); color: #21222c; font-weight: 600; }
 button.primary:hover:not(:disabled) { background: #b0f1fe; border-color: #b0f1fe; }
@@ -229,7 +229,8 @@ html[data-fx='off'] .beam { display: none; }
 .pipe .hk { overflow-wrap: anywhere; }
 .rowname { display: flex; align-items: flex-start; }
 .hk { display: block; font: 12px var(--mono); margin: 2px 0; padding: 1px 6px; border: 0; border-left: 2px solid var(--pink); border-radius: 0; background: rgba(255, 121, 198, 0.08); text-align: left; width: 100%; }
-.hk small { color: var(--mute); }
+/* the same 12px as the command: `small` shrank the matcher line to 10px */
+.hk small { color: var(--mute); font-size: inherit; }
 
 /* Doctor */
 .find { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; padding: 10px 12px; margin-bottom: 8px; align-items: start; }

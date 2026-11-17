@@ -145,8 +145,9 @@ function applyLabel(p: Plan | undefined, intent: Intent): string {
   if (intent.op === 'edit') return t('Записать команду', 'Write command')
   if (intent.op === 'copy') return t('Скопировать', 'Copy')
   if (intent.op === 'installSkill') return t('Установить', 'Install')
-  if (p?.trash === 'in') return t('Вернуть из корзины', 'Restore from trash')
-  if (!intent.enable && p?.trash === 'out') return t('Вынести в корзину', 'Move to trash')
+  // the same words as the inspector button that opened this preview
+  if (p?.trash === 'in') return t('Включить (вернуть из корзины)', 'Enable (restore from trash)')
+  if (!intent.enable && p?.trash === 'out') return t('Выключить (в корзину)', 'Disable (move to trash)')
   return intent.enable ? t('Включить', 'Enable') : t('Выключить', 'Disable')
 }
 

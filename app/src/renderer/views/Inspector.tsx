@@ -177,7 +177,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
       <details className="tech">
         <summary>{t('Технические подробности', 'Technical details')}</summary>
         <dl className="kv">
-          <div className="kvrow"><dt><Term tip={t('Где лежит запись: user — для всех проектов, project и local — для одной папки, managed — задано администратором', 'Where the entry lives: user is for all projects, project and local for one folder, managed is set by an administrator')}>{t('область', 'scope')}</Term></dt><dd>{e.scope}</dd></div>
+          <div className="kvrow"><dt><Term tip={t('Где лежит запись: user — для всех проектов; project и local — для одной папки; managed и enterprise — заданы организацией; builtin — встроено в клиент; plugin — пришло с плагином', 'Where the entry lives: user is for all projects; project and local for one folder; managed and enterprise are set by an organisation; builtin comes with the client; plugin came with a plugin')}>{t('область', 'scope')}</Term></dt><dd>{e.scope}</dd></div>
           <div className="kvrow"><dt>{t('найдено в', 'found in')}</dt><dd className="wrap"><Path p={e.origin.file} /></dd></div>
           <div className="kvrow"><dt><Term tip={t('Путь к записи внутри файла (JSON Pointer)', 'The path to the entry inside the file (JSON Pointer)')}>{t('указатель', 'pointer')}</Term></dt><dd className="wrap">{e.origin.pointer}</dd></div>
           {e.toggleAt ? <div className="kvrow"><dt>{t('переключатель', 'switch')}</dt><dd className="wrap">{e.toggleAt.pointer}</dd></div> : null}
