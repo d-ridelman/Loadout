@@ -1262,12 +1262,12 @@ try {
   const claudeDir = join(home, '.claude')
   const hookExe = join(claudeDir, 'hooks', 'context-toolkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
-  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 } // default form: advisor, main model, effort and policies are "do not change"
+  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 } // default form: advisor, main model, effort and policies are "do not change"
   const ctxkitJson = join(claudeDir, 'context-toolkit.json')
   // Context Toolkit must not touch the real owner profile: hashes of the files that `setup` writes, before and after the whole step.
   // `~/.claude.json` is not compared: the running Claude Code rewrites it, setup only reads it (the checks use --claude-json pointing to a copy).
   const realHome = homedir()
-  const realFiles = ['.claude/settings.json', '.claude/CLAUDE.md', '.claude/hooks/ctxkit.exe', '.claude/hooks/context-toolkit.exe', '.claude/ctxkit.json', '.claude/context-toolkit.json', '.claude/agents/Explore.md', '.claude/agents/checker.md', '.local/bin/ctxkit.exe', '.local/bin/context-toolkit.exe', '.gemini/config/hooks.json', '.dsh/ctxkit-hooks.json', '.dsh/context-toolkit-hooks.json', '.dsh/cordis.patch.yml', '.dsh/profiles/desktop/cordis.patch.yml', 'AppData/Roaming/Claude/ccd-session-presets.json'].map((r) => join(realHome, r))
+  const realFiles = ['.claude/settings.json', '.claude/CLAUDE.md', '.claude/hooks/ctxkit.exe', '.claude/hooks/context-toolkit.exe', '.claude/ctxkit.json', '.claude/context-toolkit.json', '.claude/agents/Explore.md', '.claude/agents/checker.md', '.local/bin/ctxkit.exe', '.local/bin/context-toolkit.exe', '.gemini/config/hooks.json', '.dsh/ctxkit-hooks.json', '.dsh/context-toolkit-hooks.json', '.dsh/cordis.patch.yml', '.dsh/profiles/desktop/cordis.patch.yml', 'AppData/Roaming/Claude/ccd-session-presets.json', '.codex/hooks.json', '.codex/AGENTS.md', '.dsh/AGENTS.md'].map((r) => join(realHome, r))
   const realState = () => realFiles.map((f) => (existsSync(f) ? createHash('sha256').update(readFileSync(f)).digest('hex') : 'нет'))
   const realBefore = realState()
   const realBackups = () => (existsSync(join(realHome, '.claude', 'backups')) ? readdirSync(join(realHome, '.claude', 'backups')).filter((n) => !n.startsWith('.claude.json.backup')).length : 0)
@@ -1287,6 +1287,15 @@ try {
     must(await page.evaluate(() => document.activeElement?.textContent?.startsWith('Предпросмотр')), 'the fix button did not lead to the preview button')
   }
   must(!(await page.locator('main').innerText()).includes('прежняя версия'), 'a clean fixture copy must have no line about a previous version')
+  // the top of the section as a newcomer sees it: what it is, three steps, the client table with the state of each client
+  await waitFor(async () => !(await page.locator('table[aria-label="Клиенты Инструментов контекста"]').innerText()).includes('…'), 'the client states are loaded')
+  for (const [w, h] of [[1280, 800], [1920, 1080]]) {
+    await resize(app, w, h)
+    await page.evaluate(() => { document.querySelector('main')?.scrollTo(0, 0); window.scrollTo(0, 0) })
+    await page.waitForTimeout(250)
+    await shot(page, `m5-ctxkit-top-${w}`)
+  }
+  await resize(app, 1280, 800)
   const applyBtn = page.getByRole('button', { name: /^Применить: установить/ })
   must(await applyBtn.isDisabled(), 'apply is available without a preview')
   // the main-process core refuses even bypassing the page: without a preview and without the required level
@@ -1459,7 +1468,7 @@ try {
   must((await hygiene.isChecked()) && (await slotsBox.isChecked()) && (await slotsNum.inputValue()) === '3', 'choosing "Turn on the selected" dropped the policies that are on')
   await polSel.selectOption('keep')
   // ---- rollback on a fixture copy: preview, R2, foreign hooks in place, a repeat is safe ----
-  const undoOpts = { antigravity: false, dsh: false }
+  const undoOpts = { antigravity: false, dsh: false, codex: false }
   const undoRefusal = (o, dry) => page.evaluate(async ([x, d]) => (await window.loadout.ctxkitUninstall(x, d)).error ?? 'ok', [o, dry])
   const undoPreviewBtn = page.getByRole('button', { name: 'Показать, что уберёт откат', exact: true })
   const undoGoBtn = page.getByRole('button', { name: 'Откатить: убрать хуки, блок правил и бинарь' })
@@ -1471,7 +1480,8 @@ try {
   must(existsSync(claudeMd) && readFileSync(claudeMd, 'utf8').includes('<!-- context-toolkit:start -->'), 'before the rollback CLAUDE.md has no rules block')
   must((await undoGoBtn.count()) === 0, 'the rollback button is visible without a rollback preview')
   must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'a rollback without a rollback preview (only a setup preview exists) was not rejected in main')
-  must((await undoRefusal({ antigravity: 'yes', dsh: false }, true)).includes('параметры'), 'invalid rollback parameters were not rejected')
+  must((await undoRefusal({ antigravity: 'yes', dsh: false, codex: false }, true)).includes('параметры'), 'invalid rollback parameters were not rejected')
+  must((await undoRefusal({ antigravity: false, dsh: false }, true)).includes('параметры'), 'rollback parameters without the Codex flag were not rejected')
   must((await undoRefusal(undoOpts, 'x')).includes('параметры'), 'an invalid rollback dryRun was not rejected')
   // busy state: right after the click the button shows "Counting…" with a spinner, the status line says it is in progress, all buttons are disabled
   const busyNow = await page.evaluate(() => {
@@ -1569,10 +1579,50 @@ try {
   await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'the repeated rollback finished')
   must(readFileSync(settingsFile, 'utf8') === settingsUndone && !existsSync(hookExe) && !(await page.locator('main [role=alert]').count()), 'the repeated rollback changed files or showed an error')
   // integration checkboxes reach setup: the rollback preview with Antigravity and DeepSeek Harness mentions them (on a copy, writes nothing)
-  const integ = await page.evaluate(async () => (await window.loadout.ctxkitUninstall({ antigravity: true, dsh: true }, true)).data?.output ?? '')
+  const integ = await page.evaluate(async () => (await window.loadout.ctxkitUninstall({ antigravity: true, dsh: true, codex: false }, true)).data?.output ?? '')
   must(/antigravity/i.test(integ) && /DeepSeek/i.test(integ) && integ.includes('[dry-run]'), `the rollback preview with integrations has no lines about Antigravity and DeepSeek: ${integ.slice(0, 400)}`)
   must(englishLeft(integ).length === 0, `English phrases in the Russian rollback preview with integrations: ${englishLeft(integ).slice(0, 5).join(' // ')}`)
   must(![realHome, realHome.replaceAll('\\', '/')].some((h) => integ.toLowerCase().includes(h.toLowerCase())), 'the rollback preview with integrations showed the path of the real profile')
+  // ---- Codex on a fixture copy: the client table, preview, apply next to the fixture's foreign hooks, the state cell, rollback ----
+  {
+    const codexDir = join(home, '.codex')
+    const codexHooks = join(codexDir, 'hooks.json')
+    const codexBefore = readFileSync(codexHooks, 'utf8')
+    const row = (name) => page.locator('table[aria-label="Клиенты Инструментов контекста"] tbody tr', { hasText: name })
+    must((await row('Codex (ChatGPT)').innerText()).includes('○ не стоят'), `Codex must be "not installed" before: ${await row('Codex (ChatGPT)').innerText()}`)
+    must((await row('OpenCode').innerText()).includes('Пока не поддерживается') && (await row('OpenCode').locator('input[type=checkbox]').isDisabled()), 'OpenCode must be shown as not supported, with a disabled checkbox')
+    must((await row('Antigravity').innerText()).includes('В разработке'), 'Antigravity must say what is still in progress')
+    const codexBox = page.getByRole('checkbox', { name: 'Codex (ChatGPT)', exact: true })
+    await codexBox.check()
+    await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+    await waitFor(() => applyBtn.isEnabled(), 'the preview with Codex ticked')
+    const cxPreview = await page.locator('pre.out').innerText()
+    must(cxPreview.includes('Codex hooks.json') && cxPreview.includes('/hooks') && cxPreview.includes('AGENTS.md'), `the preview with Codex lacks hooks.json, AGENTS.md or the /hooks note: ${cxPreview.slice(-800)}`)
+    must(englishLeft(cxPreview).length === 0, `English phrases in the Russian preview with Codex: ${englishLeft(cxPreview).slice(0, 5).join(' // ')}`)
+    must(readFileSync(codexHooks, 'utf8') === codexBefore && !existsSync(join(codexDir, 'AGENTS.md')), 'the preview with Codex changed files')
+    await applyBtn.click()
+    await waitFor(() => readFileSync(codexHooks, 'utf8').includes('--codex'), 'apply wrote the Codex hooks')
+    const cx = JSON.parse(readFileSync(codexHooks, 'utf8'))
+    must(cx.hooks.PreToolUse[0].matcher === 'Bash|apply_patch' && cx.hooks.PostToolUse[0].matcher === 'apply_patch' && !JSON.stringify(cx.hooks.Stop).includes('--codex'), `Codex hooks: ${JSON.stringify(cx).slice(0, 400)}`)
+    must(JSON.stringify(foreignCmds(cx)) === JSON.stringify(foreignCmds(JSON.parse(codexBefore))), 'apply touched the foreign Codex hooks')
+    const cxMd = readFileSync(join(codexDir, 'AGENTS.md'), 'utf8')
+    must(cxMd.includes('<!-- context-toolkit:start -->') && !cxMd.includes('Explore'), `Codex AGENTS.md: ${cxMd}`)
+    await waitFor(async () => (await row('Codex (ChatGPT)').innerText()).includes('● стоят'), 'the Codex row did not turn "installed"')
+    must((await row('Claude Code и вкладка Code').innerText()).includes('● стоят'), 'the Claude Code row did not turn "installed"')
+    await page.locator('section[aria-label="Применение"] fieldset.choices').first().screenshot({ path: join(shotDir, 'm5-ctxkit-clients-1280.png') })
+    // the rollback with Codex ticked takes ours out and returns the fixture file as it was; AGENTS.md made by setup goes
+    await undoPreviewBtn.click()
+    await waitFor(() => undoGoBtn.isEnabled(), 'the rollback preview with Codex')
+    must((await page.locator('pre.out').innerText()).includes('Codex hooks.json'), 'the rollback preview does not mention Codex')
+    await undoGoBtn.click()
+    await waitFor(() => !readFileSync(codexHooks, 'utf8').includes('--codex'), 'the rollback took the Codex hooks out')
+    must(JSON.stringify(canon(JSON.parse(readFileSync(codexHooks, 'utf8')))) === JSON.stringify(canon(JSON.parse(codexBefore))), 'after the rollback Codex hooks.json differs from the fixture')
+    must(!existsSync(join(codexDir, 'AGENTS.md')), 'the rollback left the AGENTS.md that setup created')
+    await waitFor(async () => (await row('Codex (ChatGPT)').innerText()).includes('○ не стоят'), 'the Codex row did not go back to "not installed"')
+    await codexBox.uncheck()
+    // section keys are ignored while an input has focus: the next step switches sections with 1 and 7
+    await page.evaluate(() => document.activeElement?.blur())
+  }
   // ---- migration from the previous install (ctxkit) on a fixture copy: the line about the previous version, its preview button,
   // "Apply", the result under the new name, foreign entries in place; then the rollback returns the copy to the state before the step ----
   const oldHookExe = join(claudeDir, 'hooks', 'ctxkit.exe')
@@ -1663,6 +1713,11 @@ try {
     must((await qs.count()) >= 8, `too few questions in the FAQ: ${await qs.count()}`)
     await qs.filter({ hasText: 'Как выключить MCP-сервер' }).locator('summary').click()
     must((await help.innerText()).includes('спросит разрешение'), 'the FAQ answer on disabling does not say that Loadout asks for permission')
+    // Context Toolkit has its own questions: what it is, where to start, which clients, how to remove it, the terms
+    for (const q of ['Что такое Инструменты контекста', 'С чего начать в Инструментах контекста', 'Какие клиенты поддерживают Инструменты контекста', 'Как убрать Инструменты контекста', 'шлюз Stop, советник']) must((await help.innerText()).includes(q), `the FAQ lacks the question "${q}"`)
+    await qs.filter({ hasText: 'С чего начать в Инструментах контекста' }).locator('summary').click()
+    must((await help.innerText()).includes('/hooks'), 'the Context Toolkit answer does not tell about /hooks in Codex')
+    await shot(page, 'h3-help-ctxkit-faq-1280')
     for (const [w, h] of SIZES) {
       await resize(app, w, h)
       await page.waitForTimeout(150)

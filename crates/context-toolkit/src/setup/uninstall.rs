@@ -408,7 +408,12 @@ fn remove_antigravity_hooks(path: &Path, dry_run: bool) -> Result<(), String> {
 }
 
 /// Our groups out of Codex's hooks.json; a file left with nothing but an empty `hooks` (setup made it) is deleted.
-pub(super) fn remove_codex_hooks(codex_home: &Path, dry_run: bool) -> Result<(), String> {
+/// `hook_cmd`: the command setup installed (`--hook-cmd` or the hooks binary); with ` --codex` (and `--lang ru`) it is ours too.
+pub(super) fn remove_codex_hooks(
+    codex_home: &Path,
+    hook_cmd: &str,
+    dry_run: bool,
+) -> Result<(), String> {
     let path = codex_home.join("hooks.json");
     if !path.exists() {
         return Ok(());
@@ -416,8 +421,14 @@ pub(super) fn remove_codex_hooks(codex_home: &Path, dry_run: bool) -> Result<(),
     let orig = read_json_object(&path)?;
     let mut next = orig.clone();
     if let Some(hooks) = next.get_mut("hooks").and_then(Value::as_object_mut) {
-        for ev in ["PreToolUse", "PostToolUse", "Stop"] {
-            remove_our_hook_event(hooks, ev, None);
+        let base = hook_cmd.trim();
+        for current in [
+            format!("{base} --codex"),
+            format!("{base} --codex --lang ru"),
+        ] {
+            for ev in ["PreToolUse", "PostToolUse", "Stop"] {
+                remove_our_hook_event(hooks, ev, Some(&current));
+            }
         }
     }
     let backups = codex_home.join("backups");
@@ -782,7 +793,7 @@ pub(super) fn run(
         let codex = (opts.codex || opts.codex_home.is_some()).then(|| codex_home_dir(opts, home));
         if let Some(c) = &codex {
             readable_utf8(&c.join("AGENTS.md"))?;
-            read_json_object(&c.join("hooks.json"))?;
+            preflight_codex_hooks(&c.join("hooks.json"))?;
         }
         let orig = read_json_object(&settings_path)?;
         let next = remove_from_settings(&orig, hook_cmd);
@@ -849,7 +860,7 @@ pub(super) fn run(
         }
         if let Some(c) = &codex {
             remove_rules_block(&c.join("AGENTS.md"), &c.join("backups"), opts.dry_run)?;
-            remove_codex_hooks(c, opts.dry_run)?;
+            remove_codex_hooks(c, hook_cmd, opts.dry_run)?;
         }
         Ok(orig)
     };

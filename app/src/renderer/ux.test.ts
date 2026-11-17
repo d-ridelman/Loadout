@@ -93,7 +93,7 @@ const doc = (detail: string | null, severity: CtxkitDoctor['findings'][number]['
   findings: detail === null ? [] : [{ id: 'policies', severity, message: 'policies', detail, fix: null }],
 })
 const base: SetupOptions = {
-  withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep',
+  withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep',
   policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2,
 }
 

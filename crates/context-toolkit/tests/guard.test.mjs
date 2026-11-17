@@ -739,6 +739,21 @@ const cases = [
     return true;
   }],
 
+  // --codex without a Codex home: neither the rules nor the hooks create it, and the preview says the same as the run
+  [true, () => {
+    const root = join(dir, 'codex-absent');
+    const profile = join(root, 'profile');
+    const codexHome = join(root, 'no-codex');
+    mkdirSync(profile, { recursive: true });
+    writeFileSync(join(root, 'c.json'), '{}');
+    const args = (dry) => ['setup', ...(dry ? ['--dry-run'] : []), '--profile', profile, '--claude-json', join(root, 'c.json'), '--codex', '--codex-home', codexHome, '--with-rules', '--skip-version-check', '--no-agents'];
+    const dry = spawnSync(exe, args(true), { encoding: 'utf8' });
+    const run = spawnSync(exe, args(false), { encoding: 'utf8' });
+    if (dry.status !== 0 || run.status !== 0) return `exit ${dry.status}/${run.status}: ${run.stderr}`;
+    if (!dry.stdout.includes('skip Codex') || !run.stdout.includes('skip Codex')) return 'no "skip Codex" line';
+    return existsSync(codexHome) ? 'the Codex home was created' : true;
+  }],
+
   // setup --uninstall: only ours goes, foreign hooks/keys/text stay, a second run changes nothing
   [true, () => {
     const root = join(dir, 'uninstall-test');

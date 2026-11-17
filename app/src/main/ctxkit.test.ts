@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { CtxkitReport } from '../shared/model'
 import { summarize, segments, pct, chars } from '../renderer/ctxkit-stats'
-import { BIN, OLD_BIN, parseDoctor, parseReport, parseSetupOptions, parseUninstallOptions, setupArgs, status, uninstallArgs } from './ctxkit'
+import { clientNow, ctxClients } from '../renderer/ctxkit-clients'
+import { setLang } from '../shared/i18n'
+import { BIN, OLD_BIN, clientStates, parseDoctor, parseReport, parseSetupOptions, parseUninstallOptions, runsOurBinary, setupArgs, status, uninstallArgs } from './ctxkit'
 
 const doctor = {
   tool: 'context-toolkit',
@@ -32,7 +34,7 @@ const day = {
 }
 
 describe('ctxkit: setup parameters', () => {
-  const ok = { withRules: true, desktop: false, antigravity: true, dsh: false, noStopGate: false, lang: 'ru', advisor: 'fable', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 }
+  const ok = { withRules: true, desktop: false, antigravity: true, dsh: false, codex: false, noStopGate: false, lang: 'ru', advisor: 'fable', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 }
 
   it('policies: enums and the number 1-8 are checked strictly, user text never reaches the arguments', () => {
     for (const m of ['keep', 'on', 'off']) expect(parseSetupOptions({ ...ok, policyMode: m }).policyMode).toBe(m)
@@ -96,7 +98,10 @@ describe('ctxkit: setup parameters', () => {
     expect(a).not.toContain('--no-stop-gate')
     const dev = setupArgs(parseSetupOptions(ok), false, 'C:/tmp/h')
     expect(dev).toContain('--profile')
-    expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(5) // profile, Desktop presets, Antigravity hooks.json, DSH directory, .claude.json
+    expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(6) // profile, Desktop presets, Antigravity hooks.json, DSH and Codex directories, .claude.json
+    expect(setupArgs(parseSetupOptions({ ...ok, codex: true }), true)).toContain('--codex')
+    expect(() => parseSetupOptions({ ...ok, codex: 'yes' })).toThrow()
+    expect(() => parseSetupOptions({ ...ok, codex: undefined })).toThrow()
     // no value from the page reaches the arguments as is, except enums
     expect(a.every((x) => x.startsWith('--') || ['setup', 'ru', 'fable'].includes(x))).toBe(true)
     expect(setupArgs(parseSetupOptions({ ...ok, policyMode: 'on', commitHygiene: true }), true).filter((x) => !x.startsWith('--'))).toEqual(['setup', 'ru', 'fable', 'commit-hygiene'])
@@ -104,21 +109,22 @@ describe('ctxkit: setup parameters', () => {
 })
 
 describe('ctxkit: rollback (setup --uninstall)', () => {
-  it('accepts only two boolean flags', () => {
-    expect(parseUninstallOptions({ antigravity: true, dsh: false })).toEqual({ antigravity: true, dsh: false })
-    expect(parseUninstallOptions({ antigravity: false, dsh: false, withRules: true })).toEqual({ antigravity: false, dsh: false })
-    for (const bad of [null, 'x', {}, { antigravity: 'yes', dsh: false }, { antigravity: true }, { antigravity: true, dsh: 1 }]) expect(() => parseUninstallOptions(bad)).toThrow()
+  it('accepts only three boolean flags', () => {
+    expect(parseUninstallOptions({ antigravity: true, dsh: false, codex: true })).toEqual({ antigravity: true, dsh: false, codex: true })
+    expect(parseUninstallOptions({ antigravity: false, dsh: false, codex: false, withRules: true })).toEqual({ antigravity: false, dsh: false, codex: false })
+    for (const bad of [null, 'x', {}, { antigravity: 'yes', dsh: false, codex: false }, { antigravity: true }, { antigravity: true, dsh: 1, codex: false }, { antigravity: true, dsh: false }]) expect(() => parseUninstallOptions(bad)).toThrow()
   })
 
   it('arguments: no setup flags, integrations and paths only together with the checkbox', () => {
-    expect(uninstallArgs({ antigravity: false, dsh: false }, true, 'ru')).toEqual(['setup', '--uninstall', '--lang', 'ru', '--dry-run'])
-    expect(uninstallArgs({ antigravity: true, dsh: true }, false, 'en')).toEqual(['setup', '--uninstall', '--lang', 'en', '--antigravity', '--dsh'])
-    const dev = uninstallArgs({ antigravity: true, dsh: false }, true, 'ru', 'C:/tmp/h')
+    expect(uninstallArgs({ antigravity: false, dsh: false, codex: false }, true, 'ru')).toEqual(['setup', '--uninstall', '--lang', 'ru', '--dry-run'])
+    expect(uninstallArgs({ antigravity: true, dsh: true, codex: true }, false, 'en')).toEqual(['setup', '--uninstall', '--lang', 'en', '--antigravity', '--dsh', '--codex'])
+    const dev = uninstallArgs({ antigravity: true, dsh: false, codex: false }, true, 'ru', 'C:/tmp/h')
     expect(dev).toContain('--agy-file')
     expect(dev).not.toContain('--dsh-home')
     expect(dev.filter((x) => /C:[\\/]tmp[\\/]h/.test(x))).toHaveLength(3) // profile, .claude.json, Antigravity hooks.json
+    expect(uninstallArgs({ antigravity: false, dsh: false, codex: true }, true, 'ru', 'C:/tmp/h')).toContain('--codex-home')
     // with --uninstall ctxkit rejects setup flags
-    const all = uninstallArgs({ antigravity: true, dsh: true }, false, 'ru', 'C:/tmp/h')
+    const all = uninstallArgs({ antigravity: true, dsh: true, codex: true }, false, 'ru', 'C:/tmp/h')
     for (const bad of ['--with-rules', '--desktop', '--no-stop-gate', '--advisor', '--main-model', '--effort', '--skip-version-check']) expect(all).not.toContain(bad)
   })
 })
@@ -156,18 +162,61 @@ describe('ctxkit: install state', () => {
       mkdirSync(bin)
       const bundled = join(root, BIN)
       writeFileSync(bundled, 'x') // is not run: the version will be null, comparison is by bytes
-      expect(await status(join(root, 'нет.exe'), hooks, bin)).toEqual({ available: false, version: null, hook: 'missing', bin: 'missing', legacy: false })
+      expect(await status(join(root, 'нет.exe'), hooks, bin, root, join(root, '.codex'))).toMatchObject({ available: false, version: null, hook: 'missing', bin: 'missing', legacy: false })
       writeFileSync(join(hooks, OLD_BIN), 'old')
-      const old = await status(bundled, hooks, bin)
+      const old = await status(bundled, hooks, bin, root, join(root, '.codex'))
       expect([old.hook, old.bin, old.legacy]).toEqual(['missing', 'missing', true])
       writeFileSync(join(hooks, BIN), 'x')
       writeFileSync(join(bin, BIN), 'y')
       rmSync(join(hooks, OLD_BIN))
-      const now = await status(bundled, hooks, bin)
+      const now = await status(bundled, hooks, bin, root, join(root, '.codex'))
       expect([now.hook, now.bin, now.legacy]).toEqual(['same', 'different', false])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('ctxkit: hooks by client', () => {
+  it('our binary is the program of the command under either name, not a word somewhere in it', () => {
+    for (const c of ['"C:/u/.claude/hooks/context-toolkit.exe" --codex', "& 'C:/u/.claude/hooks/context-toolkit.exe' --dsh", 'C:/x/ctxkit.exe --agy', '/home/u/.claude/hooks/context-toolkit']) expect(runsOurBinary(c)).toBe(true)
+    for (const c of ['C:/tools/logger.exe ctxkit', 'node C:/tools/ctxkit-helper/stop.js', 'context-toolkit-x.exe', '']) expect(runsOurBinary(c)).toBe(false)
+  })
+
+  it('reads the files setup writes: on, off without our hooks, absent without the client folder; OpenCode is never on', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ctk-clients-'))
+    try {
+      expect(clientStates(home, join(home, '.codex'))).toEqual({ claude: 'absent', codex: 'absent', antigravity: 'absent', dsh: 'absent', opencode: 'absent' })
+      for (const d of ['.claude', '.codex', '.gemini/config', '.dsh', '.config/opencode/plugins']) mkdirSync(join(home, d), { recursive: true })
+      writeFileSync(join(home, '.codex', 'hooks.json'), JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ command: 'C:/tools/logger.exe ctxkit' }] }] } }))
+      writeFileSync(join(home, '.claude', 'settings.json'), '{ broken')
+      expect(clientStates(home, join(home, '.codex'))).toEqual({ claude: 'off', codex: 'off', antigravity: 'off', dsh: 'off', opencode: 'off' })
+      writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: '"C:/u/.claude/hooks/context-toolkit.exe"' }] }] } }))
+      writeFileSync(join(home, '.codex', 'hooks.json'), `\uFEFF${JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash|apply_patch', hooks: [{ command: '"C:/u/.claude/hooks/context-toolkit.exe" --codex' }] }] } })}`)
+      writeFileSync(join(home, '.gemini', 'config', 'hooks.json'), JSON.stringify({ 'context-toolkit': { PreToolUse: [] } }))
+      writeFileSync(join(home, '.dsh', 'context-toolkit-hooks.json'), '{}')
+      expect(clientStates(home, join(home, '.codex'))).toEqual({ claude: 'on', codex: 'on', antigravity: 'on', dsh: 'on', opencode: 'off' })
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('ctxkit: the support table of the section', () => {
+  it('names every client once, its checkbox is a setup flag, and both languages are filled in', () => {
+    for (const l of ['ru', 'en'] as const) {
+      setLang(l)
+      const rows = ctxClients()
+      expect(rows.map((r) => r.id).sort()).toEqual(['antigravity', 'claude', 'codex', 'dsh', 'opencode'])
+      for (const r of rows) expect(r.name && r.gets).toBeTruthy()
+      expect(rows.filter((r) => r.flag).map((r) => r.flag)).toEqual(['codex', 'antigravity', 'dsh'])
+      // what is not supported or not checked live is said, not hidden
+      expect(rows.find((r) => r.id === 'opencode')?.lacks).toBeTruthy()
+      expect(rows.find((r) => r.id === 'codex')?.lacks).toContain('/hooks')
+    }
+    setLang('ru')
+    expect(clientNow('opencode', { claude: 'on', codex: 'on', antigravity: 'on', dsh: 'on', opencode: 'off' }).text).toContain('не поддерживается')
+    expect(clientNow('codex', undefined).text).toBe('…')
   })
 })
 

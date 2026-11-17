@@ -32,6 +32,7 @@ export function parseSetupOptions(raw: unknown): SetupOptions {
     desktop: flag('desktop'),
     antigravity: flag('antigravity'),
     dsh: flag('dsh'),
+    codex: flag('codex'),
     noStopGate: flag('noStopGate'),
     lang,
     advisor,
@@ -54,11 +55,11 @@ export function policyArg(o: SetupOptions): string | undefined {
   return list.length ? list.join(',') : 'none' // "enable the selected" with nothing selected is the same as "disable all"
 }
 
-/** Parses the rollback options from the page: two boolean flags, anything else is rejected. */
+/** Parses the rollback options from the page: three boolean flags, anything else is rejected. */
 export function parseUninstallOptions(raw: unknown): UninstallOptions {
   const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
-  if (typeof r['antigravity'] !== 'boolean' || typeof r['dsh'] !== 'boolean') throw new Error(t('неверные параметры Инструментов контекста', 'invalid Context Toolkit parameters'))
-  return { antigravity: r['antigravity'], dsh: r['dsh'] }
+  if (typeof r['antigravity'] !== 'boolean' || typeof r['dsh'] !== 'boolean' || typeof r['codex'] !== 'boolean') throw new Error(t('неверные параметры Инструментов контекста', 'invalid Context Toolkit parameters'))
+  return { antigravity: r['antigravity'], dsh: r['dsh'], codex: r['codex'] }
 }
 
 /**
@@ -72,6 +73,7 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
   if (o.desktop) a.push('--desktop')
   if (o.antigravity) a.push('--antigravity')
   if (o.dsh) a.push('--dsh')
+  if (o.codex) a.push('--codex')
   if (o.noStopGate) a.push('--no-stop-gate')
   a.push('--lang', o.lang)
   if (o.advisor !== 'keep') a.push('--advisor', o.advisor)
@@ -96,10 +98,12 @@ export function uninstallArgs(o: UninstallOptions, dryRun: boolean, lang: 'en' |
   if (dryRun) a.push('--dry-run')
   if (o.antigravity) a.push('--antigravity')
   if (o.dsh) a.push('--dsh')
+  if (o.codex) a.push('--codex')
   if (home) {
     a.push('--profile', join(home, '.claude'), '--claude-json', join(home, '.claude.json'))
     if (o.antigravity) a.push('--agy-file', join(home, '.gemini', 'config', 'hooks.json'))
     if (o.dsh) a.push('--dsh-home', join(home, '.dsh'))
+    if (o.codex) a.push('--codex-home', join(home, '.codex'))
   }
   return a
 }
@@ -111,6 +115,7 @@ function homeArgs(home: string): string[] {
     '--desktop-file', join(home, 'AppData', 'Roaming', 'Claude', 'ccd-session-presets.json'),
     '--agy-file', join(home, '.gemini', 'config', 'hooks.json'),
     '--dsh-home', join(home, '.dsh'),
+    '--codex-home', join(home, '.codex'),
     // for diagnostics setup reads `~/.claude.json` (the number of global MCPs): without this it would read the real file
     '--claude-json', join(home, '.claude.json'),
   ]
@@ -154,13 +159,56 @@ export const BIN = 'context-toolkit.exe'
 /** Binary name before the rename: its copy in `hooks/` marks an earlier install, which "Apply" migrates to the new name. */
 export const OLD_BIN = 'ctxkit.exe'
 
-/** Install state: copies in `hooksDir` (called by the hooks) and `binDir` (PATH), and a copy under the old name in `hooksDir`. */
-export async function status(bundled: string, hooksDir: string, binDir: string): Promise<CtxkitStatus> {
+/** Install state: copies in `hooksDir` (called by the hooks) and `binDir` (PATH), a copy under the old name in `hooksDir`, and the clients. */
+export async function status(bundled: string, hooksDir: string, binDir: string, home: string, codexHome: string): Promise<CtxkitStatus> {
   const legacy = existsSync(join(hooksDir, OLD_BIN))
-  if (!existsSync(bundled)) return { available: false, version: null, hook: 'missing', bin: 'missing', legacy }
+  const clients = clientStates(home, codexHome)
+  if (!existsSync(bundled)) return { available: false, version: null, hook: 'missing', bin: 'missing', legacy, clients }
   const v = await run(bundled, ['--version'], 5000).catch(() => undefined)
   const version = /\d+\.\d+\.\d+\S*/.exec(v?.stdout ?? '')?.[0] ?? null
-  return { available: true, version, hook: compareCopy(bundled, join(hooksDir, BIN)), bin: compareCopy(bundled, join(binDir, BIN)), legacy }
+  return { available: true, version, hook: compareCopy(bundled, join(hooksDir, BIN)), bin: compareCopy(bundled, join(binDir, BIN)), legacy, clients }
+}
+
+/** A hook command whose program (the first word, after a PowerShell `& `) is our binary under either name, as `our_name` in setup.rs. */
+export const runsOurBinary = (cmd: string): boolean => {
+  const first = /^\s*(?:&\s*)?(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(cmd)
+  const word = first?.[1] ?? first?.[2] ?? first?.[3] ?? ''
+  return /^(context-toolkit|ctxkit)(\.exe)?$/i.test(word.split(/[\\/]/).pop() ?? '')
+}
+
+const readJson = (p: string): unknown => {
+  try {
+    return JSON.parse(readFileSync(p, 'utf8').replace(/^﻿/, ''))
+  } catch {
+    return undefined
+  }
+}
+
+/** Commands of a Claude-shaped `hooks` object (`{event: [{hooks: [{command}]}]}`); anything else gives none. */
+function hookCommands(hooks: unknown): string[] {
+  if (!isObj(hooks)) return []
+  return Object.values(hooks).flatMap((groups) =>
+    (Array.isArray(groups) ? groups : []).flatMap((g: unknown) => (isObj(g) && Array.isArray(g['hooks']) ? g['hooks'] : []).map((h: unknown) => (isObj(h) && typeof h['command'] === 'string' ? h['command'] : ''))),
+  )
+}
+
+/**
+ * Where our hooks are, read from the files `setup` writes (nothing is run). A client is `absent` when its home folder is missing;
+ * OpenCode has no command hooks, so it is never `on`.
+ */
+export function clientStates(home: string, codexHome: string): CtxkitStatus['clients'] {
+  const ours = (cmds: string[]): boolean => cmds.some(runsOurBinary)
+  const state = (dir: string, on: () => boolean): 'on' | 'off' | 'absent' => (!existsSync(dir) ? 'absent' : on() ? 'on' : 'off')
+  const settings = readJson(join(home, '.claude', 'settings.json'))
+  const agy = readJson(join(home, '.gemini', 'config', 'hooks.json'))
+  const codex = readJson(join(codexHome, 'hooks.json'))
+  return {
+    claude: state(join(home, '.claude'), () => ours(hookCommands(isObj(settings) ? settings['hooks'] : undefined))),
+    codex: state(codexHome, () => ours(hookCommands(isObj(codex) ? codex['hooks'] : undefined))),
+    antigravity: state(join(home, '.gemini'), () => isObj(agy) && Object.keys(agy).some((k) => k === 'context-toolkit' || k === 'ctxkit')),
+    dsh: state(join(home, '.dsh'), () => ['context-toolkit-hooks.json', 'ctxkit-hooks.json'].some((f) => existsSync(join(home, '.dsh', f)))),
+    opencode: state(join(home, '.config', 'opencode'), () => false),
+  }
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)

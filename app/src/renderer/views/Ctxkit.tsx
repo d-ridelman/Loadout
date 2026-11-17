@@ -4,6 +4,7 @@ import { MAX_BUILD_SLOTS } from '../../shared/model'
 import { count, fmtTime, getLang, t } from '../../shared/i18n'
 import { chars, daysDesc, fixPatch, NO_POLICIES, pct, policiesNow, policySet, segments, stopGateOff, summarize, tickPolicy } from '../ctxkit-stats'
 import type { PolicySet } from '../ctxkit-stats'
+import { clientNow, ctxClients } from '../ctxkit-clients'
 import { PageHead, Rich } from '../ui'
 import type { Notify } from '../ui'
 
@@ -30,7 +31,7 @@ const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'va
 
 /** The default hook language is the interface language (the setting is independent afterwards); a function, not a constant: the language is chosen after import. */
 const defaults = (): SetupOptions => ({
-  withRules: true, desktop: false, antigravity: false, dsh: false, noStopGate: false, lang: getLang(), advisor: 'keep', mainModel: 'keep', effort: 'keep',
+  withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, noStopGate: false, lang: getLang(), advisor: 'keep', mainModel: 'keep', effort: 'keep',
   // "Protections": by default context-toolkit.json is left alone; what is ticked counts only if "Enable selected" is chosen
   policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2,
 })
@@ -118,7 +119,8 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
 
   const key = `setup:${JSON.stringify(opts)}`
   // rollback depends only on the integrations it removes, per checkbox
-  const undoKey = `uninstall:${JSON.stringify({ antigravity: opts.antigravity, dsh: opts.dsh })}`
+  const undoOpts = { antigravity: opts.antigravity, dsh: opts.dsh, codex: opts.codex }
+  const undoKey = `uninstall:${JSON.stringify(undoOpts)}`
   const change = (patch: Partial<SetupOptions>) => {
     setOpts({ ...opts, ...patch })
     setPreviewKey(null) // different settings mean a different preview
@@ -139,7 +141,7 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
       setBusy(kind === 'setup' ? (dryRun ? 'preview' : 'apply') : dryRun ? 'undoPreview' : 'undo')
       setError(null)
       setPreviewKey(null) // both the preview and the action consume the previous preview (main does the same)
-      const call = kind === 'setup' ? window.loadout.ctxkitSetup(opts, dryRun) : window.loadout.ctxkitUninstall({ antigravity: opts.antigravity, dsh: opts.dsh }, dryRun)
+      const call = kind === 'setup' ? window.loadout.ctxkitSetup(opts, dryRun) : window.loadout.ctxkitUninstall(undoOpts, dryRun)
       const r = await call.catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('не удалось', 'failed') }))
       setBusy(null)
       if (!r.ok) return setError({ text: r.error, kind })
@@ -154,14 +156,14 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
       else {
         onNotice(
           kind === 'setup'
-            ? t('Инструменты контекста применены: хуки и настройки записаны, бэкапы лежат в ~/.claude/backups', 'Context Toolkit applied: hooks and settings written, backups are in ~/.claude/backups')
+            ? t('Инструменты контекста применены: хуки и настройки записаны, копии прежних файлов — в папках backups рядом с ними', 'Context Toolkit applied: hooks and settings written, copies of the previous files are in backups folders next to them')
             : t('Откат Инструментов контекста выполнен: хуки и блок правил убраны, бинарь смотрите в блоке «Установка»; модель, советник, effort, пресеты и агенты оставлены (список и бэкап в выводе)', 'Context Toolkit rollback done: hooks and rules block removed, see “Installation” for the binary; model, advisor, effort, presets and agents left as is (list and backup in the output)'),
         )
         // the red button disappears along with the focus: return it to the rollback preview button
         if (kind === 'uninstall') setRefocus(true)
       }
     },
-    [opts, key, undoKey, onNotice, reloadStatus, reloadDoctor],
+    [opts, key, undoKey, onNotice, reloadStatus, reloadDoctor], // undoOpts comes from opts
   )
 
   const sum = report.status === 'ready' ? summarize(report.data) : null
@@ -177,16 +179,30 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
         title={t('Инструменты контекста', 'Context Toolkit')}
         topic="ctxkit"
         sub={t(
-          'Встроенный набор хуков, который не даёт агентам Claude Code засорять контекст. Здесь его ставят, проверяют и отключают.',
-          'A bundled set of hooks that keeps Claude Code agents from filling up their context. Install it, check it and turn it off here.',
+          'Хуки, которые не дают ИИ-агентам тратить лимиты впустую: Claude Code, Codex, Antigravity и DeepSeek Harness. Здесь их ставят, проверяют и убирают.',
+          'Hooks that keep AI agents from wasting their limits: Claude Code, Codex, Antigravity and DeepSeek Harness. Install, check and remove them here.',
         )}
       />
-      <p className="mute small">
-        {t(
-          'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и подсказывает агентам дешёвый поиск и независимую проверку. Основную модель Claude Code, effort и модель советника окно меняет, только если выбрать их в форме ниже (по умолчанию «Не менять»); пресеты Claude Desktop правятся только по галочке ниже. Хуки пишутся в настройки клиентов, поэтому применение и откат требуют уровня R2.',
-          'A bundled toolkit that keeps agent context in check: limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review. The window changes the Claude Code main model, effort and advisor model only if you pick them in the form below (the default is “Keep as is”); Claude Desktop presets are edited only with the checkbox below. Hooks are written into client settings, so applying and rolling back require level R2.',
-        )}
-      </p>
+      <section className="hud card" aria-label={t('Что это и с чего начать', 'What it is and where to start')}>
+        <h3>{t('Что это и с чего начать', 'What it is and where to start')}</h3>
+        <p>
+          {t(
+            'Агент быстрее всего расходует лимиты, когда читает большой файл целиком или вываливает в разговор длинный лог сборки. Хук — маленькая программа, которую клиент сам запускает перед каждым действием агента. Хук Инструментов контекста останавливает такое действие и подсказывает агенту, как взять только нужный кусок. Он работает на этом компьютере и ничего не отправляет в сеть.',
+            'An agent burns through its limits fastest when it reads a large file whole or dumps a long build log into the conversation. A hook is a small program the client runs by itself before each agent action. The Context Toolkit hook stops such an action and tells the agent how to take only the part it needs. It runs on this computer and sends nothing anywhere.',
+          )}
+        </p>
+        <ol className="steps">
+          <li>{t('Ниже, в «Куда поставить», отметьте клиенты, которыми пользуетесь. Claude Code настраивается всегда.', 'Below, under “Where to install”, tick the clients you use. Claude Code is always set up.')}</li>
+          <li>{t('Нажмите «Предпросмотр»: окно покажет, какие файлы изменятся, и ничего не запишет.', 'Press Preview: the window shows which files will change and writes nothing.')}</li>
+          <li>{t('Нажмите «Применить». Остальные настройки можно не трогать: по умолчанию модели и защиты не меняются.', 'Press Apply. You can leave the other settings alone: by default models and safeguards are not changed.')}</li>
+        </ol>
+        <p className="mute small">
+          {t(
+            'Перед записью делается копия каждого файла. Убрать всё — карточкой «Откат» ниже. Клиент подхватит хуки после перезапуска.',
+            'Every file is copied before it is written. To remove everything, use the Rollback card below. A client picks the hooks up after a restart.',
+          )}
+        </p>
+      </section>
 
       <section className="hud card" aria-label={t('Установка', 'Installation')}>
         <h3>{t('Установка', 'Installation')}</h3>
@@ -240,16 +256,50 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
           }}
         >
           <fieldset className="choices">
-            <legend className="mute small">{t('Что настроить', 'What to configure')}</legend>
-            <label><input type="checkbox" checked disabled /> {t('Claude Code: хуки, агенты Explore и checker (всегда); основная модель, effort и советник не меняются, пока не выбраны ниже', 'Claude Code: hooks, Explore and checker agents (always); main model, effort and advisor are not changed unless chosen below')}</label>
-            <label><input type="checkbox" checked={!opts.noStopGate} onChange={(e) => { setGateTouched(true); change({ noStopGate: !e.target.checked }) }} /> {t('Шлюз Stop: один раз за ход возвращает модель, если правки кода остались без checker или советника', 'Stop gate: once per turn sends the model back if code edits were not followed by checker or the advisor')}</label>
-            <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил в CLAUDE.md', 'Rules block in CLAUDE.md')}</label>
-            <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> {t('Claude Desktop (пресеты; закройте его перед применением)', 'Claude Desktop (presets; close it before applying)')}</label>
-            <label><input type="checkbox" checked={opts.antigravity} onChange={(e) => change({ antigravity: e.target.checked })} /> Antigravity</label>
-            <label><input type="checkbox" checked={opts.dsh} onChange={(e) => change({ dsh: e.target.checked })} /> DeepSeek Harness</label>
+            <legend className="mute small">{t('1. Куда поставить — отметьте клиенты, которыми пользуетесь', '1. Where to install: tick the clients you use')}</legend>
+            <table className="left ctx-clients" aria-label={t('Клиенты Инструментов контекста', 'Context Toolkit clients')}>
+              <thead>
+                <tr>
+                  <th scope="col">{t('Клиент', 'Client')}</th>
+                  <th scope="col">{t('Что получает', 'What it gets')}</th>
+                  <th scope="col">{t('Сейчас', 'Now')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ctxClients().map((c) => {
+                  const now = clientNow(c.id, status.status === 'ready' ? status.data.clients : undefined)
+                  const flag = c.flag
+                  return (
+                    <tr key={c.id}>
+                      <td className="nw">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={flag ? opts[flag] : c.id === 'claude'}
+                            disabled={!flag}
+                            onChange={flag ? (e) => change({ [flag]: e.target.checked }) : undefined}
+                          />{' '}
+                          {c.name}
+                        </label>
+                      </td>
+                      <td>
+                        {c.gets}
+                        {c.lacks ? <span className="mute small"> {c.lacks}</span> : null}
+                      </td>
+                      <td className={`nw ${now.cls}`}>{now.text}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </fieldset>
+          <fieldset className="choices">
+            <legend className="mute small">{t('2. Что ещё включить (рекомендуется оставить как есть)', '2. What else to turn on (best left as is)')}</legend>
+            <label><input type="checkbox" checked={!opts.noStopGate} onChange={(e) => { setGateTouched(true); change({ noStopGate: !e.target.checked }) }} /> {t('Шлюз Stop (только Claude Code): если агент поправил код и не позвал проверку (агента checker или советника), шлюз один раз вернёт его доделать', 'Stop gate (Claude Code only): if the agent edited code and did not call a review (the checker agent or the advisor), the gate sends it back once to finish')}</label>
+            <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил — короткая памятка агенту, как экономить контекст: в CLAUDE.md, а для отмеченных Codex и DeepSeek Harness — в их AGENTS.md', 'Rules block, a short note telling the agent how to save context: in CLAUDE.md, and in the AGENTS.md of Codex and DeepSeek Harness when they are ticked')}</label>
           </fieldset>
           <fieldset className="choices" aria-describedby="ctx-policy-hint">
-            <legend className="mute small">{t('Защиты (context-toolkit.json)', 'Safeguards (context-toolkit.json)')}</legend>
+            <legend className="mute small">{t('3. Защиты — можно не трогать (context-toolkit.json)', '3. Safeguards: can be left alone (context-toolkit.json)')}</legend>
             <div className="field">
               <label htmlFor="ctx-policy">{t('Политики', 'Policies')}</label>
               <select
@@ -298,6 +348,10 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
                 }}
               />
             </div>
+          </fieldset>
+          <fieldset className="choices">
+            <legend className="mute small">{t('4. Модели Claude Code — можно не трогать', '4. Claude Code models: can be left alone')}</legend>
+            <label><input type="checkbox" checked={opts.desktop} onChange={(e) => change({ desktop: e.target.checked })} /> {t('Пресеты Claude Desktop: поставить им модель Sonnet (и effort, если он выбран ниже); закройте Claude Desktop перед применением', 'Claude Desktop presets: set them to Sonnet (and the effort if it is chosen below); quit Claude Desktop before applying')}</label>
           </fieldset>
           <div className="field">
             <label htmlFor="ctx-lang">{t('Язык подсказок, хуков и вывода Инструментов контекста', 'Language of prompts, hooks and Context Toolkit output')}</label>
@@ -372,8 +426,8 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
         <h3>{t('Откат: убрать Инструменты контекста', 'Rollback: remove Context Toolkit')}</h3>
         <p className="small">
           {t(
-            'Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; Antigravity и DeepSeek Harness, если они отмечены в форме выше. Если без наших частей файл совпадает с копией, сделанной до установки, он возвращается к ней байт в байт; иначе (например, установка поменяла модель или effort, или вы правили файл) из него вырезаются только наши части.',
-            'The rollback removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; Antigravity and DeepSeek Harness if they are ticked in the form above. If the file without our parts matches the copy made before the install, it goes back to that copy byte for byte; otherwise (the install changed the model or effort, or you edited the file) only our parts are cut out.',
+            'Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; у Codex, Antigravity и DeepSeek Harness — только если они отмечены в «Куда поставить» выше (отметьте те, куда ставили). Чужие хуки остаются. Если без наших частей файл совпадает с копией, сделанной до установки, он возвращается к ней байт в байт; иначе (например, установка поменяла модель или effort, или вы правили файл) из него вырезаются только наши части.',
+            'The rollback removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; for Codex, Antigravity and DeepSeek Harness only if they are ticked under “Where to install” above (tick the ones you installed to). Foreign hooks stay. If the file without our parts matches the copy made before the install, it goes back to that copy byte for byte; otherwise (the install changed the model or effort, or you edited the file) only our parts are cut out.',
           )}
         </p>
         <p className="mute small">
@@ -525,8 +579,8 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
             </table>
             <p className="mute small">
               {t(
-                'Это счётчики из транскриптов Claude Code (только числа, без текста и путей; дни по UTC). Базовой линии «до Инструментов контекста» у отчёта нет, поэтому «сэкономлено» не считается: смотрите, как доля дешёвых моделей и остановленных чтений меняется по дням после применения.',
-                'These are counters from Claude Code transcripts (numbers only, no text or paths; days are in UTC). The report has no “before Context Toolkit” baseline, so “saved” is not computed: watch how the share of cheap models and blocked reads changes day by day after applying.',
+                'Это счётчики из транскриптов Claude Code (только числа, без текста и путей; дни по UTC); другие клиенты в отчёт не входят. Базовой линии «до Инструментов контекста» у отчёта нет, поэтому «сэкономлено» не считается: смотрите, как доля дешёвых моделей и остановленных чтений меняется по дням после применения.',
+                'These are counters from Claude Code transcripts (numbers only, no text or paths; days are in UTC); other clients are not in the report. The report has no “before Context Toolkit” baseline, so “saved” is not computed: watch how the share of cheap models and blocked reads changes day by day after applying.',
               )}
             </p>
           </div>

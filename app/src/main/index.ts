@@ -542,7 +542,9 @@ void app.whenReady().then(() => {
   ipcMain.handle('ctxkit:status', (e) => {
     guard(e)
     return guarded(() =>
-      ctxkit.status(ctxBin(), join(userHome(), '.claude', 'hooks'), join(userHome(), '.local', 'bin')),
+      // Codex: `setup` inherits this process's environment and takes CODEX_HOME from it outside the checks, so the status
+      // does too (straight from process.env: envOf hides the environment in an installed build, setup still sees it)
+      ctxkit.status(ctxBin(), join(userHome(), '.claude', 'hooks'), join(userHome(), '.local', 'bin'), userHome(), (!ctxHome() && process.env['CODEX_HOME']) || join(userHome(), '.codex')),
     )
   })
   ipcMain.handle('ctxkit:doctor', (e) => {

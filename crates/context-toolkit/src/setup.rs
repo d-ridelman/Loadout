@@ -282,6 +282,16 @@ pub fn run_setup(args: &[String]) -> i32 {
         );
     }
 
+    // No Codex home means no Codex on this computer: neither its rules nor its hooks are written (the preview says the same).
+    if opts.codex && !codex_home_dir(&opts, &home).exists() {
+        say!(
+            "  skip Codex (not found: {})",
+            "  Codex пропущен (не найден: {})",
+            codex_home_dir(&opts, &home).display()
+        );
+        opts.codex = false;
+    }
+
     // Before anything is copied or written: input that setup cannot handle is refused as it is,
     // so a refusal leaves neither a copied binary nor a rewritten settings.json behind.
     let dsh_home_dir = || {
@@ -306,10 +316,7 @@ pub fn run_setup(args: &[String]) -> i32 {
             }
         }
         if opts.codex {
-            let p = codex_home_dir(&opts, &home).join("hooks.json");
-            if p.exists() {
-                read_json_object(&p)?;
-            }
+            preflight_codex_hooks(&codex_home_dir(&opts, &home).join("hooks.json"))?;
         }
         if opts.antigravity {
             let p = opts
@@ -1858,6 +1865,30 @@ fn codex_home_dir(opts: &SetupOpts, home: &Path) -> PathBuf {
         .unwrap_or_else(|| home.join(".codex"))
 }
 
+/// Refuses a Codex hooks.json that `update_codex_hooks` would have to guess at: `hooks` that is not an object, or an
+/// event that is not a list (rewriting it would drop the hooks in it). Checked before anything is written.
+fn preflight_codex_hooks(path: &Path) -> Result<(), String> {
+    let v = read_json_object(path)?;
+    let Some(hooks) = v.get("hooks") else {
+        return Ok(());
+    };
+    let bad = match hooks.as_object() {
+        None => Some("hooks".to_string()),
+        Some(h) => h
+            .iter()
+            .find(|(_, groups)| !groups.is_array())
+            .map(|(ev, _)| format!("hooks.{ev}")),
+    };
+    match bad {
+        Some(key) => Err(msg!(
+            "{}: '{key}' has an unexpected shape (an object of lists is expected); fix it by hand and rerun",
+            "{}: у '{key}' неожиданная форма (ожидается объект со списками); поправьте вручную и запустите снова",
+            path.display()
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Our groups in `<codex home>/hooks.json` (the Claude Code shape): `PreToolUse` on the shell and on `apply_patch`,
 /// `PostToolUse` on `apply_patch` (its `block` replaces the tool result with the syntax error). No `Stop`: the gate
 /// reads Claude Code transcripts. Foreign hooks stay. Codex skips a new or changed hook until it is trusted in `/hooks`.
@@ -1904,8 +1935,8 @@ fn update_codex_hooks(codex_home: &Path, command: &str, dry_run: bool) -> Result
     }
     if codex_hooks_off(&fs::read_to_string(codex_home.join("config.toml")).unwrap_or_default()) {
         say!(
-            "  [warn] Codex hooks are turned off in config.toml ([features] hooks = false): the hooks will not run",
-            "  [warn] хуки Codex выключены в config.toml ([features] hooks = false): хуки не будут запускаться"
+            "  [warn] Codex hooks are turned off in config.toml (`[features] hooks = false`): the hooks will not run",
+            "  [warn] хуки Codex выключены в config.toml (`[features] hooks = false`): хуки не будут запускаться"
         );
     }
     Ok(())
@@ -1913,19 +1944,25 @@ fn update_codex_hooks(codex_home: &Path, command: &str, dry_run: bool) -> Result
 
 /// `[features] hooks = false` (or the old alias `codex_hooks`) in Codex's config.toml.
 fn codex_hooks_off(toml: &str) -> bool {
-    let mut section = "";
-    toml.lines().map(str::trim).any(|l| {
-        if l.starts_with('[') {
-            section = l;
-            return false;
-        }
+    let mut section = String::new();
+    toml.lines().any(|l| {
+        // comments and spaces do not count: `[features] # x` and `hooks = false # x` are the same lines
         let compact: String = l
             .split('#')
             .next()
             .unwrap_or("")
             .split_whitespace()
             .collect();
-        section == "[features]" && matches!(compact.as_str(), "hooks=false" | "codex_hooks=false")
+        if compact.starts_with('[') {
+            section = compact;
+            return false;
+        }
+        let key = match section.as_str() {
+            "[features]" => compact.as_str(),
+            "" => compact.strip_prefix("features.").unwrap_or(""),
+            _ => "",
+        };
+        matches!(key, "hooks=false" | "codex_hooks=false")
     })
 }
 
@@ -3660,13 +3697,25 @@ mod tests {
         update_codex_hooks(&home, "context-toolkit --codex", false).unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), once, "idempotent");
 
-        uninstall::remove_codex_hooks(&home, false).unwrap();
+        uninstall::remove_codex_hooks(&home, "\"C:/p/hooks/context-toolkit.exe\"", false).unwrap();
         assert_eq!(read_json_object(&file).unwrap(), foreign);
-        // a file that held only our hooks goes away
+        // a file that held only our hooks goes away, a custom --hook-cmd (any language) is ours too
         fs::remove_file(&file).unwrap();
-        update_codex_hooks(&home, "context-toolkit --codex", false).unwrap();
-        uninstall::remove_codex_hooks(&home, false).unwrap();
+        update_codex_hooks(&home, "D:/tools/myguard.exe --codex --lang ru", false).unwrap();
+        uninstall::remove_codex_hooks(&home, "D:/tools/myguard.exe", false).unwrap();
         assert!(!file.exists());
+
+        // a shape setup would have to guess at is refused before any write
+        fs::write(&file, r#"{"hooks":[1]}"#).unwrap();
+        assert!(preflight_codex_hooks(&file)
+            .unwrap_err()
+            .contains("'hooks'"));
+        fs::write(&file, r#"{"hooks":{"PreToolUse":{"matcher":"Bash"}}}"#).unwrap();
+        assert!(preflight_codex_hooks(&file)
+            .unwrap_err()
+            .contains("hooks.PreToolUse"));
+        fs::write(&file, foreign.to_string()).unwrap();
+        assert!(preflight_codex_hooks(&file).is_ok());
         let _ = fs::remove_dir_all(&home);
     }
 
@@ -3676,6 +3725,10 @@ mod tests {
         assert!(codex_hooks_off("[features]\ncodex_hooks=false # old\n"));
         assert!(!codex_hooks_off("[features]\nhooks = true\n"));
         assert!(!codex_hooks_off("[other]\nhooks = false\n"));
+        assert!(codex_hooks_off("[features] # flags\nhooks = false\n"));
+        assert!(codex_hooks_off("features.hooks = false\n[x]\n"));
+        assert!(!codex_hooks_off("[x]\nfeatures.hooks = false\n"));
+        assert!(preflight_codex_hooks(Path::new("no-such-file.json")).is_ok());
         assert!(!codex_hooks_off(""));
     }
 

@@ -48,7 +48,7 @@ CLI args / stdin JSON
 | Aspect | Claude Code | Antigravity |
 |---|---|---|
 | Config file | `~/.claude/settings.json` | `~/.gemini/config/hooks.json` (or `.agents/hooks.json`) |
-| Tools | `Read`, `Write`, `Edit`, `MultiEdit`, `Bash`, `PowerShell` | `read_file`, `write_file`, `edit_file`, `run_command` |
+| Tools | `Read`, `Write`, `Edit`, `MultiEdit`, `Bash`, `PowerShell` | the matcher lists `run_command` and the older names `read_file`, `write_file`, `edit_file`; current builds call the file tools `view_file`, `write_to_file`, `replace_file_content` (see below) |
 | `PreToolUse` deny | `hookSpecificOutput.permissionDecision = "deny"` | `{"decision": "deny", "reason": "..."}` |
 | `PreToolUse` allow | Empty `stdout` | `{"decision": "ask"}` |
 | `PreToolUse` ask (policies `confirm_irreversible`, `stray_files`, see the README) | `hookSpecificOutput.permissionDecision = "ask"` + `permissionDecisionReason` | `{"decision": "ask", "reason": "..."}` |
@@ -57,6 +57,22 @@ CLI args / stdin JSON
 In Antigravity's hook contract, `"decision": "allow"` auto-approves tool execution and bypasses user confirmation policies. On clean checks, `context-toolkit` always emits `{"decision": "ask"}` so Antigravity enforces its own built-in security policy.
 
 Antigravity's own hook documentation (`agy-customizations/docs/hooks.md`, shipped in `~/.gemini/antigravity-cli/builtin/skills/`, read 2026-11-16) says hooks "must output their result as a JSON object on stdout" and marks `decision` of `PreToolUse` as required (`allow`, `deny`, `ask`, `force_ask`). So an empty answer is not a documented "no opinion". In `--agy` mode (the flag `context-toolkit setup --antigravity` puts into the hook command) the "no decision" cases therefore print the same `{"decision": "ask"}` as a clean check: unreadable or oversized input, a panic, and `CONTEXT_TOOLKIT_GUARD=0` (for a `PostToolUse` call it is `{}`). Without `--agy` an unreadable payload cannot be told from Claude Code's, which must stay silent, so it prints nothing; an Antigravity payload that parses (it has `toolCall`) is recognised either way. Not verified live: what Antigravity itself does with an empty answer (the documentation does not say); the explicit answer avoids depending on it.
+
+**Two versions of the Antigravity documentation (checked 2026-11-17).** The web page `antigravity.google/docs/hooks.md` names the file tools `view_file` (`AbsolutePath`, `StartLine`, `EndLine`), `write_to_file` (`TargetFile`, `CodeContent`), `replace_file_content` and `multi_replace_file_content`, says the payload has no `cwd` (a command has its own `Cwd`, the session has `workspacePaths`), and defines `allow` as "proceed, delegating to the next hook or default policy" with a separate `auto_approve`. The copy shipped with the installed CLI (dated 2026-11-13) still says `allow` "automatically allows the tool execution". Since "pass" means different things in the two, the matcher is not extended to `view_file` or the edit tools: with `ask` as the pass, every file read would wait for the user. So in Antigravity only `run_command` is checked (and the old tool names, if an older build sends them). The hook takes the working directory from `cwd`, else the command's `Cwd`, else the first `workspacePaths` entry. Deny hints name the current tool names. Reads and edits stay "in progress" until a live run settles what `allow` does.
+
+### Codex
+
+Codex (`learn.chatgpt.com/docs/hooks`, stable since 0.124.0) reads Claude-shaped hooks from `<CODEX_HOME>/hooks.json` (default `~/.codex`). The payload and the `PreToolUse` deny answer (`hookSpecificOutput.permissionDecision = "deny"`) follow the Claude Code column, so `--codex` reuses that handler with three differences:
+
+- The shell tool is `Bash` on every system, and Codex runs it through PowerShell on Windows, so it is checked in both dialects, like Antigravity's `run_command`.
+- Edits are `apply_patch` with the patch text in `tool_input.command`. The hook reads that text as file content (backslash check before, syntax check of the touched files after), never as a shell command. Codex has no read tool, so deny hints name shell slices (`rg -n`, `sed -n`, `Get-Content | Select-Object`).
+- Codex parses `permissionDecision: "ask"` but does not support it: the hook run counts as failed and the call proceeds. The asking policies (`confirm_irreversible`, `stray_files`) therefore stay silent under `--codex`; deny policies (`commit_hygiene`) work.
+
+Codex runs hook commands through `cmd /C "<command>"` on Windows (`codex-rs/hooks/src/engine/command_runner.rs`), so the quoted path form of Claude Code works. `setup --codex` writes `PreToolUse` (`Bash|apply_patch`) and `PostToolUse` (`apply_patch`) groups, no `Stop` (the gate reads Claude Code transcripts), and no `onFailure` (a Claude Code field). A non-managed hook runs only after the user trusts it in `/hooks` (the trust is a hash in `config.toml`): setup prints that step and writes no trust record. `[features] hooks = false` in `config.toml` gets a warning. Not verified in a live Codex: only against the documentation, the Codex source and fixture runs.
+
+### OpenCode
+
+Not supported. OpenCode has no command hooks: its `tool.execute.before` is a JavaScript plugin hook, and the plugin API is changing between OpenCode 1 and 2 (2026-11-17). A wrapper plugin that runs this binary is possible but unchecked. OpenCode reads `~/.claude/CLAUDE.md` while it has no `~/.config/opencode/AGENTS.md` (`opencode.ai/docs/rules`), so setup does not create that file: creating it would cut off the owner's `CLAUDE.md`.
 
 ### DeepSeek Harness Desktop
 

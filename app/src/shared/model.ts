@@ -180,7 +180,12 @@ export interface CtxkitStatus {
   bin: 'same' | 'different' | 'missing'
   /** `~/.claude/hooks` contains `ctxkit.exe`, the binary under the former name: "Apply" moves the install to the new one. */
   legacy: boolean
+  /** Per client: our hooks are in its config (`on`), the client is there without them (`off`), or it is not on this computer (`absent`). */
+  clients: Record<CtxClient, 'on' | 'off' | 'absent'>
 }
+
+/** Clients the Context Toolkit section reports on (Claude Desktop shares the Claude Code hooks). */
+export type CtxClient = 'claude' | 'codex' | 'antigravity' | 'dsh' | 'opencode'
 
 export type FindingSeverity = 'ok' | 'info' | 'warn' | 'error'
 
@@ -221,6 +226,8 @@ export interface SetupOptions {
   desktop: boolean
   antigravity: boolean
   dsh: boolean
+  /** Codex hooks in `~/.codex/hooks.json` (and the rules block in its AGENTS.md with withRules) */
+  codex: boolean
   /** true: do not install the Stop hook (the gate) and remove ours if present */
   noStopGate: boolean
   lang: 'en' | 'ru'
@@ -248,6 +255,7 @@ export const MAX_BUILD_SLOTS = 8
 export interface UninstallOptions {
   antigravity: boolean
   dsh: boolean
+  codex: boolean
 }
 
 export interface SetupResult {

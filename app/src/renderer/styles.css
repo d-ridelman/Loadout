@@ -106,6 +106,10 @@ td.vcell { max-width: 260px; text-align: left; word-break: normal; overflow-wrap
 /* text tables (journal, Context Toolkit days): both headers and cells are left-aligned so the columns read well */
 table.left th, table.left td { text-align: left; }
 table.left td.name { word-break: normal; overflow-wrap: break-word; }
+/* Context Toolkit clients: the checkbox column and the state stay on one line, the description wraps at reading width */
+.ctx-clients td { vertical-align: top; line-height: 1.45; }
+.ctx-clients td:nth-child(2) { max-width: 80ch; }
+.ctx-clients th { position: static; }
 /* without the inspector (sections other than the matrix): the page takes the full width, text lines are not stretched */
 #app.noaside { grid-template-columns: 172px 1fr; }
 #app.noaside header, #app.noaside footer { grid-column: 1 / 3; }

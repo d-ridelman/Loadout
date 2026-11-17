@@ -91,7 +91,15 @@ The screenshots are produced by `npm run docs-shots` in `app/` (window 1920×108
 
 [`crates/context-toolkit`](crates/context-toolkit/README.md) is a set of hooks and diagnostics that keeps agent context small: it limits whole-file reads, catches broken escaping, compresses build output and points agents to cheap search and independent review. It was called ctxkit before; the old name is still recognised, and `context-toolkit setup` moves an earlier installation to the new name.
 
-In the app it is the **Context Toolkit** section (key `7`):
+In the app it is the **Context Toolkit** section (key `7`). It opens with a short "What it is and where to start" card and a **client table**: what each client gets, what it does not, and whether our hooks are in its config now.
+
+| Client | What it gets | What it does not |
+|---|---|---|
+| Claude Code (and the Code tab of Claude Desktop) | everything: read limits, shell and edit checks, the Stop gate, `Explore`/`checker`, the rules block in `CLAUDE.md`, policies | — |
+| Codex | shell (`Bash`) and `apply_patch` checks, syntax check after a patch, commit hygiene, the rules block in `~/.codex/AGENTS.md` | no Stop gate, no policies that ask (Codex does not support `ask`), no read tool to limit. Codex runs a new hook only after you trust it in `/hooks`. Checked against its documentation and on fixtures, not in a live Codex |
+| Antigravity | shell (`run_command`) checks and policies | limiting `view_file` reads and checking edits is in progress: the two versions of its hook documentation disagree on what the "pass" answer means. Every command is shown to you for confirmation while the hook is on |
+| DeepSeek Harness | read limits, shell and edit checks, policies, the rules block in `~/.dsh/AGENTS.md` | no Stop gate; needs the `@deepseek-ai/dsh-hooks-claude-code` bridge in the desktop profile |
+| OpenCode | not supported yet | it has no command hooks, only JavaScript plugins, whose API is changing (OpenCode 1 → 2). It reads `~/.claude/CLAUDE.md` while it has no `~/.config/opencode/AGENTS.md` of its own |
 
 - **Preview** (`setup --dry-run`, writes nothing) and **Apply** (needs R2 and a preview with the same settings). **Roll back** is a separate card below: "Show what the rollback removes", then the red button; it removes only what Apply installed and does not restore the model, advisor or effort (the output names the backup to take them from). To turn the policies off and keep the hooks, choose "Turn all off" under Policies and apply.
 - Selects for the main model, effort and the advisor model. The default is "Keep as is": nothing is passed and nothing changes.
