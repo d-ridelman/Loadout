@@ -49,10 +49,12 @@ fn run(dir: &Path) -> Result<(), String> {
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     for line in stdin.lock().lines() {
         let line = line.map_err(|e| e.to_string())?;
+        // a writer that starts the stream with a BOM (PowerShell does) still sends plain JSON lines
+        let line = line.trim_start_matches('\u{feff}');
         if line.trim().is_empty() {
             continue;
         }
-        let text: String = serde_json::from_str(&line).map_err(|e| format!("input: {e}"))?;
+        let text: String = serde_json::from_str(line).map_err(|e| format!("input: {e}"))?;
         let enc = tok
             .encode(text.as_str(), true)
             .map_err(|e| format!("tokenizer: {e}"))?;
