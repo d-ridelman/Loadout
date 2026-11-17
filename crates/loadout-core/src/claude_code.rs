@@ -36,13 +36,23 @@ pub fn scan(c: &mut Ctx) {
     let skills = c.home.join(".claude/skills");
     let first = c.entities.len();
     scan_skills(c, CLIENT, &skills, "user");
-    if let Some(o) = settings
-        .as_ref()
-        .and_then(|s| s.get("skillOverrides"))
-        .and_then(Value::as_object)
-    {
-        skill_overrides(&mut c.entities[first..], o);
+    // `/skills` saves to `settings.local.json`, which outranks the user file key by key (docs, settings precedence)
+    let local = c.read_json(&c.home.join(".claude/settings.local.json"));
+    let mut overrides: HashMap<String, (String, &str)> = HashMap::new();
+    for (s, file) in [
+        (settings.as_ref(), "~/.claude/settings.json"),
+        (local.as_ref(), "~/.claude/settings.local.json"),
+    ] {
+        let o = s
+            .and_then(|s| s.get("skillOverrides"))
+            .and_then(Value::as_object);
+        for (name, v) in o.into_iter().flatten() {
+            if let Some(v) = v.as_str() {
+                overrides.insert(name.clone(), (v.to_owned(), file));
+            }
+        }
     }
+    skill_overrides(&mut c.entities[first..], &overrides);
     md_dir(c, "agents", Kind::Agent);
     md_dir(c, "commands", Kind::Command);
     if let Some(h) = settings.as_ref().and_then(|s| s.get("hooks")) {
@@ -50,25 +60,28 @@ pub fn scan(c: &mut Ctx) {
     }
 }
 
-/// `skillOverrides` of `~/.claude/settings.json`: skill name → `on` | `name-only` | `user-invocable-only` | `off`
+/// `skillOverrides` (skill name → value, file it came from): `on` | `name-only` | `user-invocable-only` | `off`
 /// (Claude Code docs, settings-reference). Only `off` hides the skill from both Claude and the `/` menu.
-fn skill_overrides(skills: &mut [Entity], o: &serde_json::Map<String, Value>) {
+fn skill_overrides(skills: &mut [Entity], o: &HashMap<String, (String, &str)>) {
     for e in skills {
-        let note = match o.get(&e.name).and_then(Value::as_str) {
-            Some("off") => {
+        let Some((value, file)) = o.get(&e.name) else {
+            continue;
+        };
+        let note = match value.as_str() {
+            "off" => {
                 e.state = State::Off;
                 crate::tr!(
-                    "выключен в skillOverrides (\"off\"): Claude его не видит, в меню / его нет",
-                    "turned off in skillOverrides (\"off\"): Claude does not see it, it is not in the / menu"
+                    "выключен в skillOverrides (\"off\", {file}): Claude его не видит, в меню / его нет",
+                    "turned off in skillOverrides (\"off\", {file}): Claude does not see it, it is not in the / menu"
                 )
             }
-            Some("name-only") => crate::tr!(
-                "skillOverrides: \"name-only\" — Claude видит только имя, без описания",
-                "skillOverrides: \"name-only\" — Claude sees the name only, without the description"
+            "name-only" => crate::tr!(
+                "skillOverrides (\"name-only\", {file}): Claude видит только имя, без описания",
+                "skillOverrides (\"name-only\", {file}): Claude sees the name only, without the description"
             ),
-            Some("user-invocable-only") => crate::tr!(
-                "skillOverrides: \"user-invocable-only\" — Claude его не видит, вызвать можно только вручную через /",
-                "skillOverrides: \"user-invocable-only\" — Claude does not see it, it can only be invoked by hand via /"
+            "user-invocable-only" => crate::tr!(
+                "skillOverrides (\"user-invocable-only\", {file}): Claude его не видит, вызвать можно только вручную через /",
+                "skillOverrides (\"user-invocable-only\", {file}): Claude does not see it, it can only be invoked by hand via /"
             ),
             _ => continue,
         };

@@ -762,6 +762,67 @@ fn codex_remote_plugin_name_comes_from_the_newest_manifest() {
     assert_eq!(e.detail["displayName"], "new-name");
 }
 
+/// `/skills` saves to `settings.local.json`; it outranks `~/.claude/settings.json` key by key (docs, settings precedence).
+#[test]
+fn skill_overrides_in_settings_local_outrank_user_settings() {
+    let skill = |n: &str| {
+        (
+            format!(".claude/skills/{n}/SKILL.md"),
+            format!("---\nname: {n}\n---\n"),
+        )
+    };
+    let s = ["s-a", "s-b", "s-c", "s-d"].map(skill);
+    let mut files: Vec<(&str, &str)> = s.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    files.push((
+        ".claude/settings.json",
+        r#"{ "skillOverrides": { "s-a": "off", "s-b": "name-only", "s-d": "off" } }"#,
+    ));
+    files.push((
+        ".claude/settings.local.json",
+        r#"{ "skillOverrides": { "s-a": "on", "s-b": "off", "s-c": "off" } }"#,
+    ));
+    let h = synthetic_home(&files);
+    let r = loadout_core::scan(&h.0);
+    let get = |n: &str| {
+        r.entities
+            .iter()
+            .find(|e| e.client == Client::ClaudeCode && e.kind == Kind::Skill && e.name == n)
+            .unwrap_or_else(|| panic!("{n}"))
+    };
+    let note = |n: &str| get(n).note.clone().unwrap_or_default();
+    assert_eq!(
+        get("s-a").state,
+        State::On,
+        "local \"on\" outranks user \"off\""
+    );
+    assert_eq!(
+        get("s-b").state,
+        State::Off,
+        "local \"off\" outranks user \"name-only\""
+    );
+    assert!(
+        note("s-b").contains("settings.local.json"),
+        "{}",
+        note("s-b")
+    );
+    assert_eq!(get("s-c").state, State::Off, "only in local");
+    assert!(
+        note("s-c").contains("settings.local.json"),
+        "{}",
+        note("s-c")
+    );
+    assert_eq!(
+        get("s-d").state,
+        State::Off,
+        "only in user settings: it still applies"
+    );
+    assert!(
+        note("s-d").contains("~/.claude/settings.json"),
+        "{}",
+        note("s-d")
+    );
+}
+
 #[test]
 fn missing_home_is_not_an_error() {
     let r = loadout_core::scan(Path::new("Z:/definitely/not/here"));
