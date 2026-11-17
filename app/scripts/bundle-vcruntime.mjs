@@ -1,7 +1,7 @@
-// Puts the Visual C++ runtime DLLs the core programs need into app/build/vcruntime/: electron-builder ships them next to
-// loadout.exe and loadout-ml.exe (extraResources), so the programs start on a Windows without the VC++ Redistributable
-// (app-local deployment, the files of VC\Redist are redistributable). loadout.exe needs vcruntime140; loadout-ml.exe (the linked
-// ONNX Runtime) also needs msvcp140, msvcp140_1 and vcruntime140_1.
+// Puts the Visual C++ runtime DLLs loadout-ml.exe needs into app/build/vcruntime/: electron-builder ships them next to it
+// (extraResources), so it starts on a Windows without the VC++ Redistributable (app-local deployment, the files of VC\Redist are
+// redistributable). Its linked ONNX Runtime is built for the DLL runtime (vcruntime140, vcruntime140_1, msvcp140, msvcp140_1);
+// loadout.exe and context-toolkit.exe link vcruntime statically (their build.rs) and need none of these.
 // Source: the VCRUNTIME_DIR variable, otherwise the newest VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT of the Visual Studio vswhere finds.
 // Run: `node scripts/bundle-vcruntime.mjs` (also called by `npm run pack` and `npm run dist`).
 import { execFileSync } from 'node:child_process'
