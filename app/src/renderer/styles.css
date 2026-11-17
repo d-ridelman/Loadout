@@ -250,9 +250,11 @@ html[data-fx='off'] .beam { display: none; }
 .palette li { padding: 6px 10px; display: flex; justify-content: space-between; cursor: pointer; border-radius: 3px; }
 .palette li[aria-selected='true'] { background: rgba(189, 147, 249, 0.22); }
 .palette li[aria-selected='true'] .mute { color: var(--fg); }
-.modal { position: fixed; inset: 0; background: rgba(33, 34, 44, 0.72); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 95; }
+.modal { position: fixed; inset: 0; background: rgba(33, 34, 44, 0.72); display: flex; align-items: flex-start; justify-content: center; padding-top: 6vh; z-index: 95; }
 /* a tall form (an error line, 14px text) scrolls inside instead of pushing its buttons below the window */
-.modal .box { width: 520px; max-width: 92vw; max-height: calc(88vh - 16px); overflow: auto; padding: 16px 18px; }
+.modal .box { width: 520px; max-width: 92vw; max-height: calc(92vh - 16px); overflow: auto; padding: 16px 18px; }
+/* the dialog's own buttons stay in view while a long form scrolls under them */
+.modal .box .actions:last-child { position: sticky; bottom: -16px; margin-bottom: -16px; padding: 10px 0 16px; background: var(--panel); z-index: 1; }
 .modal p { margin: 6px 0; }
 button.level { border-color: transparent; }
 button.level[aria-pressed='true'] { border-color: var(--orange); background: rgba(255, 184, 108, 0.12); }

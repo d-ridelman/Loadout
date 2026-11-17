@@ -103,6 +103,15 @@ async function addItem(page, name) {
 }
 
 async function shot(page, name) {
+  // an open dialog's bottom row of buttons is in view without scrolling (Playwright scrolls before a click, so clicks never notice)
+  const cut = await page.evaluate(() => {
+    const box = document.querySelector('.modal .box')
+    const row = box ? [...box.querySelectorAll('.actions')].pop() : null
+    if (!box || !row) return null
+    const [b, a] = [box.getBoundingClientRect(), row.getBoundingClientRect()]
+    return a.bottom > b.bottom + 1 || a.top < b.top - 1 ? { row: [Math.round(a.top), Math.round(a.bottom)], box: [Math.round(b.top), Math.round(b.bottom)] } : null
+  })
+  must(!cut, `${name}: the dialog's buttons are out of view: ${JSON.stringify(cut)}`)
   await page.screenshot({ path: join(shotDir, `${name}.png`) })
 }
 
