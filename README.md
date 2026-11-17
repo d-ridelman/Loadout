@@ -144,7 +144,7 @@ npm run dist                   # NSIS installer in app/dist (unsigned)
 
 ## Status
 
-Version 1.0.0, Windows only. Milestones M0–M5 and the built-in Context Toolkit are done (see [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §10).
+Version 1.1.0, Windows only. Milestones M0–M5 and the built-in Context Toolkit are done (see [docs/CONCEPT.en.md](docs/CONCEPT.en.md) §10).
 
 Known limitations:
 

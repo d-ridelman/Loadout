@@ -4,7 +4,7 @@
 
 > What is loaded into your agents: plugins, MCP, skills, hooks, agents, rules. One screen for all clients.
 
-Status: the document began as a concept before the first line of code; sections 1–9 and 11–12 mostly describe the initial plan and were extended here and there as the work went on, and corrections where the plan and the result differ are marked "Later". The application has since been built (version 1.0.0): what is done and how it was checked is in §10, §13 and `README.md`. The clickable mockup `mockup/index.html` is a mockup of the initial concept and does not show the current interface.
+Status: the document began as a concept before the first line of code; sections 1–9 and 11–12 mostly describe the initial plan and were extended here and there as the work went on, and corrections where the plan and the result differ are marked "Later". The application has since been built (version 1.1.0): what is done and how it was checked is in §10, §13 and `README.md`. The clickable mockup `mockup/index.html` is a mockup of the initial concept and does not show the current interface.
 Labels in the tables: **[verified]** — seen on this machine: file, directory and key names, plus one entry each without secrets (`installed_plugins.json`, the header of one `SKILL.md`); values from configs with tokens were not read; **[hypothesis]** — not verified, to be confirmed on fixtures in M0.
 
 ## 1. Problem and goal
