@@ -792,8 +792,21 @@ pub fn mcp_detail(cfg: &Value) -> Value {
     // `args` do not start with the executable: it is in `command`. If it is npx/uvx, the first word without a flag is the package.
     let launcher = command.is_some_and(|c| LAUNCHERS.contains(&stem_of(c).as_str()));
     // `command` is the program itself (its arguments are in `args`): a bare path with spaces is not split
-    let shown_command = command.map(|c| if is_spaced_path(c) { c.to_owned() } else { mask_line(c) });
-    let shown_args = mask_args_ex(&args, 0, Pos { pkg: launcher, ..Pos::default() });
+    let shown_command = command.map(|c| {
+        if is_spaced_path(c) {
+            c.to_owned()
+        } else {
+            mask_line(c)
+        }
+    });
+    let shown_args = mask_args_ex(
+        &args,
+        0,
+        Pos {
+            pkg: launcher,
+            ..Pos::default()
+        },
+    );
     // Masking is lossy without always leaving a mark (a URL loses its query, a number argument is dropped): the window
     // starts the "Edit command" form from these values only when they are exactly what the file holds.
     let exact = shown_command.as_deref() == command
@@ -1182,12 +1195,24 @@ mod tests {
     fn mcp_detail_says_when_the_command_is_shown_exactly() {
         let exact = |cfg: Value| mcp_detail(&cfg)["exact"].clone();
         // shown as written: the window may start an edit form from it
-        assert_eq!(exact(json!({"command":"npx","args":["-y","pkg@1.2.3"]})), json!(true));
+        assert_eq!(
+            exact(json!({"command":"npx","args":["-y","pkg@1.2.3"]})),
+            json!(true)
+        );
         assert_eq!(exact(json!({"url":"https://h/mcp"})), json!(true));
         // anything masking changed or dropped: a key cut from a URL, a token, a non-string argument
-        assert_eq!(exact(json!({"command":"npx","args":["mcp-remote","https://h/sse?api_key=X1"]})), json!(false));
-        assert_eq!(exact(json!({"command":"node","args":["a.js","--token","S4"]})), json!(false));
-        assert_eq!(exact(json!({"command":"node","args":["a.js", 8080]})), json!(false));
+        assert_eq!(
+            exact(json!({"command":"npx","args":["mcp-remote","https://h/sse?api_key=X1"]})),
+            json!(false)
+        );
+        assert_eq!(
+            exact(json!({"command":"node","args":["a.js","--token","S4"]})),
+            json!(false)
+        );
+        assert_eq!(
+            exact(json!({"command":"node","args":["a.js", 8080]})),
+            json!(false)
+        );
     }
 
     #[test]
