@@ -190,6 +190,7 @@ fn remote_catalog(c: &mut Ctx) {
         .collect();
     names.sort();
     for n in names {
+        let shown = display_name(c, &root.join(&n));
         let e = Entity::new(
             CLIENT,
             Kind::Connector,
@@ -203,7 +204,35 @@ fn remote_catalog(c: &mut Ctx) {
             "запись кеша каталога удалённых плагинов; источник правды — аккаунт",
             "an entry of the remote plugin catalog cache; the source of truth is the account"
         ))
+        .detail(json!({ "displayName": shown }))
         .fs_named(); // the name is the cache directory (`app-69f0dc45…`), not the file content
         c.push(e);
     }
+}
+
+/// The human name of a cached plugin: `<dir>/<version>/.codex-plugin/plugin.json` → `interface.displayName`, else `name`
+/// (Codex source, core-plugins/manifest.rs; `.claude-plugin` is its fallback location). Text from a file: through `safe_name`.
+fn display_name(c: &mut Ctx, dir: &std::path::Path) -> Option<String> {
+    let mut versions: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    versions.sort();
+    versions.iter().rev().find_map(|v| {
+        let m = [".codex-plugin", ".claude-plugin"]
+            .iter()
+            .find_map(|d| c.read_json(&v.join(d).join("plugin.json")))?;
+        let name = m
+            .pointer("/interface/displayName")
+            .and_then(Value::as_str)
+            .and_then(mask::safe_name)
+            .or_else(|| {
+                m.get("name")
+                    .and_then(Value::as_str)
+                    .and_then(mask::safe_name)
+            });
+        name.map(str::to_owned)
+    })
 }

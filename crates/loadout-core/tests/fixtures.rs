@@ -654,6 +654,52 @@ fn antigravity_builtin_skills_are_not_listed_twice() {
     );
 }
 
+/// Codex keeps a remote plugin under its id (`app-<hex>`); the human name is in the cached manifest
+/// `<plugin>/<version>/.codex-plugin/plugin.json` → `interface.displayName` (Codex source, core-plugins/manifest.rs).
+#[test]
+fn codex_remote_plugins_carry_the_manifest_display_name() {
+    let root = ".codex/plugins/cache/openai-curated-remote";
+    let h = synthetic_home(&[
+        (
+            &format!("{root}/app-69f0dc45ab12/8a1b2c3d/.codex-plugin/plugin.json"),
+            r#"{ "name": "github", "interface": { "displayName": "GitHub" } }"#,
+        ),
+        (
+            &format!("{root}/app-0b1c2d3e4f56/1.0.0/.codex-plugin/plugin.json"),
+            r#"{ "name": "linear" }"#,
+        ),
+        (
+            &format!("{root}/app-aa11bb22cc33/1/.codex-plugin/plugin.json"),
+            r#"{ "name": "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789" }"#,
+        ),
+        (&format!("{root}/app-ffee00112233/.keep"), ""),
+    ]);
+    let r = loadout_core::scan(&h.0);
+    let shown = |id: &str| {
+        let e = r
+            .entities
+            .iter()
+            .find(|e| e.client == Client::Codex && e.name == id)
+            .unwrap_or_else(|| panic!("{id}"));
+        e.detail
+            .get("displayName")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    };
+    assert_eq!(shown("app-69f0dc45ab12").as_deref(), Some("GitHub"));
+    assert_eq!(
+        shown("app-0b1c2d3e4f56").as_deref(),
+        Some("linear"),
+        "falls back to name"
+    );
+    assert_eq!(
+        shown("app-aa11bb22cc33"),
+        None,
+        "a token-like name is dropped"
+    );
+    assert_eq!(shown("app-ffee00112233"), None, "no manifest");
+}
+
 #[test]
 fn missing_home_is_not_an_error() {
     let r = loadout_core::scan(Path::new("Z:/definitely/not/here"));
