@@ -605,6 +605,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
           onToggle={requestToggle}
           onEdit={(e) => requestForm('edit', e)}
           onCopy={(e) => requestForm('copy', e)}
+          entities={entities}
+          onShowEntity={showEntity}
         />
       </aside>
 

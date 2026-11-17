@@ -3,6 +3,7 @@
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -51,9 +52,9 @@ const must = (cond, msg) => {
 }
 
 /** A copy of the fixture with `{HOME}` substituted: the scanner checks that the paths from the client files exist. */
-function materialize(extra) {
+function materialize(extra, tag = '') {
   // a name without random letters and digits: the core hides token-like path segments, and `mkdtemp` would give hidden paths
-  const home = join(tmpdir(), `loadout-e2e-${process.pid}`)
+  const home = join(tmpdir(), `loadout-e2e-${process.pid}${tag}`)
   rmSync(home, { recursive: true, force: true })
   mkdirSync(home, { recursive: true })
   const walk = (from, to) => {
@@ -1834,6 +1835,95 @@ try {
   await session.page.getByRole('button', { name: /— обновления/ }).click()
   must(!(await session.page.getByRole('checkbox', { name: 'Проверять обновления автоматически' }).isChecked()), 'the switched-off setting did not survive a restart')
   await close(session)
+
+  // ---- "similar skills": the model on a click from a local server (sizes and sha256 checked), the vectors from a fake loadout-ml ----
+  {
+    const mlHome = materialize((h) => {
+      const skill = (name, description) => {
+        mkdirSync(join(h, '.claude', 'skills', name), { recursive: true })
+        writeFileSync(join(h, '.claude', 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n`)
+      }
+      skill('pdf-reader', 'Read and extract text from PDF files')
+      skill('pdf-tables', 'Extract text and tables from PDF files and scans')
+      skill('git-helper', 'Commit, branch and rebase with git')
+    }, '-ml')
+    homes.push(mlHome)
+    const model = Buffer.from('fake model for the window checks')
+    const tokenizer = Buffer.from('{"fake":"tokenizer"}')
+    const sha = (b) => createHash('sha256').update(b).digest('hex')
+    const served = { '/r/m.onnx': model, '/r/t.json': tokenizer }
+    const asked = []
+    const server = createServer((req, res) => {
+      asked.push(req.url)
+      const b = served[req.url ?? '']
+      res.statusCode = b ? 200 : 404
+      res.end(b)
+    })
+    await new Promise((r) => server.listen(0, '127.0.0.1', r))
+    try {
+      rmSync(join(profile, 'models'), { recursive: true, force: true })
+      session = await launch({
+        LOADOUT_HOME: mlHome,
+        LOADOUT_ML_BASE: `http://127.0.0.1:${server.address().port}/r/`,
+        LOADOUT_ML_FILES: JSON.stringify([
+          { name: 'model.onnx', path: 'm.onnx', size: model.length, sha256: sha(model) },
+          { name: 'tokenizer.json', path: 't.json', size: tokenizer.length, sha256: sha(tokenizer) },
+        ]),
+        LOADOUT_ML_BIN: process.execPath,
+        LOADOUT_ML_ARGS: JSON.stringify([join(appDir, 'e2e', 'fake-ml.mjs')]),
+      })
+      const { page } = session
+      await page.waitForSelector('#grid', { timeout: 20000 })
+      await resize(session.app, 1280, 800)
+      await page.getByPlaceholder(/Найти/).fill('pdf-reader')
+      const pdfCell = (p) => p.locator('tbody tr').filter({ has: p.locator('td.name b', { hasText: /^pdf-reader$/ }) }).locator('td').nth(1)
+      await pdfCell(page).click()
+      const box = page.locator('aside section.similar')
+      await box.getByRole('button', { name: /Скачать модель \(0 МБ\)/ }).waitFor({ timeout: 10000 })
+      must(asked.length === 0, `the model must not be fetched before the click: ${asked.join(' ')}`)
+      must((await box.innerText()).includes('Hugging Face'), 'the offer must name where the model comes from')
+      await shot(page, 's1-similar-offer-1280')
+      await box.getByRole('button', { name: /Скачать модель/ }).click()
+      await box.getByRole('list').waitFor({ timeout: 15000 })
+      must(asked.join(' ') === '/r/m.onnx /r/t.json', `the download asked for: ${asked.join(' ')}`)
+      const picks = await box.getByRole('listitem').allInnerTexts()
+      must(picks.length >= 1 && picks.length <= 3 && picks[0].startsWith('pdf-tables'), `similar to pdf-reader: ${picks.join(' | ')}`)
+      must(!picks.some((p) => p.startsWith('pdf-reader')), 'the skill itself must not be among its similar ones')
+      await shot(page, 's2-similar-list-1280')
+      await axeCheck(page, 'similar skills')
+      await box.getByRole('button', { name: /^pdf-tables/ }).click()
+      // the inspector's own title (the first bold name in its panel), not the list of similar skills below it
+      await waitFor(async () => (await page.locator('aside section.hud b').first().innerText()) === 'pdf-tables', 'a similar skill did not open in the inspector')
+      await close(session)
+
+      // a damaged model file: the next run checks sha256 before the first use and offers the download again
+      writeFileSync(join(profile, 'models', readdirSync(join(profile, 'models'))[0], 'model.onnx'), Buffer.from('fake model for the window CHECKS'))
+      session = await launch({
+        LOADOUT_HOME: mlHome,
+        LOADOUT_ML_BASE: `http://127.0.0.1:${server.address().port}/r/`,
+        LOADOUT_ML_FILES: JSON.stringify([
+          { name: 'model.onnx', path: 'm.onnx', size: model.length, sha256: sha(model) },
+          { name: 'tokenizer.json', path: 't.json', size: tokenizer.length, sha256: sha(tokenizer) },
+        ]),
+        LOADOUT_ML_BIN: process.execPath,
+        LOADOUT_ML_ARGS: JSON.stringify([join(appDir, 'e2e', 'fake-ml.mjs')]),
+      })
+      await session.page.waitForSelector('#grid', { timeout: 20000 })
+      await session.page.getByPlaceholder(/Найти/).fill('pdf-reader')
+      await pdfCell(session.page).click()
+      const box2 = session.page.locator('aside section.similar')
+      await box2.getByText('Файлы модели повреждены').waitFor({ timeout: 15000 })
+      const before = asked.length
+      await box2.getByRole('button', { name: /Скачать модель/ }).click()
+      await box2.getByRole('list').waitFor({ timeout: 15000 })
+      // only the damaged file is fetched again, and it is the right one now
+      must(asked.slice(before).join(' ') === '/r/m.onnx', `the repair asked for: ${asked.slice(before).join(' ')}`)
+      must(readFileSync(join(profile, 'models', readdirSync(join(profile, 'models'))[0], 'model.onnx')).equals(model), 'the damaged model file was not replaced')
+      await close(session)
+    } finally {
+      server.close()
+    }
+  }
 
   // ---- "loading" state ----
   session = await launch({ LOADOUT_HOME: home, LOADOUT_QA_DELAY_MS: '3000' })

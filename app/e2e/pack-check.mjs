@@ -106,6 +106,7 @@ try {
 
   // the built-in Context Toolkit from resources: version, diagnostics and a report on the real transcripts (read-only, nothing is applied)
   must(existsSync(join(unpacked, 'resources', 'context-toolkit.exe')), 'the build has no resources/context-toolkit.exe')
+  must(existsSync(join(unpacked, 'resources', 'loadout-ml.exe')), 'the build has no resources/loadout-ml.exe ("Similar skills")')
   await page.keyboard.press('7')
   await page.getByText('context-toolkit 0.', { exact: false }).first().waitFor({ timeout: 20_000 })
   await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 30_000 })

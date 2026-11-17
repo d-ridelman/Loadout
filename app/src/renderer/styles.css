@@ -227,6 +227,11 @@ html[data-fx='off'] .beam { display: none; }
 .instances { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .instances button { width: 100%; text-align: left; }
 .instances button[aria-pressed='true'] { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
+/* "similar skills" in the inspector: the same list of buttons as the cell entries, a progress bar while the model downloads */
+.similar { margin: 4px 0 12px; max-width: 340px; }
+.similar-list { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.similar-list button { width: 100%; text-align: left; }
+.similar progress { display: block; width: 100%; height: 8px; margin: 4px 0; accent-color: var(--cyan); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 
 /* hooks */

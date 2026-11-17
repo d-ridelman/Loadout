@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import type { ChangedEvent, LoadoutApi, UpdatesInfo } from '../shared/model'
+import type { ChangedEvent, LoadoutApi, SimilarInfo, UpdatesInfo } from '../shared/model'
 
 const api: LoadoutApi = {
   scan: () => ipcRenderer.invoke('scan'),
@@ -51,6 +51,16 @@ const api: LoadoutApi = {
     ipcRenderer.on('updates', handler)
     return () => {
       ipcRenderer.removeListener('updates', handler)
+    }
+  },
+  similar: () => ipcRenderer.invoke('similar:get'),
+  similarDownload: () => ipcRenderer.invoke('similar:download'),
+  similarFind: (id) => ipcRenderer.invoke('similar:find', id),
+  onSimilar: (cb) => {
+    const handler = (_e: IpcRendererEvent, info: SimilarInfo) => cb(info)
+    ipcRenderer.on('similar', handler)
+    return () => {
+      ipcRenderer.removeListener('similar', handler)
     }
   },
 }

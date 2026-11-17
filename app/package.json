@@ -28,6 +28,7 @@
     "files": ["out/**", "package.json"],
     "extraResources": [
       { "from": "../target/release/loadout.exe", "to": "loadout.exe" },
+      { "from": "../target/release/loadout-ml.exe", "to": "loadout-ml.exe" },
       { "from": "build/icon.png", "to": "icon.png" },
       { "from": "build/context-toolkit.exe", "to": "context-toolkit.exe" }
     ],

@@ -380,6 +380,32 @@ export interface LoadoutApi {
   /** Opens the release notes of the offered version in the browser (main builds the address). */
   openReleaseNotes: () => Promise<void>
   onUpdates: (cb: (info: UpdatesInfo) => void) => () => void
+  /** "Similar to this": whether the model is on this computer, its download size. */
+  similar: () => Promise<SimilarInfo>
+  /** Downloads the model (main shows the progress through `onSimilar`); only on the person's click. */
+  similarDownload: () => Promise<void>
+  /** Up to three skills closest to this one (other logical keys), best first. */
+  similarFind: (id: string) => Promise<Result<SimilarItem[]>>
+  onSimilar: (cb: (info: SimilarInfo) => void) => () => void
+}
+
+/** The state of the "similar to this" model; an error is a fixed reason, the window words it. */
+export type SimilarState =
+  | { status: 'absent' }
+  | { status: 'downloading'; percent: number }
+  | { status: 'ready' }
+  | { status: 'error'; reason: 'download' | 'corrupt' }
+
+export interface SimilarInfo {
+  state: SimilarState
+  /** The download size in MB. */
+  mb: number
+}
+
+export interface SimilarItem {
+  id: string
+  /** Cosine of the two texts, 1 is the same meaning. */
+  score: number
 }
 
 export const CLIENTS: readonly { id: ClientId; name: string }[] = [

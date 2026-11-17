@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, net, session, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { execFile } from 'node:child_process'
@@ -11,7 +11,9 @@ import { backupNotice } from '../shared/backups'
 import { getLang, isLang, langFromLocale, setLang, t } from '../shared/i18n'
 import type { Lang } from '../shared/i18n'
 import { LEVEL_RANK } from '../shared/model'
-import type { ChangedEvent, ClientId, Result, ScanResponse, UpdatesInfo, WriteLevel } from '../shared/model'
+import type { ChangedEvent, ClientId, Result, ScanResponse, SimilarInfo, SimilarItem, SimilarState, UpdatesInfo, WriteLevel } from '../shared/model'
+import { comparable, downloadModel, embed, megabytes, MODEL_BASE, MODEL_FILES, modelDirName, modelPresent, modelValid, nearest, textOf } from './similar'
+import type { ModelFile } from './similar'
 import { askConfirm } from './confirm'
 import type { Confirm } from './confirm'
 import * as ctxkit from './ctxkit'
@@ -790,6 +792,88 @@ void app.whenReady().then(() => {
     const url = notesUrl(s.version)
     if (qaFake) qaFake.opened.push(url)
     else void shell.openExternal(url)
+  })
+
+  // "Similar to this": the model comes only on a click, from Hugging Face, checked by sha256; the vectors come from loadout-ml
+  // (started only here, one run per set of new texts) and stay in memory for this run. QA swaps the files, the address and the
+  // program for small fakes; a packaged build reads none of it.
+  const mlFiles: ModelFile[] = qa && process.env.LOADOUT_ML_FILES ? (JSON.parse(process.env.LOADOUT_ML_FILES) as ModelFile[]) : MODEL_FILES
+  const mlBase = (qa && process.env.LOADOUT_ML_BASE) || MODEL_BASE
+  const mlPrefix: string[] = qa && process.env.LOADOUT_ML_ARGS ? (JSON.parse(process.env.LOADOUT_ML_ARGS) as string[]) : []
+  const mlBin = (): string =>
+    app.isPackaged ? join(process.resourcesPath, 'loadout-ml.exe') : (envOf('LOADOUT_ML_BIN') ?? resolve(app.getAppPath(), '..', 'target', 'release', 'loadout-ml.exe'))
+  const mlDir = join(app.getPath('userData'), 'models', modelDirName)
+  let mlState: SimilarState = modelPresent(mlDir, mlFiles) ? { status: 'ready' } : { status: 'absent' }
+  /** The sha256 of the files was checked in this run (after a download or before the first use). */
+  let mlChecked = false
+  const vectors = new Map<string, number[]>()
+  let mlQueue: Promise<unknown> = Promise.resolve()
+  let mlWanted = 0
+  const similarInfo = (): SimilarInfo => ({ state: mlState, mb: megabytes(mlFiles) })
+  const sendSimilar = (): void => {
+    const win = lastWindow
+    if (win && !win.isDestroyed()) win.webContents.send('similar', similarInfo())
+  }
+  async function findSimilar(id: string): Promise<SimilarItem[]> {
+    if (mlState.status !== 'ready') throw new Error(t('модель для поиска похожих не скачана', 'the model for similar entries is not downloaded'))
+    if (!mlChecked) {
+      if (!(await modelValid(mlDir, mlFiles))) {
+        mlState = { status: 'error', reason: 'corrupt' }
+        sendSimilar()
+        throw new Error(t('файлы модели повреждены: скачайте её заново', 'the model files are damaged: download it again'))
+      }
+      mlChecked = true
+    }
+    const scan = await runScan()
+    if (!scan.ok) throw new Error(scan.error)
+    const items = comparable(scan.data.entities)
+    const target = items.find((x) => x.id === id)
+    if (!target) throw new Error(t('этого скила больше нет в конфигах: обновите список', 'this skill is no longer in the configs: refresh the list'))
+    const missing = [...new Set(items.map(textOf))].filter((x) => !vectors.has(x))
+    if (missing.length > 0) {
+      const vs = await embed(mlBin(), mlDir, missing, mlPrefix)
+      missing.forEach((x, i) => vectors.set(x, vs[i]!))
+    }
+    return nearest(target, items, (x) => vectors.get(textOf(x)))
+  }
+  ipcMain.handle('similar:get', (e) => (guard(e), similarInfo()))
+  ipcMain.handle('similar:download', (e) => {
+    guard(e)
+    if (mlState.status === 'downloading' || mlState.status === 'ready') return
+    mlState = { status: 'downloading', percent: 0 }
+    sendSimilar()
+    let last = 0
+    void downloadModel(
+      mlDir,
+      mlBase,
+      (done, total) => {
+        const percent = Math.floor((done * 100) / total)
+        if (percent === last) return
+        last = percent
+        mlState = { status: 'downloading', percent }
+        sendSimilar()
+      },
+      (url, init) => net.fetch(String(url), init),
+      mlFiles,
+    )
+      .then(() => {
+        mlState = { status: 'ready' }
+        mlChecked = true
+      })
+      .catch(() => {
+        mlState = { status: 'error', reason: 'download' }
+      })
+      .finally(sendSimilar)
+  })
+  ipcMain.handle('similar:find', (e, id: unknown) => {
+    guard(e)
+    if (typeof id !== 'string' || id.length === 0 || id.length > 4096) throw new Error('invalid parameters')
+    // one run of loadout-ml at a time: a second request waits and finds the vectors of the first in memory; a request overtaken
+    // by a newer one (the arrows went on to the next skill) is skipped, the window shows only the newest answer anyway
+    const mine = ++mlWanted
+    const run = mlQueue.then(() => (mine === mlWanted ? findSimilar(id) : []))
+    mlQueue = run.catch(() => undefined)
+    return guarded(() => run)
   })
   createWindow()
   app.on('activate', () => {

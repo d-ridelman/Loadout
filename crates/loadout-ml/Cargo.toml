@@ -1,0 +1,16 @@
+[package]
+name = "loadout-ml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "loadout-ml: text vectors for 'similar to this' (MiniLM int8 through a linked ONNX Runtime); started by the window only when that feature is opened"
+
+[dependencies]
+serde_json.workspace = true
+# ONNX Runtime linked in (download-binaries fetches the static build when this crate is built): no DLL beside the exe.
+# One text at a time: the int8 model quantizes per tensor, so padding in a batch would change a text's vector (ml-eval runtime probe).
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-24"] }
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }

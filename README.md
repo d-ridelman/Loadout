@@ -39,6 +39,7 @@ Loadout reads all six clients, shows everything in one matrix and changes only t
 - **Journal** of the writes above: toggles, the trash, MCP edits, copies and additions, profile batches and skill installs. Each one rolls back from the journal after the same preview (file, key, before → after). Before any write the file is copied to a backup. Plugin and marketplace installs run through `claude` itself and are not in the journal (remove a plugin with `claude plugin uninstall`); Context Toolkit has its own rollback.
 - **Context Toolkit** built in: preview, apply, roll back, optional policies, and an "Efficiency" report (see below).
 - **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; core messages follow the choice too.
+- **Similar skills.** Select a skill and the inspector lists up to three skills whose description means something close, in Russian or English alike. A small model ([paraphrase-multilingual-MiniLM-L12-v2](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2), int8) does it on this computer; it is downloaded once on a click (about 128 MB, checked by sha256) and is not part of the installer. It is a hint, not a duplicate finder: on a sample of real skills about one pick in three was really close.
 - **Updates from GitHub releases.** Loadout checks for a new version about 10 seconds after start and once a day (hourly after a failed check), offers it in a small card, downloads it only on "Download" (just the changed blocks) and installs it on "Restart and update" or when you quit after the download. The check goes only to GitHub and carries nothing about you or your configs; turn it off in the update panel (the version button at the right end of the footer). Details: [SECURITY.md](SECURITY.md#network).
 - **Client files are read-only by default.** The write level in the header is named in words: "Read-only · R0", "On/off · R1" (toggles by flag), "All edits · R2" (the trash, edits, copies, installs, profiles, Context Toolkit). Raising it needs a confirmation in a separate window drawn by the main process, in the app's style; the page cannot press it for you. You do not have to pick the level first: an action button (Disable, Add and so on) asks for the level it needs and, once you agree, shows the preview. Only one window runs at a time; a second launch brings the first one forward.
 
@@ -117,7 +118,8 @@ Requirements: Windows 11 x64 (Windows 10 is not tested), Rust 1.91 or newer with
 ```bash
 git clone https://github.com/d-ridelman/Loadout.git
 cd Loadout
-cargo build --release          # core (loadout.exe) and context-toolkit.exe in target/release
+cargo build --release          # core (loadout.exe), loadout-ml.exe and context-toolkit.exe in target/release;
+                               # the first build downloads a static ONNX Runtime for loadout-ml (the ort crate)
 cargo test                     # Rust tests
 cd app
 npm ci

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/loadout-core", "crates/loadoutd", "crates/context-toolkit"]
+members = ["crates/loadout-core", "crates/loadoutd", "crates/context-toolkit", "crates/loadout-ml"]
 resolver = "2"
 
 # The profile belongs to the workspace: the former [profile.release] of the context-toolkit crate (fast hook start, small binary) was moved here

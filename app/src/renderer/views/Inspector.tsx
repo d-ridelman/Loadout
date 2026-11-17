@@ -5,6 +5,7 @@ import { GLYPH } from '../aggregate'
 import type { Row } from '../aggregate'
 import { Glyph, KindBadge, kindLabel, levelLabel, Panel, Path, Rich, Term } from '../ui'
 import type { Sel } from './Matrix'
+import { Similar } from './Similar'
 
 /** Whether the current write level is enough for the operation. */
 export const levelOk = (have: WriteLevel, need: Level): boolean => LEVEL_RANK[have] >= LEVEL_RANK[need]
@@ -48,9 +49,12 @@ interface Props {
   onToggle: (e: Entity, enable: boolean) => void
   onEdit: (e: Entity) => void
   onCopy: (e: Entity) => void
+  /** Every entry of the scan: the similar skills are named from it. */
+  entities: Entity[]
+  onShowEntity: (e: Entity) => void
 }
 
-export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }: Props) {
+export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy, entities, onShowEntity }: Props) {
   if (!row || !sel) {
     return (
       <>
@@ -174,6 +178,8 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
               )
             : t('Сначала предпросмотр, потом запись с бэкапом; откатить можно в журнале.', 'A preview first, then the write with a backup; you can roll it back in the journal.')}
       </p>
+
+      {e.kind === 'skill' ? <Similar e={e} entities={entities} onShow={onShowEntity} /> : null}
 
       <details className="tech">
         <summary>{t('Технические подробности', 'Technical details')}</summary>
