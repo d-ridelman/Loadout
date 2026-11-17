@@ -10,6 +10,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { uptime } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -34,7 +35,7 @@ export const marks = (root) => {
 };
 /** The gate's command is the verify tool alone (flags allowed), which marks the gate itself: it knows when a pass is honest.
  *  A compound command (`verify && more`) is an ordinary gate: only `gate.mjs run` marks it, and only when all of it is green. */
-export const runsVerify = (gate) => /^node\s+(\S*\/)?tools\/verify\.mjs(\s+--[\w-]+)*$/.test((gate.run ?? '').trim());
+export const runsVerify = (gate) => /^node\s+(\.\/)?tools\/verify\.mjs(\s+--[\w-]+)*$/.test((gate.run ?? '').trim());
 /** The gate's files as they are now: tracked and new ones (ignored ones are not the project's), each with its size and time of change. */
 export function signature(root, gate) {
   const rule = new RegExp(gate.files); const sum = createHash('sha1');
@@ -46,9 +47,14 @@ export function stamp(root, gate, sig) { mkdirSync(marks(root), { recursive: tru
 const passed = (root, gate) => { try { return JSON.parse(readFileSync(join(marks(root), gate.name + '.json'), 'utf8')); } catch { return null; } };
 /** The gates not passed for the files as they are now. */
 export const stale = (root, gates = load(root)) => gates.filter((gate) => passed(root, gate)?.sig !== signature(root, gate));
-/** A check of the gate is under way: its flag names a process that is alive (a killed run leaves a flag with a dead pid). */
+/** A check of the gate is under way: its flag names a process that is alive and was written after this boot and within six hours
+ *  (a killed run leaves a flag with a dead pid, or with a pid Windows may give to another process later). */
 export const running = (root, gates = load(root)) => new Set(gates.filter((gate) => {
-  try { const pid = Number(readFileSync(join(marks(root), gate.name + '.running'), 'utf8')); if (!(pid > 0)) return false; process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    const file = join(marks(root), gate.name + '.running'); const age = Date.now() - statSync(file).mtimeMs;
+    const pid = Number(readFileSync(file, 'utf8')); if (!(pid > 0) || age > uptime() * 1000 || age > 6 * 3600_000) return false;
+    process.kill(pid, 0); return true;
+  } catch { return false; }
 }).map((gate) => gate.name));
 
 /** The newest change time among the gate's files (0 when it has none). */

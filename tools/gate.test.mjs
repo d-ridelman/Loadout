@@ -99,6 +99,7 @@ test('only verify alone marks its own gate; a compound command is an ordinary ga
   assert.equal(runsVerify({ run: 'node tools/verify.mjs --all' }), true);
   assert.equal(runsVerify({ run: 'node tools/verify.mjs && node -e process.exit(5)' }), false);
   assert.equal(runsVerify({ run: 'npm test' }), false);
+  assert.equal(runsVerify({ run: 'node ../tools/verify.mjs' }), false, "another project's verify does not mark this gate");
 });
 
 test('a check is running only while its process is alive', async () => {
