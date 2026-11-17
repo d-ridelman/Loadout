@@ -73,7 +73,10 @@ export async function downloadModel(
     let got = 0
     try {
       const res = await fetchFn(base + f.path, { signal: abort.signal })
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok || !res.body) {
+        abort.abort() // drop the connection of an error answer at once
+        throw new Error(`HTTP ${res.status}`)
+      }
       const body = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0], { signal: abort.signal })
       body.on('data', (c: Buffer) => {
         clearTimeout(stall)
@@ -156,6 +159,7 @@ export function embed(bin: string, modelDir: string, texts: string[], prefix: st
     })
     p.on('close', (code) => {
       clearTimeout(timer)
+      if (code === null) return reject(new Error(`loadout-ml did not answer within ${EMBED_TIMEOUT_MS / 1000} s`))
       if (code !== 0) return reject(new Error(err.trim() || `loadout-ml exit ${code}`))
       const lines = out.split('\n').filter((l) => l.trim())
       if (lines.length !== texts.length) return reject(new Error(`loadout-ml: ${lines.length} vectors for ${texts.length} texts`))

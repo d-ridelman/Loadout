@@ -26,7 +26,8 @@ export function Similar({ e, entities, onShow }: { e: Entity; entities: Entity[]
   useEffect(() => {
     if (!ready) return
     let live = true
-    setFound(null)
+    // a rescan of the same skill keeps the list on screen until the new answer comes (no "Looking…" flash)
+    setFound((f) => (f?.id === e.id ? f : null))
     void window.loadout.similarFind(e.id).then(
       (r) => live && setFound(r.ok ? { id: e.id, items: r.data } : { id: e.id, error: r.error }),
       (err: unknown) => live && setFound({ id: e.id, error: err instanceof Error ? err.message : String(err) }),
