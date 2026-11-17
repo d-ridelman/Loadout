@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { BatchPlan, Entity, Level, Profile, ProfileItem, WriteLevel } from '../../shared/model'
 import { count, t } from '../../shared/i18n'
-import { kindLabel, levelLabel, PageHead } from '../ui'
+import { Cmd, kindLabel, levelLabel, PageHead } from '../ui'
 import type { Notify } from '../ui'
 import { levelOk } from './Inspector'
 import { Modal } from './Modal'
@@ -93,7 +93,7 @@ function BatchDialog({ name, onClose, onDone }: BatchProps) {
                     <span>
                       <b>{p.name}</b> <span className="mute">· {clientName(p.client)}</span>
                     </span>
-                    <span className="mono mute">{p.from} → {p.to}</span>
+                    <span className="mono mute"><Cmd text={`${p.from} → ${p.to}`} /></span>
                   </li>
                 ))}
               </ul>

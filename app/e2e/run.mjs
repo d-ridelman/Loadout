@@ -427,7 +427,8 @@ try {
   must((await page.locator('tbody tr').count()) < rowCount, 'the "skills" filter did not narrow the list')
   // the rarer kinds are one list: picking hooks shows hook rows only
   await page.getByLabel('Другие типы').selectOption('hook')
-  must((await page.locator('tbody td.name .badge').allInnerTexts()).every((b) => b === 'хук'), 'the "Other kinds: hooks" filter shows other kinds')
+  const hookBadges = await page.locator('tbody td.name .badge').allInnerTexts()
+  must(hookBadges.length > 0 && hookBadges.every((b) => b === 'хук'), `the "Other kinds: hooks" filter shows other kinds or nothing: ${JSON.stringify(hookBadges)}`)
   await page.getByRole('button', { name: 'все типы' }).click()
   must((await page.getByLabel('Другие типы').inputValue()) === 'all', '"all types" did not reset the other-kinds list')
   await page.getByLabel('Поиск').fill('tool-b')
@@ -742,7 +743,9 @@ try {
 
   // a plain write
   await page.locator('#grid').focus()
-  await page.evaluate(() => { document.querySelector('main').scrollTop = 0 })
+  // the page scrolled part way down, as in the live window where the jump showed: the selected p1 row stays in view
+  const scrolled = await page.evaluate(() => { const m = document.querySelector('main'); m.scrollTop = 120; return m.scrollTop })
+  must(scrolled > 0, 'the matrix page does not scroll at 1280×800: the scroll check below would prove nothing')
   await page.keyboard.press('Space')
   await dialog.getByRole('button', { name: APPLY }).waitFor({ timeout: 8000 })
   await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
@@ -750,7 +753,7 @@ try {
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'after the write the p1 glyph is "disabled"')
   // focus goes back to the table without moving the page (it jumped to the table's top after every preview, seen in the live window)
   await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after the write focus returned to the table')
-  must((await page.evaluate(() => document.querySelector('main').scrollTop)) === 0, 'closing the preview scrolled the page')
+  must((await page.evaluate(() => document.querySelector('main').scrollTop)) === scrolled, 'closing the preview scrolled the page')
   must(readFileSync(cfg, 'utf8') === asOff, 'something besides enabled of p1 was written')
   must((await dialog.count()) === 0, 'the preview did not close after the write')
   must((await page.locator('#notice').innerText()).includes('Откат'), 'no message about the write')
@@ -1099,7 +1102,18 @@ try {
   await page.waitForTimeout(250)
   await shot(page, 'm4-profiles-1920')
   await resize(app, 1280, 800)
+  // the profile's Apply asks for R2 itself: at R0 a refusal opens nothing and keeps R0, consent raises to R2 and opens the batch preview
+  await levelSel.selectOption('R0') // lowering needs no confirmation
+  await waitFor(() => levelIs('R0'), 'the level went down to R0 before the profile apply')
+  await stubDialog(0)
+  askedBefore = await app.evaluate(() => globalThis.__asked)
   await card.getByRole('button', { name: 'Применить…' }).click()
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, '"Apply…" at R0 did not ask for R2')
+  await page.waitForTimeout(400) // a negative check: a wrong dialog would open after the answer
+  must((await dialog.count()) === 0 && (await levelIs('R0')), 'after a refusal the profile apply must open nothing and leave R0')
+  await stubDialog(1)
+  await card.getByRole('button', { name: 'Применить…' }).click()
+  await waitFor(() => levelIs('R2'), '"Apply…" raised the level to R2 after consent')
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   const batchText = await dialog.innerText()
   must(batchText.includes('Изменится записей: 1') && batchText.includes('p1@bundled'), `bundle preview: ${batchText}`)
@@ -1500,8 +1514,18 @@ try {
   await undoGoBtn.click()
   await waitFor(() => !existsSync(hookExe) && !existsSync(oldHookExe) && !existsSync(ctxkitJson) && !existsSync(join(claudeDir, 'ctxkit.json')), 'the rollback after the migration removes both binaries and both policy files')
   must(!/context-toolkit|ctxkit/i.test(readFileSync(settingsFile, 'utf8')) && JSON.stringify(foreignCmds(JSON.parse(readFileSync(settingsFile, 'utf8')))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'the rollback after the migration left ours or touched foreign')
-  await page.keyboard.press('1')
   await levelSel.selectOption('R0') // lowering needs no confirmation
+  await waitFor(() => levelIs('R0'), 'the level went down to R0 before the Context Toolkit refusal')
+  // the page's Apply asks for R2 itself: after a preview at R0 a refusal in the OS dialog installs nothing and keeps R0
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'the preview at R0 enables Apply (it asks for the level on click)')
+  await stubDialog(0)
+  askedBefore = await app.evaluate(() => globalThis.__asked)
+  await applyBtn.click()
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'Context Toolkit Apply at R0 did not ask for R2')
+  await page.waitForTimeout(400) // a negative check: a wrong run would start after the answer
+  must(!existsSync(hookExe) && (await levelIs('R0')), 'after a refusal Context Toolkit Apply must install nothing and leave R0')
+  await page.keyboard.press('1')
   must((await refusal(opts)).includes('R2'), 'at R0 apply was not rejected in main')
   must((await undoRefusal(undoOpts, false)).includes('R2'), 'at R0 the rollback was not rejected in main')
   must(JSON.stringify(realState()) === JSON.stringify(realBefore), 'setup changed a file of the real owner profile')
