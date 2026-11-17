@@ -341,7 +341,7 @@ export interface LoadoutApi {
   plan: (intent: Intent) => Promise<PlanResponse>
   apply: (intent: Intent, baseSha: string) => Promise<Result<Applied>>
   journal: () => Promise<Result<JournalEntry[]>>
-  /** Delete old operation backups (the last 100 and those not older than 90 days stay); main asks for confirmation in a system window. */
+  /** Delete old operation backups (the last 100 and those not older than 90 days stay); main asks for confirmation in its own separate window. */
   pruneBackups: () => Promise<Result<Pruned>>
   rollback: (op: string) => Promise<Result<Applied>>
   rollbackBatch: (batch: string) => Promise<Result<Applied[]>>
