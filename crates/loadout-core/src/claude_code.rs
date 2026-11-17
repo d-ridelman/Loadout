@@ -179,15 +179,22 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                     ),
                     Some(dir) => {
                         let user_flag = flag.map(|b| (b, "~/.claude/settings.json".to_owned()));
-                        match project_flag(c, &mut project_files, &dir, key).or(user_flag) {
-                            Some((on, from)) => (
+                        match project_flag(c, &mut project_files, &dir, key).map(|f| f.or(user_flag)) {
+                            Ok(Some((on, from))) => (
                                 if on { State::On } else { State::Off },
                                 Some(crate::tr!(
                                     "флаг включения взят из {from}",
                                     "the enable flag comes from {from}"
                                 )),
                             ),
-                            None => by_default(c),
+                            Ok(None) => by_default(c),
+                            Err(file) => (
+                                State::Unknown,
+                                Some(crate::tr!(
+                                    "{file} не прочитан (см. предупреждения сканера): флаг включения неизвестен",
+                                    "{file} could not be read (see the scanner warnings): the enable flag is unknown"
+                                )),
+                            ),
                         }
                     }
                 }
@@ -275,29 +282,35 @@ fn project_dir(raw: &str) -> Option<PathBuf> {
 }
 
 /// The project's own `enabledPlugins` value: `.claude/settings.local.json` over `.claude/settings.json`
-/// (Claude Code docs, plugins/loading, "Find where a plugin is enabled"). Returns the value and the file it came from.
+/// (Claude Code docs, plugins/loading, "Find where a plugin is enabled"). Returns the value and the file it came from;
+/// `Err(file)` when a file that decides first exists but could not be read (the scan warns about it).
 fn project_flag(
     c: &mut Ctx,
     files: &mut HashMap<PathBuf, Option<Value>>,
     dir: &Path,
     key: &str,
-) -> Option<(bool, String)> {
+) -> Result<Option<(bool, String)>, String> {
     for name in ["settings.local.json", "settings.json"] {
         let p = dir.join(".claude").join(name);
         if !files.contains_key(&p) {
             let v = c.read_json(&p);
             files.insert(p.clone(), v);
         }
-        let flag = files[&p]
-            .as_ref()
-            .and_then(|v| v.get("enabledPlugins"))
+        let Some(v) = files[&p].as_ref() else {
+            if p.exists() {
+                return Err(c.tilde(&p));
+            }
+            continue;
+        };
+        let flag = v
+            .get("enabledPlugins")
             .and_then(|m| m.get(key))
             .and_then(Value::as_bool);
         if let Some(b) = flag {
-            return Some((b, c.tilde(&p)));
+            return Ok(Some((b, c.tilde(&p))));
         }
     }
-    None
+    Ok(None)
 }
 
 fn marketplaces(c: &mut Ctx) {

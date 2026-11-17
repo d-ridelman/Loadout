@@ -571,6 +571,22 @@ fn project_and_local_plugins_read_the_project_settings() {
     }
 }
 
+/// A project settings file that cannot be read is not "no entry": the state stays unknown, not `defaultEnabled`.
+#[test]
+fn an_unreadable_project_settings_file_leaves_the_plugin_unknown() {
+    let h = synthetic_home(&[
+        (
+            ".claude/plugins/installed_plugins.json",
+            r#"{ "plugins": { "pa@mp": [{ "scope": "project", "projectPath": "{HOME}/work/a", "installPath": "{HOME}/.claude/plugins/cache/mp/pa/1" }] } }"#,
+        ),
+        (".claude/plugins/cache/mp/pa/1/.keep", ""),
+        ("work/a/.claude/settings.json", "{ not json"),
+    ]);
+    let r = loadout_core::scan(&h.0);
+    assert_eq!(plugin(&r, "pa@mp").state, State::Unknown);
+    assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+}
+
 /// `skillOverrides` (Claude Code docs, settings-reference): `"off"` hides the skill, the other three values keep it.
 #[test]
 fn skill_overrides_turn_user_skills_off() {
@@ -698,6 +714,39 @@ fn codex_remote_plugins_carry_the_manifest_display_name() {
         "a token-like name is dropped"
     );
     assert_eq!(shown("app-ffee00112233"), None, "no manifest");
+}
+
+/// Version directories (`1.9.0`, `1.10.0`, sha prefixes) do not sort as strings: the newest manifest names the plugin.
+#[test]
+fn codex_remote_plugin_name_comes_from_the_newest_manifest() {
+    let root = ".codex/plugins/cache/openai-curated-remote/app-1a2b3c4d5e6f";
+    let (old, new) = (
+        format!("{root}/1.9.0/.codex-plugin/plugin.json"),
+        format!("{root}/1.10.0/.codex-plugin/plugin.json"),
+    );
+    let h = synthetic_home(&[
+        (&old, r#"{ "name": "old-name" }"#),
+        (&new, r#"{ "name": "new-name" }"#),
+    ]);
+    let day = std::time::Duration::from_secs(86_400);
+    let at = |rel: &str, t: std::time::SystemTime| {
+        fs::File::options()
+            .write(true)
+            .open(h.0.join(rel))
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    let now = std::time::SystemTime::now();
+    at(&old, now - day * 2);
+    at(&new, now - day);
+    let r = loadout_core::scan(&h.0);
+    let e = r
+        .entities
+        .iter()
+        .find(|e| e.name == "app-1a2b3c4d5e6f")
+        .unwrap();
+    assert_eq!(e.detail["displayName"], "new-name");
 }
 
 #[test]

@@ -251,4 +251,12 @@ describe('Codex connectors', () => {
       ['GitHub', 'app-69f0dc45'],
     ])
   })
+
+  it('the manifest name wins even when the config entry of the same app comes first', () => {
+    const rows = buildRows([
+      ent({ kind: 'connector', client: 'codex', scope: 'cloud', name: 'app-abc', logicalKey: 'app-abc' }),
+      ent({ kind: 'connector', client: 'codex', scope: 'cloud', name: 'app-abc', logicalKey: 'app-abc', detail: { displayName: 'Linear' } }),
+    ])
+    expect(rows.map((r) => [r.name, r.hint])).toEqual([['Linear', 'app-abc']])
+  })
 })

@@ -212,18 +212,21 @@ fn remote_catalog(c: &mut Ctx) {
 
 /// The human name of a cached plugin: `<dir>/<version>/.codex-plugin/plugin.json` → `interface.displayName`, else `name`
 /// (Codex source, core-plugins/manifest.rs; `.claude-plugin` is its fallback location). Text from a file: through `safe_name`.
+/// Version directories are hashes or versions that do not sort as strings: the newest manifest by time wins.
 fn display_name(c: &mut Ctx, dir: &std::path::Path) -> Option<String> {
-    let mut versions: Vec<_> = std::fs::read_dir(dir)
+    let mut manifests: Vec<_> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
+        .filter_map(|v| {
+            [".codex-plugin", ".claude-plugin"]
+                .iter()
+                .map(|d| v.path().join(d).join("plugin.json"))
+                .find(|p| p.is_file())
+        })
         .collect();
-    versions.sort();
-    versions.iter().rev().find_map(|v| {
-        let m = [".codex-plugin", ".claude-plugin"]
-            .iter()
-            .find_map(|d| c.read_json(&v.join(d).join("plugin.json")))?;
+    manifests.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    manifests.iter().rev().find_map(|p| {
+        let m = c.read_json(p)?;
         let name = m
             .pointer("/interface/displayName")
             .and_then(Value::as_str)

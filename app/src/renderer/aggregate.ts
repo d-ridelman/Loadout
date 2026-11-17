@@ -70,10 +70,15 @@ export function buildRows(entities: readonly Entity[]): Row[] {
       // strip the `@marketplace` suffix, keep the leading `@` of a scoped package (`@scope/name`)
       const at = e.name.lastIndexOf('@')
       const name = DISPLAY_NAME_KINDS.has(e.kind) ? (at > 0 ? e.name.slice(0, at) : e.name) : e.logicalKey
-      // a cached connector is named by its id (`app-69f0dc45…`); the core passes the manifest name in `displayName`
-      const shown = e.kind === 'connector' && typeof e.detail['displayName'] === 'string' ? e.detail['displayName'] : null
-      row = shown ? { key, group, name: shown, hint: name, kinds: [], cells: {} } : { key, group, name, kinds: [], cells: {} }
+      row = { key, group, name, kinds: [], cells: {} }
       rows.set(key, row)
+    }
+    // a cached connector is named by its id (`app-69f0dc45…`); the core passes the manifest name in `displayName`,
+    // and it wins whichever entry of the row comes first
+    const shown = e.kind === 'connector' && typeof e.detail['displayName'] === 'string' ? e.detail['displayName'] : null
+    if (shown && row.hint === undefined) {
+      row.hint = row.name
+      row.name = shown
     }
     if (!row.kinds.includes(e.kind)) row.kinds.push(e.kind)
     const cell = row.cells[e.client]
