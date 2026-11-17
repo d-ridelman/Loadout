@@ -34,15 +34,32 @@ export interface Entity {
   toggleLevel?: Level
   /** Where toggling writes, when that is not `origin` (a Claude Code plugin is switched in `settings.json`). */
   toggleAt?: { file: string; pointer: string }
-  /** MCP in a client file: its command can be edited and it can be copied to another client (R2). */
+  /** MCP in a client file: its command can be edited (R2). */
   canEdit: boolean
+  /** The entry (MCP, skill, hook) can be copied to another client (R2); `copyWhy` names the clients that cannot take it. */
+  canCopy: boolean
+  /** Clients a copy is refused to whatever the files hold, with the reason (plugins: every client). */
+  copyWhy?: Partial<Record<ClientId, string>>
+  /** Opaque id of the known project a `project:` entry belongs to: a copy sends it back, never a path. */
+  project?: string
+}
+
+/** A project folder the core knows (Claude Code `~/.claude.json`, Codex `[projects]`). */
+export interface ProjectInfo {
+  id: string
+  /** The folder as shown (`~/…`). */
+  path: string
+  claude: boolean
+  /** Codex trusts it (reads its `.codex/config.toml`). */
+  codex: boolean
 }
 
 /** What to do with an entry. It carries no paths or secret values: the core finds the target itself. */
 export type Intent =
   | { op: 'toggle'; entity: string; enable: boolean }
   | { op: 'edit'; entity: string; command: string; args: string[] }
-  | { op: 'copy'; entity: string; to: ClientId }
+  /** Copy an MCP server, a skill or a hook in the same place; `project` is the id of the project the entry came from. */
+  | { op: 'copy'; entity: string; to: ClientId; project?: string }
   /** New MCP server: local (`command`) or remote (`url`). The env values go only to the core. */
   | { op: 'add'; to: ClientId; name: string; command: string; args: string[]; url: string; env: { key: string; value: string }[] }
   /** Skill from the staging directory filled by main (`stage` is its number, `sub` is the skill's path inside). */
@@ -105,6 +122,8 @@ export interface Plan {
   affects: string[]
   /** What to know before confirming (what is not carried over, which env keys are copied). */
   notes: string[]
+  /** A risk to read before confirming, shown highlighted (secrets landing in a project folder, a hook not trusted yet). */
+  warn: string[]
   baseSha: string
 }
 
@@ -361,6 +380,12 @@ export interface LoadoutApi {
   quarantineProfiles: () => Promise<Result<string>>
   planProfile: (name: string) => Promise<Result<BatchPlan & { running: string[] }>>
   applyProfile: (name: string, batchSha: string) => Promise<Result<BatchApplied>>
+  /** Known project folders, and the entries of one of them (read only, for copying to another client). */
+  projects: () => Promise<Result<ProjectInfo[]>>
+  projectScan: (id: string) => Promise<Result<ScanResult>>
+  /** A batch of copies: one preview, one journal batch, one rollback. */
+  planCopies: (items: Intent[]) => Promise<Result<BatchPlan & { running: string[] }>>
+  applyCopies: (items: Intent[], batchSha: string) => Promise<Result<BatchApplied>>
   ctxkitStatus: () => Promise<Result<CtxkitStatus>>
   ctxkitDoctor: () => Promise<Result<CtxkitDoctor>>
   ctxkitReport: (days: 7 | 14 | 30) => Promise<Result<CtxkitReport>>

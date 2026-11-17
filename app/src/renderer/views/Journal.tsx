@@ -131,7 +131,7 @@ export function Journal({ level, refreshKey, onNotice, ensureLevel }: Props) {
                         {batchHead ? (
                           <button
                             disabled={busy !== null}
-                            title={t('Откатить весь пакет профиля, начиная с последней записи', 'Roll back the whole profile batch, starting from the latest entry')}
+                            title={t('Откатить весь пакет (профиль или копирование), начиная с последней записи', 'Roll back the whole batch (a profile or a copy), starting from the latest entry')}
                             onClick={() => void ensureLevel('R2').then((y) => y && setConfirm({ rows: state.rows.filter((x) => x.batch === j.batch && x.op !== 'rollback' && !x.rolledBack), batch: j.batch }))}
                           >
                             {t('Откатить пакет', 'Roll back batch')}

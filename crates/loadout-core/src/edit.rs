@@ -210,6 +210,63 @@ pub fn put_raw_json(
     ))
 }
 
+/// Appends `value` as the last element of the JSON array at `path` (a copied hook group). The element takes the
+/// indentation and line endings of its neighbours; all other bytes stay. An empty array with a comment inside is a refusal.
+pub fn append_json(
+    text: &str,
+    path: &[String],
+    value: &serde_json::Value,
+) -> Result<String, String> {
+    let (bom, body) = split_bom(text);
+    let raw = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    let out = with_json(body, path, |t, found| {
+        let Found::Value(Value::Array(arr)) = found else {
+            return Err(crate::tr!(
+                "по этому пути не массив",
+                "the value at this path is not an array"
+            ));
+        };
+        let nl = if t.contains("\r\n") { "\r\n" } else { "\n" };
+        let (start, end) = (arr.range.start, arr.range.end);
+        match arr.elements.last() {
+            Some(last) => {
+                let first = arr.elements[0].range().start;
+                let multiline = t[start..first].contains('\n');
+                let indent = if multiline { line_indent(t, first) } else { "" };
+                let sep = if multiline {
+                    format!(",{nl}{indent}")
+                } else {
+                    ", ".to_owned()
+                };
+                let at = last.range().end;
+                Ok(format!(
+                    "{}{sep}{}{}",
+                    &t[..at],
+                    reindent(&raw, indent, nl),
+                    &t[at..]
+                ))
+            }
+            None => {
+                if !t[start + 1..end - 1].trim().is_empty() {
+                    return Err(crate::tr!(
+                        "в пустом массиве есть комментарий",
+                        "an empty array contains a comment"
+                    ));
+                }
+                let base = line_indent(t, start);
+                let indent = format!("{base}  ");
+                Ok(format!(
+                    "{}{nl}{indent}{}{nl}{base}{}",
+                    &t[..=start],
+                    reindent(&raw, &indent, nl),
+                    &t[end - 1..]
+                ))
+            }
+        }
+    })?;
+    Ok(format!("{bom}{out}"))
+}
+
 /// The key right after `path` in its object (`None` for the last one): [`put_raw_json`] puts a cut entry back before it.
 pub fn next_key(text: &str, path: &[String]) -> Result<Option<String>, String> {
     let (_, body) = split_bom(text);

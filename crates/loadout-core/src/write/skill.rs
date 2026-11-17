@@ -6,7 +6,8 @@
 //! Rollback: if the skill has not changed since, the directory goes to the rollback operation's backup rather than being deleted for good.
 
 use super::{need_level, new_op_dir, now_ms, sha, tilde, write_manifest, Applied, Manifest, Plan};
-use crate::model::{Client, Kind};
+use crate::model::{Client, CopyFrom, Kind, ScanResult};
+use crate::projects::Project;
 use std::path::{Path, PathBuf};
 
 const MAX_FILES: usize = 1000;
@@ -50,6 +51,78 @@ fn bad(ru: &str, en: &str) -> String {
 
 pub(super) fn target(home: &Path, name: &str) -> Option<PathBuf> {
     valid_name(name).then(|| home.join(".claude").join("skills").join(name))
+}
+
+/// An install or a copy of a skill folder (rolled back as a folder, not as a file).
+pub(super) fn is_folder_op(m: &Manifest) -> bool {
+    m.kind == "skill" && (m.op == "installSkill" || m.op == "copy")
+}
+
+/// The folder a copy lands in: one the client reads and Loadout scans (docs/TRANSFER.en.md, «Skills»).
+fn skill_root(home: &Path, client: Client, project: Option<&Project>) -> Option<PathBuf> {
+    Some(match (project, client) {
+        (_, Client::ClaudeDesktop) => return None,
+        (None, Client::ClaudeCode) => home.join(".claude/skills"),
+        (None, Client::Codex) => home.join(".codex/skills"),
+        (None, Client::Antigravity) => home.join(".gemini/config/skills"),
+        (None, Client::DeepSeek) => home.join(".dsh/skills"),
+        (None, Client::OpenCode) => home.join(crate::opencode::DIR).join("skills"),
+        (Some(p), Client::ClaudeCode) => p.dir.join(".claude/skills"),
+        // shared by Codex, Antigravity, DeepSeek and OpenCode
+        (Some(p), _) => p.dir.join(".agents/skills"),
+    })
+}
+
+/// Every folder the client takes skills from, for the name check: a copy must not shadow or duplicate a skill.
+fn reads(home: &Path, client: Client, project: Option<&Project>) -> Vec<PathBuf> {
+    let user: Vec<PathBuf> = match client {
+        Client::ClaudeCode => vec![home.join(".claude/skills")],
+        Client::ClaudeDesktop => vec![],
+        Client::Codex => vec![home.join(".codex/skills"), home.join(".agents/skills")],
+        Client::Antigravity => vec![
+            home.join(".gemini/config/skills"),
+            home.join(".gemini/antigravity/skills"),
+        ],
+        Client::DeepSeek => vec![home.join(".dsh/skills"), home.join(".agents/skills")],
+        Client::OpenCode => {
+            let d = home.join(crate::opencode::DIR);
+            vec![
+                d.join("skills"),
+                d.join("skill"),
+                home.join(".claude/skills"),
+                home.join(".agents/skills"),
+            ]
+        }
+    };
+    let mut all = user;
+    if let Some(p) = project {
+        for (dir, clients) in crate::projects::SKILL_DIRS {
+            if clients.contains(&client) {
+                all.push(p.dir.join(dir));
+            }
+        }
+    }
+    all
+}
+
+/// The installed folder of an install or copy line: the client and the project come from the manifest, the path is
+/// computed again (the manifest lives in the user's directory and is not trusted).
+fn target_of(home: &Path, m: &Manifest) -> Option<PathBuf> {
+    if !valid_name(&m.name) {
+        return None;
+    }
+    let client = Client::from_slug(&m.client).unwrap_or(Client::ClaudeCode);
+    let project = if m.project.is_empty() {
+        None
+    } else {
+        Some(crate::projects::find(home, &m.project)?)
+    };
+    let target = skill_root(home, client, project.as_ref())?.join(&m.name);
+    // as on the write: a project folder that became a junction since does not lead the rollback outside the project
+    match &project {
+        Some(p) if super::transfer::inside(p, &target).is_err() => None,
+        _ => Some(target),
+    }
 }
 
 /// Tree files in order: `(path with /, full path, size)`. Links and reparse points are refused, `.git` is skipped.
@@ -195,45 +268,19 @@ fn copy_files(files: &[(String, PathBuf, u64)], to: &Path) -> Result<(), String>
     Ok(())
 }
 
-struct Checked {
-    plan: Plan,
+pub(super) struct Checked {
+    pub(super) plan: Plan,
     files: Vec<(String, PathBuf, u64)>,
     target: PathBuf,
-    stage_root: PathBuf,
+    /// The staging folder of an install from GitHub or a folder (removed after the install); none for a copy.
+    stage_root: Option<PathBuf>,
+    op: &'static str,
+    client: Client,
+    project: String,
 }
 
-fn check(home: &Path, store: &Path, stage: &str, sub: &str, name: &str) -> Result<Checked, String> {
-    if !valid_stage(stage) || !valid_sub(sub) {
-        return Err(bad(
-            "неверные параметры установки скила",
-            "invalid skill installation parameters",
-        ));
-    }
-    let target = target(home, name).ok_or_else(|| {
-        bad(
-            "имя скила: буквы, цифры, `.`, `_`, `-`, до 64 знаков; `synced` и `anthropic-skills` заняты",
-            "skill name: letters, digits, `.`, `_`, `-`, up to 64 characters; `synced` and `anthropic-skills` are reserved",
-        )
-    })?;
-    let stage_root = store.join("staging").join(stage);
-    let src = if sub.is_empty() {
-        stage_root.clone()
-    } else {
-        stage_root.join(sub)
-    };
-    if !src.join("SKILL.md").is_file() {
-        return Err(bad(
-            "источник не подготовлен или в нём нет SKILL.md: начните заново",
-            "the source is not prepared or has no SKILL.md: start over",
-        ));
-    }
-    if std::fs::symlink_metadata(&target).is_ok() {
-        return Err(bad(
-            &format!("скил «{name}» уже есть: Loadout его не перезаписывает"),
-            &format!("skill “{name}” already exists: Loadout does not overwrite it"),
-        ));
-    }
-    let files = walk(&src)?;
+/// Size, warnings and the file list of a skill tree, for the plan.
+fn tree_notes(src: &Path, files: &[(String, PathBuf, u64)]) -> Vec<String> {
     let total: u64 = files.iter().map(|f| f.2).sum();
     let mut notes = vec![bad(
         &format!("файлов: {}, всего {} КБ", files.len(), total.div_ceil(1024)),
@@ -278,6 +325,42 @@ fn check(home: &Path, store: &Path, stage: &str, sub: &str, name: &str) -> Resul
     }
     let listed: Vec<&str> = files.iter().map(|f| f.0.as_str()).take(15).collect();
     notes.push(listed.join(", ") + if files.len() > 15 { " …" } else { "" });
+    notes
+}
+
+fn check(home: &Path, store: &Path, stage: &str, sub: &str, name: &str) -> Result<Checked, String> {
+    if !valid_stage(stage) || !valid_sub(sub) {
+        return Err(bad(
+            "неверные параметры установки скила",
+            "invalid skill installation parameters",
+        ));
+    }
+    let target = target(home, name).ok_or_else(|| {
+        bad(
+            "имя скила: буквы, цифры, `.`, `_`, `-`, до 64 знаков; `synced` и `anthropic-skills` заняты",
+            "skill name: letters, digits, `.`, `_`, `-`, up to 64 characters; `synced` and `anthropic-skills` are reserved",
+        )
+    })?;
+    let stage_root = store.join("staging").join(stage);
+    let src = if sub.is_empty() {
+        stage_root.clone()
+    } else {
+        stage_root.join(sub)
+    };
+    if !src.join("SKILL.md").is_file() {
+        return Err(bad(
+            "источник не подготовлен или в нём нет SKILL.md: начните заново",
+            "the source is not prepared or has no SKILL.md: start over",
+        ));
+    }
+    if std::fs::symlink_metadata(&target).is_ok() {
+        return Err(bad(
+            &format!("скил «{name}» уже есть: Loadout его не перезаписывает"),
+            &format!("skill “{name}” already exists: Loadout does not overwrite it"),
+        ));
+    }
+    let files = walk(&src)?;
+    let notes = tree_notes(&src, &files);
     let plan = Plan {
         op: "installSkill".into(),
         level: "R2".into(),
@@ -293,6 +376,7 @@ fn check(home: &Path, store: &Path, stage: &str, sub: &str, name: &str) -> Resul
         noop: false,
         affects: Vec::new(),
         notes,
+        warn: Vec::new(),
         trash: String::new(),
         base_sha: tree_sha(&files)?,
     };
@@ -300,7 +384,198 @@ fn check(home: &Path, store: &Path, stage: &str, sub: &str, name: &str) -> Resul
         plan,
         files,
         target,
-        stage_root,
+        stage_root: Some(stage_root),
+        op: "installSkill",
+        client: Client::ClaudeCode,
+        project: String::new(),
+    })
+}
+
+/// Frontmatter keys only Claude Code understands (Claude Code docs, skills); the other clients ignore them.
+const CLAUDE_ONLY: [&str; 13] = [
+    "allowed-tools",
+    "disallowed-tools",
+    "context",
+    "agent",
+    "hooks",
+    "paths",
+    "shell",
+    "model",
+    "effort",
+    "arguments",
+    "argument-hint",
+    "when_to_use",
+    "background",
+];
+
+/// A copy of a skill folder to another client, in the same place (user or the entry's project).
+pub(super) fn copy_check(
+    home: &Path,
+    scan: &ScanResult,
+    id: &str,
+    to: &str,
+) -> Result<Checked, String> {
+    let e = super::find(scan, id)?;
+    let dest = super::transfer::dest_of(e, to)?;
+    let Some(CopyFrom::Dir(src)) = &e.copy_from else {
+        return Err(bad(
+            "у скила нет папки, которую можно скопировать",
+            "the skill has no folder to copy",
+        ));
+    };
+    let name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| valid_name(n))
+        .ok_or_else(|| {
+            bad(
+                "имя папки скила недопустимо для копирования",
+                "the skill folder name is not valid for copying",
+            )
+        })?;
+    let place = super::transfer::place_of(home, e)?;
+    let root = skill_root(home, dest, place.as_ref()).ok_or_else(|| {
+        bad(
+            "у этого клиента нет папки скилов",
+            "this client has no skills folder",
+        )
+    })?;
+    if let Some(p) = &place {
+        super::transfer::inside(p, &root)?;
+    }
+    for d in reads(home, dest, place.as_ref()) {
+        if std::fs::symlink_metadata(d.join(&name)).is_ok() {
+            return Err(bad(
+                &format!(
+                    "у получателя уже есть скил «{name}» ({}): Loadout его не перезаписывает",
+                    tilde(home, &d)
+                ),
+                &format!(
+                    "the target already has a skill “{name}” ({}): Loadout does not overwrite it",
+                    tilde(home, &d)
+                ),
+            ));
+        }
+    }
+    if !src.join("SKILL.md").is_file() {
+        return Err(bad(
+            "в папке скила нет SKILL.md",
+            "the skill folder has no SKILL.md",
+        ));
+    }
+    let files = walk(src)?;
+    let fm = crate::frontmatter::read(&src.join("SKILL.md")).unwrap_or_default();
+    let desc = fm
+        .get("description")
+        .map(|d| d.trim().to_owned())
+        .unwrap_or_default();
+    let fm_name = fm.get("name").cloned().unwrap_or_else(|| name.clone());
+    // what would make the target drop the skill: refused, not copied as a dead folder
+    if desc.is_empty() && matches!(dest, Client::Codex | Client::Antigravity | Client::DeepSeek) {
+        return Err(bad(
+            "у скила пустое description: получатель такой скил не загрузит",
+            "the skill has an empty description: the target would not load it",
+        ));
+    }
+    let kebab = !fm_name.is_empty()
+        && fm_name.split('-').all(|w| {
+            !w.is_empty()
+                && w.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        });
+    if dest == Client::DeepSeek && !kebab {
+        return Err(bad(
+            &format!(
+                "DeepSeek отбрасывает скил, у которого name не в kebab-case: «{}»",
+                crate::mask::scrub_words(&fm_name)
+            ),
+            &format!(
+                "DeepSeek drops a skill whose name is not kebab-case: “{}”",
+                crate::mask::scrub_words(&fm_name)
+            ),
+        ));
+    }
+    let mut notes = tree_notes(src, &files);
+    let mut warn = Vec::new();
+    if dest != Client::ClaudeCode {
+        let only: Vec<&str> = CLAUDE_ONLY
+            .iter()
+            .copied()
+            .filter(|k| fm.contains_key(*k))
+            .collect();
+        if !only.is_empty() {
+            notes.push(bad(
+                &format!(
+                    "Ключи {} понимает только Claude Code: получатель их пропустит.",
+                    only.join(", ")
+                ),
+                &format!(
+                    "Only Claude Code understands the keys {}: the target skips them.",
+                    only.join(", ")
+                ),
+            ));
+        }
+        let md = std::fs::read_to_string(src.join("SKILL.md")).unwrap_or_default();
+        if md.contains("!`") || md.contains("```!") || md.contains("${CLAUDE_") {
+            warn.push(bad(
+                "SKILL.md опирается на возможности Claude Code (строки !`…`, ${CLAUDE_…}): у получателя они не выполнятся и не раскроются, проверьте скил после копирования",
+                "SKILL.md relies on Claude Code features (!`…` lines, ${CLAUDE_…}): the target neither runs nor expands them, check the skill after copying",
+            ));
+        }
+    }
+    match (&place, dest) {
+        (Some(_), Client::Codex | Client::Antigravity | Client::DeepSeek | Client::OpenCode) => notes.push(bad(
+            "Папку .agents/skills проекта читают Codex, Antigravity, DeepSeek и OpenCode: скил появится у всех четырёх.",
+            "The project's .agents/skills folder is read by Codex, Antigravity, DeepSeek and OpenCode: the skill appears in all four.",
+        )),
+        (None, Client::Codex) => notes.push(bad(
+            "~/.codex/skills Codex считает устаревшей папкой, но читает; её же видит Loadout.",
+            "Codex deems ~/.codex/skills a deprecated folder but reads it; Loadout sees it too.",
+        )),
+        _ => {}
+    }
+    let from_claude = src
+        .to_string_lossy()
+        .replace('\\', "/")
+        .contains("/.claude/skills/");
+    if place.is_some() && dest != Client::ClaudeCode && from_claude {
+        notes.push(bad(
+            "OpenCode уже читает .claude/skills проекта: после копии в .agents/skills он увидит этот скил дважды.",
+            "OpenCode already reads the project's .claude/skills: after a copy into .agents/skills it sees this skill twice.",
+        ));
+    }
+    notes.push(bad(
+        "Это отдельная копия: правки исходного скила в неё не попадут.",
+        "This is a separate copy: edits of the source skill do not reach it.",
+    ));
+    let target = root.join(&name);
+    let plan = Plan {
+        op: "copy".into(),
+        level: "R2".into(),
+        entity: e.id.clone(),
+        client: dest,
+        kind: Kind::Skill,
+        name: name.clone(),
+        file: crate::scrub_home(home, &format!("{}/", tilde(home, &target))),
+        pointer: String::new(),
+        enable: true,
+        from: bad("нет записи", "no entry"),
+        to: crate::scrub_home(home, &crate::tr!("копия: {}", "copy: {}", tilde(home, src))),
+        noop: false,
+        affects: Vec::new(),
+        notes: notes.iter().map(|n| crate::scrub_home(home, n)).collect(),
+        warn,
+        trash: String::new(),
+        base_sha: tree_sha(&files)?,
+    };
+    Ok(Checked {
+        plan,
+        files,
+        target,
+        stage_root: None,
+        op: "copy",
+        client: dest,
+        project: place.map(|p| p.id).unwrap_or_default(),
     })
 }
 
@@ -327,12 +602,24 @@ pub fn apply(
 ) -> Result<Applied, String> {
     need_level("R2", max_level)?;
     let c = check(home, store, stage, sub, name)?;
+    install(store, c, base_sha, None)
+}
+
+/// Puts the checked tree into place: a backup copy and the manifest first, then a temp folder next to the skills folder
+/// and one `rename`, then the tree hash is checked.
+pub(super) fn install(
+    store: &Path,
+    c: Checked,
+    base_sha: Option<&str>,
+    batch: Option<&str>,
+) -> Result<Applied, String> {
     if base_sha.is_some_and(|b| b != c.plan.base_sha) {
         return Err(bad(
             "источник изменился после предпросмотра: постройте план заново",
             "the source changed after the preview: build the plan again",
         ));
     }
+    let name = c.plan.name.clone();
     let (id, dir) = new_op_dir(store)?;
     let fail = |e: String| {
         let _ = std::fs::remove_dir_all(&dir);
@@ -343,38 +630,47 @@ pub fn apply(
         return fail(e);
     }
     let p = &c.plan;
+    // temp directory next to `skills/` (same volume, `rename` is atomic), but not inside: clients watch `skills/`
+    let (Some(root), Some(outer)) = (c.target.parent(), c.target.parent().and_then(Path::parent))
+    else {
+        return fail(super::empty_path());
+    };
+    // the folders this copy creates (`<p>/.agents`, `<p>/.agents/skills`): the rollback removes them again when empty
+    let (made_root, made_outer) = (!root.exists(), !outer.exists());
     let m = Manifest {
         version: 2,
         id: id.clone(),
         time: now_ms(),
-        op: "installSkill".into(),
+        op: c.op.into(),
         of: None,
-        batch: None,
+        batch: batch.map(str::to_owned),
         level: "R2".into(),
-        entity: String::new(),
+        entity: p.entity.clone(),
         inverse_enable: None,
         trash_id: None,
         trash_before: None,
         path: c.target.to_string_lossy().into_owned(),
         sha_before: String::new(),
         sha_after: p.base_sha.clone(),
-        client: Client::ClaudeCode.slug().into(),
+        client: c.client.slug().into(),
         kind: "skill".into(),
-        name: name.to_owned(),
+        name: name.clone(),
         pointer: String::new(),
         file: p.file.clone(),
         from: p.from.clone(),
         to: p.to.clone(),
+        project: c.project.clone(),
+        // for a skill folder: `mkdir` is the skills folder, `created` the one above it
+        created: made_outer,
+        mkdir: made_root,
     };
     if let Err(e) = write_manifest(&dir, &m) {
         return fail(e);
     }
-    // temp directory next to `skills/` (same volume, `rename` is atomic), but not inside: Claude Code watches `skills/`
-    let claude = home.join(".claude");
-    let tmp = claude.join(format!(".{name}.loadout.tmp"));
+    let tmp = outer.join(format!(".{name}.loadout.tmp"));
     let _ = std::fs::remove_dir_all(&tmp);
     let placed = copy_files(&c.files, &tmp)
-        .and_then(|()| std::fs::create_dir_all(claude.join("skills")).map_err(|e| e.to_string()))
+        .and_then(|()| std::fs::create_dir_all(root).map_err(|e| e.to_string()))
         .and_then(|()| {
             if std::fs::symlink_metadata(&c.target).is_ok() {
                 return Err(bad(
@@ -394,12 +690,21 @@ pub fn apply(
         });
     let _ = std::fs::remove_dir_all(&tmp);
     if let Err(e) = placed {
+        // the folders made for this copy go too (only empty ones: `remove_dir` refuses otherwise)
+        if made_root {
+            let _ = std::fs::remove_dir(root);
+        }
+        if made_outer {
+            let _ = std::fs::remove_dir(outer);
+        }
         return fail(bad(
             &format!("скил не установлен: {e}"),
             &format!("the skill was not installed: {e}"),
         ));
     }
-    let _ = std::fs::remove_dir_all(&c.stage_root);
+    if let Some(stage) = &c.stage_root {
+        let _ = std::fs::remove_dir_all(stage);
+    }
     if dir_sha(&c.target).as_deref() != Some(p.base_sha.as_str()) {
         return Err(bad(
             "скил изменён другим процессом сразу после установки: проверьте результат, строка журнала сохранена",
@@ -408,7 +713,7 @@ pub fn apply(
     }
     Ok(Applied {
         op: id,
-        entity: String::new(),
+        entity: p.entity.clone(),
         from: p.from.clone(),
         to: p.to.clone(),
     })
@@ -416,7 +721,7 @@ pub fn apply(
 
 /// Whether the install can be rolled back: the skill is in place and unchanged. The path comes from the name, not from the manifest.
 pub(super) fn can_rollback(home: &Path, m: &Manifest) -> bool {
-    target(home, &m.name)
+    target_of(home, m)
         .and_then(|t| walk(&t).ok())
         .and_then(|f| tree_sha_by(&f, cached_digest).ok())
         .as_deref()
@@ -429,9 +734,13 @@ pub(super) fn rollback(
     op: &str,
     m: &Manifest,
 ) -> Result<Applied, String> {
-    // the manifest lives in the user's directory: recompute the target from the verified name
-    let target = target(home, &m.name)
-        .ok_or_else(|| bad("манифест повреждён", "the manifest is corrupted"))?;
+    // the manifest lives in the user's directory: recompute the target from the verified name, client and project
+    let target = target_of(home, m).ok_or_else(|| {
+        bad(
+            "манифест повреждён, проекта больше нет в списке известных или его папка ведёт за пределы проекта (ссылка или junction)",
+            "the manifest is corrupted, the project is no longer among the known ones, or its folder leads outside the project (a link or junction)",
+        )
+    })?;
     let files = walk(&target).map_err(|_| {
         bad(
             "скила нет на месте: откатывать нечего",
@@ -461,9 +770,12 @@ pub(super) fn rollback(
     });
     // First the directory leaves its place (one `rename` if on the same volume), and only then is the journal line written:
     // an unfinished deletion must not look like a rollback. If deletion failed, restore what was deleted from the copy.
-    let gone = home
-        .join(".claude")
-        .join(format!(".{}.loadout.removed", m.name));
+    // next to the skills folder, as on install (`~/.claude`, `<p>/.agents` …)
+    let outer = target
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(super::empty_path)?;
+    let gone = outer.join(format!(".{}.loadout.removed", m.name));
     let _ = std::fs::remove_dir_all(&gone);
     let moved = rename_dir(&target, &gone).is_ok();
     // Restore after a failed rollback. Copies everything it can, not stopping at a busy file. If it cannot restore everything,
@@ -525,6 +837,15 @@ pub(super) fn rollback(
     }
     // the copy is already in the operation's backup: a temp directory that was not fully removed does no harm
     let _ = std::fs::remove_dir_all(&gone);
+    // folders the install created go too, only when empty (`remove_dir` refuses otherwise)
+    if m.mkdir {
+        if let Some(root) = target.parent() {
+            let _ = std::fs::remove_dir(root);
+        }
+    }
+    if m.created {
+        let _ = std::fs::remove_dir(outer);
+    }
     Ok(Applied {
         op: id,
         entity: String::new(),
@@ -568,6 +889,9 @@ mod tests {
             file: String::new(),
             from: String::new(),
             to: String::new(),
+            project: String::new(),
+            created: false,
+            mkdir: false,
         }
     }
 

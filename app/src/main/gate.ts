@@ -55,7 +55,11 @@ export function validateIntent(raw: unknown): Intent {
     return { op: 'edit', entity, command: r['command'], args: args as string[] }
   }
   if (r['op'] === 'copy' && typeof r['to'] === 'string' && CLIENT_IDS.includes(r['to'])) {
-    return { op: 'copy', entity, to: r['to'] as ClientId }
+    const project = r['project']
+    // the opaque id from the core's project list, never a path
+    if (project === undefined || project === '') return { op: 'copy', entity, to: r['to'] as ClientId }
+    if (typeof project !== 'string' || !/^[0-9a-f]{16}$/.test(project)) throw invalid()
+    return { op: 'copy', entity, to: r['to'] as ClientId, project }
   }
   throw invalid()
 }

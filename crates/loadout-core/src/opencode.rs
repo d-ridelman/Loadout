@@ -223,7 +223,18 @@ fn config(c: &mut Ctx, path: &Path, scope: &'static str) {
     }
 }
 
-fn mcp(c: &mut Ctx, path: &Path, file: &str, root: &Value, g: Gen, scope: &'static str) {
+/// The MCP servers of a project's `opencode.json(c)` (read only: `projects.rs` turns their write targets into copy sources).
+pub(crate) fn project_mcp(c: &mut Ctx, path: &Path, scope: &str) {
+    let Some(root) = c.read_jsonc(path) else {
+        return;
+    };
+    let file = c.tilde(path);
+    if let Some(g) = generation(&root) {
+        mcp(c, path, &file, &root, g, scope);
+    }
+}
+
+fn mcp(c: &mut Ctx, path: &Path, file: &str, root: &Value, g: Gen, scope: &str) {
     let base = servers_path(g);
     let servers = base.iter().try_fold(root, |v, k| v.get(k));
     // V1 `enabled: false` and V2 `disabled: true` mean "off"; `inverted` marks the V2 key

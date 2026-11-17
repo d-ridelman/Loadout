@@ -12,6 +12,7 @@ import type {
   OpKind,
   Plan,
   Profile,
+  ProjectInfo,
   Pruned,
   ScanDiff,
   ScanResult,
@@ -25,6 +26,28 @@ const STATES = ['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
 const isStr = (v: unknown): v is string => typeof v === 'string'
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
+/** The opaque project id of the core (`projects.rs`): 16 hex digits. */
+export const PROJECT_RE = /^[0-9a-f]{16}$/
+
+/** Reasons a copy to a client is refused: known client ids to short strings, nothing else. */
+function copyWhyOf(raw: Record<string, unknown>): Partial<Record<ClientId, string>> {
+  const out: Partial<Record<ClientId, string>> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (CLIENTS.includes(k) && isStr(v) && v.length <= 500) out[k as ClientId] = v
+  }
+  return out
+}
+
+/** The `projects` reply: id, the folder as shown, and which clients know it. */
+export function validateProjects(raw: unknown): ProjectInfo[] {
+  if (!Array.isArray(raw) || raw.length > 5000) bad('список проектов', 'project list')
+  return raw.map((p: unknown) => {
+    if (!isObj(p) || !isStr(p['id']) || !PROJECT_RE.test(p['id']) || !isStr(p['path']) || typeof p['claude'] !== 'boolean' || typeof p['codex'] !== 'boolean') {
+      bad('проект', 'project')
+    }
+    return { id: p['id'], path: p['path'], claude: p['claude'], codex: p['codex'] }
+  })
+}
 
 /** Everything that comes from the core passes this check before it reaches the window: both request replies and pushes. */
 export function validateScan(raw: unknown): ScanResult {
@@ -64,6 +87,9 @@ export function validateScan(raw: unknown): ScanResult {
       detail: e['detail'] as Record<string, unknown>, // values are already masked by the core
       canToggle: e['canToggle'] as boolean,
       canEdit: e['canEdit'] as boolean,
+      canCopy: e['canCopy'] === true,
+      ...(isObj(e['copyWhy']) ? { copyWhy: copyWhyOf(e['copyWhy']) } : {}),
+      ...(isStr(e['project']) && PROJECT_RE.test(e['project']) ? { project: e['project'] } : {}),
       ...(isStr(e['toggleWhy']) ? { toggleWhy: e['toggleWhy'] } : {}),
       ...(e['toggleLevel'] === 'R1' || e['toggleLevel'] === 'R2' ? { toggleLevel: e['toggleLevel'] as Level } : {}),
       ...(isObj(e['toggleAt']) && isStr(e['toggleAt']['file']) && isStr(e['toggleAt']['pointer'])
@@ -128,16 +154,18 @@ const opOf = (v: unknown): v is OpKind => v === 'toggle' || v === 'edit' || v ==
 export function validatePlan(raw: unknown): Plan {
   if (!isObj(raw)) bad('план', 'plan')
   const { op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects, notes, baseSha, trash } = raw
+  const warn = raw['warn'] ?? []
   if (
     !opOf(op) || !levelOf(level) || !(trash === '' || trash === 'out' || trash === 'in') ||
     !isStr(entity) || !known(client) || !kindOf(kind) || !isStr(name) || !isStr(file) || !isStr(pointer) ||
     typeof enable !== 'boolean' || !isStr(from) || !isStr(to) || typeof noop !== 'boolean' ||
     !Array.isArray(notes) || notes.length > 20 || !notes.every(isStr) ||
+    !Array.isArray(warn) || warn.length > 10 || !warn.every(isStr) ||
     !isStr(baseSha) || !/^[0-9a-f]{64}$/.test(baseSha)
   ) {
     bad('план', 'plan')
   }
-  return { trash, op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), notes: notes as string[], baseSha }
+  return { trash, op, level, entity, client, kind, name, file, pointer, enable, from, to, noop, affects: ids(affects), notes: notes as string[], warn: warn as string[], baseSha }
 }
 
 export function validateBatchPlan(raw: unknown): BatchPlan {

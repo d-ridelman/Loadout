@@ -210,7 +210,7 @@ fn hooks_file(c: &mut Ctx, _flavor: &str, scope: &str, config_path: Option<&str>
     }
     if let Some(v) = c.read_json(&path) {
         let (hooks, ptr) = v.get("hooks").map_or((&v, ""), |h| (h, "/hooks"));
-        scan_hooks(c, CLIENT, &shown, ptr, scope, hooks);
+        scan_hooks(c, CLIENT, &shown, ptr, scope, hooks, None);
     }
 }
 

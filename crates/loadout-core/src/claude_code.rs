@@ -56,7 +56,16 @@ pub fn scan(c: &mut Ctx) {
     md_dir(c, "agents", Kind::Agent);
     md_dir(c, "commands", Kind::Command);
     if let Some(h) = settings.as_ref().and_then(|s| s.get("hooks")) {
-        scan_hooks(c, CLIENT, "~/.claude/settings.json", "/hooks", "user", h);
+        let real = c.home.join(".claude/settings.json");
+        scan_hooks(
+            c,
+            CLIENT,
+            "~/.claude/settings.json",
+            "/hooks",
+            "user",
+            h,
+            Some(&real),
+        );
     }
 }
 
@@ -288,7 +297,7 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
 }
 
 /// `projectPath` from `installed_plugins.json`: only an absolute local path without `..` is read.
-fn project_dir(raw: &str) -> Option<PathBuf> {
+pub(crate) fn project_dir(raw: &str) -> Option<PathBuf> {
     let p = PathBuf::from(raw);
     let network = raw.starts_with("\\\\") || raw.starts_with("//");
     (p.is_absolute() && !network && !p.components().any(|x| x == Component::ParentDir)).then_some(p)
@@ -484,20 +493,7 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
             .into_iter()
             .flatten()
         {
-            // `shown` is the display path (with `~`), not the real `projects` key; M3 looks the key up by `scope` for writing.
-            let shown = c.tilde(Path::new(path));
-            found.push(
-                Entity::new(
-                    CLIENT,
-                    Kind::Mcp,
-                    format!("project:{shown}"),
-                    name.clone(),
-                    State::On,
-                    file,
-                    format!("/projects/{}/mcpServers/{}", esc_ptr(&shown), esc_ptr(name)),
-                )
-                .detail(mcp_detail(cfg)),
-            );
+            found.push(local_mcp(c, &claude_json, path, name, cfg));
         }
     }
     for mut e in found {
@@ -514,6 +510,37 @@ fn mcp(c: &mut Ctx, connectors_off: bool, denied: &HashSet<String>) {
         }
         c.push(e);
     }
+}
+
+/// A local-scope server: `~/.claude.json` → `projects.<key>.mcpServers.<name>`. Read only (Loadout does not toggle it),
+/// but it can be copied to another client in the same project.
+pub(crate) fn local_mcp(c: &Ctx, claude_json: &Path, key: &str, name: &str, cfg: &Value) -> Entity {
+    // `shown` is the display path (with `~`), not the real `projects` key; the copy source keeps the real key.
+    let shown = c.tilde(Path::new(key));
+    let mut e = Entity::new(
+        CLIENT,
+        Kind::Mcp,
+        format!("project:{shown}"),
+        name.to_owned(),
+        State::On,
+        c.tilde(claude_json),
+        format!("/projects/{}/mcpServers/{}", esc_ptr(&shown), esc_ptr(name)),
+    )
+    .detail(mcp_detail(cfg))
+    .copy_from(crate::model::CopyFrom::Entry(Src {
+        file: claude_json.to_path_buf(),
+        format: Format::Json,
+        path: vec![
+            "projects".into(),
+            key.to_owned(),
+            "mcpServers".into(),
+            name.to_owned(),
+        ],
+    }));
+    if let Some(dir) = project_dir(key) {
+        e.project = Some(crate::projects::id_of(&dir));
+    }
+    e
 }
 
 fn md_dir(c: &mut Ctx, dir: &str, kind: Kind) {

@@ -14,6 +14,7 @@ pub mod mask;
 pub mod model;
 pub mod opencode;
 pub mod profiles;
+pub mod projects;
 pub mod trash;
 pub mod watch;
 pub mod write;
@@ -217,6 +218,10 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
         )
         .detail(json!({ "description": desc }))
         .fs_named(); // the name has already passed safe_name, and the fallback is the directory name
+                     // the client's own and project skills can be copied; built-in and plugin ones belong to their package
+        if scope == "user" || scope.starts_with("project:") {
+            e = e.copy_from(model::CopyFrom::Dir(d.path()));
+        }
         if name != dir_name {
             e = e.note(crate::tr!(
                 "имя в frontmatter «{name}» не совпадает с каталогом «{dir_name}»",
@@ -235,6 +240,8 @@ pub(crate) fn scan_hooks(
     root_ptr: &str,
     scope: &str,
     hooks: &Value,
+    // the real file for a copy to another client (Claude Code and Codex user hooks); `None` elsewhere
+    real: Option<&Path>,
 ) {
     let Some(events) = hooks.as_object() else {
         return;
@@ -260,7 +267,7 @@ pub(crate) fn scan_hooks(
                 // Both the label and the displayed command are built from already masked tokens.
                 let tokens = mask::mask_args(&mask::split_shell(cmd));
                 let label = hook_label(&tokens);
-                let e = Entity::new(
+                let mut e = Entity::new(
                     client,
                     Kind::Hook,
                     scope,
@@ -284,6 +291,24 @@ pub(crate) fn scan_hooks(
                     "command": mask::join_line(&tokens),
                     "timeout": h.get("timeout").filter(|t| t.is_number()),
                 }));
+                if let Some(file) = real {
+                    let mut path: Vec<String> = root_ptr
+                        .split('/')
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect();
+                    path.extend([
+                        event.clone(),
+                        gi.to_string(),
+                        "hooks".into(),
+                        hi.to_string(),
+                    ]);
+                    e = e.copy_from(model::CopyFrom::Entry(model::Src {
+                        file: file.to_path_buf(),
+                        format: model::Format::Json,
+                        path,
+                    }));
+                }
                 c.push(e);
             }
         }
@@ -526,13 +551,24 @@ pub fn scan_all(home: &Path, store: Option<&Path>, opencode_system: Option<&Path
     if let Some(store) = store {
         trash::inject(&mut c, store);
     }
+    finish(home, &mut c);
+    ScanResult {
+        entities: c.entities,
+        warnings: c.warnings,
+        facts: facts::collect(home),
+    }
+}
 
+/// Derived fields and the last scrub of every entity, for the full scan and for one project's scan alike.
+pub(crate) fn finish(home: &Path, c: &mut Ctx) {
     // Last line of defense: the home directory path must not remain in any string field.
     let forms = home_forms(home);
     let mut seen_ids: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for e in &mut c.entities {
         e.can_toggle = e.target.is_some();
         e.can_edit = e.src.is_some();
+        e.can_copy = e.src.is_some() || e.copy_from.is_some();
+        e.copy_why = write::transfer::static_why(e);
         e.toggle_level = e.target.as_ref().map(|t| {
             match t.kind {
                 model::TargetKind::Flag => "R1",
@@ -604,11 +640,6 @@ pub fn scan_all(home: &Path, store: Option<&Path>, opencode_system: Option<&Path
     }
     for w in &mut c.warnings {
         scrub_str(w, &forms);
-    }
-    ScanResult {
-        entities: c.entities,
-        warnings: c.warnings,
-        facts: facts::collect(home),
     }
 }
 

@@ -284,6 +284,66 @@ fn oc_text(o: &Oc) -> String {
     }
 }
 
+/// A hook copied from Codex into a restyled `~/.claude/settings.json`: one appended to an existing event array, one under a
+/// new event key. The copy only inserts (nothing of the file goes), keeps the file's line endings, the result parses as the
+/// old file plus the new groups, and the rollback of each brings back the very bytes.
+fn hook_copy_round_trip(s: &Style) -> Result<(), TestCaseError> {
+    let e = env();
+    let path = e.home.join(".claude/settings.json");
+    let original = restyle(&fs::read_to_string(&path).unwrap(), s, false);
+    fs::write(&path, &original).unwrap();
+    let parse = |t: &str| -> serde_json::Value {
+        serde_json::from_str(t.strip_prefix('\u{feff}').unwrap_or(t)).unwrap()
+    };
+    let r = loadout_core::scan(&e.home);
+    let hook = |event: &str| {
+        r.entities
+            .iter()
+            .find(|x| {
+                x.client == Client::Codex && x.kind == Kind::Hook && x.name.starts_with(event)
+            })
+            .map(|x| x.id.clone())
+            .unwrap()
+    };
+    for (event, at) in [("PreToolUse", 1usize), ("Stop", 0)] {
+        let i = Intent::Copy {
+            entity: hook(event),
+            to: "claude-code".into(),
+            project: String::new(),
+        };
+        let p = write::plan(&e.home, Some(&e.store), &i).map_err(TestCaseError::fail)?;
+        let op = write::apply(&e.home, &e.store, &i, &p.base_sha, ML)
+            .map_err(TestCaseError::fail)?
+            .op;
+        let after = fs::read_to_string(&path).unwrap();
+        let (gone, added) = middle(&original, &after);
+        prop_assert!(gone.is_empty(), "the copy removed bytes: {:?}", gone);
+        if s.crlf {
+            prop_assert!(
+                !added.replace("\r\n", "").contains('\n'),
+                "a bare LF in a CRLF file: {:?}",
+                added
+            );
+        }
+        prop_assert_eq!(after.starts_with('\u{feff}'), s.bom);
+        let (mut old, new) = (parse(&original), parse(&after));
+        let group = new["hooks"][event][at].clone();
+        prop_assert!(group["hooks"][0]["command"].is_string(), "{}", group);
+        match old["hooks"][event].as_array_mut() {
+            Some(a) => a.push(group),
+            None => old["hooks"][event] = serde_json::json!([group]),
+        }
+        prop_assert_eq!(old, new, "the file is the old one plus the group");
+        write::rollback(&e.home, &e.store, &op, ML).map_err(TestCaseError::fail)?;
+        prop_assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            original.clone(),
+            "rollback is byte for byte"
+        );
+    }
+    Ok(())
+}
+
 fn mcp_state(home: &Path, name: &str) -> Option<(String, State)> {
     loadout_core::scan(home)
         .entities
@@ -359,5 +419,10 @@ proptest! {
     #[test]
     fn claude_json_toggle_and_rollback_keep_every_byte(s in style()) {
         round_trip(".claude/settings.json", Client::ClaudeCode, "alpha@mp", &s, false)?;
+    }
+
+    #[test]
+    fn a_copied_hook_only_inserts_and_rolls_back_byte_for_byte(s in style()) {
+        hook_copy_round_trip(&s)?;
     }
 }
