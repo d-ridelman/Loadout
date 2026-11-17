@@ -18,12 +18,13 @@ export function Hooks({ hooks, onShow }: { hooks: Entity[]; onShow: (e: Entity) 
   return (
     <>
       <h2>{t('Конвейер хуков · события слева направо в порядке жизненного цикла', 'Hook pipeline · events left to right in lifecycle order')}</h2>
-      {/* there may be more events than fit in the window: the grid scrolls horizontally instead of being cut off */}
+      {/* columns share the window width; only with very many events (below 88px a column) does the grid scroll instead of being cut off */}
       <div className="hud tablewrap scrollx" tabIndex={0} role="region" aria-label={t('Хуки по событиям и клиентам: прокрутка', 'Hooks by event and client: scrollable')}>
-        <div className="pipe" role="group" aria-label={t('Хуки по событиям и клиентам', 'Hooks by event and client')} style={{ gridTemplateColumns: `130px repeat(${events.length}, minmax(150px, 1fr))` }}>
+        <div className="pipe" role="group" aria-label={t('Хуки по событиям и клиентам', 'Hooks by event and client')} style={{ gridTemplateColumns: `minmax(96px, 130px) repeat(${events.length}, minmax(88px, 1fr))` }}>
           <div />
           {events.map((ev) => (
-            <div key={ev} className="h">{ev}</div>
+            // a line may break between the words of `UserPromptSubmit`, not inside them
+            <div key={ev} className="h">{ev.replace(/([a-z])([A-Z])/g, '$1​$2')}</div>
           ))}
           {CLIENTS.map((c) => (
             <PipeRow key={c.id} name={c.name} events={events} hooks={hooks.filter((h) => h.client === c.id)} eventOf={eventOf} onShow={onShow} />

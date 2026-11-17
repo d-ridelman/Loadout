@@ -172,9 +172,11 @@ html[data-fx='off'] .beam { display: none; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 
 /* hooks */
-.pipe { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); min-width: max-content; width: 100%; }
-.pipe > div { background: var(--panel); padding: 6px 8px; min-height: 44px; }
-.pipe .h { font: 600 11px var(--mono); color: var(--cyan); text-align: center; }
+/* columns share the width: a long hook name or matcher wraps instead of widening every column (formerly to ~450px) */
+.pipe { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); width: 100%; }
+.pipe > div { background: var(--panel); padding: 6px 8px; min-height: 44px; min-width: 0; }
+.pipe .h { font: 600 11px var(--mono); color: var(--cyan); text-align: center; overflow-wrap: anywhere; padding: 6px 4px; }
+.pipe .hk { overflow-wrap: anywhere; }
 .rowname { display: flex; align-items: flex-start; }
 .hk { display: block; font: 12px var(--mono); margin: 2px 0; padding: 1px 6px; border: 0; border-left: 2px solid var(--pink); border-radius: 0; background: rgba(255, 121, 198, 0.08); text-align: left; width: 100%; }
 .hk small { color: var(--mute); }
