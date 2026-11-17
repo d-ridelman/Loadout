@@ -1,4 +1,6 @@
 /target
+# Claude Code worktrees of the main checkout
+/.claude/worktrees/
 /state/loadout-qa/
 /state/loadout-qa-*/
 /state/real-*.png

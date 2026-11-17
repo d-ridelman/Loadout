@@ -1,0 +1,11 @@
+{
+  "mode": "observe",
+  "gates": [
+    {
+      "name": "verify",
+      "files": "^(fixtures/|(?!(docs|state|mockup)/|LICENSE|[.]gitignore$|.*[.]md$))",
+      "run": "node tools/verify.mjs",
+      "why": "the checks the changed files need: Rust, types, unit tests, the window end to end"
+    }
+  ]
+}

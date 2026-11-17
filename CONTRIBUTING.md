@@ -21,6 +21,8 @@ If `app/node_modules/electron/dist/electron.exe` is missing after `npm ci` (npm 
 
 ## Before you push
 
+The quick way: `node tools/verify.mjs` runs only the checks your changed files need, cheapest first, and stops at the first red one (`--dry` shows the plan, `--all` runs everything, `--release` adds the screenshots, the installer and its check). The rules are in `tools/verify.mjs` and tested in `tools/verify.test.mjs`.
+
 All of these must pass:
 
 ```bash
@@ -30,12 +32,12 @@ cargo test
 cd app
 npm run typecheck
 npx vitest run
-npm run e2e          # builds the core, context-toolkit.exe and the window, drives the real app on fixtures (about 3 minutes)
+npm run e2e          # builds the core, context-toolkit.exe and the window, drives the real app on fixtures (about 2 minutes)
 ```
 
 `crates/context-toolkit` also has `node crates/context-toolkit/tests/guard.test.mjs` (needs `cargo build --release` first). To check the packaged build: `npm run pack`, then `npm run pack:check` (it reads your real configs, read-only, level R0).
 
-The e2e run opens app windows and takes screenshots, so run it when the machine is idle. Window snapshots go to `state/`; commit only the ones that changed meaningfully and revert the rest (`git checkout -- state/`).
+The e2e run opens app windows and takes screenshots, so run it when the machine is idle. The screenshots go to a temporary directory that the run prints at the end, so the tree stays clean; `E2E_UPDATE_SHOTS=1 npm run e2e` (or `node tools/verify.mjs --release`) refreshes the committed ones in `state/` when the window really changed. Waits in the scenarios wait for a condition the app shows, not for a fixed time.
 
 ## Rules that matter
 
