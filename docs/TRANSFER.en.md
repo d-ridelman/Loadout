@@ -2,7 +2,7 @@
 
 Russian version: [TRANSFER.md](TRANSFER.md).
 
-This is the map behind “Copy to client…” and “Copy from a project…”. Facts were checked against the official documentation
+This is the map behind “Copy to client…” (the inspector) and “Add ▾ → From another client…” (a batch, globally or in a project). Facts were checked against the official documentation
 and source code on 17 November 2026 (Codex rust-v0.169.0, OpenCode v1.19.6, the Antigravity CLI documentation shipped with
 the program, the README files of the DeepSeek Harness 0.2.1 packages). Anything not found in a primary source is marked
 **not verified**. Paths use `~` for the user's home folder and `<p>` for a project folder.
@@ -84,7 +84,7 @@ A plugin is a package that the client's own tool installs and updates; no pair c
 |---|---|
 | Claude Code → Antigravity | `agy plugin import claude` (Antigravity's own converter) |
 | Claude Code → Codex | Codex reads Claude Code marketplaces (`.claude-plugin/marketplace.json`): add the marketplace and install the plugin in Codex (**not verified** end to end) |
-| Claude Code → OpenCode, DeepSeek, Desktop | impossible as a package (OpenCode plugins are JS code, DeepSeek plugins are npm packages); copy the plugin's skills and MCP servers one by one where they are visible as entries |
+| Claude Code → OpenCode, DeepSeek, Desktop | impossible as a package (OpenCode plugins are JS code, DeepSeek plugins are npm packages). Loadout does not copy a plugin's skills and MCP servers either: a copy would stop following the plugin's updates, and `${CLAUDE_PLUGIN_ROOT}` points into a versioned cache folder |
 
 [cc-skills]: https://code.claude.com/docs/en/skills
 [cc-mcp]: https://code.claude.com/docs/en/mcp

@@ -57,7 +57,7 @@ export function RollbackDialog({ rows, batch, onClose, onDone }: RollbackProps) 
   const applyRef = useRef<HTMLButtonElement>(null)
   useEffect(() => applyRef.current?.focus(), [])
   const names = rows.map((r) => r.name).join(', ')
-  const head = batch !== null ? t('Откатить пакет профиля', 'Roll back the profile batch') : t('Откатить', 'Roll back')
+  const head = batch !== null ? t('Откатить пакет', 'Roll back the batch') : t('Откатить', 'Roll back')
   const run = async () => {
     if (busy) return
     setBusy(true)

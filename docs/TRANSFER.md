@@ -2,7 +2,7 @@
 
 English version: [TRANSFER.en.md](TRANSFER.en.md).
 
-На этой карте построены «Копировать в клиент…» и «Перенос из проекта…». Факты сверены с официальной документацией и
+На этой карте построены «Копировать в клиент…» (инспектор) и «Добавить ▾ → Из другого клиента…» (пакетом, глобально или в проекте). Факты сверены с официальной документацией и
 исходниками 17.11.2026 (Codex rust-v0.169.0, OpenCode v1.19.6, документация Antigravity CLI, которая ставится вместе с
 программой, README пакетов DeepSeek Harness 0.2.1). Что не нашлось в первоисточнике, помечено **не проверено**. `~` —
 домашняя папка, `<p>` — папка проекта.
@@ -83,7 +83,7 @@ Claude Code `<p>/.claude/skills`; Codex, Antigravity, DeepSeek и OpenCode чи�
 |---|---|
 | Claude Code → Antigravity | `agy plugin import claude` (конвертер самого Antigravity) |
 | Claude Code → Codex | Codex читает маркетплейсы Claude Code (`.claude-plugin/marketplace.json`): добавьте маркетплейс и поставьте плагин в Codex (**не проверено** целиком) |
-| Claude Code → OpenCode, DeepSeek, Desktop | как пакет невозможно (плагины OpenCode — код на JS, у DeepSeek — npm-пакеты); скилы и MCP-серверы плагина копируются по одному там, где они видны как записи |
+| Claude Code → OpenCode, DeepSeek, Desktop | как пакет невозможно (плагины OpenCode — код на JS, у DeepSeek — npm-пакеты). Скилы и MCP-серверы плагина Loadout тоже не копирует: копия перестала бы следовать обновлениям плагина, а `${CLAUDE_PLUGIN_ROOT}` указывает в кеш с номером версии |
 
 [cc-skills]: https://code.claude.com/docs/en/skills
 [cc-mcp]: https://code.claude.com/docs/en/mcp
