@@ -93,8 +93,8 @@ async function shot(page, lang, name) {
 }
 
 const L = {
-  ru: { add: 'Добавить MCP', client: 'Клиент', name: 'Имя', command: 'Команда', args: 'Аргументы, по одному в строке', preview: 'Предпросмотр', addGo: 'Добавить', plugin: 'Установить плагин', addMarket: 'Добавить маркетплейс…', marketSrc: 'Источник маркетплейса', addMarketGo: 'Добавить маркетплейс', catalog: 'Каталог e2e-market', close: 'Закрыть', skill: 'Установить скил', skillSrc: 'Источник скила', what: 'Что будет скачано', download: 'Скачать и показать', skillPreview: 'Предпросмотр установки', install: 'Установить', disable: 'Выключить', journal: 'Журнал операций', profName: 'Имя профиля', profile: 'рабочий', capture: 'Снять с текущего состояния', entries: 'Записи профиля', hygiene: /^Гигиена коммитов/, irreversible: /^Подтверждение необратимого/, ctxPreview: /^Предпросмотр \(/, apply: /^Применить: установить/, applied: 'Применено.', undo: 'Откатить Инструменты контекста', undoGo: 'Откатить: убрать хуки, блок правил и бинарь', eff: 'Эффективность', turns: 'Ходы по дням' },
-  en: { add: 'Add MCP', client: 'Client', name: 'Name', command: 'Command', args: 'Arguments, one per line', preview: 'Preview', addGo: 'Add', plugin: 'Install plugin', addMarket: 'Add marketplace…', marketSrc: 'Marketplace source', addMarketGo: 'Add marketplace', catalog: 'Catalog e2e-market', close: 'Close', skill: 'Install skill', skillSrc: 'Skill source', what: 'What will be downloaded', download: 'Download and show', skillPreview: 'Preview installation', install: 'Install', disable: 'Disable', journal: 'Operations journal', profName: 'Profile name', profile: 'work', capture: 'Capture current state', entries: 'Profile entries', hygiene: /^Commit hygiene/, irreversible: /^Confirm irreversible/, ctxPreview: /^Preview \(/, apply: /^Apply: install/, applied: 'Applied.', undo: 'Roll back Context Toolkit', undoGo: 'Roll back: remove hooks, rules block and binary', eff: 'Efficiency', turns: 'Turns by day' },
+  ru: { add: 'Добавить MCP', client: 'Клиент', name: 'Имя', command: 'Команда', args: 'Аргументы, по одному в строке', preview: 'Предпросмотр', addGo: 'Добавить', plugin: 'Установить плагин', addMarket: 'Добавить маркетплейс…', marketSrc: 'Источник маркетплейса', addMarketGo: 'Добавить маркетплейс', catalog: 'Каталог e2e-market', close: 'Закрыть', skill: 'Установить скил', skillSrc: 'Источник скила', what: 'Что будет скачано', download: 'Скачать и показать', skillPreview: 'Предпросмотр установки', install: 'Установить', disable: 'Выключить', journal: 'Журнал операций', profName: 'Имя профиля', profile: 'рабочий', capture: 'Снять с текущего состояния', entries: 'Записи профиля', hygiene: /^Гигиена коммитов/, irreversible: /^Подтверждение необратимого/, ctxPreview: /^Предпросмотр \(/, apply: /^Применить: установить/, applied: 'Применено.', undo: 'Показать, что уберёт откат', welcomeOk: 'Понятно, начать', legend: 'Что значат значки', undoGo: 'Откатить: убрать хуки, блок правил и бинарь', eff: 'Эффективность', turns: 'Ходы по дням' },
+  en: { add: 'Add MCP', client: 'Client', name: 'Name', command: 'Command', args: 'Arguments, one per line', preview: 'Preview', addGo: 'Add', plugin: 'Install plugin', addMarket: 'Add marketplace…', marketSrc: 'Marketplace source', addMarketGo: 'Add marketplace', catalog: 'Catalog e2e-market', close: 'Close', skill: 'Install skill', skillSrc: 'Skill source', what: 'What will be downloaded', download: 'Download and show', skillPreview: 'Preview installation', install: 'Install', disable: 'Disable', journal: 'Operations journal', profName: 'Profile name', profile: 'work', capture: 'Capture current state', entries: 'Profile entries', hygiene: /^Commit hygiene/, irreversible: /^Confirm irreversible/, ctxPreview: /^Preview \(/, apply: /^Apply: install/, applied: 'Applied.', undo: 'Show what the rollback removes', welcomeOk: 'Got it, start', legend: 'What the marks mean', undoGo: 'Roll back: remove hooks, rules block and binary', eff: 'Efficiency', turns: 'Turns by day' },
 }
 
 async function pass(lang) {
@@ -142,7 +142,11 @@ async function pass(lang) {
       await dialog.waitFor({ state: 'detached', timeout: 8000 })
     }
 
-    // sections for reading: matrix with the inspector, radar, hooks, doctor
+    // the first-run card (the profile is fresh), then the matrix with the inspector and the legend open
+    await page.getByRole('button', { name: l.welcomeOk }).waitFor({ timeout: 8000 })
+    await shot(page, lang, 'welcome')
+    await page.getByRole('button', { name: l.welcomeOk }).click()
+    await page.getByText(l.legend).click()
     await cell('tool-a', 3).click()
     await shot(page, lang, 'matrix')
     await page.keyboard.press('2')

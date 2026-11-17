@@ -338,7 +338,7 @@ export function Ctxkit({ level, onNotice }: Props) {
               {spin('apply', t('Применяю…', 'Applying…')) ?? t('Применить: установить или обновить', 'Apply: install or update')}
             </button>
           </div>
-          <p className="mute small status-line" role="status">{busy ? BUSY_TEXT[busy]() : ''}</p>
+          <p className="mute small status-line" role="status">{busy === 'preview' || busy === 'apply' ? BUSY_TEXT[busy]() : ''}</p>
         </form>
         {error?.kind === 'setup' ? <p className="s-broken" role="alert">{error.text}</p> : null}
         {result?.kind === 'setup' ? (
@@ -385,7 +385,8 @@ export function Ctxkit({ level, onNotice }: Props) {
             </button>
           ) : null}
         </div>
-        {error?.kind === 'uninstall' ? <p className="s-broken" role="alert">{error.text}</p> : null}
+        <p className="mute small status-line" role="status">{busy === 'undoPreview' || busy === 'undo' ? BUSY_TEXT[busy]() : ''}</p>
+        {error?.kind === 'uninstall' ?<p className="s-broken" role="alert">{error.text}</p> : null}
         {result?.kind === 'uninstall' ? (
           <>
             <p className="mute small">

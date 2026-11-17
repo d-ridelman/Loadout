@@ -292,6 +292,41 @@ try {
   await page.waitForSelector('#grid', { timeout: 20000 })
   must((await page.title()) === 'Loadout', 'the window title is not Loadout')
 
+  // ---- first run: the welcome card says what the window does, writes nothing, names the only network use; closed once, it stays closed ----
+  {
+    const welcome = page.getByRole('region', { name: 'Loadout: что это и чего ждать' })
+    await welcome.waitFor({ timeout: 8000 })
+    const w = await welcome.innerText()
+    for (const s of ['Claude Code', 'Только чтение · R0', 'покажет, что изменится', 'подтверждения','проверки обновлений на GitHub', 'правом нижнем углу']) must(w.includes(s), `the welcome card lacks "${s}": ${w}`)
+    for (const [ww, hh] of SIZES) {
+      await resize(app, ww, hh)
+      await page.waitForTimeout(150)
+      await layout(page, `welcome ${ww}`)
+      await shot(page, `b2-welcome-${ww}`)
+    }
+    await resize(app, 1280, 800)
+    const vw = await axeCheck(page, 'welcome')
+    must(vw.length === 0, `axe: welcome card: ${vw.map((x) => x.id).join(', ')}`)
+    await welcome.getByRole('button', { name: 'Понятно, начать' }).click()
+    await welcome.waitFor({ state: 'detached', timeout: 5000 })
+    await waitFor(() => existsSync(join(profile, 'settings.json')) && JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).welcomed === true, 'closing the welcome card is saved')
+  }
+
+  // ---- the legend of the matrix marks: one click away above the table, every state plus +N, Δ and FX ----
+  {
+    const legend = page.locator('details.legend-box')
+    await legend.locator('summary').click()
+    const text = await legend.innerText()
+    for (const s of ['включено', 'выключено', 'сломано', 'расхождение версий','только в приложении', 'не определено', '+N', 'Δ', 'FX']) must(text.includes(s), `the legend lacks "${s}": ${text}`)
+    must((await legend.boundingBox()).y < (await page.locator('#grid').boundingBox()).y, 'the legend must be above the table')
+    await shot(page, 'b2-legend-1280')
+    await resize(app, 1920, 1080)
+    await page.waitForTimeout(150)
+    await shot(page, 'b2-legend-1920')
+    await resize(app, 1280, 800)
+    await legend.locator('summary').click()
+  }
+
   // the top line is custom (no system frame): the mark, dragging; the controls do not go under the window buttons
   const bar = await page.evaluate(() => {
     const h = document.querySelector('header')
@@ -438,7 +473,7 @@ try {
   must((await page.evaluate(() => document.activeElement?.id)) === 'grid', 'focus left the table on update')
   must((await page.locator('td.fresh').count()) > 0, 'the change is not highlighted with the Δ marker')
   must((await page.locator('td.fresh .delta').first().innerText()) === 'Δ', 'highlight without a marker (colour only)')
-  must((await page.locator('[role=status]').count()) === 0, 'the "loading" screen is shown on update')
+  must((await page.locator('main [role=status]').count()) === 0, 'the "loading" screen is shown on update')
 
   // ---- a killed core comes back up, the window catches up with changes made during the pause ----
   const leaf = home.split(/[\\/]/).pop()
@@ -475,6 +510,18 @@ try {
   const dialog = page.locator('[role=dialog][aria-modal=true]')
   const asOff = original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false')
   must(asOff !== original, 'fixture: p1 has no enabled = true')
+
+  // the "broken: N" counter in the footer leads to the Doctor; the Doctor groups findings and says how to fix each one
+  await page.getByRole('button', { name: /^Сломано: \d+\. Открыть Доктора/ }).click()
+  await waitFor(async () => (await page.locator('main h2').first().innerText()).startsWith('Доктор'), 'the footer counter opens the Doctor')
+  {
+    // group headings are set in capitals by CSS
+    const doc = (await page.locator('main').innerText()).toLowerCase()
+    must(doc.includes('сломано ·') && doc.includes('к сведению ·') && (doc.match(/как исправить/g) ?? []).length === (await page.locator('.find').count()), `the Doctor without groups or a fix per finding: ${doc.slice(0, 400)}`)
+    const sizes = await page.evaluate(() => [...document.querySelectorAll('main h2, aside h2')].map((h) => parseFloat(getComputedStyle(h).fontSize)))
+    must(sizes.every((s) => s >= 18 && s <= 20), `section headings must be 18-20px: ${sizes}`)
+  }
+  await page.keyboard.press('1')
 
   // single keys also work after a mouse click on a button (focus stays on the button, not on the table)
   await page.getByRole('button', { name: /^Радар/ }).click()
@@ -682,8 +729,25 @@ try {
   // editing a command: old values are not shown, new secrets are hidden in the preview
   const deskFile = join(home, 'AppData', 'Roaming', 'Claude', 'claude_desktop_config.json')
   const deskOrig = readFileSync(deskFile)
+  // the form starts from the current command; with a masked part (a password argument) it starts empty and says why
+  // an editable MCP whose command the core shows whole (nothing masked)
+  const plain = await page.evaluate(async () => {
+    const r = await window.loadout.scan()
+    const e = r.ok ? r.data.entities.find((x) => x.kind === 'mcp' && x.canEdit && typeof x.detail.command === 'string' && !JSON.stringify(x.detail).includes('<masked>')) : undefined
+    return e ? { name: e.name, client: e.client, command: e.detail.command } : null
+  })
+  must(plain !== null, 'fixture: no editable MCP without masked values')
+  await clickCell(plain.name, ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek'].indexOf(plain.client))
+  await page.getByRole('button', { name: 'Править команду…' }).click()
+  must((await dialog.getByLabel('Команда').inputValue()) === plain.command, `the Edit command form is not filled with the current command of ${plain.name}`)
+  await page.keyboard.press('Escape')
+  await dialog.waitFor({ state: 'detached', timeout: 5000 })
   await clickCell('desk-tool', 1)
   await page.getByRole('button', { name: 'Править команду…' }).click()
+  must((await dialog.getByLabel('Команда').inputValue()) === '' && (await dialog.innerText()).includes('Часть текущей команды скрыта'), 'a masked command must leave the form empty with an explanation')
+  await dialog.getByLabel('Аргументы, по одному в строке').fill('<masked>')
+  await dialog.getByLabel('Команда').fill('x')
+  must(await dialog.getByRole('button', { name: 'Предпросмотр' }).isDisabled(), 'a typed <masked> must not reach the preview')
   await dialog.getByLabel('Команда').fill('new-cmd')
   await dialog.getByLabel('Аргументы, по одному в строке').fill('--token\nFAKE-SECRET-NEW\n--port\n8080')
   await shot(page, 'm4-edit-dialog-1280')
@@ -868,6 +932,14 @@ try {
   await dialog.waitFor({ state: 'detached', timeout: 8000 }) // while the dialog is open, single keys are disabled
   await page.keyboard.press('1')
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'profile applied: p1 disabled')
+  // the applied profile now describes the state exactly: it is marked; the destructive button is far from "Apply"
+  await page.keyboard.press('6')
+  await waitFor(async () => (await card.innerText()).includes('совпадает с текущим состоянием'), 'the applied profile is marked as matching the current state')
+  const gap = await card.evaluate((c) => {
+    const b = (name) => [...c.querySelectorAll('button')].find((x) => x.textContent.trim() === name).getBoundingClientRect()
+    return Math.round(b('Удалить профиль…').left - b('Сохранить изменения').right)
+  })
+  must(gap >= 150, `"Delete profile" sits next to the main buttons (${gap}px)`)
   await page.keyboard.press('5')
   const batchRb = await rollbackRow(page.locator('table[aria-label="Журнал операций"]'), 'Откатить пакет')
   must(batchRb.includes('p1@bundled') && batchRb.includes('~/.codex/config.toml'), `batch rollback preview: ${batchRb}`)
@@ -875,7 +947,11 @@ try {
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('включено'), 'bundle rolled back: p1 came back')
   must(readFileSync(cfg).equals(cfgBeforeCopy), 'after the bundle rollback config.toml equals the original')
   await page.keyboard.press('6')
-  await card.getByRole('button', { name: 'Удалить профиль' }).click()
+  must(!(await card.innerText()).includes('совпадает с текущим состоянием'), 'after the batch rollback the profile no longer matches, but is still marked')
+  // deleting asks once more: the first press only offers the confirmation
+  await card.getByRole('button', { name: 'Удалить профиль…' }).click()
+  must((await card.count()) === 1, 'the profile was deleted without confirmation')
+  await card.getByRole('button', { name: 'Удалить навсегда' }).click()
   await waitFor(async () => (await card.count()) === 0, 'profile deleted')
 
   // ---- built-in Context Toolkit: install and apply on a fixture copy, diagnostics and effectiveness ----
@@ -1044,10 +1120,10 @@ try {
   const slotsNum = page.getByLabel('Лимит параллельных сборок, от 1 до 8')
   must((await polSel.inputValue()) === 'keep' && (await polSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Включить выбранные|Выключить все', 'policies select: default "Do not change"')
   must((await page.locator('#ctx-policy-hint').innerText()).includes('файла политик нет'), 'the caption under the policies without a policy file must say there is none')
-  must(await hygiene.isDisabled() && await slotsBox.isDisabled() && await page.getByRole('checkbox', { name: /Неожиданные файлы-отчёты/ }).isDisabled() && await page.getByRole('checkbox', { name: /Подтверждение необратимого/ }).isDisabled(), 'with "Do not change" the policy checkboxes must be unavailable')
-  // what is ticked under "Do not change" does not go to setup: the window keeps the settings, and main keeps the arguments (no --policy)
-  await polSel.selectOption('on')
+  // under "Do not change" the checkboxes show what is on now (no file: nothing) and a tick switches the mode by itself
+  must(!(await hygiene.isDisabled()) && !(await hygiene.isChecked()) && !(await slotsBox.isChecked()), 'with "Do not change" and no policy file the checkboxes must show nothing on and be available')
   await hygiene.check()
+  must((await polSel.inputValue()) === 'on', 'a policy tick did not switch the mode to "Turn on the selected"')
   await slotsBox.check()
   await slotsNum.fill('3')
   must(await applyBtn.isDisabled(), 'after choosing policies the old preview must not allow apply')
@@ -1069,7 +1145,7 @@ try {
   // ---- rollback on a fixture copy: preview, R2, foreign hooks in place, a repeat is safe ----
   const undoOpts = { antigravity: false, dsh: false }
   const undoRefusal = (o, dry) => page.evaluate(async ([x, d]) => (await window.loadout.ctxkitUninstall(x, d)).error ?? 'ok', [o, dry])
-  const undoPreviewBtn = page.getByRole('button', { name: 'Откатить Инструменты контекста', exact: true })
+  const undoPreviewBtn = page.getByRole('button', { name: 'Показать, что уберёт откат', exact: true })
   const undoGoBtn = page.getByRole('button', { name: 'Откатить: убрать хуки, блок правил и бинарь' })
   const foreignCmds = (s) => Object.values(s.hooks ?? {}).flat().flatMap((g) => g.hooks ?? []).map((h) => h.command ?? '').filter((c) => !/(^|[\\/"])(context-toolkit|ctxkit)(\.exe)?("|\s|$)/i.test(c)).sort()
   const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v)
@@ -1083,8 +1159,8 @@ try {
   must((await undoRefusal(undoOpts, 'x')).includes('параметры'), 'an invalid rollback dryRun was not rejected')
   // busy state: right after the click the button shows "Counting…" with a spinner, the status line says it is in progress, all buttons are disabled
   const busyNow = await page.evaluate(() => {
-    const sec = document.querySelector('section[aria-label="Применение"]')
-    const b = [...sec.querySelectorAll('button')].find((x) => x.textContent === 'Откатить Инструменты контекста')
+    const sec = document.querySelector('section[aria-label="Откат"]')
+    const b = [...sec.querySelectorAll('button')].find((x) => x.textContent === 'Показать, что уберёт откат')
     // the state is captured at the first moment the DOM showed the busy state (MutationObserver, not a pause: the response is fast)
     return new Promise((resolve) => {
       const snap = () => ({ label: b.textContent, spin: !!b.querySelector('.spin'), status: sec.querySelector('[role=status]').textContent, allDisabled: [...sec.querySelectorAll('button')].every((x) => x.disabled) })
@@ -1127,11 +1203,15 @@ try {
     const br = btns.map(r)
     const hints = [...sec.querySelectorAll('.field > .small')].map(r)
     const spread = (xs) => Math.max(...xs) - Math.min(...xs)
+    // the rollback card comes after the apply card, its red button is not in the apply row
+    const undoSec = document.querySelector('section[aria-label="Откат"]')
     return {
       selDx: spread(sels.map((x) => x.left)), lblDx: spread(lbls.map((x) => x.left)), lblSelDx: Math.abs(lbls[0].left - sels[0].left),
-      btnCount: btns.length, btnLeftDx: spread(br.map((x) => x.left)), btnWidthDx: spread(br.map((x) => x.width)),
+      btnCount: btns.length, btnLeftDx: Math.abs(br[0].left - sels[0].left), btnWidthDx: 0,
       btnClipped: btns.some((b) => b.scrollWidth > b.clientWidth + 1),
-      btnsOrdered: br.every((x, i) => i === 0 || x.top >= br[i - 1].bottom - 1),
+      // preview then apply, on one line, apply filled as the main action
+      btnsOrdered: br.length === 2 && Math.abs(br[0].top - br[1].top) <= 1 && br[1].left >= br[0].right && btns[1].classList.contains('primary'),
+      undoBelow: r(undoSec).top >= r(sec).bottom,
       hintsOut: hints.some((x) => x.right > r(sec).right + 0.5 || x.left < r(sec).left - 0.5),
       statusBelow: r(sec.querySelector('[role=status]')).top >= br[br.length - 1].bottom - 1,
       hScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth, mScroll: document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth,
@@ -1141,7 +1221,7 @@ try {
     await resize(app, w, 800)
     await page.waitForTimeout(250)
     const f = await formLayout()
-    must(f.selDx <= 1 && f.lblDx <= 1 && f.lblSelDx <= 1 && f.btnCount === 4 && f.btnLeftDx <= 1 && f.btnWidthDx <= 1 && !f.btnClipped && f.btnsOrdered && !f.hintsOut && f.statusBelow && f.hScroll <= 0 && f.mScroll <= 1, `alignment of the Context Toolkit form at ${w}: ${JSON.stringify(f)}`)
+    must(f.selDx <= 1 && f.lblDx <= 1 && f.lblSelDx <= 1 && f.btnCount === 2 && f.btnLeftDx <= 1 && !f.btnClipped && f.btnsOrdered && f.undoBelow && !f.hintsOut && f.statusBelow && f.hScroll <= 0 && f.mScroll <= 1, `alignment of the Context Toolkit form at ${w}: ${JSON.stringify(f)}`)
     if (w !== 1100) await shot(page, `m5-ctxkit-undo-${w}`)
   }
   await resize(app, 1280, 800)
@@ -1152,7 +1232,7 @@ try {
   await waitFor(() => !existsSync(hookExe), 'the rollback removed the hooks binary')
   await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'after the rollback there is no "Rollback done." caption')
   await waitFor(async () => (await page.locator('#notice').innerText().catch(() => '')).includes('Откат Инструментов контекста выполнен'), 'after the rollback there is no notification')
-  must(await page.evaluate(() => document.activeElement?.textContent === 'Откатить Инструменты контекста'), 'after the rollback focus did not return to the rollback preview button')
+  must(await page.evaluate(() => document.activeElement?.textContent === 'Показать, что уберёт откат'), 'after the rollback focus did not return to the rollback preview button')
   must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'one rollback preview allowed a second rollback')
   await waitFor(async () => (await page.locator('main').innerText()).includes('~/.claude/hooks/context-toolkit.exe: ✕ нет'), 'status after the rollback: the hooks copy is gone')
   const undone = JSON.parse(readFileSync(settingsFile, 'utf8'))
@@ -1171,7 +1251,7 @@ try {
   await waitFor(() => undoGoBtn.isEnabled(), 'repeated rollback preview')
   await undoGoBtn.click()
   await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'the repeated rollback finished')
-  must(readFileSync(settingsFile, 'utf8') === settingsUndone && !existsSync(hookExe) && !(await page.locator('section[aria-label="Применение"] [role=alert]').count()), 'the repeated rollback changed files or showed an error')
+  must(readFileSync(settingsFile, 'utf8') === settingsUndone && !existsSync(hookExe) && !(await page.locator('main [role=alert]').count()), 'the repeated rollback changed files or showed an error')
   // integration checkboxes reach setup: the rollback preview with Antigravity and DeepSeek Harness mentions them (on a copy, writes nothing)
   const integ = await page.evaluate(async () => (await window.loadout.ctxkitUninstall({ antigravity: true, dsh: true }, true)).data?.output ?? '')
   must(/antigravity/i.test(integ) && /DeepSeek/i.test(integ) && integ.includes('[dry-run]'), `the rollback preview with integrations has no lines about Antigravity and DeepSeek: ${integ.slice(0, 400)}`)
@@ -1293,6 +1373,29 @@ try {
     must((await up.locator('footer img').count()) === 0, 'release notes HTML reached the window')
     must(!(await calls()).includes('download'), 'the update started downloading by itself')
     await both('upd-available')
+    // a toast and the update card at the same time: both whole, no overlap, at the narrowest window too
+    await up.getByLabel('Уровень записи').selectOption('R0')
+    await up.getByRole('button', { name: 'Добавить MCP' }).click()
+    const toast = up.locator('#notice')
+    await toast.waitFor({ timeout: 5000 })
+    must((await up.locator('.toasts[role=status] #notice').count()) === 1, 'an info toast must sit in the status live region')
+    for (const w of [1100, 1280, 1920]) {
+      await resize(ua, w, 800)
+      await up.waitForTimeout(150)
+      const m = await up.evaluate(() => {
+        const a = document.querySelector('#notice').getBoundingClientRect()
+        const b = document.querySelector('.upd-card').getBoundingClientRect()
+        const t = document.querySelector('#notice .toast-text')
+        return { overlap: !(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top), clipped: t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1, right: a.right, vw: innerWidth }
+      })
+      must(!m.overlap && !m.clipped && m.right <= m.vw, `toast and update card at ${w}: ${JSON.stringify(m)}`)
+      if (w !== 1100) await shot(up, `b2-toast-update-${w}`)
+    }
+    await resize(ua, 1280, 800)
+    const vt = await axeCheck(up, 'toast')
+    must(vt.length === 0, `axe found violations on the toast: ${vt.map((x) => x.id).join(', ')}`)
+    await toast.getByRole('button', { name: 'Закрыть уведомление' }).click()
+    await toast.waitFor({ state: 'detached', timeout: 3000 })
     const va = await axeCheck(up, 'update card')
     must(va.length === 0, `axe found violations on the update card: ${va.map((x) => x.id).join(', ')}`)
     await card.getByRole('button', { name: 'Что нового (GitHub)' }).click()
@@ -1331,7 +1434,7 @@ try {
 
   // ---- "loading" state ----
   session = await launch({ LOADOUT_HOME: home, LOADOUT_QA_DELAY_MS: '3000' })
-  await session.page.waitForSelector('[role=status]', { timeout: 10000 })
+  await session.page.waitForSelector('main [role=status]', { timeout: 10000 })
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-loading-1280')
   await session.page.waitForSelector('#grid', { timeout: 20000 })
@@ -1339,8 +1442,16 @@ try {
 
   // ---- "error" state: the core is not found ----
   session = await launch({ LOADOUT_HOME: home, LOADOUT_BIN: join(repo, 'target', 'release', 'loadout-missing.exe') })
-  await session.page.waitForSelector('[role=alert]', { timeout: 10000 })
-  must((await session.page.locator('[role=alert]').innerText()).includes('ядро не найдено'), 'message about a missing core')
+  await session.page.waitForSelector('main [role=alert]', { timeout: 10000 })
+  {
+    // the person reads what to do; the raw text (path) is folded under "Details" and carries no developer advice
+    const alert = session.page.locator('main [role=alert]')
+    const seen = await alert.innerText()
+    must(seen.includes('Повторить') && seen.includes('переустановите') && !seen.includes('loadout-missing'), `the error screen without a human hint or with the raw path unfolded: ${seen}`)
+    must((await alert.textContent()).includes('ядро не найдено') && !/cargo/i.test(await alert.textContent()), 'the folded detail must name the missing core and give no cargo advice')
+    await alert.locator('summary').click()
+    must((await alert.innerText()).includes('loadout-missing'), 'the details do not open')
+  }
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-error-1280')
   await close(session)
@@ -1350,8 +1461,8 @@ try {
   cpSync(process.execPath, fake)
   homes.push(dirname(fake))
   session = await launch({ LOADOUT_HOME: home, LOADOUT_BIN: fake })
-  await session.page.waitForSelector('[role=alert]', { timeout: 15000 })
-  must((await session.page.locator('[role=alert]').innerText()).includes('ядро не ответило'), 'message about a core failure')
+  await session.page.waitForSelector('main [role=alert]', { timeout: 15000 })
+  must((await session.page.locator('main [role=alert]').textContent()).includes('ядро не ответило'), 'message about a core failure')
   await session.page.getByRole('button', { name: 'Повторить' }).click()
   await close(session)
 
@@ -1360,16 +1471,28 @@ try {
   homes.push(empty)
   session = await launch({ LOADOUT_HOME: empty })
   await session.page.waitForSelector('#grid', { timeout: 20000 })
-  must((await session.page.locator('td.empty').innerText()).includes('не найдено'), 'empty state')
+  must((await session.page.locator('td.empty').innerText()).includes('Не найдено ни одного клиента'), 'empty state')
+  must((await session.page.locator('td.empty').getByRole('button', { name: 'Пересканировать' }).count()) === 1, 'the empty matrix offers no next step')
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-empty-1280')
+  // the other sections of an empty home say what to do too, and nothing is clipped at either width
+  for (const [key, name, text] of [['3', 'hooks', 'Хуков не найдено'], ['4', 'doctor', 'Всё чисто'], ['6', 'profiles', 'Профилей пока нет']]) {
+    await session.page.keyboard.press(key)
+    await waitFor(async () => (await session.page.locator('main').innerText()).includes(text), `empty ${name}`)
+    for (const [w, h] of SIZES) {
+      await resize(session.app, w, h)
+      await session.page.waitForTimeout(150)
+      await layout(session.page, `empty ${name} ${w}`)
+      await shot(session.page, `b2-empty-${name}-${w}`)
+    }
+  }
   await close(session)
   session = undefined
 
   // ---- English UI: not a single Cyrillic letter in the text, in the attributes, or in the core responses ----
   const enHome = materialize(() => {})
   homes.push(enHome)
-  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ writeLevel: 'R2' }))
+  writeFileSync(join(profile, 'settings.json'), JSON.stringify({ writeLevel: 'R2', welcomed: true }))
   // the journal of the Russian scenarios stays: entries made in another language are shown in the current one (relang in the core)
   const enMarket = sources(enHome)
   session = await launch({ ...fakeEnv(enHome, join(enHome, 'claude-calls.txt')), LOADOUT_LANG: 'en' })
@@ -1442,7 +1565,7 @@ try {
       await enOk('ctxkit: applied')
       await waitFor(async () => (await en.locator('#ctx-policy-hint').innerText()).includes('Currently on: commit_hygiene, stray_files'), 'Context Toolkit (EN): the “Currently on” caption from the doctor')
       await enOk('ctxkit: policies caption')
-      await en.getByRole('button', { name: 'Roll back Context Toolkit', exact: true }).click()
+      await en.getByRole('button', { name: 'Show what the rollback removes', exact: true }).click()
       const enUndo = en.getByRole('button', { name: 'Roll back: remove hooks, rules block and binary' })
       await waitFor(() => enUndo.isEnabled(), 'Context Toolkit (EN): rollback preview')
       await enOk('ctxkit: rollback preview')
@@ -1554,12 +1677,17 @@ try {
     await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().waitFor({ timeout: 8000 })
     await enOk('journal row')
     await shot(en, 'en-journal-1280')
-    // the language switch: to Russian and back
+    // the language switch: to Russian and back; the open section and the matrix selection stay
     await en.getByLabel('Language').selectOption('ru')
     await en.getByRole('button', { name: 'Матрица' }).waitFor({ timeout: 10000 })
     must((await en.evaluate(() => document.documentElement.lang)) === 'ru', 'after switching to RU lang is not ru')
+    must((await en.locator('nav [aria-current=page]').innerText()).startsWith('Журнал'), 'the language switch left the journal')
     await en.getByLabel('Язык').selectOption('en')
     await en.getByRole('button', { name: 'Matrix' }).waitFor({ timeout: 10000 })
+    must((await en.locator('nav [aria-current=page]').innerText()).startsWith('Journal'), 'the language switch back left the journal')
+    await en.keyboard.press('1')
+    await en.waitForSelector('#grid', { timeout: 15000 })
+    must((await en.locator('td[aria-selected="true"]').count()) === 1, 'the language switch lost the matrix selection')
     // after RU→EN: the write level survived saving the language, the restarted core speaks English and accepts a write
     must((await en.getByLabel('Write').inputValue()) === 'R2', 'the language change reset the write level')
     must(JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).lang === 'en', 'the language was not saved to settings.json')
