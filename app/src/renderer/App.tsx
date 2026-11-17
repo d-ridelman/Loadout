@@ -163,7 +163,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
   /** Closes the dialog and returns focus to the table, like the palette. */
   const closeFlow = useCallback(() => {
     setFlow(null)
-    requestAnimationFrame(() => document.getElementById('grid')?.focus())
+    // no scroll: focusing the table jumped the page to its top after every preview (seen in the live window)
+    requestAnimationFrame(() => document.getElementById('grid')?.focus({ preventScroll: true }))
   }, [])
   /** Data refresh counter: the "Journal" and "Profiles" sections re-read on it (`canRollback` depends on the file). */
   const [rev, setRev] = useState(0)

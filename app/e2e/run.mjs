@@ -742,11 +742,15 @@ try {
 
   // a plain write
   await page.locator('#grid').focus()
+  await page.evaluate(() => { document.querySelector('main').scrollTop = 0 })
   await page.keyboard.press('Space')
   await dialog.getByRole('button', { name: APPLY }).waitFor({ timeout: 8000 })
   await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
   await dialog.getByRole('button', { name: APPLY }).click()
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'after the write the p1 glyph is "disabled"')
+  // focus goes back to the table without moving the page (it jumped to the table's top after every preview, seen in the live window)
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after the write focus returned to the table')
+  must((await page.evaluate(() => document.querySelector('main').scrollTop)) === 0, 'closing the preview scrolled the page')
   must(readFileSync(cfg, 'utf8') === asOff, 'something besides enabled of p1 was written')
   must((await dialog.count()) === 0, 'the preview did not close after the write')
   must((await page.locator('#notice').innerText()).includes('Откат'), 'no message about the write')
