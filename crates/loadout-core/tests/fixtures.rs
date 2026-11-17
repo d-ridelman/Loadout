@@ -76,6 +76,9 @@ fn claude_code_inventory() {
         [State::Stale, State::Stale],
         "two entries with different versions"
     );
+    // the note is shown as is in the window: no number + noun that would need inflecting ("2 версий")
+    let dup_note = r.entities.iter().find(|e| e.name == "dup@mp").and_then(|e| e.note.clone()).unwrap_or_default();
+    assert_eq!(dup_note, "в области user записано версий: 2", "{dup_note}");
     assert_eq!(
         state_of(&r, c, Kind::Plugin, "lost@mp"),
         [State::Broken],

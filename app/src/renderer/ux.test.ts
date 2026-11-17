@@ -73,6 +73,14 @@ describe('Doctor: every finding says how to fix it, grouped by severity', () => 
     expect(new Set(list.map((f) => f.id.split(':')[0]))).toEqual(new Set(['broken', 'stale', 'unknown', 'orphan', 'secret', 'dup', 'warn', 'backups', 'links']))
     for (const f of list) expect(f.fix.trim().length, f.id).toBeGreaterThan(10)
   })
+  it('a count after «у» takes the genitive', () => {
+    const title = (k: number) => diagnose(Array.from({ length: k }, (_, i) => ent({ state: 'unknown', name: `u${i}` })), [])[0]?.title
+    expect([1, 2, 5].map(title)).toEqual([
+      'Claude Code: у 1 плагина состояние не определено',
+      'Claude Code: у 2 плагинов состояние не определено',
+      'Claude Code: у 5 плагинов состояние не определено',
+    ])
+  })
   it('groups keep the severity order and drop empty groups', () => {
     const list = diagnose([ent({ state: 'broken', name: 'a' }), ent({ kind: 'marketplace', name: 'm' })], [])
     expect(groupFindings(list).map((g) => [g.severity, g.items.length])).toEqual([['error', 1], ['info', 1]])

@@ -224,8 +224,8 @@ fn plugins(c: &mut Ctx, settings: Option<&Value>) {
                     Some(true) if user_versions.len() > 1 => (
                         State::Stale,
                         Some(crate::tr!(
-                            "в области user записано {} версий",
-                            "{} versions are recorded in scope user",
+                            "в области user записано версий: {}",
+                            "versions recorded in scope user: {}",
                             user_versions.len()
                         )),
                     ),

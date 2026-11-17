@@ -521,6 +521,18 @@ try {
     const sizes = await page.evaluate(() => [...document.querySelectorAll('main h2, aside h2')].map((h) => parseFloat(getComputedStyle(h).fontSize)))
     must(sizes.every((s) => s >= 18 && s <= 20), `section headings must be 18-20px: ${sizes}`)
   }
+  // every section except the matrix has one page width (measured at 1920, where the cap applies)
+  {
+    await resize(app, 1920, 1080)
+    const widths = []
+    for (const key of ['2', '3', '4', '5', '6', '7']) {
+      await page.keyboard.press(key)
+      await page.locator('main .page').waitFor({ timeout: 5000 })
+      widths.push(Math.round((await page.locator('main .page').boundingBox()).width))
+    }
+    must(Math.max(...widths) - Math.min(...widths) <= 1, `section pages differ in width: ${widths}`)
+    await resize(app, 1280, 800)
+  }
   await page.keyboard.press('1')
 
   // single keys also work after a mouse click on a button (focus stays on the button, not on the table)
@@ -854,6 +866,11 @@ try {
   const catalog = dialog.getByRole('list', { name: 'Каталог e2e-market' })
   await catalog.waitFor({ timeout: 8000 })
   must(await catalog.getByRole('button', { name: /^tool-plugin/ }).isDisabled(), 'a plugin with a command source cannot be installed from here')
+  // "Refresh catalog" re-reads the catalogs from disk (no network, no claude call) and says so
+  const callsBefore = existsSync(claudeCalls) ? readFileSync(claudeCalls, 'utf8') : ''
+  await dialog.getByRole('button', { name: 'Обновить каталог' }).click()
+  await dialog.getByText(/^Каталог перечитан с диска/).waitFor({ timeout: 8000 })
+  must((existsSync(claudeCalls) ? readFileSync(claudeCalls, 'utf8') : '') === callsBefore && (await catalog.count()) === 1, 'refreshing the catalog ran claude or lost the catalog')
   await catalog.getByRole('button', { name: /^hello-plugin/ }).click()
   await dialog.getByText('claude plugin install hello-plugin@e2e-market --scope user').waitFor({ timeout: 8000 })
   const vCat = await axeCheck(page, 'marketplace catalog')
@@ -887,6 +904,12 @@ try {
   const skillPlan = await openPlan()
   must(skillPlan.includes('~/.claude/skills/web-search/') && skillPlan.includes('helper.py') && skillPlan.includes('файлы кода'), `skill install preview: ${skillPlan}`)
   must(!existsSync(skillDir), 'the skill is not installed before confirmation')
+  // the code warning stands apart in a highlighted box, the size summary and the file list do not
+  {
+    const box = dialog.getByRole('note', { name: 'Внимание: скил с кодом' })
+    const boxText = await box.innerText()
+    must(boxText.includes('файлы кода') && boxText.includes('helper.py') && !boxText.includes('файлов:'), `the skill code warning is not set apart: ${boxText}`)
+  }
   await shot(page, 'm6-skill-plan-1280')
   await applyDialog()
   await waitFor(() => existsSync(join(skillDir, 'SKILL.md')) && existsSync(join(skillDir, 'helper.py')), 'the skill is installed in ~/.claude/skills/web-search')
@@ -974,6 +997,14 @@ try {
   must(await page.getByRole('heading', { name: 'Инструменты контекста', level: 2 }).isVisible(), 'the section heading is not the Context Toolkit one')
   must(await page.locator('nav').getByRole('button', { name: /^Инструменты контекста/ }).isVisible(), 'the navigation has no Context Toolkit item')
   must((await page.locator('main').innerText()).includes('нет: «Применить» установит'), 'before the install the hooks copy must be "absent"')
+  // a doctor fix that is a `context-toolkit setup` command is a window action: the button leads to the Apply form, no CLI text
+  {
+    const fixBtn = page.getByRole('button', { name: 'Исправить: настроить форму «Применить»' }).first()
+    await waitFor(async () => (await fixBtn.count()) > 0, 'a doctor setup fix shown as a button')
+    must(!(await page.locator('ul[aria-label="Находки диагностики"]').innerText()).includes('→ context-toolkit setup'), 'the setup command is still shown as a CLI hint')
+    await fixBtn.click()
+    must(await page.evaluate(() => document.activeElement?.textContent?.startsWith('Предпросмотр')), 'the fix button did not lead to the preview button')
+  }
   must(!(await page.locator('main').innerText()).includes('прежняя версия'), 'a clean fixture copy must have no line about a previous version')
   const applyBtn = page.getByRole('button', { name: /^Применить: установить/ })
   must(await applyBtn.isDisabled(), 'apply is available without a preview')
@@ -1345,6 +1376,7 @@ try {
     }
     const version = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8')).version
     must((await up.locator('#privacy').innerText()).includes('только проверка обновлений (GitHub)'), 'the footer does not say that the update check goes online')
+    must((await up.locator('.welcome').count()) === 0, 'the welcome card came back after a restart')
     // the visible "vX.Y.Z" starts the accessible name; a new version is added in words
     const btn = up.getByRole('button', { name: new RegExp(`^v${version} — обновления`) })
     must((await btn.getAttribute('aria-label')) === `v${version} — обновления`, 'the version button name')

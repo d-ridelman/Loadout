@@ -1501,7 +1501,7 @@ pub fn apply_batch(
             Err(_) if !bp.plans.iter().any(|p| p.entity == i.entity()) => continue,
             Err(e) => {
                 return Err(crate::tr!(
-                    "{e} (выполнено {} записей; сделанное можно откатить в журнале)",
+                    "{e} (выполнено записей: {}; сделанное можно откатить в журнале)",
                     "{e} (done: {} entries; what was done can be rolled back in the journal)",
                     done.len()
                 ))

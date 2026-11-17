@@ -102,8 +102,8 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       ),
       fix:
         e.client === 'claude-code'
-          ? t(`Нужен — ничего делать не надо. Не нужен — удалите его командой \`claude plugin marketplace remove ${e.name}\`.`, `If you need it, there is nothing to do. If not, remove it with \`claude plugin marketplace remove ${e.name}\`.`)
-          : t('Нужен — ничего делать не надо. Не нужен — удалите его в настройках клиента.', 'If you need it, there is nothing to do. If not, remove it in the client’s settings.'),
+          ? t(`Если он нужен, ничего делать не надо. Если нет, удалите его командой \`claude plugin marketplace remove ${e.name}\`.`, `If you need it, there is nothing to do. If not, remove it with \`claude plugin marketplace remove ${e.name}\`.`)
+          : t('Если он нужен, ничего делать не надо. Если нет, удалите его в настройках клиента.', 'If you need it, there is nothing to do. If not, remove it in the client’s settings.'),
       entity: e,
     })
   }
@@ -183,7 +183,8 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
     if (e.kind === 'plugin' && e.state === 'unknown') unknownByClient.set(e.client, (unknownByClient.get(e.client) ?? 0) + 1)
   }
   for (const [client, n] of unknownByClient) {
-    const plugins = `${n} ${plural(n, ['плагина', 'плагина', 'плагинов'], ['plugin', 'plugins'])}`
+    // after «у» the genitive: «у 1 плагина», «у 2 плагинов», «у 5 плагинов»
+    const plugins = `${n} ${plural(n, ['плагина', 'плагинов', 'плагинов'], ['plugin', 'plugins'])}`
     out.push({
       id: `unknown:${client}`,
       severity: 'info',

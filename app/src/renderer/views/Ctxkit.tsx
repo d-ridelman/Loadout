@@ -484,9 +484,9 @@ export function Ctxkit({ level, onNotice }: Props) {
               <dt>{t('на Opus и Fable', 'on Opus and Fable')}</dt><dd className={sum.expensiveShare !== null && sum.expensiveShare > 0.5 ? 's-stale' : ''}>{pct(sum.expensiveShare)}</dd>
               <dt>{t('ходов субагентов', 'subagent turns')}</dt><dd>{sum.subTurns} ({t(`${pct(sum.subShare)} от всех`, `${pct(sum.subShare)} of all`)})</dd>
               <dt>{t('вызовов советника', 'advisor calls')}</dt><dd>{sum.advisorCalls}</dd>
-              <dt>{t('результатов инструментов', 'tool results')}</dt><dd>{t(`${chars(sum.toolResultChars)} знаков, из них чтения файлов ${chars(sum.readChars)}, осмотр оболочкой ${chars(sum.shellInspectChars)}`, `${chars(sum.toolResultChars)} chars, of which file reads ${chars(sum.readChars)}, shell inspection ${chars(sum.shellInspectChars)}`)}</dd>
+              <dt>{t('результатов инструментов', 'tool results')}</dt><dd>{t(`знаков: ${chars(sum.toolResultChars)}, из них чтения файлов ${chars(sum.readChars)}, осмотр оболочкой ${chars(sum.shellInspectChars)}`, `chars: ${chars(sum.toolResultChars)}, of which file reads ${chars(sum.readChars)}, shell inspection ${chars(sum.shellInspectChars)}`)}</dd>
               <dt>{t('чтений остановлено', 'reads blocked')}</dt><dd>{sum.readBlocked}</dd>
-              <dt>{t('сжатых проверок (check)', 'compressed checks (check)')}</dt><dd>{t(`${sum.checkCalls} вызовов, в контекст ушло ${chars(sum.checkChars)} знаков`, `${sum.checkCalls} calls, ${chars(sum.checkChars)} chars went into context`)}</dd>
+              <dt>{t('сжатых проверок (check)', 'compressed checks (check)')}</dt><dd>{t(`${count(sum.checkCalls, ['вызов', 'вызова', 'вызовов'], ['call', 'calls'])}, в контекст ушло знаков: ${chars(sum.checkChars)}`, `${count(sum.checkCalls, ['вызов', 'вызова', 'вызовов'], ['call', 'calls'])}, chars that went into context: ${chars(sum.checkChars)}`)}</dd>
             </dl>
             <p className="mute small">
               {t('Вызовы по агентам:', 'Calls by agent:')} {sum.agents.length ? sum.agents.map(([k, n]) => `${k} ×${n}`).join(', ') : t('нет', 'none')}.
