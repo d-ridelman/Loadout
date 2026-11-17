@@ -148,7 +148,8 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
           title={!e.canToggle ? e.toggleWhy : t('Покажет, что изменится, и подождёт подтверждения (Space)', 'Shows what will change and waits for your confirmation (Space)')}
           onClick={() => onToggle(e, enable)}
         >
-          {enable ? (e.toggleLevel === 'R2' ? t('Включить (вернуть из корзины)', 'Enable (restore from trash)') : t('Включить', 'Enable')) : e.toggleLevel === 'R2' ? t('Выключить (в корзину)', 'Disable (move to trash)') : t('Выключить', 'Disable')}
+          {/* plain "Enable": an R2 entry may come back from the Loadout trash or from the client's own stash; the preview names which */}
+          {enable ? t('Включить', 'Enable') : e.toggleLevel === 'R2' ? t('Выключить (в корзину)', 'Disable (move to trash)') : t('Выключить', 'Disable')}
         </button>
         {e.canEdit ? (
           <>
