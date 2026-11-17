@@ -18,6 +18,7 @@ export function Hooks({ hooks, onShow }: { hooks: Entity[]; onShow: (e: Entity) 
   const head = (
     <PageHead
       title={t('Хуки', 'Hooks')}
+      topic="hooks"
       sub={t(
         'Хуки всех клиентов по событиям, слева направо в том порядке, в каком события происходят. Нажмите на хук, чтобы открыть его в матрице.',
         'Hooks of every client by event, left to right in the order the events happen. Click a hook to open it in the matrix.',

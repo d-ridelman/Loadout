@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { t } from '../../shared/i18n'
 import type { Marketplace } from '../../shared/model'
-import { Rich } from '../ui'
+import { Cmd, Rich } from '../ui'
 import { Modal } from './Modal'
 
 interface Props {
@@ -164,7 +164,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
                 'Claude Code downloads the marketplace (from GitHub or the address) or reads it from the folder, and records it in ~/.claude/settings.json and ~/.claude/plugins/known_marketplaces.json. No plugins are installed. This is not in the Loadout journal: remove it with claude plugin marketplace remove <name>.',
               )}
             </p>
-            {command?.kind === 'add' ? <p className="s-stale">◐ {t('Будет выполнено:', 'Will run:')} <span className="mono">{command.text}</span></p> : null}
+            {command?.kind === 'add' ? <p className="s-stale">◐ {t('Будет выполнено:', 'Will run:')} <span className="mono"><Cmd text={command.text} /></span></p> : null}
             <div className="actions">
               {command?.kind === 'add' ? (
                 <button type="button" className="primary" disabled={busy} onClick={() => void run('add', false, source.trim())}>
@@ -227,7 +227,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
                   )}
                 />
               </p>
-              {command?.kind === 'install' ? <p className="s-stale">◐ {t('Будет выполнено:', 'Will run:')} <span className="mono">{command.text}</span></p> : null}
+              {command?.kind === 'install' ? <p className="s-stale">◐ {t('Будет выполнено:', 'Will run:')} <span className="mono"><Cmd text={command.text} /></span></p> : null}
             </>
           )
         ) : null}

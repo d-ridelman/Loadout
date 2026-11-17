@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
-import type { BatchPlan, Entity, Profile, ProfileItem, WriteLevel } from '../../shared/model'
+import type { BatchPlan, Entity, Level, Profile, ProfileItem, WriteLevel } from '../../shared/model'
 import { count, t } from '../../shared/i18n'
-import { PageHead, pickLevel } from '../ui'
+import { Cmd, kindLabel, levelLabel, PageHead } from '../ui'
 import type { Notify } from '../ui'
 import { levelOk } from './Inspector'
 import { Modal } from './Modal'
@@ -93,7 +93,7 @@ function BatchDialog({ name, onClose, onDone }: BatchProps) {
                     <span>
                       <b>{p.name}</b> <span className="mute">· {clientName(p.client)}</span>
                     </span>
-                    <span className="mono mute">{p.from} → {p.to}</span>
+                    <span className="mono mute"><Cmd text={`${p.from} → ${p.to}`} /></span>
                   </li>
                 ))}
               </ul>
@@ -127,10 +127,12 @@ interface Props {
   refreshKey: number
   /** The current scan: the profile that matches it is marked. */
   entities: readonly Entity[]
+  /** Asks for a write level (the confirmation window); true when it is granted. */
+  ensureLevel: (need: Level) => Promise<boolean>
 }
 
 /** Profiles: named sets of "what is enabled". Applying one is a batch through the same write pipeline (R2). */
-export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
+export function Profiles({ level, onNotice, refreshKey, entities, ensureLevel }: Props) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState('')
@@ -167,6 +169,7 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
     <>
       <PageHead
         title={t('Профили', 'Profiles')}
+        topic="profiles"
         sub={t(
           'Профиль запоминает, что включено. Сохраните текущее состояние под именем, и потом к нему можно вернуться одной кнопкой.',
           'A profile remembers what is turned on. Save the current state under a name and return to it later with one button.',
@@ -185,10 +188,10 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('Например: рабочий', 'For example: work')} maxLength={40} aria-label={t('Имя профиля', 'Profile name')} />
           </label>
           <div className="actions">
-            <button type="submit" className="primary" disabled={!nameOk}>{t('Снять с текущего состояния', 'Capture current state')}</button>
+            <button type="submit" className="primary" disabled={!nameOk}>{t('Сохранить текущее состояние', 'Save the current state')}</button>
           </div>
         </form>
-        <p className="mute small">{t('Применение профиля пишет в конфиги клиентов, поэтому нужен уровень «Все правки · R2». Сами профили можно создавать и менять на любом уровне.', 'Applying a profile writes to client configs, so it needs the “All edits · R2” level. Profiles themselves can be created and edited at any level.')}</p>
+        <p className="mute small">{t(`Применение профиля пишет в конфиги клиентов, поэтому нужен уровень «${levelLabel('R2')}»: если его нет, Loadout спросит разрешение сам. Сами профили можно создавать и менять на любом уровне.`, `Applying a profile writes to client configs, so it needs the “${levelLabel('R2')}” level: if it is not granted, Loadout asks for it itself. Profiles themselves can be created and edited at any level.`)}</p>
       </div>
       {error ? <p className="s-broken" role="alert">{error}</p> : null}
       {error?.includes('profiles.json') ? (
@@ -215,7 +218,7 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
       ) : profiles.length === 0 ? (
         <div className="hud card">
           <p>{t('Профилей пока нет.', 'No profiles yet.')}</p>
-          <p className="mute">{t('Введите имя выше и нажмите «Снять с текущего состояния»: профиль запомнит, какие плагины и MCP-серверы сейчас включены.', 'Type a name above and press “Capture current state”: the profile remembers which plugins and MCP servers are on now.')}</p>
+          <p className="mute">{t('Введите имя выше и нажмите «Сохранить текущее состояние»: профиль запомнит, какие плагины и MCP-серверы сейчас включены.', 'Type a name above and press “Save the current state”: the profile remembers which plugins and MCP servers are on now.')}</p>
         </div>
       ) : (
         <div className="cards">
@@ -236,7 +239,7 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
                     {items.map((it, i) => (
                       <li key={`${it.client}|${it.kind}|${it.scope}|${it.name}`} className="pitem">
                         <span>
-                          <b>{it.name}</b> <span className="mute">· {clientName(it.client)} · {it.kind}</span>
+                          <b>{it.name}</b> <span className="mute">· {clientName(it.client)} · {kindLabel(it.kind)}</span>
                         </span>
                         <label className="check">
                           <input
@@ -244,7 +247,8 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
                             checked={it.enable}
                             onChange={(e) => setDraft({ ...draft, [p.name]: items.map((x, j) => (j === i ? { ...x, enable: e.target.checked } : x)) })}
                           />
-                          {t('включено', 'enabled')}
+                          {/* the checkbox says what applying will do, not what is on now */}
+                          {t('включить при применении', 'enable on apply')}
                         </label>
                       </li>
                     ))}
@@ -254,9 +258,8 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
                 <div className="actions split">
                   <button
                     className="primary"
-                    disabled={!canApply}
-                    title={canApply ? t('Предпросмотр и запись пакета', 'Preview and write the batch') : pickLevel('R2')}
-                    onClick={() => setApplying(p.name)}
+                    title={canApply ? t('Предпросмотр и запись пакета', 'Preview and write the batch') : t('Сначала Loadout спросит разрешение на запись, потом покажет предпросмотр', 'Loadout asks for permission to write first, then shows the preview')}
+                    onClick={() => void ensureLevel('R2').then((ok) => ok && setApplying(p.name))}
                   >
                     {t('Применить…', 'Apply…')}
                   </button>

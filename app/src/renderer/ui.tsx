@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import type { ReactNode } from 'react'
 import { t } from '../shared/i18n'
 import type { EntityState, Kind, WriteLevel } from '../shared/model'
@@ -11,8 +12,6 @@ export type Notify = (message: string, tone?: Tone) => void
 export const levelLabel = (l: WriteLevel): string =>
   l === 'R0' ? t('Только чтение · R0', 'Read-only · R0') : l === 'R1' ? t('Вкл/выкл · R1', 'On/off · R1') : t('Все правки · R2', 'All edits · R2')
 
-/** "Pick level X in the header" for a disabled button's hint. */
-export const pickLevel = (l: WriteLevel): string => t(`Выберите в шапке окна уровень записи «${levelLabel(l)}»`, `Pick the write level “${levelLabel(l)}” in the window header`)
 
 /** State as a glyph plus color: color alone carries no meaning (accessibility, CONCEPT.md §8). */
 export function Glyph({ state, pulse }: { state: EntityState | 'none'; pulse?: boolean }) {
@@ -24,8 +23,21 @@ export function Glyph({ state, pulse }: { state: EntityState | 'none'; pulse?: b
   )
 }
 
+/** A kind in the person's words (one entry), not the config key. */
+export const kindLabel = (k: Kind): string =>
+  ({
+    plugin: t('плагин', 'plugin'),
+    mcp: 'MCP',
+    skill: t('скил', 'skill'),
+    hook: t('хук', 'hook'),
+    agent: t('агент', 'agent'),
+    command: t('команда', 'command'),
+    connector: t('коннектор', 'connector'),
+    marketplace: t('маркетплейс', 'marketplace'),
+  })[k] ?? k
+
 export function KindBadge({ kinds }: { kinds: readonly Kind[] }) {
-  return <span className={`badge k-${kinds[0] ?? 'plugin'}`}>{kinds.join('+')}</span>
+  return <span className={`badge k-${kinds[0] ?? 'plugin'}`}>{kinds.map(kindLabel).join(' + ')}</span>
 }
 
 export function Panel({ title, children, className = '' }: { title?: string; children: ReactNode; className?: string }) {
@@ -37,12 +49,40 @@ export function Panel({ title, children, className = '' }: { title?: string; chi
   )
 }
 
-/** Section title with a one-line explanation under it: the same size and spacing on every page. */
-export function PageHead({ title, sub, children }: { title: ReactNode; sub: ReactNode; children?: ReactNode }) {
+/**
+ * A term with its explanation: dotted underline, the explanation shows on hover and on keyboard focus (not a `title`,
+ * which the keyboard never reaches) and is the term's accessible description.
+ */
+export function Term({ tip, children }: { tip: string; children: ReactNode }) {
+  const id = useId()
+  return (
+    <span className="term" tabIndex={0} aria-describedby={id} onKeyDown={(e) => e.key === 'Escape' && e.currentTarget.blur()}>
+      {children}
+      <span role="tooltip" id={id} className="tip">{tip}</span>
+    </span>
+  )
+}
+
+/** Opens the in-window help at a topic; set once by App (the help lives there). */
+export let openHelp: (topic?: string) => void = () => undefined
+export const setOpenHelp = (f: (topic?: string) => void): void => {
+  openHelp = f
+}
+
+/** Section title with a one-line explanation under it and a link to the section's help: the same size and spacing on every page. */
+export function PageHead({ title, sub, topic, children }: { title: ReactNode; sub: ReactNode; topic?: string; children?: ReactNode }) {
   return (
     <div className="pagehead">
       <h2>{title}</h2>
-      <p className="mute">{sub}</p>
+      <p className="mute">
+        {sub}
+        {topic ? (
+          <>
+            {' '}
+            <button className="linkish" onClick={() => openHelp(topic)}>{t('Подробнее в справке', 'More in Help')}</button>
+          </>
+        ) : null}
+      </p>
       {children}
     </div>
   )
@@ -77,6 +117,15 @@ export function Toast({ id, tone, text, onClose }: { id: string; tone: Tone; tex
   )
 }
 
+/** A command or a value that wraps only between its words: "e2e-market" or "--scope" never break at a hyphen (a word longer than the line still breaks). */
+export function Cmd({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(\s+)/).map((w, i) => (i % 2 ? w : w ? <span key={i} className="tok">{w}</span> : null))}
+    </>
+  )
+}
+
 /** Path with wrap points after `/` and `\`: a long path breaks between segments, not in the middle of a file name. */
 export function Path({ p }: { p: string }) {
   return (
@@ -97,4 +146,5 @@ export const clientShort: Record<string, string> = {
   codex: 'ChatGPT / Codex',
   antigravity: 'Antigravity',
   deepseek: 'DeepSeek',
+  opencode: 'OpenCode',
 }

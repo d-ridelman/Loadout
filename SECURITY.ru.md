@@ -19,13 +19,13 @@
 
 ## Что Loadout читает
 
-- Конфиги пяти клиентов в вашем профиле Windows, в основном: `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/plugins/installed_plugins.json` и `known_marketplaces.json`, `~/.claude/skills`, агенты и команды; `%APPDATA%\Claude\claude_desktop_config.json`; `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/skills`; `~/.gemini/config/` (`mcp_config.json`, `hooks.json`, `plugins/`, `skills/`); `~/.dsh/cordis.patch.yml`, `~/.dsh/profiles/*/cordis.patch.yml`, `~/.dsh/skills`. А также кеши плагинов и папки встроенных скилов этих клиентов, каталоги (`marketplace.json`) добавленных маркетплейсов Claude Code и имена файлов-копий в папках клиентов (их считает Доктор).
+- Конфиги шести клиентов в вашем профиле Windows, в основном: `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/plugins/installed_plugins.json` и `known_marketplaces.json`, `~/.claude/skills`, агенты и команды; `%APPDATA%\Claude\claude_desktop_config.json`; `~/.codex/config.toml`, `~/.codex/hooks.json`, `~/.codex/skills`; `~/.gemini/config/` (`mcp_config.json`, `hooks.json`, `plugins/`, `skills/`); `~/.dsh/cordis.patch.yml`, `~/.dsh/profiles/*/cordis.patch.yml`, `~/.dsh/skills`; `~/.config/opencode/` (`opencode.json`, `opencode.jsonc`, `agent(s)/`, `command(s)/`, `plugin(s)/`, `skill(s)/`). А также кеши плагинов и папки встроенных скилов этих клиентов, каталоги (`marketplace.json`) добавленных маркетплейсов Claude Code и имена файлов-копий в папках клиентов (их считает Доктор).
 - Значения `env` и заголовков MCP ядро держит у себя: окно, планы, журнал и сообщения об ошибках получают только имена ключей, остальные строки проходят маскировку (см. [docs/CONCEPT.md](docs/CONCEPT.md), §5). Файлы учётных данных клиентов (`~/.claude/.credentials.json`, `~/.codex/auth.json`, `~/.dsh/.credentials.yaml` и подобные) не читаются.
 - Раздел «Инструменты контекста» запускает встроенный `context-toolkit.exe`. Он читает те же файлы Claude Code, а для отчёта «Эффективность» ещё и транскрипты Claude Code (`~/.claude/projects/**/*.jsonl`). В отчёте только счётчики, без текста и путей.
 
 ## Что Loadout пишет
 
-На уровне R0 (по умолчанию) файлы клиентов не пишутся. Они меняются, только когда вы повысили уровень (R1 или R2, с подтверждением окном системы) и подтвердили предпросмотр. Свои данные Loadout (настройки, профили, очистка своих старых копий после подтверждения окном системы) пишет на любом уровне.
+На уровне R0 (по умолчанию) файлы клиентов не пишутся. Они меняются, только когда вы повысили уровень (R1 или R2, с подтверждением в отдельном окне, которое рисует и слушает главный процесс; страница до него не дотягивается и нажать его за вас не может) и подтвердили предпросмотр. Свои данные Loadout (настройки, профили, очистка своих старых копий после подтверждения в том же отдельном окне) пишет на любом уровне.
 
 - **Конфиги клиентов**, только то значение, которое меняет операция (включить/выключить, корзина, правка, копия, добавление MCP, применение профиля).
 - **`~/.claude/skills/<имя>`** при установке скила.

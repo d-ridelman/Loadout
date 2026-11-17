@@ -78,7 +78,8 @@ async function launch(env) {
     executablePath: electronExe,
     args: [appDir],
     // the default language is Russian (the scenarios look for Russian labels); the English pass sets LOADOUT_LANG=en itself
-    env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', ...env },
+    // the OpenCode system config (%ProgramData%\opencode) comes from a fixture, never from the machine running the check
+    env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', LOADOUT_OPENCODE_SYSTEM_DIR: join(repo, 'fixtures', 'system-opencode'), ...env },
   })
   const page = await app.firstWindow()
   const pid = app.process().pid
@@ -96,7 +97,22 @@ const shotDir = process.env.E2E_SHOTS ?? (process.env.E2E_UPDATE_SHOTS === '1' ?
 if (shotDir !== stateDir && !process.env.E2E_SHOTS) rmSync(shotDir, { recursive: true, force: true })
 mkdirSync(shotDir, { recursive: true })
 
+/** The header's single "Add" list: opens it and picks the item whose name starts with `name` (MCP server, plugin, skill). */
+async function addItem(page, name) {
+  await page.locator('header .addmenu > button').click()
+  await page.locator('#addpop').getByRole('button', { name: new RegExp(`^${name}`) }).click()
+}
+
 async function shot(page, name) {
+  // an open dialog's bottom row of buttons is in view without scrolling (Playwright scrolls before a click, so clicks never notice)
+  const cut = await page.evaluate(() => {
+    const box = document.querySelector('.modal .box')
+    const row = box ? [...box.querySelectorAll('.actions')].pop() : null
+    if (!box || !row) return null
+    const [b, a] = [box.getBoundingClientRect(), row.getBoundingClientRect()]
+    return a.bottom > b.bottom + 1 || a.top < b.top - 1 ? { row: [Math.round(a.top), Math.round(a.bottom)], box: [Math.round(b.top), Math.round(b.bottom)] } : null
+  })
+  must(!cut, `${name}: the dialog's buttons are out of view: ${JSON.stringify(cut)}`)
   await page.screenshot({ path: join(shotDir, `${name}.png`) })
 }
 
@@ -119,6 +135,30 @@ async function headerLayout(page, label) {
   must(m.over <= 0, `${label}: the header goes under the window buttons by ${m.over}px`)
 }
 
+/**
+ * Crisp text, measured: no visible text under 12px (11px mono was the softest text in the window), and the mono face only on code,
+ * paths, keys, numbers and marks, never on labels and prose. Lists offenders by tag, class and the first words.
+ */
+async function typeCheck(page, label) {
+  const bad = await page.evaluate(() => {
+    const MONO_OK = 'code, kbd, pre, .mono, .wrap, .hk, .g, .sev, .logo, .delta, .more, .pipe .h, .rowname, input[spellcheck="false"], textarea[spellcheck="false"]'
+    const out = []
+    for (const el of document.querySelectorAll('body *')) {
+      const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())
+      if (!own || el.getClientRects().length === 0) continue
+      const cs = getComputedStyle(el)
+      if (cs.visibility === 'hidden') continue
+      const size = parseFloat(cs.fontSize)
+      const mono = /JetBrains Mono/i.test(cs.fontFamily.split(',')[0])
+      const what = `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} "${el.textContent.trim().slice(0, 30)}"`
+      if (size < 12) out.push(`${size}px ${what}`)
+      else if (mono && !el.closest(MONO_OK)) out.push(`mono ${what}`)
+    }
+    return out
+  })
+  must(bad.length === 0, `${label}: small or mono UI text: ${JSON.stringify(bad.slice(0, 8))}`)
+}
+
 /** A measurement, not "by eye": no horizontal page scroll, no clipped names, the header and cell columns are aligned. */
 async function layout(page, label) {
   const m = await page.evaluate(() => {
@@ -130,9 +170,31 @@ async function layout(page, label) {
     const misaligned = ths.length && cells.length === ths.length
       ? ths.filter((th, i) => Math.abs(th.getBoundingClientRect().left - cells[i].getBoundingClientRect().left) > 1.5).length
       : 0
-    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length }
+    // an empty field's placeholder must fit its box (the search hint was cut to "Найти по названию (")
+    const ctx = document.createElement('canvas').getContext('2d')
+    const cutHints = [...document.querySelectorAll('input[placeholder]')].filter((i) => {
+      if (i.value || i.getClientRects().length === 0) return false
+      const cs = getComputedStyle(i)
+      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+      return ctx.measureText(i.placeholder).width > i.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) + 1
+    }).map((i) => i.placeholder)
+    // a name broken over lines though it would fit the cell whole ("p1- / server" at 1100 with six columns)
+    const brokenNames = [...document.querySelectorAll('td.name b')].filter((b) => {
+      const r = document.createRange()
+      r.selectNodeContents(b)
+      if (new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size < 2) return false
+      const cs = getComputedStyle(b)
+      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+      const td = b.closest('td')
+      const room = td.clientWidth - parseFloat(getComputedStyle(td).paddingLeft) - parseFloat(getComputedStyle(td).paddingRight)
+      return ctx.measureText(b.textContent).width < room
+    }).map((b) => b.textContent)
+    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length, cutHints, brokenNames }
   })
   log(`  measurement ${label}:`, JSON.stringify(m))
+  must(m.brokenNames.length === 0, `${label}: names broken though they fit: ${JSON.stringify(m.brokenNames)}`)
+  must(m.cutHints.length === 0, `${label}: placeholders cut: ${JSON.stringify(m.cutHints)}`)
+  await typeCheck(page, label)
   await headerLayout(page, label)
   must(m.hscroll <= 0, `${label}: horizontal page scroll (${m.hscroll}px)`)
   must(m.clipped === 0, `${label}: clipped names: ${m.clipped}`)
@@ -204,6 +266,8 @@ async function axeCheck(page, label) {
     return r.violations.map((v) => ({ id: v.id, impact: v.impact, count: v.nodes.length, sample: v.nodes[0]?.target?.join(' ') }))
   })
   for (const v of violations) log(`  axe ${label}: ${v.id} (${v.impact}) ×${v.count} ${v.sample}`)
+  // every screen axe sees also gets the crisp-text check (dialogs, journal, profiles, Context Toolkit, updates)
+  await typeCheck(page, label)
   return violations
 }
 
@@ -321,7 +385,8 @@ try {
     const legend = page.locator('details.legend-box')
     await legend.locator('summary').click()
     const text = await legend.innerText()
-    for (const s of ['включено', 'выключено', 'сломано', 'расхождение версий','только в приложении', 'не определено', '+N', 'Δ', 'FX']) must(text.includes(s), `the legend lacks "${s}": ${text}`)
+    // FX left the legend: it is not a mark of the table and lives in Help → Appearance now
+    for (const s of ['включено', 'выключено', 'сломано', 'расхождение версий','только в приложении', 'не определено', '+N', 'Δ']) must(text.includes(s), `the legend lacks "${s}": ${text}`)
     must((await legend.boundingBox()).y < (await page.locator('#grid').boundingBox()).y, 'the legend must be above the table')
     await shot(page, 'b2-legend-1280')
     await resize(app, 1920, 1080)
@@ -356,7 +421,7 @@ try {
   const rowCount = await page.locator('tbody tr').count()
   log('rows in the matrix:', rowCount)
   must(rowCount > 10, 'too few rows in the matrix')
-  must((await page.locator('thead th').count()) === 6, 'the header must have 6 columns (entity + 5 clients)')
+  must((await page.locator('thead th').count()) === 7, 'the header must have 7 columns (entity + 6 clients)')
 
   // keyboard: j, l → the selected cell and the inspector
   await page.locator('#grid').focus()
@@ -373,7 +438,12 @@ try {
   // states and filters
   await page.getByRole('button', { name: 'скилы' }).click()
   must((await page.locator('tbody tr').count()) < rowCount, 'the "skills" filter did not narrow the list')
+  // the rarer kinds are one list: picking hooks shows hook rows only
+  await page.getByLabel('Другие типы').selectOption('hook')
+  const hookBadges = await page.locator('tbody td.name .badge').allInnerTexts()
+  must(hookBadges.length > 0 && hookBadges.every((b) => b === 'хук'), `the "Other kinds: hooks" filter shows other kinds or nothing: ${JSON.stringify(hookBadges)}`)
   await page.getByRole('button', { name: 'все типы' }).click()
+  must((await page.getByLabel('Другие типы').inputValue()) === 'all', '"all types" did not reset the other-kinds list')
   await page.getByLabel('Поиск').fill('tool-b')
   must((await page.locator('tbody tr').count()) >= 1, 'search for tool-b found nothing')
   await page.getByLabel('Поиск').fill('')
@@ -389,7 +459,7 @@ try {
   must((await page.locator('[role=dialog][aria-label="Палитра команд"]').count()) === 0, 'the palette did not close')
   must((await page.locator('aside').innerText()).includes('tool-b'), 'the palette did not select tool-b')
   // The palette returns focus to the table on the next frame. If it is opened again sooner, the second time it remembers
-  // the previous field (search), returns focus there, and the digit `2` goes into the search: the radar does not open ("the radar must have 5 clients").
+  // the previous field (search), returns focus there, and the digit `2` goes into the search: the radar does not open ("the radar must have 6 clients").
   await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after the palette focus returned to the table')
   await page.keyboard.press('Control+k')
   await page.getByRole('combobox', { name: 'Команда' }).waitFor() // Esc is handled by the input field: wait until it gets focus
@@ -417,7 +487,14 @@ try {
   // sections by digits
   await page.keyboard.press('2')
   // a section is not drawn instantly: count with a wait, not right after the key press
-  await waitFor(async () => (await page.locator('.node').count()) === 5, 'the radar must have 5 clients')
+  await waitFor(async () => (await page.locator('.node').count()) === 6, 'the radar must have 6 clients')
+  // every client has its own place: no node covers another one or the row counter in the middle
+  const radarHits = await page.evaluate(() => {
+    const boxes = [...document.querySelectorAll('.node'), document.querySelector('.rcenter .big')].map((e) => e.getBoundingClientRect())
+    const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+    return boxes.flatMap((a, i) => boxes.slice(i + 1).map((b, j) => (hit(a, b) ? `${i}/${i + 1 + j}` : null))).filter(Boolean)
+  })
+  must(radarHits.length === 0, `radar nodes overlap: ${radarHits.join(', ')}`)
   // a client without Doctor problems shows no warning sign, and the sign counts the same problems as the "Issues" panel
   const radarText = await page.locator('.radar').innerText()
   must(!radarText.includes('⚠ 0'), `the radar shows a zero warning: ${radarText}`)
@@ -468,6 +545,14 @@ try {
         must(reach.over <= 0, `the hooks grid scrolls sideways at ${w}px: ${JSON.stringify(reach)}`)
         await page.evaluate(() => { document.querySelector('.tablewrap.scrollx').scrollLeft = 0 })
       }
+      if (name === 'radar') {
+        // every client card stays inside the radar panel (the side ones stuck out at 1280 and 1920)
+        const out = await page.evaluate(() => {
+          const p = document.querySelector('.rwrap').closest('.hud').getBoundingClientRect()
+          return [...document.querySelectorAll('.node')].filter((n) => { const r = n.getBoundingClientRect(); return r.left < p.left - 1 || r.right > p.right + 1 }).map((n) => n.querySelector('b')?.textContent)
+        })
+        must(out.length === 0, `radar cards stick out of the panel at ${w}: ${JSON.stringify(out)}`)
+      }
       if (w === 1920) {
         const v = await axeCheck(page, name)
         must(v.length === 0, `axe found violations on the "${name}" screen: ${v.map((x) => x.id).join(', ')}`)
@@ -480,7 +565,12 @@ try {
   // ---- live update: editing a config on disk changes the matrix without a "Scan" button and without a "loading" screen ----
   await resize(app, 1100, 700) // the minimum window size: the header is still on one line
   await page.waitForTimeout(250)
-  await headerLayout(page, 'ru@1100')
+  // six client columns at the minimum width: no clipped names, no sideways scroll, header and cells aligned (layout() checks the header too)
+  await layout(page, 'matrix@1100')
+  // the filter bar stays within two rows at the narrowest window (it took three before the rarer kinds became one list)
+  // rows by item centres (items of one row differ in height), a new row starts more than 12px below the previous centre
+  const barRows = await page.evaluate(() => [...document.querySelector('main .bar').children].map((c) => { const r = c.getBoundingClientRect(); return r.top + r.height / 2 }).sort((a, b) => a - b).filter((y, i, a) => i === 0 || y - a[i - 1] > 12).length)
+  must(barRows <= 2, `the matrix filter bar takes ${barRows} rows at 1100`)
   await shot(page, 'm1-matrix-1100')
   await resize(app, 1280, 800)
   await page.keyboard.press('1')
@@ -524,14 +614,15 @@ try {
   }
   const levelSel = page.getByLabel('Уровень записи')
   const levelIs = async (l) => (await levelSel.inputValue()) === l
-  /** The OS dialog on raising the level is replaced in the main process: `answer` 1 is "Enable", 0 is "Cancel". */
+  /** The confirmation window on raising the level is replaced in the main process: `answer` 1 is "Enable", 0 is "Cancel". */
   const stubDialog = (answer) =>
-    app.evaluate(({ dialog }, a) => {
+    app.evaluate((_electron, a) => {
       globalThis.__answer = a
       globalThis.__asked ??= 0
-      dialog.showMessageBox = async () => {
+      // main asks through this hook in the QA mode instead of opening its confirmation window (index.ts `confirm`)
+      globalThis.__loadoutConfirm = async () => {
         globalThis.__asked++
-        return { response: globalThis.__answer, checkboxChecked: false }
+        return globalThis.__answer === 1
       }
     }, answer)
   const dialog = page.locator('[role=dialog][aria-modal=true]')
@@ -572,30 +663,116 @@ try {
   await shot(page, 'm3-journal-empty-1280')
   await page.keyboard.press('1')
 
+  // ---- a newcomer's path: R0 → a cell → "Disable" in the inspector → the OS asks once → the preview; no header list, no keys ----
+  // (formerly the button was inactive at R0 and the hint sent the person to the header: the dead end the owner called too hard)
   await clickCell('p1', 2)
   must(await levelIs('R0'), 'the default level is R0')
   must((await page.locator('#scanlines').count()) === 0, 'scanline stripes (a linear horizontal ripple) must be removed')
-  await page.keyboard.press('Space')
-  must((await dialog.count()) === 0, 'at R0 the preview does not open')
-  must((await page.locator('#notice').innerText()).includes('R0'), 'at R0 there is no explanation')
-  must(readFileSync(cfg, 'utf8') === original, 'at R0 the file must not change')
-  must(await page.getByRole('button', { name: 'Выключить', exact: true }).isDisabled(), 'at R0 the button in the inspector is inactive')
-
-  // a refusal in the OS dialog leaves R0, consent raises to R1
+  const offBtn = page.locator('aside').getByRole('button', { name: 'Выключить', exact: true })
+  must(!(await offBtn.isDisabled()), 'at R0 the inspector button must be active: it asks for permission and goes on')
+  must((await page.locator('aside').innerText()).includes('спросит разрешение'), 'at R0 the inspector does not say what the button will do')
+  for (const [w, h] of SIZES) {
+    await resize(app, w, h)
+    await page.waitForTimeout(150)
+    await layout(page, `novice inspector ${w}`)
+    await shot(page, `n1-inspector-r0-${w}`)
+  }
+  await resize(app, 1280, 800)
+  // the real confirmation window, not stubbed: main's own window in the app's style with the question, Cancel focused first; Esc refuses
+  {
+    const next = app.waitForEvent('window', { timeout: 8000 })
+    await offBtn.click()
+    const cw = await next
+    await cw.waitForSelector('#cancel', { timeout: 8000 })
+    const body = await cw.locator('body').innerText()
+    must(body.includes('Разрешить Loadout включать и выключать') && body.includes('Разрешить вкл/выкл') && body.includes('Отмена'), `the confirmation window lacks its question or buttons: ${body.slice(0, 300)}`)
+    must((await cw.evaluate(() => document.activeElement?.id)) === 'cancel', 'Cancel must have the focus in the confirmation window')
+    const vc = await axeCheck(cw, 'confirmation window')
+    must(vc.length === 0, `axe: confirmation window: ${vc.map((x) => x.id).join(', ')}`)
+    // the detail names the backups folder, here the check profile inside this working copy: the committed picture shows the default
+    // folder instead, so no path of the machine that ran the check gets into state/
+    // main shows the folder with the home directory as "~": both forms are replaced
+    const raw = join(profile, 'backups')
+    await cw.evaluate((forms) => {
+      for (const el of document.querySelectorAll('#d p')) for (const f of forms) el.textContent = el.textContent.split(f).join('%APPDATA%\\loadout-app\\backups')
+    }, [raw, tilde(raw)])
+    const shown = await cw.locator('body').innerText()
+    must(!shown.includes(repo) && !shown.includes(tilde(repo)), 'the confirmation window picture would show the path of this working copy')
+    await cw.screenshot({ path: join(shotDir, 'n2-confirm-window.png') })
+    // the window closes on the key itself, so the press may not get its own reply: the close event is what this waits for
+    await Promise.all([cw.waitForEvent('close', { timeout: 8000 }), cw.keyboard.press('Escape').catch(() => undefined)])
+    await page.waitForTimeout(300) // a negative check: a wrong level would arrive after the answer
+    must(await levelIs('R0'), 'Esc in the confirmation window must leave R0')
+    must((await dialog.count()) === 0, 'a refused confirmation must open no preview')
+    // consent with the button: the level rises to R1 and the preview opens; then back to R0 (lowering needs no confirmation)
+    const next2 = app.waitForEvent('window', { timeout: 8000 })
+    await offBtn.click()
+    const cw2 = await next2
+    await Promise.all([cw2.waitForEvent('close', { timeout: 8000 }), cw2.locator('#ok').click().catch(() => undefined)])
+    await waitFor(() => levelIs('R1'), '"Allow on/off" in the confirmation window did not raise the level')
+    await dialog.waitFor({ timeout: 8000 })
+    await page.keyboard.press('Escape')
+    await dialog.waitFor({ state: 'detached', timeout: 8000 })
+    await levelSel.selectOption('R0')
+    await waitFor(() => levelIs('R0'), 'the level went back to R0')
+    // cleaning up old copies asks in the same window, with a red (danger) button; Esc refuses and deletes nothing
+    await page.keyboard.press('5')
+    await page.getByText('Где хранятся копии и что в них').click()
+    const next3 = app.waitForEvent('window', { timeout: 8000 })
+    await page.getByRole('button', { name: 'Очистить старые копии…' }).click()
+    const cw3 = await next3
+    await cw3.waitForSelector('#ok.danger', { timeout: 8000 })
+    must((await cw3.locator('#ok').innerText()) === 'Очистить', 'the cleanup confirmation has no "Clean up" button')
+    await Promise.all([cw3.waitForEvent('close', { timeout: 8000 }), cw3.keyboard.press('Escape').catch(() => undefined)])
+    await page.locator('#notice').waitFor({ timeout: 5000 })
+    must((await page.locator('#notice').innerText()).includes('очистка отменена'), 'a refused cleanup did not say it was cancelled')
+    await page.getByText('Где хранятся копии и что в них').click()
+    await page.keyboard.press('1')
+    await clickCell('p1', 2)
+  }
+  // a refusal (Space and the button both ask) leaves R0, opens nothing and writes nothing
   await stubDialog(0)
-  const askedBefore = await app.evaluate(() => globalThis.__asked)
+  let askedBefore = await app.evaluate(() => globalThis.__asked)
+  // Space on another focusable control (here "Technical details") does what that control does, it does not toggle the selection
+  const tech = page.locator('aside details.tech')
+  await tech.locator('summary').focus()
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400) // a negative check: give a wrong confirmation request time to arrive
+  must(await tech.evaluate((d) => d.open), 'Space on "Technical details" did not open them')
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore, 'Space on "Technical details" toggled the selected entry')
+  await tech.locator('summary').click()
+  // the same for a button inside the table: "Clear the filters" clears them and leaves the hidden selection alone
+  await page.locator('input[type=search]').fill('zzzz-no-such-entry')
+  const clearBtn = page.locator('#grid').getByRole('button', { name: 'Сбросить фильтры' })
+  await clearBtn.focus()
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400) // a negative check, as above
+  must((await page.locator('input[type=search]').inputValue()) === '', 'Space on "Clear the filters" did not clear them')
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore, 'Space on "Clear the filters" toggled the hidden selected entry')
+  await page.getByLabel('скрыть «не определено»').check() // "Clear the filters" also shows unknown rows: back to the default view
+  await clickCell('p1', 2)
+  await page.locator('#grid').focus()
+  await page.keyboard.press('Space')
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'Space at R0 did not ask for permission')
+  // wait for this message, not any: the "cleanup cancelled" error from the step above may still be on screen for a moment
+  await waitFor(async () => ((await page.locator('#notice').count()) ? (await page.locator('#notice').innerText()).includes('R0') : false), 'a refusal does not say the level stayed R0', 5000)
+  must((await dialog.count()) === 0, 'after a refusal the preview must not open')
+  must(readFileSync(cfg, 'utf8') === original, 'after a refusal the file must not change')
+  // the header list asks in the same confirmation window; a refusal there leaves R0 too
+  askedBefore = await app.evaluate(() => globalThis.__asked)
   await levelSel.selectOption('R1')
-  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'the OS dialog was not asked')
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'the confirmation window was not asked')
   // a negative check: the select is controlled and shows R0 at once, so give a wrong level time to arrive, then ask main too
   await page.waitForTimeout(600)
-  must(await levelIs('R0'), 'a refusal in the OS dialog must leave R0')
-  must((await page.evaluate(() => window.loadout.getWriteLevel())) === 'R0', 'a refusal in the OS dialog must leave R0 in main')
+  must(await levelIs('R0'), 'a refusal in the confirmation window must leave R0')
+  must((await page.evaluate(() => window.loadout.getWriteLevel())) === 'R0', 'a refusal in the confirmation window must leave R0 in main')
+  // consent: the same button raises the level to what this entry needs (R1, a flag) and opens the preview
   await stubDialog(1)
-  await levelSel.selectOption('R1')
-  await waitFor(() => levelIs('R1'), 'the level switched to R1')
-  await clickCell('p1', 2)
-  await page.keyboard.press('Space')
+  askedBefore = await app.evaluate(() => globalThis.__asked)
+  await offBtn.click()
   await dialog.waitFor({ timeout: 8000 })
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'the button must ask the confirmation window exactly once')
+  await waitFor(() => levelIs('R1'), 'the button raised the level to R1')
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   const dText = await dialog.innerText()
   must(dText.includes('~/.codex/config.toml') && dText.includes('включено') && dText.includes('выключено'), `preview without the file and values: ${dText}`)
@@ -640,11 +817,17 @@ try {
 
   // a plain write
   await page.locator('#grid').focus()
+  // the page scrolled part way down, as in the live window where the jump showed: the selected p1 row stays in view
+  const scrolled = await page.evaluate(() => { const m = document.querySelector('main'); m.scrollTop = 120; return m.scrollTop })
+  must(scrolled > 0, 'the matrix page does not scroll at 1280×800: the scroll check below would prove nothing')
   await page.keyboard.press('Space')
   await dialog.getByRole('button', { name: APPLY }).waitFor({ timeout: 8000 })
   await page.waitForFunction(() => !document.querySelector('[role=dialog] button[disabled]'), null, { timeout: 8000 })
   await dialog.getByRole('button', { name: APPLY }).click()
   await waitFor(async () => String(await cellLabel(page, 'p1', 2)).includes('выключено'), 'after the write the p1 glyph is "disabled"')
+  // focus goes back to the table without moving the page (it jumped to the table's top after every preview, seen in the live window)
+  await waitFor(async () => (await page.evaluate(() => document.activeElement?.id)) === 'grid', 'after the write focus returned to the table')
+  must((await page.evaluate(() => document.querySelector('main').scrollTop)) === scrolled, 'closing the preview scrolled the page')
   must(readFileSync(cfg, 'utf8') === asOff, 'something besides enabled of p1 was written')
   must((await dialog.count()) === 0, 'the preview did not close after the write')
   must((await page.locator('#notice').innerText()).includes('Откат'), 'no message about the write')
@@ -702,8 +885,56 @@ try {
   must(plugText.includes('~/.claude/settings.json') && plugText.includes('/enabledPlugins/alpha@mp') && !plugText.includes('installed_plugins'), `the plugin preview names another file: ${plugText}`)
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'detached', timeout: 8000 })
+  // OpenCode (the sixth column): a V2 server is switched by the inverse `disabled` key (R1) in a JSONC file whose comments stay;
+  // the journal rollback brings the file back byte for byte
+  {
+    must((await page.locator('thead th').allInnerTexts()).some((h) => h.toUpperCase().includes('OPENCODE')), 'the matrix has no OpenCode column')
+    const ocFile = join(home, '.config', 'opencode', 'opencode.jsonc')
+    const ocOrig = readFileSync(ocFile, 'utf8')
+    await clickCell('tool-a', 5)
+    await page.keyboard.press('Space')
+    await dialog.waitFor({ timeout: 8000 })
+    await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
+    const ocText = await dialog.innerText()
+    must(ocText.includes('~/.config/opencode/opencode.jsonc') && ocText.includes('/mcp/servers/tool-a/disabled') && ocText.includes('R1') && !ocText.includes('FAKE-SECRET'), `OpenCode toggle preview: ${ocText}`)
+    await shot(page, 'm7-opencode-dialog-1280')
+    await dialog.getByRole('button', { name: APPLY }).click()
+    await waitFor(async () => String(await cellLabel(page, 'tool-a', 5)).includes('выключено'), 'after the write the OpenCode tool-a glyph is "disabled"')
+    const ocAfter = readFileSync(ocFile, 'utf8')
+    must(ocAfter.includes('"disabled": true') && ocAfter.includes('// the same server as in Antigravity') && String(await cellLabel(page, 'tool-a', 3)).includes('включено'), 'the OpenCode write lost a comment or touched the Antigravity cell')
+    await page.keyboard.press('5')
+    const ocRow = page.locator('table[aria-label="Журнал операций"] tbody tr', { hasText: 'tool-a' }).first()
+    await ocRow.waitFor({ timeout: 8000 })
+    await ocRow.getByRole('button', { name: 'Откатить', exact: true }).click()
+    await dialog.waitFor({ timeout: 8000 })
+    await dialog.getByRole('button', { name: 'Откатить', exact: true }).click()
+    await dialog.waitFor({ state: 'detached', timeout: 8000 })
+    await waitFor(() => readFileSync(ocFile, 'utf8') === ocOrig, 'the OpenCode rollback restored opencode.jsonc byte for byte')
+    await page.keyboard.press('1')
+    await waitFor(async () => String(await cellLabel(page, 'tool-a', 5)).includes('включено'), 'after the rollback the OpenCode tool-a glyph came back')
+    // the system config (%ProgramData%\opencode, a fixture here) shows as scope managed and is read only: no switch, the reason named
+    await clickCell('corp-proxy', 5)
+    const sysAside = await page.locator('aside').innerText()
+    must(sysAside.includes('системного конфига OpenCode'), `the inspector does not say why a system OpenCode entry cannot be switched: ${sysAside.slice(0, 400)}`)
+    must(await page.locator('aside').getByRole('button', { name: 'Выключить', exact: true }).isDisabled(), 'a system OpenCode entry must not offer a switch')
+  }
   // ---- R2: trash, edit, copy, profiles (also on a fixture copy) ----
+  // most MCP servers have no flag: at R1 their "Disable (move to trash)" asks for R2 itself, once, and opens the trash preview
   await stubDialog(1)
+  must(await levelIs('R1'), 'before the trash step the level must be R1')
+  await clickCell('tool-b', 3)
+  askedBefore = await app.evaluate(() => globalThis.__asked)
+  await page.locator('aside').getByRole('button', { name: 'Выключить (в корзину)', exact: true }).click()
+  await dialog.waitFor({ timeout: 8000 })
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'the trash button must ask the confirmation window exactly once')
+  await waitFor(() => levelIs('R2'), 'the trash button raised the level to R2')
+  await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
+  must((await dialog.innerText()).includes('в корзине Loadout'), 'the trash button did not open the trash preview')
+  await page.keyboard.press('Escape')
+  await dialog.waitFor({ state: 'detached', timeout: 8000 })
+  // the header list still raises the level after the confirmation window (lowering needs none)
+  await levelSel.selectOption('R1')
+  await waitFor(() => levelIs('R1'), 'the level went down to R1')
   await levelSel.selectOption('R2')
   await waitFor(() => levelIs('R2'), 'the level switched to R2')
   const agFile = join(home, '.gemini', 'config', 'mcp_config.json')
@@ -778,7 +1009,7 @@ try {
     return e ? { name: e.name, client: e.client, command: e.detail.command } : null
   })
   must(plain !== null, 'fixture: no editable MCP without masked values')
-  await clickCell(plain.name, ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek'].indexOf(plain.client))
+  await clickCell(plain.name, ['claude-code', 'claude-desktop', 'codex', 'antigravity', 'deepseek', 'opencode'].indexOf(plain.client))
   await page.getByRole('button', { name: 'Править команду…' }).click()
   must((await dialog.getByLabel('Команда').inputValue()) === plain.command, `the Edit command form is not filled with the current command of ${plain.name}`)
   await page.keyboard.press('Escape')
@@ -825,7 +1056,7 @@ try {
   // adding a new MCP: env values go only to the core, the rollback restores the file byte for byte
   await page.keyboard.press('1')
   // a taken name is reported by the form itself, before any plan
-  await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
+  await addItem(page, 'MCP-сервер')
   await dialog.getByLabel('Клиент').selectOption({ label: 'Antigravity' })
   await dialog.getByLabel('Имя', { exact: true }).fill('tool-a')
   await dialog.getByLabel('Команда', { exact: true }).fill('npx')
@@ -837,7 +1068,7 @@ try {
   // a refusal of the core is shown as the core said it, and "Back to the form" keeps everything typed, env included
   writeFileSync(cfg, cfgBeforeCopy.toString('utf8').replace('\n', '\r\n'))
   const addEnv = 'API_TOKEN=FAKE-SECRET-ADDED'
-  await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
+  await addItem(page, 'MCP-сервер')
   await dialog.getByLabel('Клиент').selectOption({ label: 'ChatGPT / Codex' })
   await dialog.getByLabel('Имя', { exact: true }).fill('e2e-added')
   await dialog.getByLabel('Команда', { exact: true }).fill('npx')
@@ -882,7 +1113,7 @@ try {
   }
   must((await mpErr(marketDir, false)).includes('предпросмотр'), 'adding a marketplace without a preview must refuse')
   // marketplace → catalog → install by picking from the list
-  await page.getByRole('button', { name: 'Установить плагин', exact: true }).click()
+  await addItem(page, 'Плагин Claude Code')
   await dialog.getByRole('button', { name: 'Добавить маркетплейс…' }).click()
   await dialog.getByLabel('Источник маркетплейса').fill(marketDir)
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
@@ -903,6 +1134,11 @@ try {
   const vCat = await axeCheck(page, 'marketplace catalog')
   must(vCat.length === 0, `axe: marketplace catalog: ${vCat.map((x) => x.id).join(', ')}`)
   await shot(page, 'm4-plugin-dialog-1280')
+  // the smallest window (1100×640): the catalog dialog scrolls, its buttons stay in view (shot() measures that)
+  await resize(app, 1100, 640)
+  await page.waitForTimeout(150)
+  await shot(page, 'm4-plugin-dialog-1100x640')
+  await resize(app, 1280, 800)
   await dialog.getByRole('button', { name: 'Установить', exact: true }).click()
   const calls = () => (existsSync(claudeCalls) ? readFileSync(claudeCalls, 'utf8').trim().split('\n') : [])
   await waitFor(() => calls().join('|') === `plugin marketplace add --scope user ${marketDir}|plugin install hello-plugin@e2e-market --scope user`, 'claude was called with the exact add and install commands')
@@ -917,7 +1153,7 @@ try {
   const badPlan = await page.evaluate(async () => (await window.loadout.plan({ op: 'installSkill', stage: '../../x', sub: '', name: 'a' })).ok)
   must(badPlan === false, 'a skill install plan with a path instead of a preparation number must be rejected')
   const skillDir = join(home, '.claude', 'skills', 'web-search')
-  await page.getByRole('button', { name: 'Установить скил', exact: true }).click()
+  await addItem(page, 'Скил')
   await dialog.getByLabel('Источник скила').fill('acme/skills')
   await dialog.getByRole('button', { name: 'Что будет скачано' }).click()
   await dialog.getByText(/Будет скачано:.*git .*clone --depth 1 .*acme\/skills\.git/).waitFor({ timeout: 8000 })
@@ -953,7 +1189,7 @@ try {
   // profiles: capture the state, tweak, apply as a bundle, roll back the whole bundle
   await page.keyboard.press('6')
   await page.getByLabel('Имя профиля').fill('e2e')
-  await page.getByRole('button', { name: 'Снять с текущего состояния' }).click()
+  await page.getByRole('button', { name: 'Сохранить текущее состояние' }).click()
   const card = page.getByRole('region', { name: 'Профиль e2e' })
   await card.waitFor({ timeout: 8000 })
   await card.getByText('Записи профиля').click()
@@ -973,7 +1209,18 @@ try {
   await page.waitForTimeout(250)
   await shot(page, 'm4-profiles-1920')
   await resize(app, 1280, 800)
+  // the profile's Apply asks for R2 itself: at R0 a refusal opens nothing and keeps R0, consent raises to R2 and opens the batch preview
+  await levelSel.selectOption('R0') // lowering needs no confirmation
+  await waitFor(() => levelIs('R0'), 'the level went down to R0 before the profile apply')
+  await stubDialog(0)
+  askedBefore = await app.evaluate(() => globalThis.__asked)
   await card.getByRole('button', { name: 'Применить…' }).click()
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, '"Apply…" at R0 did not ask for R2')
+  await page.waitForTimeout(400) // a negative check: a wrong dialog would open after the answer
+  must((await dialog.count()) === 0 && (await levelIs('R0')), 'after a refusal the profile apply must open nothing and leave R0')
+  await stubDialog(1)
+  await card.getByRole('button', { name: 'Применить…' }).click()
+  await waitFor(() => levelIs('R2'), '"Apply…" raised the level to R2 after consent')
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   const batchText = await dialog.innerText()
   must(batchText.includes('Изменится записей: 1') && batchText.includes('p1@bundled'), `bundle preview: ${batchText}`)
@@ -1140,7 +1387,7 @@ try {
   must(sNow.advisorModel === 'fable', `advisorModel from the form was not written: ${sNow.advisorModel}`)
   // the "Main model" and "Effort" selects: default "Do not change", an explicit Sonnet + high choice is visible in the preview and written after apply
   const mainSel = page.getByLabel('Основная модель', { exact: true })
-  const effortSel = page.getByLabel('Effort', { exact: true })
+  const effortSel = page.getByLabel('Усилие модели (effort)', { exact: true })
   must((await mainSel.inputValue()) === 'keep' && (await effortSel.inputValue()) === 'keep', 'the main model and effort selects must default to "Do not change"')
   must((await mainSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|Sonnet|Opus|Haiku', 'main model options')
   must((await effortSel.locator('option').allInnerTexts()).join('|') === 'Не менять (по умолчанию)|low|medium|high|xhigh', 'effort options')
@@ -1374,17 +1621,98 @@ try {
   await undoGoBtn.click()
   await waitFor(() => !existsSync(hookExe) && !existsSync(oldHookExe) && !existsSync(ctxkitJson) && !existsSync(join(claudeDir, 'ctxkit.json')), 'the rollback after the migration removes both binaries and both policy files')
   must(!/context-toolkit|ctxkit/i.test(readFileSync(settingsFile, 'utf8')) && JSON.stringify(foreignCmds(JSON.parse(readFileSync(settingsFile, 'utf8')))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'the rollback after the migration left ours or touched foreign')
-  await page.keyboard.press('1')
   await levelSel.selectOption('R0') // lowering needs no confirmation
+  await waitFor(() => levelIs('R0'), 'the level went down to R0 before the Context Toolkit refusal')
+  // the page's Apply asks for R2 itself: after a preview at R0 a refusal in the confirmation window installs nothing and keeps R0
+  await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+  await waitFor(() => applyBtn.isEnabled(), 'the preview at R0 enables Apply (it asks for the level on click)')
+  await stubDialog(0)
+  askedBefore = await app.evaluate(() => globalThis.__asked)
+  await applyBtn.click()
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'Context Toolkit Apply at R0 did not ask for R2')
+  await page.waitForTimeout(400) // a negative check: a wrong run would start after the answer
+  must(!existsSync(hookExe) && (await levelIs('R0')), 'after a refusal Context Toolkit Apply must install nothing and leave R0')
+  await page.keyboard.press('1')
   must((await refusal(opts)).includes('R2'), 'at R0 apply was not rejected in main')
   must((await undoRefusal(undoOpts, false)).includes('R2'), 'at R0 the rollback was not rejected in main')
   must(JSON.stringify(realState()) === JSON.stringify(realBefore), 'setup changed a file of the real owner profile')
   must(realBackups() === realBackupsBefore, 'setup created a backup in the real owner profile')
   await waitFor(() => levelIs('R0'), 'the level went back to R0')
 
-  // reduced motion → "FX: off" by default is applied on load; here we check the switch
-  await page.getByLabel('Уровень эффектов').selectOption('off')
-  must((await page.evaluate(() => document.documentElement.dataset.fx)) === 'off', 'FX did not turn off')
+  // ---- help in the window: F1 / the header button, getting started, sections, questions, shortcuts, appearance ----
+  {
+    const help = page.getByRole('dialog', { name: 'Справка' })
+    await page.keyboard.press('F1')
+    await help.waitFor({ timeout: 5000 })
+    await page.keyboard.press('Escape')
+    await help.waitFor({ state: 'detached', timeout: 5000 })
+    // a click on the help's plain text moves focus off the dialog: Esc must still close it
+    await page.keyboard.press('F1')
+    await help.waitFor({ timeout: 5000 })
+    await help.locator('h2').click()
+    await page.keyboard.press('Escape')
+    await help.waitFor({ state: 'detached', timeout: 5000 })
+    await page.getByRole('button', { name: /^Справка/ }).click()
+    await help.waitFor({ timeout: 5000 })
+    const tab = (name) => help.getByRole('button', { name, exact: true })
+    await tab('С чего начать').click()
+    must((await help.locator('ol.steps li').count()) === 3, 'getting started must be three steps')
+    await tab('Вопросы и ответы').click()
+    const qs = help.locator('.faq details')
+    must((await qs.count()) >= 8, `too few questions in the FAQ: ${await qs.count()}`)
+    await qs.filter({ hasText: 'Как выключить MCP-сервер' }).locator('summary').click()
+    must((await help.innerText()).includes('спросит разрешение'), 'the FAQ answer on disabling does not say that Loadout asks for permission')
+    for (const [w, h] of SIZES) {
+      await resize(app, w, h)
+      await page.waitForTimeout(150)
+      await layout(page, `help ${w}`)
+      await shot(page, `h1-help-faq-${w}`)
+    }
+    await resize(app, 1280, 800)
+    const vh = await axeCheck(page, 'help')
+    must(vh.length === 0, `axe: help: ${vh.map((x) => x.id).join(', ')}`)
+    await tab('Клавиши').click()
+    must((await help.innerText()).includes('F1'), 'the shortcuts tab lacks F1')
+    // reduced motion → "FX: off" by default is applied on load; here we check the switch, which lives in Help → Appearance now
+    await tab('Вид').click()
+    await help.getByLabel('Анимация').selectOption('off')
+    must((await page.evaluate(() => document.documentElement.dataset.fx)) === 'off', 'FX did not turn off')
+    // Tab from a block the script focused stays inside the dialog
+    await page.evaluate(() => document.querySelector('.help-body')?.setAttribute('tabindex', '-1'))
+    await page.locator('.help-body').focus()
+    await page.keyboard.press('Tab')
+    must(await page.evaluate(() => !!document.activeElement?.closest('[role=dialog]')), 'Tab left the help dialog')
+    await page.keyboard.press('Escape')
+    await help.waitFor({ state: 'detached', timeout: 5000 })
+    await waitFor(() => page.evaluate(() => document.activeElement?.textContent?.startsWith('Справка') ?? false), 'focus did not return to the Help button')
+    // a section's "More in Help" opens the help on that section
+    await page.keyboard.press('4')
+    await page.locator('main').getByRole('button', { name: 'Подробнее в справке' }).click()
+    await help.locator('#help-doctor.hit').waitFor({ timeout: 5000 })
+    must((await page.evaluate(() => document.activeElement?.id)) === 'help-doctor', 'the help did not focus the section it was opened for')
+    await shot(page, 'h2-help-section-1280')
+    // the welcome card comes back from the help
+    await tab('С чего начать').click()
+    await help.getByRole('button', { name: 'Показать приветствие снова' }).click()
+    await page.getByRole('region', { name: 'Loadout: что это и чего ждать' }).waitFor({ timeout: 5000 })
+    await page.getByRole('button', { name: 'Понятно, начать' }).click()
+    // a term explains itself on keyboard focus, not only on hover
+    await page.locator('header .term').focus()
+    must(await page.locator('header .term .tip').isVisible(), 'the write level term shows no explanation on focus')
+    await shot(page, 'h3-term-1280')
+    // a term inside the narrow inspector: its explanation stays inside the window
+    await page.keyboard.press('1')
+    await clickCell('tool-a', 3)
+    await page.locator('aside details.tech summary').click()
+    const scopeTerm = page.locator('aside details.tech .term').first()
+    await scopeTerm.focus()
+    const tipBox = await scopeTerm.locator('.tip').boundingBox()
+    const vw = await page.evaluate(() => innerWidth)
+    must(tipBox && tipBox.x >= 0 && tipBox.x + tipBox.width <= vw, `the scope explanation goes off the window: ${JSON.stringify(tipBox)} of ${vw}`)
+    await shot(page, 'h4-term-inspector-1280')
+    await page.locator('aside details.tech summary').click()
+    await page.locator('#grid').focus()
+  }
 
   must(pageErrors.length === 0, `page errors: ${pageErrors.join(' | ')}`)
   await close(session)
@@ -1446,7 +1774,11 @@ try {
     await both('upd-available')
     // a toast and the update card at the same time: both whole, no overlap, at the narrowest window too
     await up.getByLabel('Уровень записи').selectOption('R0')
-    await up.getByRole('button', { name: 'Добавить MCP' }).click()
+    // at R0 "Add" asks for R2 in the confirmation window; a refusal gives the info toast this check needs
+    await ua.evaluate(() => {
+      globalThis.__loadoutConfirm = async () => false
+    })
+    await addItem(up, 'MCP-сервер')
     const toast = up.locator('#notice')
     await toast.waitFor({ timeout: 5000 })
     must((await up.locator('.toasts[role=status] #notice').count()) === 1, 'an info toast must sit in the status live region')
@@ -1540,10 +1872,11 @@ try {
   // ---- "empty" state ----
   const empty = mkdtempSync(join(tmpdir(), 'loadout-empty-'))
   homes.push(empty)
-  session = await launch({ LOADOUT_HOME: empty })
+  // empty means no system config either
+  session = await launch({ LOADOUT_HOME: empty, LOADOUT_OPENCODE_SYSTEM_DIR: join(empty, 'no-system-config') })
   await session.page.waitForSelector('#grid', { timeout: 20000 })
   must((await session.page.locator('td.empty').innerText()).includes('Не найдено ни одного клиента'), 'empty state')
-  must((await session.page.locator('td.empty').getByRole('button', { name: 'Пересканировать' }).count()) === 1, 'the empty matrix offers no next step')
+  must((await session.page.locator('td.empty').getByRole('button', { name: 'Обновить' }).count()) === 1, 'the empty matrix offers no next step')
   await resize(session.app, 1280, 800)
   await shot(session.page, 'm1-state-empty-1280')
   // the other sections of an empty home say what to do too, and nothing is clipped at either width
@@ -1655,15 +1988,20 @@ try {
     await en.keyboard.press('Escape')
     // add: a taken name (the form says so before any plan) and a core plan — both in English
     const enDialog = en.locator('[role=dialog][aria-modal=true]')
-    await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
+    await addItem(en, 'MCP server')
     await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
     await enDialog.getByLabel('Name', { exact: true }).fill('tool-a')
     await enDialog.getByLabel('Command', { exact: true }).fill('npx')
     await enDialog.locator('[role=alert]').waitFor({ timeout: 8000 })
     await enOk('add: taken name')
     await shot(en, 'en-add-error-1280')
+    // the tallest form at the smallest window: Preview and Cancel stay in view while the form scrolls
+    await resize(enApp, 1100, 640)
+    await en.waitForTimeout(150)
+    await shot(en, 'en-add-error-1100x640')
+    await resize(enApp, 1280, 800)
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
-    await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
+    await addItem(en, 'MCP server')
     await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
     await enDialog.getByLabel('Name', { exact: true }).fill('en-added')
     await enDialog.getByLabel('Command', { exact: true }).fill('npx')
@@ -1673,7 +2011,7 @@ try {
     await shot(en, 'en-add-plan-1280')
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
     // plugin install: preview
-    await en.getByRole('button', { name: 'Install plugin', exact: true }).click()
+    await addItem(en, 'Claude Code plugin')
     await enDialog.getByRole('button', { name: 'Add marketplace…' }).click()
     await enDialog.getByLabel('Marketplace source').fill(enMarket)
     await enDialog.getByRole('button', { name: 'Preview' }).click()
@@ -1691,7 +2029,7 @@ try {
     await enDialog.waitFor({ state: 'detached', timeout: 8000 })
     await enOk('plugin installed')
     // skill: showing "what will be downloaded", download, choice and the core plan
-    await en.getByRole('button', { name: 'Install skill', exact: true }).click()
+    await addItem(en, 'Skill')
     await enDialog.getByLabel('Skill source').fill('acme/skills')
     await enDialog.getByRole('button', { name: 'What will be downloaded' }).click()
     await enDialog.getByText(/Will download:/).waitFor({ timeout: 8000 })
@@ -1745,7 +2083,10 @@ try {
     await enDialog.getByRole('button', { name: 'Move to trash' }).click()
     await enDialog.waitFor({ state: 'detached', timeout: 8000 })
     await en.keyboard.press('5')
-    await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().waitFor({ timeout: 8000 })
+    // on a timeout say what the window shows instead (this step once timed out with no clue)
+    await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().waitFor({ timeout: 8000 }).catch(async (e) => {
+      throw new Error(`${e.message.split('\n')[0]}; the window shows: ${JSON.stringify((await en.locator('body').innerText()).slice(0, 900))}`)
+    })
     await enOk('journal row')
     await shot(en, 'en-journal-1280')
     // the language switch: to Russian and back; the open section and the matrix selection stay

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { t } from '../../shared/i18n'
 import type { Intent, SkillFetch } from '../../shared/model'
+import { Cmd } from '../ui'
 import { Modal } from './Modal'
 
 interface Props {
@@ -78,7 +79,7 @@ export function SkillDialog({ onClose, onSubmit }: Props) {
         ) : null}
         {preview && !fetched ? (
           <p className="s-stale">
-            ◐ {local ? t('Будет скопировано:', 'Will copy:') : t('Будет скачано:', 'Will download:')} <span className="mono">{preview}</span>
+            ◐ {local ? t('Будет скопировано:', 'Will copy:') : t('Будет скачано:', 'Will download:')} <span className="mono"><Cmd text={preview} /></span>
           </p>
         ) : null}
         {fetched ? (

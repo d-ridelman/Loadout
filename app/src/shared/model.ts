@@ -1,7 +1,7 @@
 /** Shape of the `loadout scan --json` output (crates/loadout-core/src/model.rs). Change only together with the core. */
 import type { Lang } from './i18n'
 
-export type ClientId = 'claude-code' | 'claude-desktop' | 'codex' | 'antigravity' | 'deepseek'
+export type ClientId = 'claude-code' | 'claude-desktop' | 'codex' | 'antigravity' | 'deepseek' | 'opencode'
 
 export type Kind =
   | 'plugin'
@@ -388,4 +388,5 @@ export const CLIENTS: readonly { id: ClientId; name: string }[] = [
   { id: 'codex', name: 'ChatGPT / Codex' },
   { id: 'antigravity', name: 'Antigravity' },
   { id: 'deepseek', name: 'DeepSeek' },
+  { id: 'opencode', name: 'OpenCode' },
 ]

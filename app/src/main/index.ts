@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, session, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { execFile } from 'node:child_process'
@@ -12,6 +12,8 @@ import { getLang, isLang, langFromLocale, setLang, t } from '../shared/i18n'
 import type { Lang } from '../shared/i18n'
 import { LEVEL_RANK } from '../shared/model'
 import type { ChangedEvent, ClientId, Result, ScanResponse, UpdatesInfo, WriteLevel } from '../shared/model'
+import { askConfirm } from './confirm'
+import type { Confirm } from './confirm'
 import * as ctxkit from './ctxkit'
 import { assertTrusted, grantedOf, parseBatch, parseLevel, parseOp, parseSha, trustedSender, validateIntent, validateName } from './gate'
 import { checkoutArgs, checkTreeSize, cloneArgs, findSkills, isCommitRef, localMarketplaceOk, parseMarketplaceSource, parseRefs, parseSkillSource, pickTreeRef, readCatalog, remoteUrl, rmTree } from './install'
@@ -105,6 +107,9 @@ function ensureSidecar(): Sidecar | string {
   const args = ['serve', '--backups', backupsDir(), '--lang', getLang()]
   const homeOverride = envOf('LOADOUT_HOME')
   if (homeOverride) args.push('--home', homeOverride)
+  // checks point the OpenCode system config (%ProgramData%\opencode) at a fixture; ignored in the packaged build like every LOADOUT_*
+  const systemOverride = envOf('LOADOUT_OPENCODE_SYSTEM_DIR')
+  if (systemOverride) args.push('--opencode-system', systemOverride)
   let readySeen = false
   sidecar = new Sidecar({
     bin,
@@ -229,6 +234,8 @@ const CLIENT_PROCESSES: Partial<Record<ClientId, string[]>> = {
   // names taken from a real machine: the DeepSeek window is called "DeepSeek Harness", Antigravity has a shell and the CLI `agy`
   antigravity: ['antigravity.exe', 'agy.exe'],
   deepseek: ['deepseek harness.exe'],
+  // the desktop app and its CLI as installed on a real machine (OpenCode 2.3.0)
+  opencode: ['opencode.exe', 'opencode-cli.exe'],
 }
 
 function runningOf(client: ClientId): Promise<string[]> {
@@ -295,6 +302,18 @@ async function core(method: string, params?: Record<string, unknown>): Promise<u
  * was open to a race (`profileSave` could be slipped in between the calls).
  */
 const grantedLevel = (): 'R1' | 'R2' => grantedOf(readWriteLevel())
+
+/** The write level in the words of the window's header list. */
+const levelLabel = (l: WriteLevel): string => (l === 'R2' ? t('Все правки · R2', 'All edits · R2') : l === 'R1' ? t('Вкл/выкл · R1', 'On/off · R1') : t('Только чтение · R0', 'Read-only · R0'))
+
+/**
+ * A person's yes or no in main's own confirmation window (confirm.ts). Window checks put an answer function in
+ * `globalThis.__loadoutConfirm` instead; that hook exists only in the QA mode, never in the packaged build.
+ */
+const confirm = (parent: BrowserWindow | null, o: Confirm): Promise<boolean> => {
+  const hook = qa ? (globalThis as { __loadoutConfirm?: (o: Confirm) => Promise<boolean> }).__loadoutConfirm : undefined
+  return hook ? hook(o) : askConfirm(parent, o, getLang(), qaHidden)
+}
 
 /** Accept calls only from our own page (see gate.ts). */
 const trusted = (e: IpcMainInvokeEvent): boolean => trustedSender(e, INDEX_URL, DEV_URL)
@@ -384,17 +403,16 @@ void app.whenReady().then(() => {
   ipcMain.handle('writeLevel:set', async (e, raw: unknown) => {
     guard(e)
     const level = parseLevel(raw)
-    // Raising the level is confirmed by a person in an OS window that the page cannot click for them:
+    // Raising the level is confirmed by a person in a window of main's own that the page cannot click for them:
     // otherwise a compromised page would enable writing and call `apply` right away. Lowering needs no confirmation.
-    // Window checks replace `dialog.showMessageBox` in the main process, for both consent and refusal.
+    // Window checks replace `globalThis.__loadoutConfirm` in the main process (QA only), for both consent and refusal.
     if (LEVEL_RANK[level] > LEVEL_RANK[readWriteLevel()]) {
       const r2 = level === 'R2'
       const opts = {
-        type: 'warning' as const,
-        title: t(`Loadout: включить уровень ${level}?`, `Loadout: enable level ${level}?`),
+        title: t(`разрешить запись: ${levelLabel(level)}`, `allow writing: ${levelLabel(level)}`),
         message: r2
           ? t('Разрешить Loadout выносить записи в корзину (так выключаются MCP без флага), править команды MCP, копировать и добавлять MCP, применять профили, ставить скилы, плагины и Инструменты контекста?', 'Allow Loadout to move entries to the trash (that is how an MCP server without a flag is disabled), edit MCP commands, copy and add MCP servers, apply profiles, and install skills, plugins and Context Toolkit?')
-          : t('Разрешить Loadout включать и выключать записи по флагу в конфигах клиентов (плагины, коннекторы, записи Codex)?', 'Allow Loadout to turn entries on and off by their flag in client configs (plugins, connectors, Codex entries)?'),
+          : t('Разрешить Loadout включать и выключать записи по флагу в конфигах клиентов (плагины, коннекторы, записи Codex, MCP-серверы OpenCode)?', 'Allow Loadout to turn entries on and off by their flag in client configs (plugins, connectors, Codex entries, OpenCode MCP servers)?'),
         detail:
           (r2
             ? t(
@@ -406,14 +424,10 @@ void app.whenReady().then(() => {
           t('Закройте Claude Code и Codex, если они запущены: они могут перезаписать файл.', 'Close Claude Code and Codex if they are running: they may overwrite the file.') +
           '\n\n' +
           backupNotice(tidy(backupsDir())),
-        buttons: [t('Отмена', 'Cancel'), r2 ? t('Включить R2', 'Enable R2') : t('Включить запись', 'Enable writing')],
-        defaultId: 0,
-        cancelId: 0,
-        noLink: true,
+        cancel: t('Отмена', 'Cancel'),
+        ok: r2 ? t('Разрешить все правки', 'Allow all edits') : t('Разрешить вкл/выкл', 'Allow on/off'),
       }
-      const win = BrowserWindow.fromWebContents(e.sender)
-      const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-      if (r.response !== 1) return readWriteLevel()
+      if (!(await confirm(BrowserWindow.fromWebContents(e.sender), opts))) return readWriteLevel()
     }
     saveWriteLevel(level)
     return level
@@ -439,22 +453,18 @@ void app.whenReady().then(() => {
     guard(e)
     return guarded(async () => validateJournal(await core('journal')))
   })
-  // Cleaning up old backups is irreversible, so a person confirms it in an OS window (the page cannot click it), like raising the level.
+  // Cleaning up old backups is irreversible, so a person confirms it in main's own window (the page cannot click it), like raising the level.
   ipcMain.handle('backups:prune', async (e) => {
     guard(e)
     const opts = {
-      type: 'warning' as const,
-      title: t('Loadout: очистить старые копии?', 'Loadout: clean up old copies?'),
+      title: t('очистить старые копии', 'clean up old copies'),
       message: t('Удалить копии старых операций? Откатить их после этого будет нельзя.', 'Delete the copies of old operations? They cannot be rolled back afterwards.'),
       detail: backupNotice(tidy(backupsDir())),
-      buttons: [t('Отмена', 'Cancel'), t('Очистить', 'Clean up')],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true,
+      cancel: t('Отмена', 'Cancel'),
+      ok: t('Очистить', 'Clean up'),
+      danger: true,
     }
-    const win = BrowserWindow.fromWebContents(e.sender)
-    const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-    if (r.response !== 1) return { ok: false, error: t('очистка отменена', 'cleanup cancelled') }
+    if (!(await confirm(BrowserWindow.fromWebContents(e.sender), opts))) return { ok: false, error: t('очистка отменена', 'cleanup cancelled') }
     return guarded(async () => validatePruned(await core('pruneBackups')))
   })
   ipcMain.handle('rollback', (e, op: unknown) => {

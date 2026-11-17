@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
+import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, Level, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
 import { MAX_BUILD_SLOTS } from '../../shared/model'
 import { count, fmtTime, getLang, t } from '../../shared/i18n'
 import { chars, daysDesc, fixPatch, NO_POLICIES, pct, policiesNow, policySet, segments, stopGateOff, summarize, tickPolicy } from '../ctxkit-stats'
 import type { PolicySet } from '../ctxkit-stats'
-import { PageHead, pickLevel, Rich } from '../ui'
+import { PageHead, Rich } from '../ui'
 import type { Notify } from '../ui'
 
 // t() only during render: the language is chosen before the first render, not when the module is imported
@@ -81,10 +81,12 @@ function useLoaded<T>(load: () => Promise<{ ok: true; data: T } | { ok: false; e
 interface Props {
   level: WriteLevel
   onNotice: Notify
+  /** Asks for a write level (the confirmation window); true when it is granted. */
+  ensureLevel: (need: Level) => Promise<boolean>
 }
 
 /** Built-in Context Toolkit (CONCEPT.md §13): install and apply, diagnostics, effectiveness from transcript counters. */
-export function Ctxkit({ level, onNotice }: Props) {
+export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
   const [status, reloadStatus] = useLoaded<CtxkitStatus>(() => window.loadout.ctxkitStatus(), [])
   const [doctor, reloadDoctor, doctorBusy] = useLoaded<CtxkitDoctor>(() => window.loadout.ctxkitDoctor(), [])
   const [days, setDays] = useState<7 | 14 | 30>(14)
@@ -163,14 +165,17 @@ export function Ctxkit({ level, onNotice }: Props) {
   )
 
   const sum = report.status === 'ready' ? summarize(report.data) : null
-  const canApply = level === 'R2' && previewKey === key && !busy
-  const canUndo = level === 'R2' && previewKey === undoKey && !busy
+  // the level is not a precondition here: the button asks for R2 itself (the confirmation window), like every other write
+  const canApply = previewKey === key && !busy
+  const canUndo = previewKey === undoKey && !busy
+  const askFirst = t('Сначала Loadout спросит разрешение на запись в окне подтверждения', 'Loadout asks for permission to write first, in a confirmation window')
   const spin = (b: Busy, text: string) => (busy === b ? <><span className="spin" aria-hidden="true" />{text}</> : null)
 
   return (
     <>
       <PageHead
         title={t('Инструменты контекста', 'Context Toolkit')}
+        topic="ctxkit"
         sub={t(
           'Встроенный набор хуков, который не даёт агентам Claude Code засорять контекст. Здесь его ставят, проверяют и отключают.',
           'A bundled set of hooks that keeps Claude Code agents from filling up their context. Install it, check it and turn it off here.',
@@ -312,7 +317,7 @@ export function Ctxkit({ level, onNotice }: Props) {
             <span id="ctx-main-hint" className="mute small">{t('Пишет model в settings.json профиля Claude Code; прежнее значение предпросмотр покажет строкой «было -> стало».', 'Writes model into the Claude Code profile settings.json; the preview shows the previous value as a “was -> became” line.')}</span>
           </div>
           <div className="field">
-            <label htmlFor="ctx-effort">Effort</label>
+            <label htmlFor="ctx-effort">{t('Усилие модели (effort)', 'Model effort')}</label>
             <select id="ctx-effort" aria-describedby="ctx-effort-hint" value={opts.effort} onChange={(e) => change({ effort: e.target.value as SetupOptions['effort'] })}>
               <option value="keep">{t('Не менять (по умолчанию)', 'Keep as is (default)')}</option>
               <option value="low">low</option>
@@ -341,8 +346,8 @@ export function Ctxkit({ level, onNotice }: Props) {
               className="primary"
               disabled={!canApply}
               aria-busy={busy === 'apply'}
-              title={level !== 'R2' ? pickLevel('R2') : previewKey !== key ? t('Сначала предпросмотр с этими настройками', 'Preview these settings first') : t('Установить бинарь, прописать хуки и настройки', 'Install the binary, register hooks and settings')}
-              onClick={() => void run('setup', false)}
+              title={previewKey !== key ? t('Сначала предпросмотр с этими настройками', 'Preview these settings first') : level !== 'R2' ? askFirst : t('Установить бинарь, прописать хуки и настройки', 'Install the binary, register hooks and settings')}
+              onClick={() => void ensureLevel('R2').then((ok) => (ok ? run('setup', false) : undefined))}
             >
               {spin('apply', t('Применяю…', 'Applying…')) ?? t('Применить: установить или обновить', 'Apply: install or update')}
             </button>
@@ -387,8 +392,8 @@ export function Ctxkit({ level, onNotice }: Props) {
               className="danger"
               disabled={!canUndo}
               aria-busy={busy === 'undo'}
-              title={level !== 'R2' ? pickLevel('R2') : t('Убрать хуки Инструментов контекста, блок правил в CLAUDE.md и бинарь хуков', 'Remove the Context Toolkit hooks, the CLAUDE.md rules block and the hooks binary')}
-              onClick={() => void run('uninstall', false)}
+              title={level !== 'R2' ? askFirst : t('Убрать хуки Инструментов контекста, блок правил в CLAUDE.md и бинарь хуков', 'Remove the Context Toolkit hooks, the CLAUDE.md rules block and the hooks binary')}
+              onClick={() => void ensureLevel('R2').then((ok) => (ok ? run('uninstall', false) : undefined))}
             >
               {spin('undo', t('Откатываю…', 'Rolling back…')) ?? t('Откатить: убрать хуки, блок правил и бинарь', 'Roll back: remove hooks, rules block and binary')}
             </button>
@@ -494,10 +499,10 @@ export function Ctxkit({ level, onNotice }: Props) {
             <table className="left" aria-label={t('Ходы по дням', 'Turns by day')}>
               <thead>
                 <tr>
-                  <th scope="col">{t('ДЕНЬ', 'DAY')}</th>
-                  <th scope="col">{t('ХОДЫ ОСНОВНОЙ СЕССИИ ПО МОДЕЛЯМ', 'MAIN SESSION TURNS BY MODEL')}</th>
-                  <th scope="col">{t('СОВЕТНИК', 'ADVISOR')}</th>
-                  <th scope="col">{t('ОСТАНОВЛЕНО', 'BLOCKED')}</th>
+                  <th scope="col">{t('День', 'Day')}</th>
+                  <th scope="col">{t('Ходы основной сессии по моделям', 'Main session turns by model')}</th>
+                  <th scope="col">{t('Советник', 'Advisor')}</th>
+                  <th scope="col">{t('Остановлено', 'Blocked')}</th>
                 </tr>
               </thead>
               <tbody>

@@ -1,4 +1,4 @@
-//! Loadout core: read-only (R0). A scanner for five clients: Claude Code, Claude Desktop, Codex, Antigravity, DeepSeek.
+//! Loadout core: read-only (R0). A scanner for six clients: Claude Code, Claude Desktop, Codex, Antigravity, DeepSeek, OpenCode.
 
 pub mod antigravity;
 pub mod claude_code;
@@ -12,6 +12,7 @@ pub mod frontmatter;
 pub mod i18n;
 pub mod mask;
 pub mod model;
+pub mod opencode;
 pub mod profiles;
 pub mod trash;
 pub mod watch;
@@ -27,6 +28,8 @@ pub struct Ctx {
     pub home: PathBuf,
     pub entities: Vec<Entity>,
     pub warnings: Vec<String>,
+    /// The OpenCode system config directory (`%ProgramData%\opencode`); `None` reads none (checks on a fixture home).
+    pub opencode_system: Option<PathBuf>,
 }
 
 /// Size limit for a file being read.
@@ -90,6 +93,20 @@ impl Ctx {
             Ok(v) => Some(v),
             Err(e) => {
                 let w = crate::tr!("{}: не JSON ({})", "{}: not JSON ({})", self.tilde(p), e);
+                self.warnings.push(w);
+                None
+            }
+        }
+    }
+
+    /// [`Ctx::read_json`] for JSONC files (comments, trailing commas): OpenCode's `opencode.json(c)`.
+    pub fn read_jsonc(&mut self, p: &Path) -> Option<Value> {
+        let text = self.read_text(p)?;
+        let body = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        match jsonc_parser::parse_to_serde_value(body, &Default::default()) {
+            Ok(v) => v,
+            Err(e) => {
+                let w = crate::tr!("{}: не JSONC ({})", "{}: not JSONC ({})", self.tilde(p), e);
                 self.warnings.push(w);
                 None
             }
@@ -487,17 +504,25 @@ pub fn scan(home: &Path) -> ScanResult {
 }
 
 /// A scan with the Loadout trash (`store` is the app's backup directory): removed entries show up as disabled.
+/// No machine-wide config is read: the result depends on `home` alone (what checks need).
 pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
+    scan_all(home, store, None)
+}
+
+/// [`scan_with`] plus the machine-wide OpenCode config in `opencode_system` (the CLI passes `%ProgramData%\opencode`).
+pub fn scan_all(home: &Path, store: Option<&Path>, opencode_system: Option<&Path>) -> ScanResult {
     let mut c = Ctx {
         home: home.to_path_buf(),
         entities: Vec::new(),
         warnings: Vec::new(),
+        opencode_system: opencode_system.map(Path::to_path_buf),
     };
     claude_code::scan(&mut c);
     claude_desktop::scan(&mut c);
     codex::scan(&mut c);
     antigravity::scan(&mut c);
     deepseek::scan(&mut c);
+    opencode::scan(&mut c);
     if let Some(store) = store {
         trash::inject(&mut c, store);
     }
@@ -756,6 +781,7 @@ mod tests {
             home: PathBuf::from("C:\\Users\\Alice"),
             entities: vec![],
             warnings: vec![],
+            opencode_system: None,
         };
         assert_eq!(c.tilde(Path::new("c:/users/ALICE/work/p")), "~/work/p");
         assert_eq!(c.tilde(Path::new("D:/other")), "D:/other");

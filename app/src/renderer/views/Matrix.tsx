@@ -33,6 +33,7 @@ export function withModifier(e: { ctrlKey: boolean; metaKey: boolean; altKey: bo
 }
 
 const STATES: EntityState[] = ['on', 'off', 'broken', 'stale', 'cloud', 'unknown']
+const MAIN_GROUPS: readonly Group[] = ['plugin', 'mcp', 'skill']
 
 interface Props {
   rows: Row[]
@@ -113,12 +114,12 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
 
   return (
     <>
-      <PageHead title={t('Матрица', 'Matrix')} sub={t('Что установлено в каждом клиенте. Выберите ячейку, справа появятся подробности.', 'What is installed in each client. Select a cell to see the details on the right.')} />
+      <PageHead title={t('Матрица', 'Matrix')} topic="matrix" sub={t('Что установлено в каждом клиенте. Выберите ячейку, справа появятся подробности.', 'What is installed in each client. Select a cell to see the details on the right.')} />
       <div className="bar">
         <input
           ref={searchRef}
           type="search"
-          placeholder={t('Поиск ( / )', 'Search ( / )')}
+          placeholder={t('Найти по названию ( / )', 'Find by name ( / )')}
           aria-label={t('Поиск', 'Search')}
           value={filters.q}
           onChange={(e) => setFilters({ ...filters, q: e.target.value })}
@@ -126,11 +127,23 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
         <button className="chip" aria-pressed={filters.group === 'all'} onClick={() => setFilters({ ...filters, group: 'all' })}>
           {t('все типы', 'all types')}
         </button>
-        {GROUPS.map((g) => (
+        {/* the three kinds most people look for stay as buttons; the rarer ones are one list, so the bar fits two rows at 1100 */}
+        {GROUPS.filter((g) => MAIN_GROUPS.includes(g.id)).map((g) => (
           <button key={g.id} className="chip" aria-pressed={filters.group === g.id} onClick={() => setFilters({ ...filters, group: g.id })}>
             {g.label}
           </button>
         ))}
+        <select
+          aria-label={t('Другие типы', 'Other kinds')}
+          className={MAIN_GROUPS.includes(filters.group as Group) || filters.group === 'all' ? undefined : 'picked'}
+          value={MAIN_GROUPS.includes(filters.group as Group) ? 'all' : filters.group}
+          onChange={(e) => setFilters({ ...filters, group: e.target.value as Filters['group'] })}
+        >
+          <option value="all">{t('другие типы…', 'other kinds…')}</option>
+          {GROUPS.filter((g) => !MAIN_GROUPS.includes(g.id)).map((g) => (
+            <option key={g.id} value={g.id}>{g.label}</option>
+          ))}
+        </select>
         <select
           aria-label={t('Фильтр по состоянию', 'Filter by state')}
           value={filters.state}
@@ -168,7 +181,6 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
           ))}
           <li><span className="more">+N</span> {t('ещё N записей в других областях', 'N more entries in other scopes')}</li>
           <li><span className="delta">Δ</span> {t('изменилось на диске только что, метка гаснет через несколько секунд', 'just changed on disk, the mark fades after a few seconds')}</li>
-          <li><span className="mono">FX</span> {t('в шапке: анимации окна (выкл, лёгкие, полные)', 'in the header: window animations (off, light, full)')}</li>
         </ul>
       </details>
 
@@ -184,9 +196,9 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
         >
           <thead>
             <tr>
-              <th scope="col">{t('СУЩНОСТЬ', 'ENTITY')}</th>
+              <th scope="col">{t('Название', 'Name')}</th>
               {CLIENTS.map((c) => (
-                <th key={c.id} scope="col">{c.name.toUpperCase()}</th>
+                <th key={c.id} scope="col">{c.name}</th>
               ))}
             </tr>
           </thead>
@@ -195,7 +207,8 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
               <tr key={r.key} role="row">
                 <td className="name" role="rowheader">
                   <KindBadge kinds={r.kinds} />
-                  <b title={r.hint ?? r.name}>{r.name}</b>
+                  {/* a whole word: with six columns at 1100 "p1-server" broke at its hyphen; a name longer than the cell still wraps */}
+                  <b className="tok" title={r.hint ?? r.name}>{r.name}</b>
                 </td>
                 {CLIENTS.map((c, ci) => {
                   const cell = r.cells[c.id]
@@ -229,10 +242,10 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
                 <td colSpan={CLIENTS.length + 1} className="empty">
                   {total === 0 ? (
                     <>
-                      <p>{t('Не найдено ни одного клиента: в домашней папке нет конфигов Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity и DeepSeek, или они пусты.', 'No client found: the home folder has no configs of Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity or DeepSeek, or they are empty.')}</p>
-                      <p>{t('Установите клиент или добавьте в него MCP-сервер, затем пересканируйте.', 'Install a client or add an MCP server to one, then rescan.')}</p>
+                      <p>{t('Не найдено ни одного клиента: в домашней папке нет конфигов Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity, DeepSeek и OpenCode, или они пусты.', 'No client found: the home folder has no configs of Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity, DeepSeek or OpenCode, or they are empty.')}</p>
+                      <p>{t('Установите клиент или добавьте в него MCP-сервер, затем нажмите «Обновить».', 'Install a client or add an MCP server to one, then press Refresh.')}</p>
                       <div className="actions center">
-                        <button className="primary" onClick={onRescan}>{t('Пересканировать', 'Rescan')}</button>
+                        <button className="primary" onClick={onRescan}>{t('Обновить', 'Refresh')}</button>
                         <button onClick={onAdd}>{t('Добавить MCP…', 'Add MCP…')}</button>
                       </div>
                     </>

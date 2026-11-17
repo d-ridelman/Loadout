@@ -93,8 +93,8 @@ async function shot(page, lang, name) {
 }
 
 const L = {
-  ru: { add: 'Добавить MCP', client: 'Клиент', name: 'Имя', command: 'Команда', args: 'Аргументы, по одному в строке', preview: 'Предпросмотр', addGo: 'Добавить', plugin: 'Установить плагин', addMarket: 'Добавить маркетплейс…', marketSrc: 'Источник маркетплейса', addMarketGo: 'Добавить маркетплейс', catalog: 'Каталог e2e-market', close: 'Закрыть', skill: 'Установить скил', skillSrc: 'Источник скила', what: 'Что будет скачано', download: 'Скачать и показать', skillPreview: 'Предпросмотр установки', install: 'Установить', disable: 'Выключить', journal: 'Журнал операций', profName: 'Имя профиля', profile: 'рабочий', capture: 'Снять с текущего состояния', entries: 'Записи профиля', hygiene: /^Гигиена коммитов/, irreversible: /^Подтверждение необратимого/, ctxPreview: /^Предпросмотр \(/, apply: /^Применить: установить/, applied: 'Применено.', undo: 'Показать, что уберёт откат', welcomeOk: 'Понятно, начать', legend: 'Что значат значки', undoGo: 'Откатить: убрать хуки, блок правил и бинарь', eff: 'Эффективность', turns: 'Ходы по дням' },
-  en: { add: 'Add MCP', client: 'Client', name: 'Name', command: 'Command', args: 'Arguments, one per line', preview: 'Preview', addGo: 'Add', plugin: 'Install plugin', addMarket: 'Add marketplace…', marketSrc: 'Marketplace source', addMarketGo: 'Add marketplace', catalog: 'Catalog e2e-market', close: 'Close', skill: 'Install skill', skillSrc: 'Skill source', what: 'What will be downloaded', download: 'Download and show', skillPreview: 'Preview installation', install: 'Install', disable: 'Disable', journal: 'Operations journal', profName: 'Profile name', profile: 'work', capture: 'Capture current state', entries: 'Profile entries', hygiene: /^Commit hygiene/, irreversible: /^Confirm irreversible/, ctxPreview: /^Preview \(/, apply: /^Apply: install/, applied: 'Applied.', undo: 'Show what the rollback removes', welcomeOk: 'Got it, start', legend: 'What the marks mean', undoGo: 'Roll back: remove hooks, rules block and binary', eff: 'Efficiency', turns: 'Turns by day' },
+  ru: { add: 'MCP-сервер', faq: 'Вопросы и ответы', client: 'Клиент', name: 'Имя', command: 'Команда', args: 'Аргументы, по одному в строке', preview: 'Предпросмотр', addGo: 'Добавить', plugin: 'Плагин Claude Code', addMarket: 'Добавить маркетплейс…', marketSrc: 'Источник маркетплейса', addMarketGo: 'Добавить маркетплейс', catalog: 'Каталог e2e-market', close: 'Закрыть', skill: 'Скил', skillSrc: 'Источник скила', what: 'Что будет скачано', download: 'Скачать и показать', skillPreview: 'Предпросмотр установки', install: 'Установить', disable: 'Выключить', journal: 'Журнал операций', profName: 'Имя профиля', profile: 'рабочий', capture: 'Сохранить текущее состояние', entries: 'Записи профиля', hygiene: /^Гигиена коммитов/, irreversible: /^Подтверждение необратимого/, ctxPreview: /^Предпросмотр \(/, apply: /^Применить: установить/, applied: 'Применено.', undo: 'Показать, что уберёт откат', welcomeOk: 'Понятно, начать', legend: 'Что значат значки', undoGo: 'Откатить: убрать хуки, блок правил и бинарь', eff: 'Эффективность', turns: 'Ходы по дням' },
+  en: { add: 'MCP server', faq: 'Questions', client: 'Client', name: 'Name', command: 'Command', args: 'Arguments, one per line', preview: 'Preview', addGo: 'Add', plugin: 'Claude Code plugin', addMarket: 'Add marketplace…', marketSrc: 'Marketplace source', addMarketGo: 'Add marketplace', catalog: 'Catalog e2e-market', close: 'Close', skill: 'Skill', skillSrc: 'Skill source', what: 'What will be downloaded', download: 'Download and show', skillPreview: 'Preview installation', install: 'Install', disable: 'Disable', journal: 'Operations journal', profName: 'Profile name', profile: 'work', capture: 'Save the current state', entries: 'Profile entries', hygiene: /^Commit hygiene/, irreversible: /^Confirm irreversible/, ctxPreview: /^Preview \(/, apply: /^Apply: install/, applied: 'Applied.', undo: 'Show what the rollback removes', welcomeOk: 'Got it, start', legend: 'What the marks mean', undoGo: 'Roll back: remove hooks, rules block and binary', eff: 'Efficiency', turns: 'Turns by day' },
 }
 
 async function pass(lang) {
@@ -113,6 +113,8 @@ async function pass(lang) {
       LOADOUT_BIN: loadoutBin,
       LOADOUT_LANG: lang,
       LOADOUT_HOME: home,
+      // the OpenCode system config comes from the fixture, never from the machine taking the screenshots
+      LOADOUT_OPENCODE_SYSTEM_DIR: join(repo, 'fixtures', 'system-opencode'),
       LOADOUT_CLAUDE: process.execPath,
       LOADOUT_CLAUDE_ARGS: JSON.stringify([join(appDir, 'e2e', 'fake-claude.mjs')]),
       FAKE_CLAUDE_CALLS: join(home, 'claude-calls.txt'),
@@ -134,6 +136,11 @@ async function pass(lang) {
       throw new Error(`${e.message}: ${(await size()).join('×')}`)
     })
     const dialog = page.locator('[role=dialog][aria-modal=true]')
+    /** The header's single "Add" list: opens it and picks the item whose name starts with `name`. */
+    const addItem = async (name) => {
+      await page.locator('header .addmenu > button').click()
+      await page.locator('#addpop').getByRole('button', { name: new RegExp(`^${name}`) }).click()
+    }
     const cell = (rowName, idx) => page.locator('tbody tr', { has: page.locator('td.name b', { hasText: new RegExp(`^${rowName}$`) }) }).locator('td').nth(idx + 1)
     const applyPlan = async (label) => {
       await dialog.getByRole('button', { name: label, exact: true }).waitFor({ timeout: 8000 })
@@ -150,7 +157,7 @@ async function pass(lang) {
     await cell('tool-a', 3).click()
     await shot(page, lang, 'matrix')
     await page.keyboard.press('2')
-    await waitFor(async () => (await page.locator('.node').count()) === 5, 'radar')
+    await waitFor(async () => (await page.locator('.node').count()) === 6, 'radar')
     await shot(page, lang, 'radar')
     await page.keyboard.press('3')
     await waitFor(async () => (await page.locator('.pipe .hk').count()) > 0, 'hooks')
@@ -158,10 +165,16 @@ async function pass(lang) {
     await page.keyboard.press('4')
     await waitFor(async () => (await page.locator('.find').count()) > 0, 'doctor')
     await shot(page, lang, 'doctor')
+    // the help: F1, questions and answers with one open
+    await page.keyboard.press('F1')
+    await page.getByRole('button', { name: l.faq, exact: true }).click()
+    await page.locator('.faq details summary').nth(1).click()
+    await shot(page, lang, 'help')
+    await page.keyboard.press('Escape')
     await page.keyboard.press('1')
 
     // add an MCP: the form, then the entry (it ends up in the journal)
-    await page.getByRole('button', { name: l.add, exact: true }).click()
+    await addItem(l.add)
     await dialog.getByLabel(l.client).selectOption({ label: 'ChatGPT / Codex' })
     await dialog.getByLabel(l.name, { exact: true }).fill('notes-mcp')
     await dialog.getByLabel(l.command, { exact: true }).fill('npx')
@@ -171,7 +184,7 @@ async function pass(lang) {
     await applyPlan(l.addGo)
 
     // install a plugin: the marketplace is added by the stand-in `claude`, the screenshot is the catalog (the path entry step is not captured: it shows the full path)
-    await page.getByRole('button', { name: l.plugin, exact: true }).click()
+    await addItem(l.plugin)
     await dialog.getByRole('button', { name: l.addMarket }).click()
     await dialog.getByLabel(l.marketSrc).fill(join(home, 'src', 'market'))
     await dialog.getByRole('button', { name: l.preview, exact: true }).click()
@@ -185,7 +198,7 @@ async function pass(lang) {
     await dialog.waitFor({ state: 'detached', timeout: 8000 })
 
     // install a skill from "GitHub" (a local git repository): pick the skill, then install
-    await page.getByRole('button', { name: l.skill, exact: true }).click()
+    await addItem(l.skill)
     await dialog.getByLabel(l.skillSrc).fill('acme/skills')
     await dialog.getByRole('button', { name: l.what }).click()
     await dialog.getByRole('button', { name: l.download }).click()

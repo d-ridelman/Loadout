@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { Entity, Intent, JournalEntry, Plan } from '../../shared/model'
 import { count, plural, t } from '../../shared/i18n'
-import { Path } from '../ui'
+import { Cmd, Path } from '../ui'
 import { Modal } from './Modal'
 
 type PlanState =
@@ -33,8 +33,8 @@ function Change({ file, pointer, from, to }: { file: string; pointer: string; fr
           <dt>{t('ключ', 'key')}</dt><dd className="wrap">{pointer}</dd>
         </>
       ) : null}
-      <dt>{t('было', 'before')}</dt><dd className="wrap mono">{from}</dd>
-      <dt>{t('станет', 'after')}</dt><dd className="wrap mono"><b>{to}</b></dd>
+      <dt>{t('было', 'before')}</dt><dd className="wrap mono"><Cmd text={from} /></dd>
+      <dt>{t('станет', 'after')}</dt><dd className="wrap mono"><b><Cmd text={to} /></b></dd>
     </dl>
   )
 }
@@ -134,7 +134,7 @@ function title(p: Plan | undefined, intent: Intent): string {
   const op = p?.op ?? intent.op
   if (op === 'add') return t('Добавить MCP-сервер', 'Add MCP server')
   if (op === 'edit') return t('Правка команды', 'Edit command')
-  if (op === 'copy') return t('Копирование в другой клиент', 'Copy to another client')
+  if (op === 'copy') return t('Копировать в другой клиент', 'Copy to another client')
   if (op === 'installSkill') return t('Установить скил', 'Install skill')
   return intent.op === 'toggle' && intent.enable ? t('Включить', 'Enable') : t('Выключить', 'Disable')
 }
@@ -145,8 +145,9 @@ function applyLabel(p: Plan | undefined, intent: Intent): string {
   if (intent.op === 'edit') return t('Записать команду', 'Write command')
   if (intent.op === 'copy') return t('Скопировать', 'Copy')
   if (intent.op === 'installSkill') return t('Установить', 'Install')
-  if (p?.trash === 'in') return t('Вернуть из корзины', 'Restore from trash')
-  if (!intent.enable && p?.trash === 'out') return t('Вынести в корзину', 'Move to trash')
+  // the same words as the inspector button that opened this preview
+  if (p?.trash === 'in') return t('Включить (вернуть из корзины)', 'Enable (restore from trash)')
+  if (!intent.enable && p?.trash === 'out') return t('Выключить (в корзину)', 'Disable (move to trash)')
   return intent.enable ? t('Включить', 'Enable') : t('Выключить', 'Disable')
 }
 
@@ -240,9 +241,10 @@ export function PlanDialog({ entity, intent, onBack, onClose, onDone }: Props) {
                     <p className="mute small">{t('Устанавливайте его, только если доверяете источнику и прочитали его файлы.', 'Install it only if you trust the source and have read its files.')}</p>
                   </div>
                 ) : null}
-                {rest.map((n) => (
-                  <p key={n} className="s-stale">◐ {n}</p>
-                ))}
+                {/* a skill plan's notes are its file list and where it goes: information, not a warning (the warning is the box above) */}
+                {rest.map((n) =>
+                  state.plan.op === 'installSkill' ? <p key={n} className="mute">{n}</p> : <p key={n} className="s-stale">◐ {n}</p>,
+                )}
               </>
             )
           })()}

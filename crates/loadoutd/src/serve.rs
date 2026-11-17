@@ -47,6 +47,15 @@ fn send(v: &Value) {
     }
 }
 
+/// What to watch: the paths of the scan plus the OpenCode system config directory, even before it or its file exists.
+fn targets_of(home: &Path, scan: &ScanResult, system: Option<&Path>) -> Targets {
+    let mut t = Targets::from_scan(home, scan);
+    if let Some(dir) = system {
+        t.watch_config_dir(dir, &loadout_core::opencode::FILES);
+    }
+    t
+}
+
 struct Server {
     home: PathBuf,
     last: ScanResult,
@@ -56,12 +65,19 @@ struct Server {
     seq: u64,
     /// Directory of backups and the journal; without it writing is disabled.
     backups: Option<PathBuf>,
+    /// The OpenCode system config directory (`%ProgramData%\opencode`), read only; `None` reads none.
+    system: Option<PathBuf>,
 }
 
 impl Server {
-    fn new(home: &Path, backups: Option<PathBuf>, watcher: Option<RecommendedWatcher>) -> Self {
-        let last = loadout_core::scan_with(home, backups.as_deref());
-        let targets = Targets::from_scan(home, &last);
+    fn new(
+        home: &Path,
+        backups: Option<PathBuf>,
+        system: Option<PathBuf>,
+        watcher: Option<RecommendedWatcher>,
+    ) -> Self {
+        let last = loadout_core::scan_all(home, backups.as_deref(), system.as_deref());
+        let targets = targets_of(home, &last, system.as_deref());
         let mut s = Server {
             home: home.to_path_buf(),
             last,
@@ -70,6 +86,7 @@ impl Server {
             watched: BTreeMap::new(),
             seq: 0,
             backups,
+            system,
         };
         s.sync_watches(false);
         s
@@ -144,9 +161,10 @@ impl Server {
 
     /// A new scan; events are sent only when it differs semantically from the previous one.
     fn rescan(&mut self, announce: bool, reset: bool) {
-        let new = loadout_core::scan_with(&self.home, self.backups.as_deref());
+        let new =
+            loadout_core::scan_all(&self.home, self.backups.as_deref(), self.system.as_deref());
         // the set of paths is rebuilt on every scan, even without semantic changes: a directory may have appeared or vanished
-        self.targets = Targets::from_scan(&self.home, &new);
+        self.targets = targets_of(&self.home, &new, self.system.as_deref());
         self.sync_watches(reset);
         let d = diff(&self.last, &new);
         if d.is_empty() {
@@ -349,7 +367,7 @@ fn spawn_stdin_reader(tx: Sender<Msg>) {
     });
 }
 
-pub fn run(home: &Path, backups: Option<PathBuf>) {
+pub fn run(home: &Path, backups: Option<PathBuf>, system: Option<PathBuf>) {
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = mpsc::channel();
     let tx_fs = tx.clone();
     let watcher = recommended_watcher(move |res| {
@@ -364,7 +382,7 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
     .ok();
     spawn_stdin_reader(tx);
 
-    let mut server = Server::new(home, backups, watcher);
+    let mut server = Server::new(home, backups, system, watcher);
     send(
         &json!({ "jsonrpc": "2.0", "method": "ready", "params": { "watching": server.watched.len(), "protocol": PROTOCOL } }),
     );

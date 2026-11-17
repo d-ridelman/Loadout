@@ -19,7 +19,9 @@ pub struct Target {
 }
 
 /// File names whose change alters the scan result.
-const KNOWN_NAMES: [&str; 12] = [
+const KNOWN_NAMES: [&str; 14] = [
+    "opencode.json",
+    "opencode.jsonc",
     ".claude.json",
     "settings.json",
     "settings.local.json",
@@ -35,7 +37,16 @@ const KNOWN_NAMES: [&str; 12] = [
 ];
 
 /// (directory relative to home, recursive, any descendant is significant)
-const FIXED: [(&str, bool, bool); 19] = [
+const FIXED: [(&str, bool, bool); 28] = [
+    (".config/opencode", false, false),
+    (".config/opencode/agent", false, true),
+    (".config/opencode/agents", false, true),
+    (".config/opencode/command", false, true),
+    (".config/opencode/commands", false, true),
+    (".config/opencode/plugin", false, true),
+    (".config/opencode/plugins", false, true),
+    (".config/opencode/skill", true, false),
+    (".config/opencode/skills", true, false),
     (".", false, false), // `.claude.json` lives in the home root: events are filtered by file name
     (".claude", false, false),
     (".claude/plugins", false, false),
@@ -103,6 +114,26 @@ fn nearest_existing_ancestor(
 }
 
 impl Targets {
+    /// A config directory outside home (the OpenCode system config): watched when it exists, otherwise through its parent, so a
+    /// directory and a file created later are seen too, not only edits of a file that already had entries. Only `names` count.
+    pub fn watch_config_dir(&mut self, dir: &Path, names: &[&str]) {
+        self.fixed.insert(norm(dir));
+        for n in names {
+            self.files.insert(norm(&dir.join(n)));
+        }
+        let at = if dir.is_dir() {
+            dir.to_path_buf()
+        } else if let Some(p) = dir.parent().filter(|p| p.is_dir()) {
+            p.to_path_buf()
+        } else {
+            return;
+        };
+        self.dirs.entry(at).or_insert(Target {
+            recursive: false,
+            any_child: false,
+        });
+    }
+
     /// Directories and files from a scan result: the permanent set plus parents of all files the entries are built from.
     pub fn from_scan(home: &Path, scan: &ScanResult) -> Self {
         let mut t = Targets::default();
@@ -146,10 +177,12 @@ impl Targets {
             }
         }
         for e in &scan.entities {
-            let Some(rest) = e.origin.file.strip_prefix("~/") else {
-                continue;
+            // a file under home is shown as `~/…`; one outside it (the OpenCode system config in %ProgramData%) keeps its full path
+            let file = match e.origin.file.strip_prefix("~/") {
+                Some(rest) => home.join(rest),
+                None if Path::new(&e.origin.file).is_absolute() => PathBuf::from(&e.origin.file),
+                None => continue,
             };
-            let file = home.join(rest);
             t.files.insert(norm(&file));
             if let Some(parent) = file.parent() {
                 t.fixed.insert(norm(parent));
@@ -285,6 +318,65 @@ mod tests {
             "other files in the same directory are not significant"
         );
         let _ = fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn a_config_outside_home_is_watched_too() {
+        let h = home();
+        let sys = h.with_extension("system");
+        fs::create_dir_all(&sys).unwrap();
+        let file = sys.join("opencode.json");
+        let shown = file.to_string_lossy().replace('\\', "/");
+        let scan = ScanResult {
+            entities: vec![Entity::new(
+                Client::OpenCode,
+                Kind::Mcp,
+                "managed",
+                "corp",
+                State::On,
+                shown,
+                "/mcp/servers/corp",
+            )],
+            ..ScanResult::default()
+        };
+        let t = Targets::from_scan(&h, &scan);
+        assert!(
+            t.dirs.contains_key(&sys),
+            "the directory of the system config is watched"
+        );
+        assert!(
+            t.is_relevant(&file),
+            "an edit of the system config is significant"
+        );
+        let _ = fs::remove_dir_all(&h);
+        let _ = fs::remove_dir_all(&sys);
+    }
+
+    #[test]
+    fn a_system_config_dir_created_later_is_seen() {
+        let h = home();
+        let parent = h.with_extension("programdata");
+        let _ = fs::remove_dir_all(&parent);
+        fs::create_dir_all(&parent).unwrap();
+        let sys = parent.join("opencode");
+        let mut t = Targets::from_scan(&h, &ScanResult::default());
+        t.watch_config_dir(&sys, &["opencode.json", "opencode.jsonc"]);
+        assert!(
+            t.dirs.contains_key(&parent),
+            "a missing system dir is watched through its parent"
+        );
+        assert!(t.is_fixed(&sys), "creating the system dir is significant");
+        fs::create_dir_all(&sys).unwrap();
+        let mut t = Targets::from_scan(&h, &ScanResult::default());
+        t.watch_config_dir(&sys, &["opencode.json", "opencode.jsonc"]);
+        assert!(t.dirs.contains_key(&sys));
+        assert!(
+            t.is_relevant(&sys.join("opencode.json")),
+            "a new system config file is significant"
+        );
+        assert!(!t.is_relevant(&sys.join("notes.txt")));
+        let _ = fs::remove_dir_all(&h);
+        let _ = fs::remove_dir_all(&parent);
     }
 
     #[test]

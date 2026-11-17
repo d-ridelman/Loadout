@@ -100,8 +100,15 @@ pub fn get_value(
     let text = text.strip_prefix(BOM).unwrap_or(text);
     match format {
         Format::Json => {
-            let v: serde_json::Value =
-                serde_json::from_str(text).map_err(|_| crate::tr!("не JSON", "not JSON"))?;
+            // strict JSON first, then JSONC (OpenCode): the edits in this module already accept comments and trailing commas
+            let v: serde_json::Value = serde_json::from_str(text)
+                .ok()
+                .or_else(|| {
+                    jsonc_parser::parse_to_serde_value(text, &ParseOptions::default())
+                        .ok()
+                        .flatten()
+                })
+                .ok_or_else(|| crate::tr!("не JSON", "not JSON"))?;
             Ok(path.iter().try_fold(&v, |cur, k| cur.get(k)).cloned())
         }
         Format::Toml => {

@@ -140,8 +140,8 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
             'Press “Show”: the inspector names the file of the entry. Put back what it points to, or disable the entry.',
           )
         : t(
-            'Обновите или переустановите его средствами клиента, чтобы осталась одна версия, затем пересканируйте (клавиша R).',
-            'Update or reinstall it with the client so that one version is left, then rescan (key R).',
+            'Обновите или переустановите его средствами клиента, чтобы осталась одна версия, затем нажмите «Обновить» (клавиша R).',
+            'Update or reinstall it with the client so that one version is left, then press Refresh (key R).',
           ),
       entity: e,
     })
@@ -194,7 +194,7 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       ),
       fix: t(
         'Обычно ничего. Включён ли плагин, видно в самом клиенте. Строки, где состояние не определено ни в одном клиенте, матрица по умолчанию прячет (галочка «скрыть «не определено»»).',
-        'Usually nothing. The client itself shows whether the plugin is on. Rows whose state is unknown in every client are hidden in the matrix by default (the “hide "unknown"” checkbox).',
+        'Usually nothing. The client itself shows whether the plugin is on. Rows whose state is unknown in every client are hidden in the matrix by default (the “hide unknown” checkbox).',
       ),
     })
   }
@@ -231,8 +231,8 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       what: w,
       why: t('Файл или его часть не прочитаны: записей оттуда в списке нет.', 'A file or part of it was not read: its entries are missing from the list.'),
       fix: t(
-        'Откройте файл из предупреждения в редакторе и исправьте место, на которое оно указывает, затем пересканируйте (клавиша R).',
-        'Open the file named in the warning, fix the place it points to, then rescan (key R).',
+        'Откройте файл из предупреждения в редакторе и исправьте место, на которое оно указывает, затем нажмите «Обновить» (клавиша R).',
+        'Open the file named in the warning, fix the place it points to, then press Refresh (key R).',
       ),
     }),
   )

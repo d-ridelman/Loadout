@@ -2,7 +2,7 @@
 
 # Loadout
 
-**A Windows app that shows the plugins, MCP servers, skills and hooks of five AI coding clients in one matrix and edits their configs safely: preview, backup, journal, rollback.**
+**A Windows app that shows the plugins, MCP servers, skills and hooks of six AI coding clients in one matrix and edits their configs safely: preview, backup, journal, rollback.**
 
 [English](README.md) · [Русский](README.ru.md)
 
@@ -20,17 +20,18 @@
 
 ## Why
 
-Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity and DeepSeek Harness each keep plugins, MCP servers, skills, agents, hooks and commands in their own files and formats (JSON, TOML, YAML). Finding out what is enabled where, or moving a server from one client to another, means editing config files by hand.
+Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity, DeepSeek Harness and OpenCode each keep plugins, MCP servers, skills, agents, hooks and commands in their own files and formats (JSON, JSONC, TOML, YAML). Finding out what is enabled where, or moving a server from one client to another, means editing config files by hand.
 
-Loadout reads all five clients, shows everything in one matrix and changes only the value you touched.
+Loadout reads all six clients, shows everything in one matrix and changes only the value you touched.
 
 ## Features
 
-- **First launch**: a card says what Loadout is, that it writes nothing without a preview and your confirmation, and that the only thing it does online by itself is the update check. Close it once and it does not come back.
-- **Matrix** of every entry across the five clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). "What the marks mean" above the table explains every mark, `+N`, the `Δ` of a fresh change and the FX switch. The inspector on the right shows the file, the key and the contents without secrets.
+- **First launch**: a card says what Loadout is, shows the first task in three steps (find an entry, click its mark, Enable or Disable), and says that it writes nothing without a preview and your confirmation and that the only thing it does online by itself is the update check. Close it once and it does not come back; Help can show it again.
+- **Help in the window** (`F1`, `?` or the Help button in the header): getting started, what each section is for, questions and answers, shortcuts and the animation setting. "More in Help" under every section title opens Help on that section; unfamiliar terms (write level, scope, pointer) explain themselves on hover and on keyboard focus. The sidebar gives each section a line on what it is for and its key.
+- **Matrix** of every entry across the six clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). "What the marks mean" above the table explains every mark, `+N` and the `Δ` of a fresh change. The inspector on the right shows the client, the state and the file, with the main action as a button; the scope, the key and the contents without secrets are under "Technical details".
 - **Radar, hooks, doctor.** A per-client overview, the hook pipeline by lifecycle event, and findings: broken entries, version mismatches, the same entry in several scopes, empty marketplaces, broken links to a cleaned cache, piles of third-party backups, MCP configs with secret keys. The Doctor groups findings by severity and says how to fix each one; the "broken: N" counter in the footer opens it.
 - **Messages** after an action pop up above the footer in colour (done, error, info) and in full; screen readers announce them.
-- **Toggle** an entry that has an on/off flag: plugins, connectors, Codex entries (write level R1). Most MCP servers have no such flag: disabling one **moves it to the Loadout trash**, and enabling puts it back in the same place (R2). **Edit an MCP command, copy it to another client** (R2); JSON, TOML and YAML are translated for you.
+- **Toggle** an entry that has an on/off flag: plugins, connectors, Codex and OpenCode entries (write level R1). Most MCP servers have no such flag: disabling one **moves it to the Loadout trash**, and enabling puts it back in the same place (R2). **Edit an MCP command, copy it to another client** (R2); JSON, TOML and YAML are translated for you.
 - **Add an MCP server** from the window. The `env` values you type go to the core and are not shown in the preview, the journal or the inspector.
 - **Install a Claude Code plugin from a marketplace.** Add a marketplace by GitHub `owner/repo`, an `https://` or SSH address, or a local folder, then pick a plugin from its catalog. Before anything runs, the window shows the exact `claude plugin …` command.
 - **Install a skill** into `~/.claude/skills` from a GitHub repository or a local folder. The window first says what will be downloaded and where, then shows a plan with the files and a warning when the skill contains code. The installation goes into the journal and can be rolled back.
@@ -39,7 +40,7 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 - **Context Toolkit** built in: preview, apply, roll back, optional policies, and an "Efficiency" report (see below).
 - **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; core messages follow the choice too.
 - **Updates from GitHub releases.** Loadout checks for a new version about 10 seconds after start and once a day (hourly after a failed check), offers it in a small card, downloads it only on "Download" (just the changed blocks) and installs it on "Restart and update" or when you quit after the download. The check goes only to GitHub and carries nothing about you or your configs; turn it off in the update panel (the version button at the right end of the footer). Details: [SECURITY.md](SECURITY.md#network).
-- **Client files are read-only by default.** The write level in the header is named in words: "Read-only · R0", "On/off · R1" (toggles by flag), "All edits · R2" (the trash, edits, copies, installs, profiles, Context Toolkit). Raising it needs an OS confirmation dialog. Only one window runs at a time; a second launch brings the first one forward.
+- **Client files are read-only by default.** The write level in the header is named in words: "Read-only · R0", "On/off · R1" (toggles by flag), "All edits · R2" (the trash, edits, copies, installs, profiles, Context Toolkit). Raising it needs a confirmation in a separate window drawn by the main process, in the app's style; the page cannot press it for you. You do not have to pick the level first: an action button (Disable, Add and so on) asks for the level it needs and, once you agree, shows the preview. Only one window runs at a time; a second launch brings the first one forward.
 
 ### Safe write pipeline
 
@@ -78,6 +79,10 @@ Operation backups and the Loadout trash keep client configs **in full and as pla
 | Context Toolkit: rollback preview | First launch |
 |---|---|
 | ![Context Toolkit rollback](docs/screenshots/en-context-toolkit-rollback.png) | ![Welcome card](docs/screenshots/en-welcome.png) |
+
+| Help: questions and answers | |
+|---|---|
+| ![Help](docs/screenshots/en-help.png) | |
 
 The screenshots are produced by `npm run docs-shots` in `app/` (window 1920×1080, fixtures only).
 
@@ -147,7 +152,8 @@ Known limitations:
 - macOS and Linux;
 - project-level settings (`.claude/settings.json` in a project, `.mcp.json`): plugins enabled only there show as "unknown";
 - the MCP check that starts a server and asks for its tools;
-- a Claude Code profile other than `~/.claude` (`CLAUDE_CONFIG_DIR`) is not read.
+- a Claude Code profile other than `~/.claude` (`CLAUDE_CONFIG_DIR`) is not read;
+- OpenCode: the global `~/.config/opencode` is read and written; the system config in `%ProgramData%\opencode` is shown as scope `managed` and only read (an administrator changes it). Project `opencode.json` files are not read: OpenCode keeps its list of projects only inside its SQLite database. `AGENTS.md` rules and `tui.json` have no entries to show; the old `config.json` is not among the files OpenCode V2 reads.
 
 Open work is in [TODO.md](TODO.md): one dated item, comparing advisor and `checker` calls by day after 22.11.2026.
 

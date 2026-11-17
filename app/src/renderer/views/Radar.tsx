@@ -7,7 +7,7 @@ import type { Finding } from '../doctor'
 import { PageHead, Panel } from '../ui'
 
 const POS: readonly [number, number][] = [
-  [50, 6], [91, 40], [76, 90], [24, 90], [9, 40],
+  [50, 6], [88, 28], [88, 72], [50, 94], [12, 72], [12, 28],
 ]
 
 interface Props {
@@ -24,6 +24,7 @@ export function Radar({ rows, findings, activeClient, onClient, onDoctor }: Prop
     <>
     <PageHead
       title={t('Радар', 'Radar')}
+      topic="radar"
       sub={t(
         'Сколько строк матрицы у каждого клиента и сколько проблем у него нашёл Доктор. Нажмите на клиента, чтобы отфильтровать матрицу.',
         'How many matrix rows each client has and how many problems the Doctor found in it. Click a client to filter the matrix.',
@@ -36,7 +37,7 @@ export function Radar({ rows, findings, activeClient, onClient, onDoctor }: Prop
           <div className="beam fx" />
           <div className="rcenter">
             <div className="mono big">{rows.length}</div>
-            <div className="mute mono small">{t('строк матрицы', 'matrix rows')}</div>
+            <div className="mute small">{t('строк матрицы', 'matrix rows')}</div>
           </div>
           {CLIENTS.map((c, i) => {
             const s = clientStat(rows, findings, c.id)
@@ -45,13 +46,14 @@ export function Radar({ rows, findings, activeClient, onClient, onDoctor }: Prop
               <button
                 key={c.id}
                 className="node"
-                style={{ left: `${POS[i]?.[0] ?? 50}%`, top: `${POS[i]?.[1] ?? 50}%` }}
+                // clamped by half the card width: at 9 % / 91 % a 124 px card stuck out of the panel
+                style={{ left: `clamp(62px, ${POS[i]?.[0] ?? 50}%, calc(100% - 62px))`, top: `${POS[i]?.[1] ?? 50}%` }}
                 aria-pressed={activeClient === c.id}
                 aria-label={t(`${c.name}: строк в матрице ${s.cells}, проблем ${s.issues}`, `${c.name}: ${s.cells} matrix rows, ${s.issues} issues`)}
                 onClick={() => onClient(c.id)}
               >
                 <b>{c.name}</b>
-                <span className="mute mono small">
+                <span className="mute small">
                   <span className="dot pulse" style={{ background: colour }} />
                   {s.cells}
                   {s.issues > 0 ? ` · ⚠ ${s.issues}` : null}
@@ -66,7 +68,7 @@ export function Radar({ rows, findings, activeClient, onClient, onDoctor }: Prop
           <dl className="kv">
             {GROUPS.map((g) => (
               <div key={g.id} className="kvrow">
-                <dt><span className={`badge k-${g.id}`}>{g.id}</span></dt>
+                <dt><span className={`badge k-${g.id}`}>{g.label}</span></dt>
                 <dd>{rows.filter((r) => r.group === g.id).length}</dd>
               </div>
             ))}
