@@ -56,11 +56,18 @@ struct Server {
     seq: u64,
     /// Directory of backups and the journal; without it writing is disabled.
     backups: Option<PathBuf>,
+    /// The OpenCode system config directory (`%ProgramData%\opencode`), read only; `None` reads none.
+    system: Option<PathBuf>,
 }
 
 impl Server {
-    fn new(home: &Path, backups: Option<PathBuf>, watcher: Option<RecommendedWatcher>) -> Self {
-        let last = loadout_core::scan_with(home, backups.as_deref());
+    fn new(
+        home: &Path,
+        backups: Option<PathBuf>,
+        system: Option<PathBuf>,
+        watcher: Option<RecommendedWatcher>,
+    ) -> Self {
+        let last = loadout_core::scan_all(home, backups.as_deref(), system.as_deref());
         let targets = Targets::from_scan(home, &last);
         let mut s = Server {
             home: home.to_path_buf(),
@@ -70,6 +77,7 @@ impl Server {
             watched: BTreeMap::new(),
             seq: 0,
             backups,
+            system,
         };
         s.sync_watches(false);
         s
@@ -144,7 +152,8 @@ impl Server {
 
     /// A new scan; events are sent only when it differs semantically from the previous one.
     fn rescan(&mut self, announce: bool, reset: bool) {
-        let new = loadout_core::scan_with(&self.home, self.backups.as_deref());
+        let new =
+            loadout_core::scan_all(&self.home, self.backups.as_deref(), self.system.as_deref());
         // the set of paths is rebuilt on every scan, even without semantic changes: a directory may have appeared or vanished
         self.targets = Targets::from_scan(&self.home, &new);
         self.sync_watches(reset);
@@ -349,7 +358,7 @@ fn spawn_stdin_reader(tx: Sender<Msg>) {
     });
 }
 
-pub fn run(home: &Path, backups: Option<PathBuf>) {
+pub fn run(home: &Path, backups: Option<PathBuf>, system: Option<PathBuf>) {
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = mpsc::channel();
     let tx_fs = tx.clone();
     let watcher = recommended_watcher(move |res| {
@@ -364,7 +373,7 @@ pub fn run(home: &Path, backups: Option<PathBuf>) {
     .ok();
     spawn_stdin_reader(tx);
 
-    let mut server = Server::new(home, backups, watcher);
+    let mut server = Server::new(home, backups, system, watcher);
     send(
         &json!({ "jsonrpc": "2.0", "method": "ready", "params": { "watching": server.watched.len(), "protocol": PROTOCOL } }),
     );

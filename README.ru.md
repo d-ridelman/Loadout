@@ -153,7 +153,7 @@ npm run dist                   # установщик NSIS в app/dist (без �
 - настройки уровня проекта (`.claude/settings.json` в проекте, `.mcp.json`): плагины, включённые только там, показываются как «не определено»;
 - проверка MCP запуском сервера и запросом списка его инструментов;
 - профиль Claude Code не из `~/.claude` (`CLAUDE_CONFIG_DIR`) не читается;
-- OpenCode: читается только глобальный `~/.config/opencode`; проектный `opencode.json`, устаревший `config.json` схемы V1, правила `AGENTS.md` и системный конфиг в `%ProgramData%\opencode` — нет.
+- OpenCode: глобальный `~/.config/opencode` читается и правится; системный конфиг `%ProgramData%\opencode` показывается как область `managed` и только читается (его меняет администратор). Проектные `opencode.json` не читаются: список проектов OpenCode хранит только в своей базе SQLite. В правилах `AGENTS.md` и `tui.json` нет записей для показа; старый `config.json` OpenCode V2 не читает.
 
 Открытая работа записана в [TODO.md](TODO.md): один пункт со сроком, сравнить вызовы advisor и `checker` по дням после 22.11.2026.
 

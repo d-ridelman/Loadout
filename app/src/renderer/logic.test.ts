@@ -102,6 +102,16 @@ describe('aggregate', () => {
     expect(onlyUnknown(rows[0]!)).toBe(true)
     expect(scopeRank('user')).toBeLessThan(scopeRank('project:~/x'))
   })
+
+  it('the OpenCode system config speaks for its cell; a Claude Code "managed" entry does not', () => {
+    expect(scopeRank('managed', 'opencode')).toBeLessThan(scopeRank('user', 'opencode'))
+    expect(scopeRank('managed', 'claude-code')).toBeGreaterThan(scopeRank('user', 'claude-code'))
+    const rows = buildRows([
+      ent({ logicalKey: 'srv', client: 'opencode', scope: 'user', state: 'on' }),
+      ent({ logicalKey: 'srv', client: 'opencode', scope: 'managed', state: 'off' }),
+    ])
+    expect(rows[0]!.cells.opencode?.state).toBe('off')
+  })
 })
 
 describe('Stop gate checkbox', () => {

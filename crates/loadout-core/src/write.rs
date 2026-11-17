@@ -63,6 +63,10 @@ pub fn why_not(e: &Entity) -> String {
                 "the entry was not recognized as a `- id: …` block in cordis.patch.yml: line-based removal is not supported for it"
             )
         }
+        (Client::OpenCode, _) if e.scope == "managed" => crate::tr!(
+            "запись из системного конфига OpenCode (%ProgramData%\\opencode): его меняет администратор, Loadout только читает",
+            "an entry of the OpenCode system config (%ProgramData%\\opencode): an administrator changes it, Loadout only reads it"
+        ),
         (_, Kind::Mcp) => crate::tr!(
             "запись лежит в проекте или в плагине: их файлы Loadout не правит",
             "the entry is in a project or a plugin: Loadout does not edit their files"

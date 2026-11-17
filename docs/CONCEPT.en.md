@@ -54,7 +54,8 @@ Non-goals (v1):
 | | MCP | `{type: "local", command: [program, …args], environment?, cwd?}` or `{type: "remote", url, headers?, oauth?}`; turned off by a flag (R1) | JSONC | verified |
 | | agents, commands | maps in the config and `agent(s)/<name>.md`, `command(s)/<name>.md` (the name is the file name; this machine has `command/`) | JSONC + MD | verified |
 | | plugins, skills | `plugin(s)` in the config (a name, `[name, options]` or `{package, options}`), local `plugin(s)/`; skills `skill(s)/<name>/SKILL.md` | JSONC + JS/TS + MD | verified |
-| | not read | project `opencode.json` and `.opencode/` (no file lists the projects), the legacy global `config.json` (V1), `AGENTS.md` rules, `tui.json`, the system `%ProgramData%\opencode` | — | — |
+| | read only | the system `%ProgramData%\opencode\opencode.json(c)`, scope `managed` (the core reads it without `--home`; checks use the fixture `fixtures/system-opencode`: `LOADOUT_OPENCODE_SYSTEM_DIR` → the core flag `--opencode-system`, ignored in the packaged build; the watcher sees edits) | — | — |
+| | not read | project `opencode.json` and `.opencode/` (only the SQLite database `opencode.db` lists the projects), `AGENTS.md` rules, `tui.json`; V2 does not read the old `config.json` | — | — |
 | | memory, instructions | `~/.dsh/memory/`, `~/.dsh/AGENTS.md` | MD | verified |
 | | TUI settings | `~/.dsh-tui/settings.json` (`version, values, imported`) | JSON | verified |
 | | secrets | `~/.dsh/.credentials.yaml` | YAML | **never read** |

@@ -157,10 +157,12 @@ impl Targets {
             }
         }
         for e in &scan.entities {
-            let Some(rest) = e.origin.file.strip_prefix("~/") else {
-                continue;
+            // a file under home is shown as `~/…`; one outside it (the OpenCode system config in %ProgramData%) keeps its full path
+            let file = match e.origin.file.strip_prefix("~/") {
+                Some(rest) => home.join(rest),
+                None if Path::new(&e.origin.file).is_absolute() => PathBuf::from(&e.origin.file),
+                None => continue,
             };
-            let file = home.join(rest);
             t.files.insert(norm(&file));
             if let Some(parent) = file.parent() {
                 t.fixed.insert(norm(parent));
@@ -296,6 +298,38 @@ mod tests {
             "other files in the same directory are not significant"
         );
         let _ = fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn a_config_outside_home_is_watched_too() {
+        let h = home();
+        let sys = h.with_extension("system");
+        fs::create_dir_all(&sys).unwrap();
+        let file = sys.join("opencode.json");
+        let shown = file.to_string_lossy().replace('\\', "/");
+        let scan = ScanResult {
+            entities: vec![Entity::new(
+                Client::OpenCode,
+                Kind::Mcp,
+                "managed",
+                "corp",
+                State::On,
+                shown,
+                "/mcp/servers/corp",
+            )],
+            ..ScanResult::default()
+        };
+        let t = Targets::from_scan(&h, &scan);
+        assert!(
+            t.dirs.contains_key(&sys),
+            "the directory of the system config is watched"
+        );
+        assert!(
+            t.is_relevant(&file),
+            "an edit of the system config is significant"
+        );
+        let _ = fs::remove_dir_all(&h);
+        let _ = fs::remove_dir_all(&sys);
     }
 
     #[test]

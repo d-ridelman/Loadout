@@ -28,7 +28,10 @@ export function groupOf(kind: Kind): Group {
  * Which entry speaks for the cell when there are several instances: user scope before project scope,
  * project before "built-in" and cloud. Dozens of project entries of a plugin do not override the user entry.
  */
-export function scopeRank(scope: string): number {
+export function scopeRank(scope: string, client?: string): number {
+  // OpenCode's system config (%ProgramData%\opencode) overrides the user's: what it sets is what OpenCode uses. Elsewhere "managed"
+  // means a flag Loadout does not read, which must not speak for the cell.
+  if (scope === 'managed' && client === 'opencode') return -1
   if (scope === 'user') return 0
   if (scope === 'local') return 1
   if (scope === 'managed' || scope === 'enterprise') return 1.5
@@ -89,7 +92,7 @@ export function buildRows(entities: readonly Entity[]): Row[] {
   for (const row of rows.values()) {
     for (const cell of Object.values(row.cells)) {
       // sort is stable: with equal scopes the file order is kept
-      cell.instances.sort((a, b) => scopeRank(a.scope) - scopeRank(b.scope))
+      cell.instances.sort((a, b) => scopeRank(a.scope, a.client) - scopeRank(b.scope, b.client))
       cell.state = cell.instances[0]?.state ?? 'unknown'
     }
   }

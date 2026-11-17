@@ -113,6 +113,8 @@ async function pass(lang) {
       LOADOUT_BIN: loadoutBin,
       LOADOUT_LANG: lang,
       LOADOUT_HOME: home,
+      // the OpenCode system config comes from the fixture, never from the machine taking the screenshots
+      LOADOUT_OPENCODE_SYSTEM_DIR: join(repo, 'fixtures', 'system-opencode'),
       LOADOUT_CLAUDE: process.execPath,
       LOADOUT_CLAUDE_ARGS: JSON.stringify([join(appDir, 'e2e', 'fake-claude.mjs')]),
       FAKE_CLAUDE_CALLS: join(home, 'claude-calls.txt'),

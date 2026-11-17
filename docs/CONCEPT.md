@@ -54,7 +54,8 @@
 | | MCP | `{type: "local", command: [программа, …аргументы], environment?, cwd?}` или `{type: "remote", url, headers?, oauth?}`; выключение флагом (R1) | JSONC | проверено |
 | | агенты, команды | карты в конфиге и `agent(s)/<имя>.md`, `command(s)/<имя>.md` (имя — имя файла; на этой машине `command/`) | JSONC + MD | проверено |
 | | плагины, скилы | `plugin(s)` в конфиге (имя, `[имя, опции]` или `{package, options}`), локальные `plugin(s)/`; скилы `skill(s)/<имя>/SKILL.md` | JSONC + JS/TS + MD | проверено |
-| | не читается | проектные `opencode.json` и `.opencode/` (списка проектов в файлах нет), устаревший глобальный `config.json` (V1), правила `AGENTS.md`, `tui.json`, системный `%ProgramData%\opencode` | — | — |
+| | только чтение | системный `%ProgramData%\opencode\opencode.json(c)`, область `managed` (ядро читает его без `--home`; в проверках — фикстура `fixtures/system-opencode`: `LOADOUT_OPENCODE_SYSTEM_DIR` → флаг ядра `--opencode-system`, в установленной сборке переменная не действует; правки замечает сторож) | — | — |
+| | не читается | проектные `opencode.json` и `.opencode/` (список проектов есть только в базе SQLite `opencode.db`), правила `AGENTS.md`, `tui.json`; старый `config.json` V2 не читает | — | — |
 | | память, инструкции | `~/.dsh/memory/`, `~/.dsh/AGENTS.md` | MD | проверено |
 | | TUI-настройки | `~/.dsh-tui/settings.json` (`version, values, imported`) | JSON | проверено |
 | | секреты | `~/.dsh/.credentials.yaml` | YAML | **никогда не читаем** |

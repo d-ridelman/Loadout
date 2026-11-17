@@ -78,7 +78,8 @@ async function launch(env) {
     executablePath: electronExe,
     args: [appDir],
     // the default language is Russian (the scenarios look for Russian labels); the English pass sets LOADOUT_LANG=en itself
-    env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', ...env },
+    // the OpenCode system config (%ProgramData%\opencode) comes from a fixture, never from the machine running the check
+    env: { ...process.env, APP_QA: '1', LOADOUT_USER_DATA: profile, LOADOUT_BIN: loadoutBin, LOADOUT_LANG: 'ru', LOADOUT_OPENCODE_SYSTEM_DIR: join(repo, 'fixtures', 'system-opencode'), ...env },
   })
   const page = await app.firstWindow()
   const pid = app.process().pid
@@ -899,6 +900,11 @@ try {
     await waitFor(() => readFileSync(ocFile, 'utf8') === ocOrig, 'the OpenCode rollback restored opencode.jsonc byte for byte')
     await page.keyboard.press('1')
     await waitFor(async () => String(await cellLabel(page, 'tool-a', 5)).includes('включено'), 'after the rollback the OpenCode tool-a glyph came back')
+    // the system config (%ProgramData%\opencode, a fixture here) shows as scope managed and is read only: no switch, the reason named
+    await clickCell('corp-proxy', 5)
+    const sysAside = await page.locator('aside').innerText()
+    must(sysAside.includes('системного конфига OpenCode'), `the inspector does not say why a system OpenCode entry cannot be switched: ${sysAside.slice(0, 400)}`)
+    must(await page.locator('aside').getByRole('button', { name: 'Выключить', exact: true }).isDisabled(), 'a system OpenCode entry must not offer a switch')
   }
   // ---- R2: trash, edit, copy, profiles (also on a fixture copy) ----
   // most MCP servers have no flag: at R1 their "Disable (move to trash)" asks for R2 itself, once, and opens the trash preview
@@ -1854,7 +1860,8 @@ try {
   // ---- "empty" state ----
   const empty = mkdtempSync(join(tmpdir(), 'loadout-empty-'))
   homes.push(empty)
-  session = await launch({ LOADOUT_HOME: empty })
+  // empty means no system config either
+  session = await launch({ LOADOUT_HOME: empty, LOADOUT_OPENCODE_SYSTEM_DIR: join(empty, 'no-system-config') })
   await session.page.waitForSelector('#grid', { timeout: 20000 })
   must((await session.page.locator('td.empty').innerText()).includes('Не найдено ни одного клиента'), 'empty state')
   must((await session.page.locator('td.empty').getByRole('button', { name: 'Обновить' }).count()) === 1, 'the empty matrix offers no next step')

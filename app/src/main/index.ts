@@ -107,6 +107,9 @@ function ensureSidecar(): Sidecar | string {
   const args = ['serve', '--backups', backupsDir(), '--lang', getLang()]
   const homeOverride = envOf('LOADOUT_HOME')
   if (homeOverride) args.push('--home', homeOverride)
+  // checks point the OpenCode system config (%ProgramData%\opencode) at a fixture; ignored in the packaged build like every LOADOUT_*
+  const systemOverride = envOf('LOADOUT_OPENCODE_SYSTEM_DIR')
+  if (systemOverride) args.push('--opencode-system', systemOverride)
   let readySeen = false
   sidecar = new Sidecar({
     bin,
@@ -409,7 +412,7 @@ void app.whenReady().then(() => {
         title: t(`разрешить запись: ${levelLabel(level)}`, `allow writing: ${levelLabel(level)}`),
         message: r2
           ? t('Разрешить Loadout выносить записи в корзину (так выключаются MCP без флага), править команды MCP, копировать и добавлять MCP, применять профили, ставить скилы, плагины и Инструменты контекста?', 'Allow Loadout to move entries to the trash (that is how an MCP server without a flag is disabled), edit MCP commands, copy and add MCP servers, apply profiles, and install skills, plugins and Context Toolkit?')
-          : t('Разрешить Loadout включать и выключать записи по флагу в конфигах клиентов (плагины, коннекторы, записи Codex)?', 'Allow Loadout to turn entries on and off by their flag in client configs (plugins, connectors, Codex entries)?'),
+          : t('Разрешить Loadout включать и выключать записи по флагу в конфигах клиентов (плагины, коннекторы, записи Codex, MCP-серверы OpenCode)?', 'Allow Loadout to turn entries on and off by their flag in client configs (plugins, connectors, Codex entries, OpenCode MCP servers)?'),
         detail:
           (r2
             ? t(

@@ -10,14 +10,17 @@
 //! - Markdown agents and commands `agent(s)/<name>.md`, `command(s)/<name>.md` (the file name is the name), skills
 //!   `skill(s)/<name>/SKILL.md`, local plugins `plugin(s)/` (files or directories); singular and plural names both work.
 //!
-//! Not read: project configs (OpenCode keeps no list of projects in a file), `AGENTS.md` rules (no entry kind for them),
-//! `tui.json`, the system config in `%ProgramData%\opencode` (managed by an administrator).
+//! - The system config `%ProgramData%\opencode\opencode.json(c)` (highest precedence, set by an administrator) is read as scope
+//!   `managed` and never written: changing a machine-wide file needs administrator rights.
+//!
+//! Not read: project configs (OpenCode keeps its list of projects only in its SQLite database `opencode.db`), `AGENTS.md`
+//! rules (no entry kind for them), `tui.json` (screen settings, no entries), macOS managed preferences.
 
 use crate::mask::{self, mcp_detail};
 use crate::model::{Client, Entity, Format, Kind, Src, State, Target, TargetKind};
 use crate::{esc_ptr, frontmatter, scan_skills, Ctx};
 use serde_json::{json, Map, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const CLIENT: Client = Client::OpenCode;
 pub(crate) const DIR: &str = ".config/opencode";
@@ -144,10 +147,22 @@ pub(crate) fn from_common(v: &Value) -> Value {
     Value::Object(out)
 }
 
+/// The machine-wide config directory, `%ProgramData%\opencode`, for a scan of the real machine (the CLI decides when).
+pub fn system_dir() -> Option<PathBuf> {
+    std::env::var_os("ProgramData").map(|p| PathBuf::from(p).join("opencode"))
+}
+
 pub fn scan(c: &mut Ctx) {
     let dir = c.home.join(DIR);
+    let before = c.entities.len();
     for f in FILES {
-        config(c, &dir.join(f));
+        config(c, &dir.join(f), "user");
+    }
+    note_twins(&mut c.entities[before..]);
+    if let Some(sys) = c.opencode_system.clone() {
+        for f in FILES {
+            config(c, &sys.join(f), "managed");
+        }
     }
     for d in ["agent", "agents"] {
         md_dir(c, &dir.join(d), Kind::Agent);
@@ -163,26 +178,52 @@ pub fn scan(c: &mut Ctx) {
     }
 }
 
-fn config(c: &mut Ctx, path: &Path) {
+/// The same MCP server in both `opencode.json` and `opencode.jsonc`: OpenCode merges the two files into one server, so each
+/// entry says so (switching one file alone may not change what OpenCode uses).
+fn note_twins(found: &mut [Entity]) {
+    let mcp = |e: &Entity| e.kind == Kind::Mcp;
+    let twins: Vec<String> = found
+        .iter()
+        .filter(|e| mcp(e))
+        .filter(|e| {
+            found
+                .iter()
+                .any(|o| mcp(o) && o.name == e.name && o.origin.file != e.origin.file)
+        })
+        .map(|e| e.name.clone())
+        .collect();
+    for e in found
+        .iter_mut()
+        .filter(|e| e.kind == Kind::Mcp && twins.contains(&e.name))
+    {
+        e.note = Some(crate::tr!(
+            "этот сервер описан и в opencode.json, и в opencode.jsonc: OpenCode сливает оба файла в один сервер, поэтому выключите его в обоих или удалите лишнюю копию",
+            "this server is in both opencode.json and opencode.jsonc: OpenCode merges the two files into one server, so turn it off in both or remove the extra copy"
+        ));
+    }
+}
+
+/// One config file; `scope` is `user` (the global config, writable) or `managed` (the system config, read only).
+fn config(c: &mut Ctx, path: &Path, scope: &'static str) {
     let Some(root) = c.read_jsonc(path) else {
         return;
     };
     let file = c.tilde(path);
     if let Some(g) = generation(&root) {
-        mcp(c, path, &file, &root, g);
+        mcp(c, path, &file, &root, g, scope);
     }
     for key in ["agent", "agents"] {
-        named_map(c, &file, &root, key, Kind::Agent);
+        named_map(c, &file, &root, key, Kind::Agent, scope);
     }
     for key in ["command", "commands"] {
-        named_map(c, &file, &root, key, Kind::Command);
+        named_map(c, &file, &root, key, Kind::Command, scope);
     }
     for key in ["plugin", "plugins"] {
-        plugin_list(c, &file, &root, key);
+        plugin_list(c, &file, &root, key, scope);
     }
 }
 
-fn mcp(c: &mut Ctx, path: &Path, file: &str, root: &Value, g: Gen) {
+fn mcp(c: &mut Ctx, path: &Path, file: &str, root: &Value, g: Gen, scope: &'static str) {
     let base = servers_path(g);
     let servers = base.iter().try_fold(root, |v, k| v.get(k));
     // V1 `enabled: false` and V2 `disabled: true` mean "off"; `inverted` marks the V2 key
@@ -210,31 +251,36 @@ fn mcp(c: &mut Ctx, path: &Path, file: &str, root: &Value, g: Gen) {
         let e = Entity::new(
             CLIENT,
             Kind::Mcp,
-            "user",
+            scope,
             shown,
             if off { State::Off } else { State::On },
             file,
             format!("{ptr}/{}", esc_ptr(name)),
         )
-        .detail(mcp_detail(&to_common(cfg)))
-        .target(Target {
-            file: path.to_path_buf(),
-            format: Format::Json,
-            path: key,
-            inverted,
-            kind: TargetKind::Flag,
-        })
-        .src(Src {
-            file: path.to_path_buf(),
-            format: Format::Json,
-            path: at,
-        });
+        .detail(mcp_detail(&to_common(cfg)));
+        // the system config is read only: no switch and no source to edit or copy from
+        let e = if scope == "managed" {
+            e
+        } else {
+            e.target(Target {
+                file: path.to_path_buf(),
+                format: Format::Json,
+                path: key,
+                inverted,
+                kind: TargetKind::Flag,
+            })
+            .src(Src {
+                file: path.to_path_buf(),
+                format: Format::Json,
+                path: at,
+            })
+        };
         c.push(e);
     }
 }
 
 /// `agent` / `agents` and `command` / `commands`: `{name: {...}}`. Prompts and templates are not shown (they can hold anything).
-fn named_map(c: &mut Ctx, file: &str, root: &Value, key: &str, kind: Kind) {
+fn named_map(c: &mut Ctx, file: &str, root: &Value, key: &str, kind: Kind, scope: &'static str) {
     for (name, v) in root
         .get(key)
         .and_then(Value::as_object)
@@ -250,7 +296,7 @@ fn named_map(c: &mut Ctx, file: &str, root: &Value, key: &str, kind: Kind) {
         let e = Entity::new(
             CLIENT,
             kind,
-            "user",
+            scope,
             shown,
             if off { State::Off } else { State::On },
             file,
@@ -267,7 +313,7 @@ fn model_name(s: &str) -> Option<&str> {
 }
 
 /// `plugin` (V1: a name or `[name, options]`) and `plugins` (V2: a name or `{package, options}`). Options are not shown.
-fn plugin_list(c: &mut Ctx, file: &str, root: &Value, key: &str) {
+fn plugin_list(c: &mut Ctx, file: &str, root: &Value, key: &str, scope: &'static str) {
     for (i, p) in root
         .get(key)
         .and_then(Value::as_array)
@@ -285,7 +331,7 @@ fn plugin_list(c: &mut Ctx, file: &str, root: &Value, key: &str) {
         let e = Entity::new(
             CLIENT,
             Kind::Plugin,
-            "user",
+            scope,
             name,
             State::On,
             file,
@@ -448,6 +494,83 @@ mod tests {
         );
         assert_eq!(g(r#"{"plugin":["x"]}"#), Some(Gen::V1));
         assert_eq!(g(r#"{"model":"a/b","$schema":"x"}"#), None);
+    }
+
+    #[test]
+    fn the_system_config_is_read_as_managed_and_never_switched() {
+        let dir = std::env::temp_dir().join(format!("loadout-oc-system-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("opencode.json");
+        std::fs::write(
+            &file,
+            r#"{"mcp":{"servers":{"corp":{"type":"remote","url":"https://h/mcp","disabled":true}}},"agents":{"review":{}},"plugins":["corp-guard@1.0.0"]}"#,
+        )
+        .unwrap();
+        let mut c = Ctx {
+            home: dir.join("home"),
+            entities: vec![],
+            warnings: vec![],
+            opencode_system: None,
+        };
+        config(&mut c, &file, "managed");
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(
+            c.entities.len(),
+            3,
+            "{:?}",
+            c.entities.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
+        assert!(c
+            .entities
+            .iter()
+            .all(|e| e.scope == "managed" && e.target.is_none()));
+        let mcp = c.entities.iter().find(|e| e.kind == Kind::Mcp).unwrap();
+        assert_eq!(
+            mcp.state,
+            State::Off,
+            "V2 `disabled: true` is off in the system config too"
+        );
+        assert!(
+            mcp.src.is_none(),
+            "a system entry is not a source to edit or copy"
+        );
+    }
+
+    #[test]
+    fn a_server_in_both_files_says_so() {
+        let dir = std::env::temp_dir().join(format!("loadout-oc-twins-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let both = r#"{"mcp":{"servers":{"twin":{"type":"local","command":["x"]}}}}"#;
+        std::fs::write(dir.join("opencode.json"), both).unwrap();
+        std::fs::write(dir.join("opencode.jsonc"), both).unwrap();
+        std::fs::write(
+            dir.join("lone.json"),
+            r#"{"mcp":{"servers":{"lone":{"type":"local","command":["y"]}}}}"#,
+        )
+        .unwrap();
+        let mut c = Ctx {
+            home: dir.clone(),
+            entities: vec![],
+            warnings: vec![],
+            opencode_system: None,
+        };
+        for f in ["opencode.json", "opencode.jsonc", "lone.json"] {
+            config(&mut c, &dir.join(f), "user");
+        }
+        note_twins(&mut c.entities);
+        std::fs::remove_dir_all(&dir).ok();
+        let noted = |n: &str| {
+            c.entities
+                .iter()
+                .filter(|e| e.name == n && e.note.is_some())
+                .count()
+        };
+        assert_eq!(
+            noted("twin"),
+            2,
+            "both copies of a server in both files carry the note"
+        );
+        assert_eq!(noted("lone"), 0, "a server in one file has no note");
     }
 
     #[test]

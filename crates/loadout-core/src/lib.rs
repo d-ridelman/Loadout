@@ -28,6 +28,8 @@ pub struct Ctx {
     pub home: PathBuf,
     pub entities: Vec<Entity>,
     pub warnings: Vec<String>,
+    /// The OpenCode system config directory (`%ProgramData%\opencode`); `None` reads none (checks on a fixture home).
+    pub opencode_system: Option<PathBuf>,
 }
 
 /// Size limit for a file being read.
@@ -502,11 +504,18 @@ pub fn scan(home: &Path) -> ScanResult {
 }
 
 /// A scan with the Loadout trash (`store` is the app's backup directory): removed entries show up as disabled.
+/// No machine-wide config is read: the result depends on `home` alone (what checks need).
 pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
+    scan_all(home, store, None)
+}
+
+/// [`scan_with`] plus the machine-wide OpenCode config in `opencode_system` (the CLI passes `%ProgramData%\opencode`).
+pub fn scan_all(home: &Path, store: Option<&Path>, opencode_system: Option<&Path>) -> ScanResult {
     let mut c = Ctx {
         home: home.to_path_buf(),
         entities: Vec::new(),
         warnings: Vec::new(),
+        opencode_system: opencode_system.map(Path::to_path_buf),
     };
     claude_code::scan(&mut c);
     claude_desktop::scan(&mut c);
@@ -772,6 +781,7 @@ mod tests {
             home: PathBuf::from("C:\\Users\\Alice"),
             entities: vec![],
             warnings: vec![],
+            opencode_system: None,
         };
         assert_eq!(c.tilde(Path::new("c:/users/ALICE/work/p")), "~/work/p");
         assert_eq!(c.tilde(Path::new("D:/other")), "D:/other");

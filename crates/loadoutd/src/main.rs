@@ -18,6 +18,18 @@ fn home_or_default(home: Option<PathBuf>) -> Option<PathBuf> {
     })
 }
 
+/// The OpenCode system config to read: the one passed, else `%ProgramData%\opencode` for the real home only. With `--home`
+/// (a check on a fixture) and no `--opencode-system`, none: a result must not depend on the machine running the check.
+fn opencode_system(passed: Option<PathBuf>, home_overridden: bool) -> Option<PathBuf> {
+    passed.or_else(|| {
+        if home_overridden {
+            None
+        } else {
+            loadout_core::opencode::system_dir()
+        }
+    })
+}
+
 fn no_home() -> ExitCode {
     eprintln!(
         "{}",
@@ -29,15 +41,16 @@ fn no_home() -> ExitCode {
     ExitCode::from(2)
 }
 
-/// `loadout serve [--home PATH] [--backups DIR] [--lang ru|en]`: a long-running process for the window (JSON-RPC over stdio and a file watcher).
-/// Without `--backups` the write methods (R1) refuse.
+/// `loadout serve [--home PATH] [--backups DIR] [--opencode-system DIR] [--lang ru|en]`: a long-running process for the window
+/// (JSON-RPC over stdio and a file watcher). Without `--backups` the write methods (R1) refuse.
 fn serve_main(args: &[String]) -> ExitCode {
-    let (mut home, mut backups) = (None, None);
+    let (mut home, mut backups, mut system) = (None, None, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--home" => home = it.next().map(PathBuf::from),
             "--backups" => backups = it.next().map(PathBuf::from),
+            "--opencode-system" => system = it.next().map(PathBuf::from),
             "--lang" => loadout_core::i18n::set_lang(it.next().map_or("ru", String::as_str)),
             other => {
                 eprintln!(
@@ -48,10 +61,11 @@ fn serve_main(args: &[String]) -> ExitCode {
             }
         }
     }
+    let system = opencode_system(system, home.is_some());
     let Some(home) = home_or_default(home) else {
         return no_home();
     };
-    serve::run(&home, backups);
+    serve::run(&home, backups, system);
     ExitCode::SUCCESS
 }
 
@@ -128,8 +142,8 @@ fn main() -> ExitCode {
         eprintln!(
             "{}",
             loadout_core::tr!(
-                "             loadout serve [--home ПУТЬ] [--backups КАТАЛОГ] [--lang ru|en]",
-                "             loadout serve [--home PATH] [--backups DIR] [--lang ru|en]"
+                "             loadout serve [--home ПУТЬ] [--backups КАТАЛОГ] [--opencode-system КАТАЛОГ] [--lang ru|en]",
+                "             loadout serve [--home PATH] [--backups DIR] [--opencode-system DIR] [--lang ru|en]"
             )
         );
         eprintln!(
@@ -143,12 +157,14 @@ fn main() -> ExitCode {
     }
     let (mut json, mut pretty) = (false, false);
     let (mut home, mut client): (Option<PathBuf>, Option<String>) = (None, None);
+    let mut system: Option<PathBuf> = None;
     let mut it = args.iter().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--json" => json = true,
             "--pretty" => pretty = true,
             "--home" => home = it.next().map(PathBuf::from),
+            "--opencode-system" => system = it.next().map(PathBuf::from),
             "--client" => client = it.next().cloned(),
             "--lang" => loadout_core::i18n::set_lang(it.next().map_or("ru", String::as_str)),
             other => {
@@ -160,11 +176,12 @@ fn main() -> ExitCode {
             }
         }
     }
+    let system = opencode_system(system, home.is_some());
     let Some(home) = home_or_default(home) else {
         return no_home();
     };
 
-    let mut res: ScanResult = loadout_core::scan(&home);
+    let mut res: ScanResult = loadout_core::scan_all(&home, None, system.as_deref());
     if let Some(want) = client {
         let Some(want) = Client::from_slug(&want) else {
             eprintln!(

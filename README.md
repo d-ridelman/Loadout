@@ -153,7 +153,7 @@ Known limitations:
 - project-level settings (`.claude/settings.json` in a project, `.mcp.json`): plugins enabled only there show as "unknown";
 - the MCP check that starts a server and asks for its tools;
 - a Claude Code profile other than `~/.claude` (`CLAUDE_CONFIG_DIR`) is not read;
-- OpenCode: only the global `~/.config/opencode` is read; project `opencode.json`, the legacy V1 `config.json`, `AGENTS.md` rules and the system config in `%ProgramData%\opencode` are not.
+- OpenCode: the global `~/.config/opencode` is read and written; the system config in `%ProgramData%\opencode` is shown as scope `managed` and only read (an administrator changes it). Project `opencode.json` files are not read: OpenCode keeps its list of projects only inside its SQLite database. `AGENTS.md` rules and `tui.json` have no entries to show; the old `config.json` is not among the files OpenCode V2 reads.
 
 Open work is in [TODO.md](TODO.md): one dated item, comparing advisor and `checker` calls by day after 22.11.2026.
 
