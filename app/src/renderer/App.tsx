@@ -135,6 +135,13 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
   /** The write level is kept by the main process; this is only its mirror. */
   const [level, setLevel] = useState<WriteLevel>('R0')
   const [flow, setFlow] = useState<Flow | null>(null)
+  // the key handler below is re-subscribed in an effect, after paint: a key pressed between a dialog closing and that effect reached
+  // the old handler, which still saw the dialog open and dropped the key (a "5" right after a write was lost once in e2e). The ref is
+  // current from the render on.
+  const flowRef = useRef(flow)
+  flowRef.current = flow
+  const helpRef = useRef(help)
+  helpRef.current = help
   const [notice, setNotice] = useState<{ text: string; tone: Tone } | null>(null)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const say = useCallback((text: string, tone: Tone = 'ok') => {
@@ -329,10 +336,10 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // While a dialog is open (form, write or batch preview), other keys are disabled; Esc closes the dialog.
-      if (flow || document.querySelector('.modal')) {
-        if (e.key === 'Escape' && flow) closeFlow()
+      if (flowRef.current || document.querySelector('.modal')) {
+        if (e.key === 'Escape' && flowRef.current) closeFlow()
         // a click on the help's text leaves focus on <body>, where the dialog's own Esc handler does not hear the key
-        else if (e.key === 'Escape' && help && !(document.activeElement instanceof Element && document.activeElement.closest('.modal'))) closeHelp()
+        else if (e.key === 'Escape' && helpRef.current && !(document.activeElement instanceof Element && document.activeElement.closest('.modal'))) closeHelp()
         return
       }
       const k = keyOf(e)

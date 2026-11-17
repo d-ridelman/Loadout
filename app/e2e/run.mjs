@@ -1951,7 +1951,10 @@ try {
     await enDialog.getByRole('button', { name: 'Move to trash' }).click()
     await enDialog.waitFor({ state: 'detached', timeout: 8000 })
     await en.keyboard.press('5')
-    await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().waitFor({ timeout: 8000 })
+    // on a timeout say what the window shows instead (this step once timed out with no clue)
+    await en.getByRole('row').filter({ hasText: 'Loadout trash' }).first().waitFor({ timeout: 8000 }).catch(async (e) => {
+      throw new Error(`${e.message.split('\n')[0]}; the window shows: ${JSON.stringify((await en.locator('body').innerText()).slice(0, 900))}`)
+    })
     await enOk('journal row')
     await shot(en, 'en-journal-1280')
     // the language switch: to Russian and back; the open section and the matrix selection stay
