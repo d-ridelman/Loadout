@@ -83,7 +83,7 @@ footer > button.foot-link:hover { text-decoration-thickness: 2px; }
 /* clicks pass through the toast to the content under it (only its close button takes them): a message never blocks the window */
 .toasts { position: fixed; left: 186px; bottom: 36px; width: min(560px, calc(100vw - 186px - 364px)); z-index: 86; pointer-events: none; }
 .toast-close { pointer-events: auto; }
-.toast { display: flex; gap: 10px; align-items: flex-start; padding: 10px 8px 10px 12px; border-left-width: 3px; font: 13px/1.45 var(--sans); color: var(--fg); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); }
+.toast { display: flex; gap: 10px; align-items: flex-start; padding: 10px 8px 10px 12px; font: 13px/1.45 var(--sans); color: var(--fg); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); }
 .toast .g { line-height: 1.45; font-size: 13px; }
 .toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .toast-ok { border-color: var(--green); } .toast-ok .g { color: var(--green); }
@@ -110,7 +110,7 @@ aside[hidden] { display: none; }
 .actions.split > .sp { flex: 1; }
 .card.current { border-color: var(--green); }
 .badge.now { margin: 0 0 0 10px; min-width: 0; border-color: var(--green); color: var(--green); letter-spacing: 0; text-transform: none; }
-.alert-box { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--red); border-left-width: 4px; border-radius: 4px; background: rgba(255, 85, 85, 0.08); }
+.alert-box { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--red); border-radius: 4px; background: rgba(255, 85, 85, 0.08); }
 .alert-box p { margin: 4px 0 0; }
 .group-head { margin: 16px 0 8px; }
 section:first-of-type > .group-head { margin-top: 0; }

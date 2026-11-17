@@ -974,6 +974,12 @@ try {
   // deleting asks once more: the first press only offers the confirmation
   await card.getByRole('button', { name: 'Удалить профиль…' }).click()
   must((await card.count()) === 1, 'the profile was deleted without confirmation')
+  await card.getByRole('button', { name: 'Не удалять' }).click()
+  must(
+    await card.getByRole('button', { name: 'Удалить профиль…' }).evaluate((b) => b === document.activeElement),
+    '"Keep it" returns the focus to "Delete profile…"',
+  )
+  await card.getByRole('button', { name: 'Удалить профиль…' }).click()
   await card.getByRole('button', { name: 'Удалить навсегда' }).click()
   await waitFor(async () => (await card.count()) === 0, 'profile deleted')
 
@@ -1376,6 +1382,8 @@ try {
     }
     const version = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf8')).version
     must((await up.locator('#privacy').innerText()).includes('только проверка обновлений (GitHub)'), 'the footer does not say that the update check goes online')
+    const cut = await up.evaluate(() => [...document.querySelectorAll('footer > span, #privacy')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent))
+    must(cut.length === 0, `footer text is cut at 1280: ${JSON.stringify(cut)}`)
     must((await up.locator('.welcome').count()) === 0, 'the welcome card came back after a restart')
     // the visible "vX.Y.Z" starts the accessible name; a new version is added in words
     const btn = up.getByRole('button', { name: new RegExp(`^v${version} — обновления`) })

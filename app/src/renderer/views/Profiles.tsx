@@ -138,6 +138,7 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
   const [applying, setApplying] = useState<string | null>(null)
   /** The profile whose delete button was pressed once: the second press, on "Delete for good", deletes. */
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [kept, setKept] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const r = await window.loadout.profiles().catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('профили не прочитаны', 'could not read profiles') }))
@@ -279,10 +280,26 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
                         {t('Удалить навсегда', 'Delete for good')}
                       </button>
                       {/* focus on the safe choice: a double click or a held Enter does not delete */}
-                      <button autoFocus onClick={() => setDeleting(null)}>{t('Не удалять', 'Keep it')}</button>
+                      <button
+                        autoFocus
+                        onClick={() => {
+                          setKept(p.name)
+                          setDeleting(null)
+                        }}
+                      >
+                        {t('Не удалять', 'Keep it')}
+                      </button>
                     </>
                   ) : (
-                    <button className="danger" onClick={() => setDeleting(p.name)}>{t('Удалить профиль…', 'Delete profile…')}</button>
+                    // after "Keep it" the focus comes back here instead of falling to the page body
+                    <button className="danger" autoFocus={kept === p.name}
+                      onClick={() => {
+                        setKept(null)
+                        setDeleting(p.name)
+                      }}
+                    >
+                      {t('Удалить профиль…', 'Delete profile…')}
+                    </button>
                   )}
                 </div>
               </section>
