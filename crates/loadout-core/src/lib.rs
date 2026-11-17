@@ -293,9 +293,19 @@ fn hook_label(tokens: &[String]) -> String {
             .map_or(base.clone(), |(s, _)| s.to_owned())
     };
     let is_switch = |t: &str| t.len() == 2 && t.starts_with('/');
-    expand_nested(tokens, 0)
+    let tokens = expand_nested(tokens, 0);
+    // a visible value of a long flag (`--client codex`) is not a program name; a file (`--login script.sh`) still is
+    let flag_value = |i: usize, t: &str| {
+        i > 0
+            && tokens[i - 1].starts_with("--")
+            && !tokens[i - 1].contains('=')
+            && !t.contains(['.', '/', '\\'])
+    };
+    tokens
         .iter()
-        .map(|t| t.trim_matches(|c| c == '&' || c == ';'))
+        .enumerate()
+        .filter(|(i, t)| !flag_value(*i, t))
+        .map(|(_, t)| t.trim_matches(|c| c == '&' || c == ';'))
         .filter(|t| {
             !t.is_empty()
                 && !t.contains('>') // redirections `>/dev/null`, `2>&1`
@@ -529,15 +539,18 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
             &mut e.origin.file,
             &mut e.origin.pointer,
         ];
+        // The file path of such an entry is the same directory name, and its note quotes only that name and the filtered one.
         for (i, s) in fields.into_iter().enumerate() {
-            let fs_field = matches!(i, 0 | 2 | 4) && fs;
+            let fs_field = matches!(i, 0 | 2 | 3 | 4) && fs;
             if !fs_field {
                 *s = mask::scrub_words(s);
             }
         }
         if let Some(s) = e.note.as_mut() {
             scrub_str(s, &forms);
-            *s = mask::scrub_words(s);
+            if !fs {
+                *s = mask::scrub_words(s);
+            }
         }
         if let Some(s) = e.version.as_mut() {
             scrub_str(s, &forms);
@@ -617,6 +630,13 @@ mod tests {
         assert_eq!(label(r#"sh -c "bash -c 'guard --api-key N02'""#), "guard");
         assert_eq!(label(r#"node "C:/Program Files/x/hook.js""#), "hook");
         assert_eq!(label(r#"bash -c "/usr/bin/tool --token N03""#), "tool");
+    }
+
+    #[test]
+    fn a_visible_flag_value_is_not_the_label() {
+        assert_eq!(label("node --client codex guard.mjs"), "guard");
+        assert_eq!(label("tool --client=codex"), "tool");
+        assert_eq!(label("bash --login script.sh"), "script");
     }
 
     #[test]

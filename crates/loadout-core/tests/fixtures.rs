@@ -603,6 +603,29 @@ fn skill_overrides_turn_user_skills_off() {
     assert!(get("s-on").note.is_none() && get("s-free").note.is_none());
 }
 
+/// A long skill directory name with a digit is a file system name, not a token: the 2a audit saw it masked in the path and the note.
+#[test]
+fn long_skill_directory_names_are_not_masked() {
+    let dir = "context7-documentation-lookup-v2";
+    let h = synthetic_home(&[(
+        &format!(".claude/skills/{dir}/SKILL.md"),
+        "---\nname: docs-lookup\n---\n",
+    )]);
+    let r = loadout_core::scan(&h.0);
+    let e = r
+        .entities
+        .iter()
+        .find(|e| e.kind == Kind::Skill)
+        .expect("skill");
+    assert_eq!(e.name, "docs-lookup");
+    assert_eq!(e.origin.file, format!("~/.claude/skills/{dir}/SKILL.md"));
+    assert!(
+        e.note.as_deref().is_some_and(|n| n.contains(dir)),
+        "{:?}",
+        e.note
+    );
+}
+
 #[test]
 fn missing_home_is_not_an_error() {
     let r = loadout_core::scan(Path::new("Z:/definitely/not/here"));

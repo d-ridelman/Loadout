@@ -137,6 +137,7 @@ pub struct Entity {
     pub detail: Value,
     /// The name and pointer are taken from a file or directory name, not from file content: token-like words in them are not hidden,
     /// otherwise different entries (`app-69f0dc45…` in the Codex directory) would merge into one `<masked>` string.
+    /// The same holds for the file path and the note of such an entry: they quote only that directory name.
     #[serde(skip)]
     pub fs_named: bool,
     /// How to switch the entry; `None` means the switch is not supported (see [`crate::write::why_not`]).

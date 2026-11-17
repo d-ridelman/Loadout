@@ -317,12 +317,51 @@ fn safe_value(v: &str) -> String {
 }
 
 /// Command-line parsing state.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Pos {
     /// An executable is expected.
     cmd: bool,
     /// A package name is expected (after `npx`, `uvx`).
     pkg: bool,
+    /// The previous token is a long flag from [`VALUE_FLAGS`] (`--client`): its value may be shown.
+    flag: bool,
+}
+
+/// A short plain value of a harmless flag (`--client x`, `--mode stdio`): lower-case letters and `-` only, so a password
+/// with a digit or a mixed-case key never passes.
+fn is_plain_word(v: &str) -> bool {
+    (1..=16).contains(&v.len())
+        && v.starts_with(|c: char| c.is_ascii_lowercase())
+        && v.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+}
+
+/// Long flags whose value names a client, mode or format, never a credential (an allow list, as everywhere here:
+/// `--header`, `--env`, `--config` carry secrets and are not on it).
+const VALUE_FLAGS: &[&str] = &[
+    "client",
+    "mode",
+    "transport",
+    "scope",
+    "profile",
+    "format",
+    "type",
+    "level",
+    "log-level",
+    "target",
+    "channel",
+    "shell",
+    "lang",
+    "language",
+    "locale",
+    "model",
+    "provider",
+    "agent",
+];
+
+/// `--name` (without `=`) from [`VALUE_FLAGS`]: the next token is its value.
+fn is_plain_flag(a: &str) -> bool {
+    a.strip_prefix("--")
+        .is_some_and(|n| VALUE_FLAGS.contains(&n))
 }
 
 /// One command-line token. `next` is the next token (for short flags with a separate value).
@@ -346,6 +385,7 @@ fn mask_token(a: &str, pos: Pos, next: Option<&str>) -> (String, bool) {
         let secretish = is_secret_key(name) || matches!(name, "user" | "proxy-user");
         return match val {
             Some(_) if secretish => (format!("--{name}={MASK}"), false),
+            Some(v) if VALUE_FLAGS.contains(&name) && is_plain_word(v) => (a.to_owned(), false),
             Some(v) => (format!("--{name}={}", safe_value(v)), false),
             None => (a.to_owned(), secretish),
         };
@@ -380,6 +420,9 @@ fn mask_token(a: &str, pos: Pos, next: Option<&str>) -> (String, bool) {
     if shown != MASK {
         return (shown, false);
     }
+    if pos.flag && is_plain_word(a) {
+        return (a.to_owned(), false);
+    }
     // Package name after npx/uvx and executable name in the command position: lower-case letters only.
     if pos.pkg && is_package_name(a) && !seg_secret(a) {
         return (a.to_owned(), false);
@@ -403,7 +446,7 @@ pub fn mask_args(args: &[String]) -> Vec<String> {
         0,
         Pos {
             cmd: true,
-            pkg: false,
+            ..Pos::default()
         },
     )
 }
@@ -413,7 +456,27 @@ const MAX_DEPTH: usize = 3;
 
 /// An argument with a space that does not look like a path with spaces is a nested command line.
 pub(crate) fn is_nested_command(a: &str) -> bool {
-    a.contains(char::is_whitespace) && !a.split_whitespace().all(|w| w.contains(['/', '\\']))
+    a.contains(char::is_whitespace)
+        && !a.split_whitespace().all(|w| w.contains(['/', '\\']))
+        && !is_spaced_path(a)
+}
+
+/// A path whose directory names have spaces (`C:\Program Files\Microsoft VS Code\bin\code.cmd`). Arguments cannot hide
+/// in it: the file name has no space, and every word of a spaced directory name starts with a capital letter or `(`,
+/// as Windows folder names do (`tool secretpw rel` and `x.exe --pw y` do not pass).
+fn is_spaced_path(s: &str) -> bool {
+    let segs: Vec<&str> = s.split(['/', '\\']).collect();
+    let (Some(last), Some(dirs)) = (segs.last(), segs.get(..segs.len().saturating_sub(1))) else {
+        return false;
+    };
+    s.contains(' ')
+        && !last.contains(char::is_whitespace)
+        && dirs.iter().filter(|d| d.contains(' ')).all(|d| {
+            d.split(' ')
+                .all(|w| w.starts_with(|c: char| c.is_ascii_uppercase() || c == '('))
+        })
+        // each word is checked as a segment: `Program Files (x86)` as a whole mixes cases and digits like a key
+        && is_path_like(&s.replace(' ', "/"))
 }
 
 fn mask_nested(arg: &str, depth: usize) -> String {
@@ -425,7 +488,7 @@ fn mask_nested(arg: &str, depth: usize) -> String {
         depth + 1,
         Pos {
             cmd: true,
-            pkg: false,
+            ..Pos::default()
         },
     ));
     // collapse consecutive hidden words into one
@@ -452,16 +515,10 @@ fn mask_args_ex(args: &[String], depth: usize, start: Pos) -> Vec<String> {
         if hide_next {
             out.push(MASK.to_owned());
             hide_next = false;
-            pos = Pos {
-                cmd: false,
-                pkg: false,
-            };
+            pos = Pos::default();
         } else if is_nested_command(a) {
             out.push(mask_nested(a, depth));
-            pos = Pos {
-                cmd: false,
-                pkg: false,
-            };
+            pos = Pos::default();
         } else if a.contains(char::is_whitespace) {
             // path with spaces
             out.push(if is_path_like(a) {
@@ -470,8 +527,8 @@ fn mask_args_ex(args: &[String], depth: usize, start: Pos) -> Vec<String> {
                 MASK.to_owned()
             });
             pos = Pos {
-                cmd: false,
                 pkg: pos.pkg,
+                ..Pos::default()
             };
         } else {
             let (shown, hide) = mask_token(a, pos, args.get(i + 1).map(String::as_str));
@@ -489,6 +546,7 @@ fn mask_args_ex(args: &[String], depth: usize, start: Pos) -> Vec<String> {
                             a.as_str(),
                             "-y" | "--yes" | "-q" | "--quiet" | "--no-install"
                         )),
+                flag: is_plain_flag(a),
             };
             hide_next = hide;
             out.push(shown);
@@ -654,8 +712,16 @@ pub fn scrub_words(s: &str) -> String {
             word.clear();
         }
     };
-    for c in s.chars() {
-        if is_delim(c) {
+    // In a JSON Pointer `~1` is `/` and `~0` is `~` (RFC 6901): the escape is a delimiter as a whole, so its digit
+    // does not glue to the next word and make a long name look like a token. The string itself stays encoded.
+    let pointer = s.starts_with('/');
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if pointer && c == '~' && matches!(chars.peek(), Some('0' | '1')) {
+            flush(&mut word, &mut out);
+            out.push(c);
+            out.extend(chars.next());
+        } else if is_delim(c) {
             flush(&mut word, &mut out);
             out.push(c);
         } else {
@@ -718,8 +784,9 @@ pub fn mcp_detail(cfg: &Value) -> Value {
     let launcher = command.is_some_and(|c| LAUNCHERS.contains(&stem_of(c).as_str()));
     json!({
         "transport": transport,
-        "command": command.map(mask_line),
-        "args": mask_args_ex(&args, 0, Pos { cmd: false, pkg: launcher }),
+        // `command` is the program itself (its arguments are in `args`): a bare path with spaces is not split
+        "command": command.map(|c| if is_spaced_path(c) { c.to_owned() } else { mask_line(c) }),
+        "args": mask_args_ex(&args, 0, Pos { pkg: launcher, ..Pos::default() }),
         "url": url.map(mask_url),
         "envKeys": keys_of(cfg, &["env"]),
         "headerKeys": keys_of(cfg, &["headers", "http_headers", "env_http_headers"]),
@@ -816,6 +883,80 @@ mod tests {
         assert_eq!(scrub_words("claude.ai Github"), "claude.ai Github");
         assert_eq!(scrub_words("project:~/work/proj"), "project:~/work/proj");
         assert_eq!(scrub_words("harnio@harnio"), "harnio@harnio");
+    }
+
+    /// False positives of the 2a audit: these harmless values stay visible...
+    #[test]
+    fn audit_2a_harmless_values_stay_visible() {
+        // a program under a directory with spaces (`Microsoft VS Code`): quoted in a hook, bare in an MCP `command`
+        let code = r"C:\Program Files\Microsoft VS Code\bin\code.cmd";
+        assert_eq!(
+            mask_line(&format!("\"{code}\" --wait")),
+            format!("\"{code}\" --wait")
+        );
+        assert_eq!(
+            mcp_detail(&json!({ "command": code }))["command"],
+            json!(code)
+        );
+        assert_eq!(
+            mcp_detail(&json!({ "command": r"C:\Program Files (x86)\Tool Kit\tool.exe" }))
+                ["command"],
+            json!(r"C:\Program Files (x86)\Tool Kit\tool.exe")
+        );
+        // a short plain value right after a flag that does not name a secret
+        assert_eq!(mask_line("tool --client x"), "tool --client x");
+        assert_eq!(mask_line("tool --client=codex"), "tool --client=codex");
+        assert_eq!(
+            mask_line("tool --mode stdio --client claude-code"),
+            "tool --mode stdio --client claude-code"
+        );
+        // RFC 6901 escapes in a pointer are not glued to the next word (`~1` is `/`, `~0` is `~`)
+        for p in [
+            "/projects/~0~1work~1loadout-release-candidate-two/mcpServers/x",
+            "/enabledPlugins/scope~1loadout-release-candidate-two@mp",
+        ] {
+            assert_eq!(scrub_words(p), p);
+        }
+    }
+
+    /// ...while the same shapes with a real secret stay hidden.
+    #[test]
+    fn audit_2a_secrets_next_to_them_stay_hidden() {
+        for (line, secret) in [
+            ("tool --client hunter2", "hunter2"),
+            ("tool --client sk-abc123SECRETxyz", "sk-abc"),
+            ("tool --token x", " x"),
+            ("tool --user x", " x"),
+            ("tool --env GITHUB_PAT S03", "S03"),
+            ("tool --client=hunter2", "hunter2"),
+            ("curl --header hunterpw", "hunterpw"),
+            ("curl --header=hunterpw", "hunterpw"),
+            ("tool --env hunterpw", "hunterpw"),
+            ("tool --config hunterpw", "hunterpw"),
+            ("tool x", " x"),
+            ("plink -p 4821 host", "4821"),
+            (r#""/usr/bin/tool --pw hunter""#, "hunter"),
+            (r#"bash -c "C:\tools\x.exe hunter""#, "hunter"),
+            (r#""C:\x\tool secretpw rel\f.txt""#, "secretpw"),
+        ] {
+            let out = mask_line(line);
+            assert!(!out.contains(secret), "{line} -> {out}");
+        }
+        for cmd in [
+            r"C:\tools\x.exe hunter",
+            "/usr/bin/tool --pw hunter",
+            r"C:\x\tool secretpw rel\f.txt",
+        ] {
+            let out = mcp_detail(&json!({ "command": cmd }))["command"].to_string();
+            assert!(
+                !out.contains("hunter") && !out.contains("secretpw"),
+                "{cmd} -> {out}"
+            );
+        }
+        assert_eq!(
+            scrub_words("/mcpServers/~1ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"),
+            "/mcpServers/~1<masked>"
+        );
     }
 
     #[test]
