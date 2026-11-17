@@ -113,7 +113,7 @@ aside[hidden] { display: none; }
 .alert-box { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--red); border-left-width: 4px; border-radius: 4px; background: rgba(255, 85, 85, 0.08); }
 .alert-box p { margin: 4px 0 0; }
 .group-head { margin: 16px 0 8px; }
-.group-head:first-of-type { margin-top: 0; }
+section:first-of-type > .group-head { margin-top: 0; }
 .group-head > span { text-transform: none; }
 dd.fix, .fix { color: var(--fg); }
 .legend-box { margin: 0 0 10px; }

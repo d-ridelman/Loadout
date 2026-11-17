@@ -130,7 +130,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
           {t('скрыть «не определено»', 'hide "unknown"')}
         </label>
         {filters.client ? (
-          <button onClick={() => setFilters({ ...filters, client: null })} aria-label={t(`Снять фильтр по клиенту ${CLIENTS.find((c) => c.id === filters.client)?.name}`, `Clear the ${CLIENTS.find((c) => c.id === filters.client)?.name} client filter`)}>
+          <button onClick={() => setFilters({ ...filters, client: null })} aria-label={t(`клиент: ${CLIENTS.find((c) => c.id === filters.client)?.name}, снять фильтр`, `client: ${CLIENTS.find((c) => c.id === filters.client)?.name}, clear the filter`)}>
             {t('клиент', 'client')}: {CLIENTS.find((c) => c.id === filters.client)?.name} <span aria-hidden="true">✕</span>
           </button>
         ) : null}

@@ -91,6 +91,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
   // entry by id: when data is refreshed from disk the list indexes shift, but the selection must stay on the same entry
   const e: Entity = cell.instances.find((x) => x.id === sel.id) ?? cell.instances[0]!
   const details = Object.entries(e.detail)
+    .filter(([k]) => k !== 'exact') // a flag for the edit form, not content
     .map(([k, v]) => [k, show(v)] as const)
     .filter((kv): kv is readonly [string, string] => kv[1] !== null)
 

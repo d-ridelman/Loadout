@@ -18,14 +18,18 @@ const MASK = '<masked>'
 export const hasMask = (command: string, args: readonly string[]): boolean => command.includes(MASK) || args.some((a) => a.includes(MASK))
 
 /**
- * The form starts from the current command when the core showed all of it. If any part is hidden, the form starts empty:
- * a prefilled mask could be saved over the real secret.
+ * The form starts from the current command only when the core says it showed it exactly (`detail.exact`): masking is lossy
+ * without always leaving a mark (a URL loses its query), and a prefilled lossy value saved back would erase the secret.
+ * `partial` means there was a command the form could not start from.
  */
-export function prefill(e: Entity): { command: string; args: string; masked: boolean } {
+export function prefill(e: Entity): { command: string; args: string; partial: boolean } {
   const command = typeof e.detail['command'] === 'string' ? e.detail['command'] : ''
   const args = Array.isArray(e.detail['args']) ? e.detail['args'].filter((a): a is string => typeof a === 'string') : []
-  if (hasMask(command, args)) return { command: '', args: '', masked: true }
-  return { command, args: args.join('\n'), masked: false }
+  if (command === '' && args.length === 0) return { command: '', args: '', partial: false }
+  // one argument per line: an empty or multi-line argument would not survive the round trip
+  const fits = args.every((a) => a !== '' && !a.includes('\n'))
+  if (e.detail['exact'] !== true || !fits || hasMask(command, args)) return { command: '', args: '', partial: true }
+  return { command, args: args.join('\n'), partial: false }
 }
 
 /**
@@ -62,11 +66,11 @@ export function EditDialog({ entity, draft, onSubmit, onClose }: Props) {
           {t('Аргументы, по одному в строке', 'Arguments, one per line')}
           <textarea value={args} onChange={(e) => setArgs(e.target.value)} rows={5} placeholder={t('-y\nпакет@1.2.3', '-y\npackage@1.2.3')} spellCheck={false} />
         </label>
-        {start.masked ? (
+        {start.partial && !draft ? (
           <p className="s-stale">
             ◐ {t(
-              'Часть текущей команды скрыта, потому что похожа на секрет, поэтому поля пустые: введите команду и аргументы целиком.',
-              'Part of the current command is hidden because it looks like a secret, so the fields are empty: type the command and arguments in full.',
+              'Текущую команду окно не может показать в точности (часть похожа на секрет и скрыта), поэтому поля пустые: введите команду и аргументы целиком.',
+              'The window cannot show the current command exactly (part of it looks like a secret and is hidden), so the fields are empty: type the command and arguments in full.',
             )}
           </p>
         ) : null}

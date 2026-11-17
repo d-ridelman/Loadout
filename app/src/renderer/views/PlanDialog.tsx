@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { Entity, Intent, JournalEntry, Plan } from '../../shared/model'
 import { count, plural, t } from '../../shared/i18n'
-import { Path, Rich } from '../ui'
+import { Path } from '../ui'
 import { Modal } from './Modal'
 
 type PlanState =
@@ -233,14 +233,15 @@ export function PlanDialog({ entity, intent, onBack, onClose, onDone }: Props) {
                 {alerts.length > 0 ? (
                   <div className="alert-box" role="note" aria-label={t('Внимание: скил с кодом', 'Warning: a skill with code')}>
                     <b className="s-broken">{t('⚠ Скил может запускать программы на этом компьютере', '⚠ This skill can run programs on this computer')}</b>
+                    {/* as the core wrote them: the backticks of !`…` are the pattern to look for in SKILL.md, not code markup */}
                     {alerts.map((n) => (
-                      <p key={n}><Rich text={n} /></p>
+                      <p key={n}>{n}</p>
                     ))}
                     <p className="mute small">{t('Устанавливайте его, только если доверяете источнику и прочитали его файлы.', 'Install it only if you trust the source and have read its files.')}</p>
                   </div>
                 ) : null}
                 {rest.map((n) => (
-                  <p key={n} className="s-stale">◐ <Rich text={n} /></p>
+                  <p key={n} className="s-stale">◐ {n}</p>
                 ))}
               </>
             )

@@ -53,7 +53,6 @@ describe('text in backticks is shown as code', () => {
   it('no backticks, or an odd number of them, leaves the text alone', () => {
     expect(codeSpans('plain')).toEqual(['plain'])
     expect(codeSpans('a ` b `c` d')).toEqual(['a ` b `c` d'])
-    expect(codeSpans('SKILL.md runs !`…` commands')).toEqual(['SKILL.md runs !', { code: '…' }, ' commands'])
   })
 })
 
@@ -95,6 +94,8 @@ describe('Context Toolkit: policy checkboxes pick the mode themselves', () => {
     expect(policySet(doc('commit_hygiene, build_slots=3'))).toEqual({ commitHygiene: true, confirmIrreversible: false, strayFiles: false, buildSlots: true, buildSlotsN: 3 })
     expect(policySet(doc(null))).toEqual({ commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 })
     expect(policySet(doc('bad json', 'warn'))).toBeNull()
+    // Context Toolkit allows up to 64, the window up to 8: a larger limit is lowered, not sent on to be refused
+    expect(policySet(doc('build_slots=16'))?.buildSlotsN).toBe(8)
   })
   it('a tick in "keep" mode switches to "on" and keeps the policies that are already on', () => {
     const now = policySet(doc('commit_hygiene, build_slots=3'))
@@ -137,12 +138,16 @@ describe('Profiles: the one that matches the current state is marked', () => {
 })
 
 describe('"Edit command" starts from the current value, never from a mask', () => {
-  it('fills the form when nothing is hidden', () => {
-    expect(prefill(ent({ kind: 'mcp', detail: { command: 'npx', args: ['-y', 'pkg@1'] } }))).toEqual({ command: 'npx', args: '-y\npkg@1', masked: false })
+  it('fills the form only when the core says the values are exactly what the file holds', () => {
+    expect(prefill(ent({ kind: 'mcp', detail: { command: 'npx', args: ['-y', 'pkg@1'], exact: true } }))).toEqual({ command: 'npx', args: '-y\npkg@1', partial: false })
+    // a URL that lost its query has no mark in it: only the core's flag tells
+    expect(prefill(ent({ kind: 'mcp', detail: { command: 'npx', args: ['mcp-remote', 'https://h/sse'], exact: false } }))).toEqual({ command: '', args: '', partial: true })
+    expect(prefill(ent({ kind: 'mcp', detail: { command: 'node', args: ['a.js', '--token', '<masked>'] } }))).toEqual({ command: '', args: '', partial: true })
+    expect(prefill(ent({ kind: 'mcp', detail: {} }))).toEqual({ command: '', args: '', partial: false })
   })
-  it('a hidden part leaves the form empty and says so', () => {
-    expect(prefill(ent({ kind: 'mcp', detail: { command: 'node', args: ['a.js', '--token', '<masked>'] } }))).toEqual({ command: '', args: '', masked: true })
-    expect(prefill(ent({ kind: 'mcp', detail: {} }))).toEqual({ command: '', args: '', masked: false })
+  it('an argument the one-per-line form cannot hold (empty, multi-line) leaves the form empty', () => {
+    expect(prefill(ent({ kind: 'mcp', detail: { command: 'x', args: ['a', ''], exact: true } })).partial).toBe(true)
+    expect(prefill(ent({ kind: 'mcp', detail: { command: 'x', args: ['a\nb'], exact: true } })).partial).toBe(true)
   })
   it('a typed mask is refused', () => {
     expect(hasMask('node', ['--key=<masked>'])).toBe(true)

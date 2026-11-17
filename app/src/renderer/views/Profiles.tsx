@@ -271,7 +271,6 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
                       <span className="s-broken small">{t('Профиль удалится без отката.', 'The profile is deleted with no rollback.')}</span>
                       <button
                         className="danger"
-                        autoFocus
                         onClick={() => {
                           setDeleting(null)
                           void run(window.loadout.deleteProfile(p.name), t(`Профиль «${p.name}» удалён`, `Profile “${p.name}” deleted`))
@@ -279,7 +278,8 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
                       >
                         {t('Удалить навсегда', 'Delete for good')}
                       </button>
-                      <button onClick={() => setDeleting(null)}>{t('Не удалять', 'Keep it')}</button>
+                      {/* focus on the safe choice: a double click or a held Enter does not delete */}
+                      <button autoFocus onClick={() => setDeleting(null)}>{t('Не удалять', 'Keep it')}</button>
                     </>
                   ) : (
                     <button className="danger" onClick={() => setDeleting(p.name)}>{t('Удалить профиль…', 'Delete profile…')}</button>

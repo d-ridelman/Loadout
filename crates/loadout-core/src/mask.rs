@@ -780,9 +780,8 @@ pub fn mcp_detail(cfg: &Value) -> Value {
         None if command.is_some() => "stdio",
         None => "http",
     };
-    let args: Vec<String> = cfg
-        .get("args")
-        .and_then(Value::as_array)
+    let raw_args = cfg.get("args").and_then(Value::as_array);
+    let args: Vec<String> = raw_args
         .map(|a| {
             a.iter()
                 .filter_map(Value::as_str)
@@ -792,11 +791,19 @@ pub fn mcp_detail(cfg: &Value) -> Value {
         .unwrap_or_default();
     // `args` do not start with the executable: it is in `command`. If it is npx/uvx, the first word without a flag is the package.
     let launcher = command.is_some_and(|c| LAUNCHERS.contains(&stem_of(c).as_str()));
+    // `command` is the program itself (its arguments are in `args`): a bare path with spaces is not split
+    let shown_command = command.map(|c| if is_spaced_path(c) { c.to_owned() } else { mask_line(c) });
+    let shown_args = mask_args_ex(&args, 0, Pos { pkg: launcher, ..Pos::default() });
+    // Masking is lossy without always leaving a mark (a URL loses its query, a number argument is dropped): the window
+    // starts the "Edit command" form from these values only when they are exactly what the file holds.
+    let exact = shown_command.as_deref() == command
+        && shown_args == args
+        && !raw_args.is_some_and(|a| a.len() != args.len());
     json!({
         "transport": transport,
-        // `command` is the program itself (its arguments are in `args`): a bare path with spaces is not split
-        "command": command.map(|c| if is_spaced_path(c) { c.to_owned() } else { mask_line(c) }),
-        "args": mask_args_ex(&args, 0, Pos { pkg: launcher, ..Pos::default() }),
+        "command": shown_command,
+        "args": shown_args,
+        "exact": exact,
         "url": url.map(mask_url),
         "envKeys": keys_of(cfg, &["env"]),
         "headerKeys": keys_of(cfg, &["headers", "http_headers", "env_http_headers"]),
@@ -1169,6 +1176,18 @@ mod tests {
         // the npx package name stays
         let npx = mcp_detail(&json!({"command":"npx","args":["-y","firecrawl-mcp"]})).to_string();
         assert!(npx.contains("firecrawl-mcp"), "{npx}");
+    }
+
+    #[test]
+    fn mcp_detail_says_when_the_command_is_shown_exactly() {
+        let exact = |cfg: Value| mcp_detail(&cfg)["exact"].clone();
+        // shown as written: the window may start an edit form from it
+        assert_eq!(exact(json!({"command":"npx","args":["-y","pkg@1.2.3"]})), json!(true));
+        assert_eq!(exact(json!({"url":"https://h/mcp"})), json!(true));
+        // anything masking changed or dropped: a key cut from a URL, a token, a non-string argument
+        assert_eq!(exact(json!({"command":"npx","args":["mcp-remote","https://h/sse?api_key=X1"]})), json!(false));
+        assert_eq!(exact(json!({"command":"node","args":["a.js","--token","S4"]})), json!(false));
+        assert_eq!(exact(json!({"command":"node","args":["a.js", 8080]})), json!(false));
     }
 
     #[test]

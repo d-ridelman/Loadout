@@ -1,5 +1,6 @@
 import { t } from '../shared/i18n'
 import type { CtxkitDoctor, CtxkitReport, DayStats, SetupOptions } from '../shared/model'
+import { MAX_BUILD_SLOTS } from '../shared/model'
 
 /** Totals for the period. Arithmetic over Context Toolkit counters only: there are no "saved tokens" here, the report has no "before" baseline. */
 export interface Summary {
@@ -91,7 +92,7 @@ export function stopGateOff(d: CtxkitDoctor): boolean | null {
 
 /**
  * The "currently enabled: ..." label for the "Protections" block, from the `policies` finding (present only if the policy file exists):
- * `{ text, broken }`, or `null` if there is no file. Label only: nothing from here goes into the form or the arguments.
+ * `{ text, broken }`, or `null` if there is no file. `policySet` reads the same finding into form checkboxes.
  */
 export function policiesNow(d: CtxkitDoctor): { text: string; broken: boolean } | null {
   const f = d.findings.find((x) => x.id === 'policies')
@@ -101,7 +102,7 @@ export function policiesNow(d: CtxkitDoctor): { text: string; broken: boolean } 
 }
 
 export type PolicySet = Pick<SetupOptions, 'commitHygiene' | 'confirmIrreversible' | 'strayFiles' | 'buildSlots' | 'buildSlotsN'>
-const NO_POLICIES: PolicySet = { commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 }
+export const NO_POLICIES: PolicySet = { commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 }
 
 /**
  * The policies that are on now, as form checkboxes, from the same `policies` finding (`commit_hygiene, build_slots=3`).
@@ -118,7 +119,8 @@ export function policySet(d: CtxkitDoctor): PolicySet | null {
     confirmIrreversible: on.has('confirm_irreversible'),
     strayFiles: on.has('stray_files'),
     buildSlots: on.has('build_slots'),
-    buildSlotsN: Number.isInteger(n) && n >= 1 ? n : 2,
+    // the window allows 1-8 (main refuses more), Context Toolkit up to 64: a larger limit in the file is lowered to 8
+    buildSlotsN: Number.isInteger(n) && n >= 1 ? Math.min(n, MAX_BUILD_SLOTS) : 2,
   }
 }
 

@@ -512,7 +512,7 @@ try {
   must(asOff !== original, 'fixture: p1 has no enabled = true')
 
   // the "broken: N" counter in the footer leads to the Doctor; the Doctor groups findings and says how to fix each one
-  await page.getByRole('button', { name: /^Сломано: \d+\. Открыть Доктора/ }).click()
+  await page.getByRole('button', { name: /^сломано: \d+, открыть Доктора/ }).click()
   await waitFor(async () => (await page.locator('main h2').first().innerText()).startsWith('Доктор'), 'the footer counter opens the Doctor')
   {
     // group headings are set in capitals by CSS
@@ -733,7 +733,7 @@ try {
   // an editable MCP whose command the core shows whole (nothing masked)
   const plain = await page.evaluate(async () => {
     const r = await window.loadout.scan()
-    const e = r.ok ? r.data.entities.find((x) => x.kind === 'mcp' && x.canEdit && typeof x.detail.command === 'string' && !JSON.stringify(x.detail).includes('<masked>')) : undefined
+    const e = r.ok ? r.data.entities.find((x) => x.kind === 'mcp' && x.canEdit && typeof x.detail.command === 'string' && x.detail.exact === true) : undefined
     return e ? { name: e.name, client: e.client, command: e.detail.command } : null
   })
   must(plain !== null, 'fixture: no editable MCP without masked values')
@@ -744,7 +744,7 @@ try {
   await dialog.waitFor({ state: 'detached', timeout: 5000 })
   await clickCell('desk-tool', 1)
   await page.getByRole('button', { name: 'Править команду…' }).click()
-  must((await dialog.getByLabel('Команда').inputValue()) === '' && (await dialog.innerText()).includes('Часть текущей команды скрыта'), 'a masked command must leave the form empty with an explanation')
+  must((await dialog.getByLabel('Команда').inputValue()) === '' && (await dialog.innerText()).includes('не может показать в точности'), 'a masked command must leave the form empty with an explanation')
   await dialog.getByLabel('Аргументы, по одному в строке').fill('<masked>')
   await dialog.getByLabel('Команда').fill('x')
   must(await dialog.getByRole('button', { name: 'Предпросмотр' }).isDisabled(), 'a typed <masked> must not reach the preview')
@@ -1141,6 +1141,10 @@ try {
   // the "currently enabled" caption comes from the policies finding and does not change the form
   await waitFor(async () => (await page.locator('#ctx-policy-hint').innerText()).includes('Сейчас включены: commit_hygiene, build_slots=3'), 'the "Currently enabled" caption from diagnostics')
   must((await polSel.inputValue()) === 'on', 'the caption from diagnostics changed the form')
+  await polSel.selectOption('keep')
+  // back to "Turn on the selected" through the list: it starts from the policies on now, nothing is switched off unseen
+  await polSel.selectOption('on')
+  must((await hygiene.isChecked()) && (await slotsBox.isChecked()) && (await slotsNum.inputValue()) === '3', 'choosing "Turn on the selected" dropped the policies that are on')
   await polSel.selectOption('keep')
   // ---- rollback on a fixture copy: preview, R2, foreign hooks in place, a repeat is safe ----
   const undoOpts = { antigravity: false, dsh: false }

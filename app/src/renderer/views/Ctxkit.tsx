@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
 import { MAX_BUILD_SLOTS } from '../../shared/model'
 import { count, fmtTime, getLang, t } from '../../shared/i18n'
-import { chars, daysDesc, fixPatch, pct, policiesNow, policySet, segments, stopGateOff, summarize, tickPolicy } from '../ctxkit-stats'
+import { chars, daysDesc, fixPatch, NO_POLICIES, pct, policiesNow, policySet, segments, stopGateOff, summarize, tickPolicy } from '../ctxkit-stats'
 import type { PolicySet } from '../ctxkit-stats'
 import { PageHead, pickLevel, Rich } from '../ui'
 import type { Notify } from '../ui'
@@ -77,8 +77,6 @@ function useLoaded<T>(load: () => Promise<{ ok: true; data: T } | { ok: false; e
   }, [...deps, n])
   return [s, () => setN((x) => x + 1), busy, at]
 }
-
-const NO_POLICIES: PolicySet = { commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 }
 
 interface Props {
   level: WriteLevel
@@ -248,7 +246,17 @@ export function Ctxkit({ level, onNotice }: Props) {
             <legend className="mute small">{t('Защиты (context-toolkit.json)', 'Safeguards (context-toolkit.json)')}</legend>
             <div className="field">
               <label htmlFor="ctx-policy">{t('Политики', 'Policies')}</label>
-              <select id="ctx-policy" value={opts.policyMode} onChange={(e) => change({ policyMode: e.target.value as SetupOptions['policyMode'] })}>
+              <select
+                id="ctx-policy"
+                value={opts.policyMode}
+                disabled={policyWait}
+                onChange={(e) => {
+                  const mode = e.target.value as SetupOptions['policyMode']
+                  // "Turn on the selected" starts from what is on now, like a first tick: nothing is switched off unseen
+                  if (mode === 'on') tick({})
+                  else change({ policyMode: mode })
+                }}
+              >
                 <option value="keep">{t('Не менять (по умолчанию)', 'Keep as is (default)')}</option>
                 <option value="on">{t('Включить выбранные', 'Turn on the selected')}</option>
                 <option value="off">{t('Выключить все', 'Turn all off')}</option>
@@ -358,8 +366,8 @@ export function Ctxkit({ level, onNotice }: Props) {
         <h3>{t('Откат: убрать Инструменты контекста', 'Rollback: remove Context Toolkit')}</h3>
         <p className="small">
           {t(
-            'Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; Antigravity и DeepSeek Harness, если они отмечены в форме выше. Файл, который после установки никто не трогал, возвращается байт в байт таким, каким был до неё; в изменённом файле вырезаются только наши части.',
-            'The rollback removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; Antigravity and DeepSeek Harness if they are ticked in the form above. A file nobody touched since the install comes back byte for byte as it was before it; in a changed file only our parts are cut out.',
+            'Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; Antigravity и DeepSeek Harness, если они отмечены в форме выше. Если без наших частей файл совпадает с копией, сделанной до установки, он возвращается к ней байт в байт; иначе (например, установка поменяла модель или effort, или вы правили файл) из него вырезаются только наши части.',
+            'The rollback removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; Antigravity and DeepSeek Harness if they are ticked in the form above. If the file without our parts matches the copy made before the install, it goes back to that copy byte for byte; otherwise (the install changed the model or effort, or you edited the file) only our parts are cut out.',
           )}
         </p>
         <p className="mute small">

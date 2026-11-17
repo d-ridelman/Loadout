@@ -341,6 +341,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
 
   const planBack = flow?.type === 'plan' ? flow.back : undefined
   const problems = findings.filter((f) => f.severity === 'error').length
+  const cautions = findings.filter((f) => f.severity === 'warn').length
   const scanText =
     scan.status === 'ready' ? t(`скан: ${scan.ms} мс`, `scan: ${scan.ms} ms`) : scan.status === 'loading' ? t('скан…', 'scan…') : t('скан не удался', 'scan failed')
 
@@ -413,8 +414,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             </p>
             <p>
               {t(
-                `Без вашей команды Loadout ничего не меняет. Уровень записи сейчас «${levelLabel(level)}»; чтобы что-то включить или поправить, поднимите его в шапке окна. Перед каждой записью окно покажет, что изменится, и подождёт подтверждения. Правки конфигов можно откатить в журнале.`,
-                `Loadout changes nothing unless you tell it to. The write level is “${levelLabel(level)}” now; to turn something on or edit it, raise the level in the window header. Before every write the window shows what will change and waits for you to confirm. Config edits can be rolled back in the journal.`,
+                `Без вашей команды Loadout ничего не меняет. Уровень записи сейчас «${levelLabel(level)}»${level === 'R0' ? '; чтобы что-то включить или поправить, поднимите его в шапке окна' : ', он выбирается в шапке окна'}. Перед каждой записью окно покажет, что изменится, и подождёт подтверждения. Правки конфигов можно откатить в журнале.`,
+                `Loadout changes nothing unless you tell it to. The write level is “${levelLabel(level)}” now${level === 'R0' ? '; to turn something on or edit it, raise the level in the window header' : ', and you pick it in the window header'}. Before every write the window shows what will change and waits for you to confirm. Config edits can be rolled back in the journal.`,
               )}
             </p>
             <p>
@@ -497,14 +498,15 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             {t('обновлено', 'updated')} {fmtTime(updatedAt)}
           </span>
         ) : null}
+        {/* the same counts as the Doctor's "Broken" and "Warnings" groups; the visible text starts the button name */}
         {problems > 0 ? (
-          <button className="foot-link s-broken" onClick={() => setView('doctor')} aria-label={t(`Сломано: ${problems}. Открыть Доктора`, `Broken: ${problems}. Open Doctor`)}>
-            ✕ {t('сломано', 'broken')}: {problems}
+          <button className="foot-link s-broken" onClick={() => setView('doctor')} aria-label={t(`сломано: ${problems}, открыть Доктора`, `broken: ${problems}, open Doctor`)}>
+            <span aria-hidden="true">✕ </span>{t('сломано', 'broken')}: {problems}
           </button>
         ) : null}
-        {warnings.length > 0 ? (
-          <button className="foot-link s-stale" onClick={() => setView('doctor')} aria-label={t(`Предупреждений сканера: ${warnings.length}. Открыть Доктора`, `Scanner warnings: ${warnings.length}. Open Doctor`)}>
-            ◐ {t('предупреждений', 'warnings')}: {warnings.length}
+        {cautions > 0 ? (
+          <button className="foot-link s-stale" onClick={() => setView('doctor')} aria-label={t(`предупреждений: ${cautions}, открыть Доктора`, `warnings: ${cautions}, open Doctor`)}>
+            <span aria-hidden="true">◐ </span>{t('предупреждений', 'warnings')}: {cautions}
           </button>
         ) : null}
         <span className="sp" />
