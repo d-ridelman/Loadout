@@ -80,7 +80,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
           <p className="mute">
             {t(`В ${client?.name} этой сущности нет.`, `This entity is not in ${client?.name}.`)}
             {/* copying works for MCP servers in a client file, and not into DeepSeek (tagged YAML) */}
-            {row.kinds.includes('mcp') && sel.client !== 'deepseek'
+            {sel.client !== 'deepseek' && CLIENTS.some((c) => row.cells[c.id]?.instances.some((x) => x.kind === 'mcp' && x.canEdit))
               ? ' ' + t('MCP-сервер можно скопировать сюда из ячейки другого клиента: «Копировать в клиент…».', 'An MCP server can be copied here from another client’s cell: “Copy to client…”.')
               : null}
           </p>

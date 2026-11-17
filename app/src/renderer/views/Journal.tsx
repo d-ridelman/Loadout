@@ -105,7 +105,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
                     </td>
                     <td className="name">
                       <b>{j.name}</b>
-                      <div className="mute small">{CLIENTS.find((c) => c.id === j.client)?.name} · {j.pointer}</div>
+                      <div className="mute small">{CLIENTS.find((c) => c.id === j.client)?.name}{j.pointer ? ` · ${j.pointer}` : ''}</div>
                     </td>
                     <td className="mono vcell wrap">{j.from} → {j.to}</td>
                     <td className="nw">{j.rolledBack ? t('↺ откатано', '↺ rolled back') : j.op === 'rollback' ? t('откат записан', 'rollback recorded') : j.canRollback ? t('в силе', 'in effect') : t('уже менялось', 'changed since')}</td>

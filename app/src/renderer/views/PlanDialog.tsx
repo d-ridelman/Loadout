@@ -83,14 +83,18 @@ export function RollbackDialog({ rows, batch, onClose, onDone }: RollbackProps) 
       <h2>
         {head} <span className="lvl">{rows.some((r) => r.level === 'R2') ? 'R2' : 'R1'}</span>
       </h2>
-      {rows.map((r) => (
+      {rows.map((r, i) => {
+        // The journal checks every line against the file as it is now. In a batch, a line whose file a newer line of
+        // the same batch also changed becomes checkable only after that newer one is rolled back: no verdict for it here.
+        const shadowed = rows.slice(0, i).some((x) => x.file === r.file)
+        return (
         <div key={r.id}>
           <p>
             <b>{r.name}</b> <span className="mute">· {clientName(r.client)}</span>
           </p>
-          <Change file={r.file} pointer={r.pointer} from={r.to} to={r.rollbackTo ?? r.from} />
+          <Change file={r.file} pointer={r.pointer} from={r.to} to={(shadowed ? undefined : r.rollbackTo) ?? r.from} />
           {/* a batch stops at the first line that cannot be rolled back: say so before, not after */}
-          {!r.canRollback && r.why ? (
+          {!shadowed && !r.canRollback && r.why ? (
             <p className="s-broken">
               {batch !== null
                 ? t(`Эта запись не откатится (${r.why}): пакет остановится на ней.`, `This entry will not roll back (${r.why}): the batch stops at it.`)
@@ -98,7 +102,8 @@ export function RollbackDialog({ rows, batch, onClose, onDone }: RollbackProps) 
             </p>
           ) : null}
         </div>
-      ))}
+        )
+      })}
       <p className="mute small">
         {t(
           'Перед записью копия файла сохранится в бэкап, остальное содержимое не меняется. Ядро ещё раз сверит файл и запись: если после операции их изменили так, что откат затёр бы чужие правки, он не пройдёт.',
