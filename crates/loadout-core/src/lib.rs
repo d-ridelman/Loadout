@@ -85,7 +85,8 @@ impl Ctx {
 
     pub fn read_json(&mut self, p: &Path) -> Option<Value> {
         let text = self.read_text(p)?;
-        match serde_json::from_str(&text) {
+        // a BOM (Notepad and some Windows editors write one) is no reason to ignore the file: the write side keeps it too
+        match serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text)) {
             Ok(v) => Some(v),
             Err(e) => {
                 let w = crate::tr!("{}: не JSON ({})", "{}: not JSON ({})", self.tilde(p), e);
@@ -591,11 +592,18 @@ mod tests {
     #[test]
     fn a_home_path_turned_into_tilde_is_not_an_exact_command() {
         let forms = home_forms(Path::new(r"C:\Users\me"));
-        let mut inside = mask::mcp_detail(&serde_json::json!({"command":"node","args":[r"C:\Users\me\mcp\server.js"]}));
-        assert_eq!(inside["exact"], serde_json::json!(true), "masking alone keeps a plain path");
+        let mut inside = mask::mcp_detail(
+            &serde_json::json!({"command":"node","args":[r"C:\Users\me\mcp\server.js"]}),
+        );
+        assert_eq!(
+            inside["exact"],
+            serde_json::json!(true),
+            "masking alone keeps a plain path"
+        );
         scrub_detail(&mut inside, &forms);
         assert_eq!(inside["exact"], serde_json::json!(false), "{inside}");
-        let mut outside = mask::mcp_detail(&serde_json::json!({"command":"node","args":[r"D:\tools\server.js"]}));
+        let mut outside =
+            mask::mcp_detail(&serde_json::json!({"command":"node","args":[r"D:\tools\server.js"]}));
         scrub_detail(&mut outside, &forms);
         assert_eq!(outside["exact"], serde_json::json!(true), "{outside}");
     }
