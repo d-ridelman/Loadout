@@ -106,6 +106,12 @@ pub(crate) fn esc_ptr(s: &str) -> String {
     s.replace('~', "~0").replace('/', "~1")
 }
 
+/// A skill description as shown: masked first, cut to 200 characters after, so the cut never leaves a piece of a
+/// token too short to be recognised.
+fn shown_description(s: &str) -> String {
+    mask::mask_prose(s).chars().take(200).collect()
+}
+
 /// The `mcpServers` object in the format `{name: {command, args, env?, url?}}` (Antigravity, Claude Desktop, Antigravity plugins).
 pub(crate) fn scan_mcp_servers(
     c: &mut Ctx,
@@ -181,7 +187,7 @@ pub(crate) fn scan_skills(c: &mut Ctx, client: Client, root: &Path, scope: &str)
             .map_or_else(|| dir_name.clone(), str::to_owned);
         let desc: String = fm
             .get("description")
-            .map(|s| mask::mask_prose(&s.chars().take(200).collect::<String>()))
+            .map(|s| shown_description(s))
             .unwrap_or_default();
         let mut e = Entity::new(
             client,
@@ -584,6 +590,17 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_description_is_masked_before_it_is_cut() {
+        // a 32-hex token across the 200-character cut: cutting first would leave 10 characters, too few to recognise
+        let token = "0123456789abcdef0123456789abcdef";
+        let s = format!("{} {token} tail", "word ".repeat(38).trim_end());
+        assert!(s.chars().count() > 200 && s.find(token).unwrap() < 200);
+        let shown = shown_description(&s);
+        assert!(!shown.contains("0123456789"), "{shown}");
+        assert!(shown.chars().count() <= 200);
+    }
 
     fn label(cmd: &str) -> String {
         hook_label(&mask::mask_args(&mask::split_shell(cmd)))

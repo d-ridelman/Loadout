@@ -743,12 +743,21 @@ pub fn scrub_words(s: &str) -> String {
 }
 
 /// Free text (skill description): words that look like a token or a key of a known kind are replaced.
+/// Any whitespace separates words (a line break or a tab must not glue a token to the word before it); the result
+/// is one line with single spaces.
 pub fn mask_prose(s: &str) -> String {
     const PREFIXES: [&str; 8] = ["sk-", "sk_", "ghp_", "gho_", "xox", "AKIA", "eyJ", "glpat"];
-    s.split(' ')
+    // zero-width space, word joiner and BOM are not whitespace to Rust, but they glue a token to a word just the same
+    s.split(|c: char| c.is_whitespace() || matches!(c, '\u{200B}' | '\u{2060}' | '\u{FEFF}'))
+        .filter(|w| !w.is_empty())
         .map(|w| {
-            let bare = w.trim_matches(|c: char| !c.is_alphanumeric());
-            if seg_secret(bare) || PREFIXES.iter().any(|p| bare.starts_with(p)) {
+            let secret = |part: &str| {
+                let bare = part.trim_matches(|c: char| !c.is_alphanumeric());
+                seg_secret(bare) || PREFIXES.iter().any(|p| bare.starts_with(p))
+            };
+            // a token glued to a word by a sign or an invisible character (`token=ghp_…`) is still a token
+            let parts = w.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+            if secret(w) || parts.filter(|p| !p.is_empty()).any(secret) {
                 MASK
             } else {
                 w
@@ -1236,6 +1245,31 @@ mod tests {
         assert_eq!(
             mask_prose("Ключ sk-ant-api03-AbCdEf0123456789 и текст"),
             "Ключ <masked> и текст"
+        );
+        // a line break or a tab is no hiding place: any whitespace separates words
+        assert_eq!(
+            mask_prose("token below\nghp_abcdef0123456789abcdef0123456789\tand sk-abc"),
+            "token below <masked> and <masked>"
+        );
+        // a zero-width character glues no token to its neighbour either
+        assert_eq!(
+            mask_prose("below\u{200B}ghp_abcdef0123456789abcdef0123456789"),
+            "below <masked>"
+        );
+        // nor a sign or another invisible character: a token inside a word is still a token
+        assert_eq!(
+            mask_prose("token=ghp_abcdef0123456789abcdef0123456789 ok"),
+            "<masked> ok"
+        );
+        assert_eq!(
+            mask_prose("x\u{200C}sk-ant-api03-AbCdEf0123456789"),
+            "<masked>"
+        );
+        assert_eq!(mask_prose("url/path/glpat-abc123 here"), "<masked> here");
+        // ordinary words with signs stay
+        assert_eq!(
+            mask_prose("read a/b, then key=value."),
+            "read a/b, then key=value."
         );
     }
 
