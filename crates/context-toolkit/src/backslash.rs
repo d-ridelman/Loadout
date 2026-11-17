@@ -14,8 +14,13 @@ fn fix_hint(client: Client, lang: Lang) -> &'static str {
         ),
         Client::Antigravity => t(
             lang,
-            "Backslashes get stripped here. Modify existing files with edit_file. Write new scripts via write_file and run them in a separate command; do not bypass this block by rewriting the same command.",
-            "Так обратные слеши теряются. Правку существующего файла делай инструментом edit_file. Новый код запиши через write_file и запусти его отдельной командой. Не обходи запрет другой формой той же команды.",
+            "Backslashes get stripped here. Modify existing files with replace_file_content. Write new scripts via write_to_file and run them in a separate command; do not bypass this block by rewriting the same command.",
+            "Так обратные слеши теряются. Правку существующего файла делай инструментом replace_file_content. Новый код запиши через write_to_file и запусти его отдельной командой. Не обходи запрет другой формой той же команды.",
+        ),
+        Client::Codex => t(
+            lang,
+            "Backslashes get stripped here. Modify files with apply_patch. Write a new script into a file with apply_patch and run it in a separate command; do not bypass this block by rewriting the same command.",
+            "Так обратные слеши теряются. Правь файлы через apply_patch. Новый код запиши в файл через apply_patch и запусти его отдельной командой. Не обходи запрет другой формой той же команды.",
         ),
         Client::Dsh => t(
             lang,
@@ -593,7 +598,7 @@ mod tests {
             Lang::En,
         )
         .unwrap();
-        assert!(r.contains("edit_file"));
+        assert!(r.contains("replace_file_content"));
         assert!(pre_reason(
             "run_command",
             "",

@@ -509,6 +509,9 @@ const cases = [
   ['deny', () => preAgy('run_command', { CommandLine: `rg "foo" src/` }).decision],
   ['deny', () => preAgy('run_command', { CommandLine: `python -c "print('a${B}nb')"` }).decision],
   ['ask', () => preAgy('run_command', { CommandLine: 'git status' }).decision],
+  // no `cwd` in the payload: a relative path resolves against the command's `Cwd`, else the first workspace
+  ['deny', () => preAgy('run_command', { CommandLine: 'cat big.ts', Cwd: dir }).decision],
+  ['deny', () => JSON.parse(runHook({ toolCall: { name: 'run_command', args: { CommandLine: 'cat big.ts' } }, workspacePaths: [dir], stepIdx: 1 })).decision],
   ['deny', () => preAgy('write_file', { Path: `${TMP}patch.py`, Content: `s=open(p).read()\ns=s.replace("a${B}n","b")\nopen(p,'w').write(s)\n` }).decision],
   ['ask', () => preAgy('write_file', { Path: `${TMP}notes.md`, Content: 'ok\n' }).decision],
   ['deny', () => preAgy('edit_file', { Path: `${TMP}patch.py`, Replacement: `s=s.replace("a${B}n","b")\nopen(p,'w').write(s)\n` }).decision],
@@ -543,6 +546,30 @@ const cases = [
       tool_input: { input: `*** Begin Patch\n*** Update File: ${brokenJs}\n` },
     });
     return JSON.parse(out).decision === 'block' && out.includes('with apply_patch:');
+  }],
+
+  // Codex (`--codex`): Claude protocol, the shell is `Bash` in either dialect, edits are `apply_patch` with the patch in
+  // `tool_input.command`, no read tool, no `ask` (learn.chatgpt.com/docs/hooks)
+  [true, () => {
+    const cx = (tool_name, tool_input, extra = {}) => runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input }, ['--codex', ...(extra.args ?? [])], extra.env ?? {});
+    const reason = (out) => JSON.parse(out).hookSpecificOutput?.permissionDecisionReason ?? '';
+    const big = reason(cx('Bash', { command: `cat "${bigFile}"` }));
+    if (!big.includes("sed -n") || big.includes('Explore') || big.includes('Read with')) return `cat hint: ${big}`;
+    if (!reason(cx('Bash', { command: `Get-Content "${bigFile}"` })).includes('Get-Content')) return 'PowerShell read on Windows';
+    if (cx('Bash', { command: 'git status' }) !== '') return 'a clean command must pass silently';
+    if (!reason(cx('Bash', { command: `python -c "print('a${B}nb')"` })).includes('apply_patch')) return 'inline backslash names apply_patch';
+    const patch = `*** Begin Patch\n*** Add File: ${TMP}patch.py\n+s=open(p).read()\n+s=s.replace("a${B}n","b")\n+open(p,'w').write(s)\n*** End Patch\n`;
+    if (decisionOf(cx('apply_patch', { command: patch })) !== 'deny') return 'a backslash patch';
+    // the patch text is file content, not a shell command: `cat <big file>` inside it is not a read
+    if (cx('apply_patch', { command: `*** Begin Patch\n*** Add File: ${TMP}notes.md\n+cat "${bigFile}"\n*** End Patch\n` }) !== '') return 'patch text taken for a command';
+    const on = P('codex', { commit_hygiene: true, confirm_irreversible: true });
+    if (decisionOf(cx('Bash', { command: COAUTH }, { env: { CLAUDE_CONFIG_DIR: on } })) !== 'deny') return 'commit hygiene';
+    if (cx('Bash', { command: 'git push' }, { env: { CLAUDE_CONFIG_DIR: on } }) !== '') return 'Codex has no ask: silent';
+    const brokenJs = join(dir, 'codex-patch-broken.js');
+    writeFileSync(brokenJs, 'function broken( {');
+    const post = runHook({ hook_event_name: 'PostToolUse', tool_name: 'apply_patch', tool_input: { command: `*** Begin Patch\n*** Update File: ${brokenJs}\n*** End Patch\n` } }, ['--codex']);
+    if (JSON.parse(post).decision !== 'block' || !post.includes('with apply_patch:')) return `post: ${post}`;
+    return true;
   }],
 
   // CLI check mode
@@ -718,10 +745,15 @@ const cases = [
     const profile = join(root, 'profile');
     const agyFile = join(root, 'agy-hooks.json');
     const dshHome = join(root, 'dsh');
+    const codexHome = join(root, 'codex');
     const claudeJson = join(root, 'claude.json');
     const presets = join(root, 'ccd-session-presets.json');
     mkdirSync(join(dshHome, 'profiles', 'desktop'), { recursive: true });
     mkdirSync(profile, { recursive: true });
+    mkdirSync(codexHome, { recursive: true });
+    const origCodex = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'C:/x/codex-hook.cmd', timeout: 3 }] }], PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'node C:/hooks/guard.mjs', timeout: 5 }] }] } };
+    writeFileSync(join(codexHome, 'hooks.json'), JSON.stringify(origCodex, null, 2));
+    writeFileSync(join(codexHome, 'AGENTS.md'), '# codex rules\n');
     const foreignStop = { type: 'command', command: 'node C:/tools/ctxkit-helper/stop.js' };
     const origSettings = {
       model: 'opus',
@@ -744,7 +776,7 @@ const cases = [
     writeFileSync(claudeJson, '{}');
     writeFileSync(presets, JSON.stringify({ byAccount: { a: { presets: [{ name: 'dev', settings: { modelId: 'claude-opus-5-5', effort: 'low' } }] } } }));
 
-    const common = ['--profile', profile, '--claude-json', claudeJson, '--antigravity', '--agy-file', agyFile, '--dsh', '--dsh-home', dshHome, '--desktop-file', presets, '--lang', 'ru'];
+    const common = ['--profile', profile, '--claude-json', claudeJson, '--antigravity', '--agy-file', agyFile, '--dsh', '--dsh-home', dshHome, '--codex', '--codex-home', codexHome, '--desktop-file', presets, '--lang', 'ru'];
     const hookBin = join(profile, 'hooks', BIN_NAME);
     const setupRun = spawnSync(exe, ['setup', '--with-rules', '--desktop', '--skip-version-check', ...common], { encoding: 'utf8' });
     if (setupRun.status !== 0 || !existsSync(hookBin)) return false;
@@ -754,7 +786,15 @@ const cases = [
       patch: readFileSync(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8'),
     };
     if (!afterSetup.md.includes('<!-- context-toolkit:start -->') || !afterSetup.patch.includes('context-toolkit-hooks') || !existsSync(join(dshHome, 'context-toolkit-hooks.json'))) return false;
-    const state = () => [join(profile, 'settings.json'), join(profile, 'CLAUDE.md'), agyFile, join(dshHome, 'AGENTS.md'), join(dshHome, 'context-toolkit-hooks.json'), join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), hookBin]
+    // Codex: our groups first, foreign ones kept; the rules block without Claude-only agents; a note about /hooks
+    const cxHooks = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8')).hooks;
+    const cxCmds = (ev) => (cxHooks[ev] ?? []).flatMap((g) => g.hooks.map((h) => h.command));
+    if (cxHooks.PreToolUse[0].matcher !== 'Bash|apply_patch' || !cxCmds('PreToolUse')[0].endsWith('--codex --lang ru') || !cxCmds('PreToolUse').includes('node C:/hooks/guard.mjs')) return 'codex PreToolUse';
+    if (cxHooks.PostToolUse[0].matcher !== 'apply_patch' || cxCmds('Stop').join() !== 'C:/x/codex-hook.cmd') return 'codex PostToolUse/Stop';
+    const cxMd = readFileSync(join(codexHome, 'AGENTS.md'), 'utf8');
+    if (!cxMd.startsWith('# codex rules') || !cxMd.includes('<!-- context-toolkit:start -->') || cxMd.includes('Explore') || cxMd.includes('checker')) return 'codex AGENTS.md';
+    if (!setupRun.stdout.includes('/hooks')) return 'codex trust note';
+    const state = () => [join(codexHome, 'hooks.json'), join(codexHome, 'AGENTS.md'), join(profile, 'settings.json'), join(profile, 'CLAUDE.md'), agyFile, join(dshHome, 'AGENTS.md'), join(dshHome, 'context-toolkit-hooks.json'), join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), hookBin]
       .map((f) => (existsSync(f) ? readFileSync(f, 'utf8') : null)).join('\u0000');
     const before = state();
 
@@ -787,6 +827,10 @@ const cases = [
     if (existsSync(join(dshHome, 'context-toolkit-hooks.json'))) return false;
     if (readFileSync(join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8') !== origPatch) return false;
     if (readFileSync(join(dshHome, 'AGENTS.md'), 'utf8') !== '# dsh rules\n') return false;
+    // setup writes JSON with sorted keys: compare the values, not the key order
+    const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
+    if (JSON.stringify(canon(JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8')))) !== JSON.stringify(canon(origCodex))) return 'codex hooks.json after the rollback';
+    if (readFileSync(join(codexHome, 'AGENTS.md'), 'utf8') !== '# codex rules\n') return 'codex AGENTS.md after the rollback';
 
     // a second uninstall changes nothing and makes no backup
     const after = state();

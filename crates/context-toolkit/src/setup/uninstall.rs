@@ -407,6 +407,41 @@ fn remove_antigravity_hooks(path: &Path, dry_run: bool) -> Result<(), String> {
     write_json_if_changed(path, None, &orig, &next, dry_run, "Antigravity hooks.json")
 }
 
+/// Our groups out of Codex's hooks.json; a file left with nothing but an empty `hooks` (setup made it) is deleted.
+pub(super) fn remove_codex_hooks(codex_home: &Path, dry_run: bool) -> Result<(), String> {
+    let path = codex_home.join("hooks.json");
+    if !path.exists() {
+        return Ok(());
+    }
+    let orig = read_json_object(&path)?;
+    let mut next = orig.clone();
+    if let Some(hooks) = next.get_mut("hooks").and_then(Value::as_object_mut) {
+        for ev in ["PreToolUse", "PostToolUse", "Stop"] {
+            remove_our_hook_event(hooks, ev, None);
+        }
+    }
+    let backups = codex_home.join("backups");
+    if next != orig && (next == json!({}) || next == json!({ "hooks": {} })) {
+        return delete_created(
+            &path,
+            &backups,
+            &msg!(
+                "removed Codex hooks.json (only our hooks were in it)",
+                "Codex hooks.json удалён (в нём были только наши хуки)"
+            ),
+            dry_run,
+        );
+    }
+    write_json_if_changed(
+        &path,
+        Some(&backups),
+        &orig,
+        &next,
+        dry_run,
+        "Codex hooks.json",
+    )
+}
+
 fn remove_dsh(dsh_home: &Path, dry_run: bool) -> Result<(), String> {
     for (i, file) in [DSH_HOOKS_FILE, OLD_DSH_HOOKS_FILE].into_iter().enumerate() {
         let hooks_path = dsh_home.join(file);
@@ -744,6 +779,11 @@ pub(super) fn run(
                 read_json_object(&apath)?;
             }
         }
+        let codex = (opts.codex || opts.codex_home.is_some()).then(|| codex_home_dir(opts, home));
+        if let Some(c) = &codex {
+            readable_utf8(&c.join("AGENTS.md"))?;
+            read_json_object(&c.join("hooks.json"))?;
+        }
         let orig = read_json_object(&settings_path)?;
         let next = remove_from_settings(&orig, hook_cmd);
         let saved = read_backups(&backup_dir, "settings.json");
@@ -807,6 +847,10 @@ pub(super) fn run(
             )?;
             remove_dsh(&dsh_home, opts.dry_run)?;
         }
+        if let Some(c) = &codex {
+            remove_rules_block(&c.join("AGENTS.md"), &c.join("backups"), opts.dry_run)?;
+            remove_codex_hooks(c, opts.dry_run)?;
+        }
         Ok(orig)
     };
     let orig = match run() {
@@ -863,14 +907,19 @@ pub(super) fn run(
             }
         }
         if had_hook
-            && !(opts.antigravity || opts.agy_file.is_some() || opts.dsh || opts.dsh_home.is_some())
+            && !(opts.antigravity
+                || opts.agy_file.is_some()
+                || opts.dsh
+                || opts.dsh_home.is_some()
+                || opts.codex
+                || opts.codex_home.is_some())
         {
             println!(
                 "  {}",
                 t(
                     opts.lang,
-                    "[note] If setup ran with --antigravity / --dsh, their hooks now point at the removed binary: run the rollback again with the same flags.",
-                    "[note] Если setup запускался с --antigravity / --dsh, их хуки указывают на удалённый бинарь: запустите откат с теми же флагами."
+                    "[note] If setup ran with --antigravity / --dsh / --codex, their hooks now point at the removed binary: run the rollback again with the same flags.",
+                    "[note] Если setup запускался с --antigravity / --dsh / --codex, их хуки указывают на удалённый бинарь: запустите откат с теми же флагами."
                 )
             );
         }

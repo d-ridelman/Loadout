@@ -20,8 +20,14 @@ fn read_hint(client: Client, lang: Lang) -> &'static str {
         ),
         Client::Antigravity => t(
             lang,
-            "search first via grep, then read a slice via read_file with StartLine and EndLine (up to 450 lines).",
-            "сначала найди нужное место через grep, затем прочитай фрагмент через read_file с StartLine и EndLine (до 450 строк).",
+            "search first via grep_search, then read a slice via view_file with StartLine and EndLine (up to 450 lines).",
+            "сначала найди нужное место через grep_search, затем прочитай фрагмент через view_file с StartLine и EndLine (до 450 строк).",
+        ),
+        // Codex has no read tool: the shell is the only way to read, so the hint names shell slices.
+        Client::Codex => t(
+            lang,
+            "find the spot first with `rg -n <pattern> <file>`, then print a slice: `sed -n '120,200p' <file>` or `Get-Content <file> | Select-Object -Skip 119 -First 80` (up to 450 lines).",
+            "сначала найди место через `rg -n <шаблон> <файл>`, затем выведи фрагмент: `sed -n '120,200p' <файл>` или `Get-Content <файл> | Select-Object -Skip 119 -First 80` (до 450 строк).",
         ),
         Client::Dsh => t(
             lang,
@@ -276,8 +282,10 @@ pub fn shell_read_guard(
                 check_ps_inspect(sub, client, lang, current_cwd.as_deref())
             }
             (Client::Claude | Client::Dsh, _) => return None,
-            (Client::Antigravity, _) => check_ps_inspect(sub, client, lang, current_cwd.as_deref())
-                .or_else(|| check_bash_inspect(sub, client, lang, current_cwd.as_deref())),
+            (Client::Antigravity | Client::Codex, _) => {
+                check_ps_inspect(sub, client, lang, current_cwd.as_deref())
+                    .or_else(|| check_bash_inspect(sub, client, lang, current_cwd.as_deref()))
+            }
         };
         if let Some(reason) =
             dump.or_else(|| check_recursive_grep(sub, client, lang, current_cwd.as_deref()))
@@ -408,7 +416,7 @@ fn check_recursive_grep(
                 "Use the built-in `grep` tool instead of raw recursive grep/rg in the shell to avoid bloating its output.",
                 "Используй встроенный инструмент `grep` вместо прямого рекурсивного grep/rg в shell, чтобы не раздувать его вывод.",
             ),
-            Client::Antigravity => t(
+            Client::Antigravity | Client::Codex => t(
                 lang,
                 "Add `-l`, `-c` or `-m 20`, or point it at a single file, instead of broad recursive `grep -r`/`rg`.",
                 "Добавь `-l`, `-c` или `-m 20` либо укажи один файл вместо широкого рекурсивного `grep -r`/`rg`, чтобы не раздувать вывод shell.",
@@ -486,7 +494,7 @@ mod tests {
         assert!(read_guard(path, Some(1), Some(200), Client::Claude, Lang::En, None).is_none());
 
         let agy_deny = read_guard(path, None, None, Client::Antigravity, Lang::En, None).unwrap();
-        assert!(agy_deny.contains("read_file"));
+        assert!(agy_deny.contains("view_file"));
         assert!(agy_deny.contains("StartLine"));
         assert!(read_guard(
             path,

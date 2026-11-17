@@ -64,6 +64,8 @@ struct SetupOpts {
     agy_file: Option<PathBuf>,
     dsh: bool,
     dsh_home: Option<PathBuf>,
+    codex: bool,
+    codex_home: Option<PathBuf>,
     hook_cmd: Option<String>,
     claude_json: Option<PathBuf>,
     skip_version_check: bool,
@@ -100,6 +102,8 @@ impl Default for SetupOpts {
             agy_file: None,
             dsh: false,
             dsh_home: None,
+            codex: false,
+            codex_home: None,
             hook_cmd: None,
             claude_json: None,
             skip_version_check: false,
@@ -138,12 +142,13 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--desktop" => opts.desktop = true,
             "--antigravity" => opts.antigravity = true,
             "--dsh" => opts.dsh = true,
+            "--codex" => opts.codex = true,
             "--skip-version-check" => opts.skip_version_check = true,
             "--no-stop-gate" => opts.no_stop_gate = true,
             "--uninstall" => opts.uninstall = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
             | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home"
-            | "--hook-cmd" | "--claude-json" | "--lang" | "--policy") => {
+            | "--codex-home" | "--hook-cmd" | "--claude-json" | "--lang" | "--policy") => {
                 let Some(val) = args.get(i + 1) else {
                     eprintln!(
                         "ERR: {}",
@@ -164,6 +169,7 @@ pub fn run_setup(args: &[String]) -> i32 {
                     "--desktop-file" => opts.desktop_file = Some(PathBuf::from(val)),
                     "--agy-file" => opts.agy_file = Some(PathBuf::from(val)),
                     "--dsh-home" => opts.dsh_home = Some(PathBuf::from(val)),
+                    "--codex-home" => opts.codex_home = Some(PathBuf::from(val)),
                     "--hook-cmd" => opts.hook_cmd = Some(val.clone()),
                     "--claude-json" => opts.claude_json = Some(PathBuf::from(val)),
                     "--policy" => match policy::parse_selection(val) {
@@ -295,6 +301,15 @@ pub fn run_setup(args: &[String]) -> i32 {
             if opts.dsh {
                 preflight_rules_file(&dsh_home_dir().join("AGENTS.md"))?;
             }
+            if opts.codex {
+                preflight_rules_file(&codex_home_dir(&opts, &home).join("AGENTS.md"))?;
+            }
+        }
+        if opts.codex {
+            let p = codex_home_dir(&opts, &home).join("hooks.json");
+            if p.exists() {
+                read_json_object(&p)?;
+            }
         }
         if opts.antigravity {
             let p = opts
@@ -417,11 +432,30 @@ pub fn run_setup(args: &[String]) -> i32 {
             if let Err(e) = upsert_claude_md(
                 &dsh_agents,
                 &dsh_backup,
-                &rules_snippet(&opts, &settings_root),
+                &other_client_rules(&opts),
                 opts.dry_run,
             ) {
                 eprintln!("ERR: {e}");
                 return 1;
+            }
+        }
+        if opts.codex {
+            let codex = codex_home_dir(&opts, &home);
+            if let Err(e) = upsert_claude_md(
+                &codex.join("AGENTS.md"),
+                &codex.join("backups"),
+                &other_client_rules(&opts),
+                opts.dry_run,
+            ) {
+                eprintln!("ERR: {e}");
+                return 1;
+            }
+            if codex.join("AGENTS.override.md").exists() {
+                say!(
+                    "  [warn] Codex reads {} instead of AGENTS.md while it exists: the rules block in AGENTS.md is not used",
+                    "  [warn] пока есть {}, Codex читает его вместо AGENTS.md: блок правил в AGENTS.md не используется",
+                    codex.join("AGENTS.override.md").display()
+                );
             }
         }
     }
@@ -489,6 +523,17 @@ pub fn run_setup(args: &[String]) -> i32 {
             .map(|cmd| format_custom_dsh_command(&cmd, opts.lang))
             .unwrap_or_else(|| format_dsh_command(&hook_bin_path, opts.lang));
         if let Err(e) = update_dsh_hooks(&dsh_home, &dsh_cmd, opts.dry_run) {
+            eprintln!("ERR: {e}");
+            return 1;
+        }
+    }
+
+    if opts.codex {
+        let cmd = match opts.lang {
+            Lang::Ru => format!("{} --codex --lang ru", hook_cmd.trim()),
+            Lang::En => format!("{} --codex", hook_cmd.trim()),
+        };
+        if let Err(e) = update_codex_hooks(&codex_home_dir(&opts, &home), &cmd, opts.dry_run) {
             eprintln!("ERR: {e}");
             return 1;
         }
@@ -1805,6 +1850,85 @@ fn update_antigravity_hooks(path: &Path, command: &str, dry_run: bool) -> Result
     write_json_if_changed(path, None, &orig, &next, dry_run, "Antigravity hooks.json")
 }
 
+/// The Codex home: `--codex-home`, else `$CODEX_HOME`, else `~/.codex` (learn.chatgpt.com/docs/hooks).
+fn codex_home_dir(opts: &SetupOpts, home: &Path) -> PathBuf {
+    opts.codex_home
+        .clone()
+        .or_else(|| env::var_os("CODEX_HOME").map(PathBuf::from))
+        .unwrap_or_else(|| home.join(".codex"))
+}
+
+/// Our groups in `<codex home>/hooks.json` (the Claude Code shape): `PreToolUse` on the shell and on `apply_patch`,
+/// `PostToolUse` on `apply_patch` (its `block` replaces the tool result with the syntax error). No `Stop`: the gate
+/// reads Claude Code transcripts. Foreign hooks stay. Codex skips a new or changed hook until it is trusted in `/hooks`.
+fn update_codex_hooks(codex_home: &Path, command: &str, dry_run: bool) -> Result<(), String> {
+    if !codex_home.exists() {
+        say!(
+            "  skip Codex (not found: {})",
+            "  Codex пропущен (не найден: {})",
+            codex_home.display()
+        );
+        return Ok(());
+    }
+    let path = codex_home.join("hooks.json");
+    let orig = read_json_object(&path)?;
+    let mut next = orig.clone();
+    let root = next.as_object_mut().ok_or_else(|| {
+        msg!(
+            "hooks.json root is not object",
+            "корень hooks.json не является объектом"
+        )
+    })?;
+    let hooks = ensure_object(root, "hooks")?;
+    upsert_claude_hook_event(
+        hooks,
+        "PreToolUse",
+        Some("Bash|apply_patch"),
+        command,
+        false,
+    );
+    upsert_claude_hook_event(hooks, "PostToolUse", Some("apply_patch"), command, false);
+    write_json_if_changed(
+        &path,
+        Some(&codex_home.join("backups")),
+        &orig,
+        &next,
+        dry_run,
+        "Codex hooks.json",
+    )?;
+    if orig != next {
+        say!(
+            "  [note] Codex runs a new or changed hook only after you trust it: open Codex, type /hooks and trust the context-toolkit hooks",
+            "  [note] Codex запускает новый или изменённый хук только после подтверждения: откройте Codex, введите /hooks и доверьте хукам context-toolkit"
+        );
+    }
+    if codex_hooks_off(&fs::read_to_string(codex_home.join("config.toml")).unwrap_or_default()) {
+        say!(
+            "  [warn] Codex hooks are turned off in config.toml ([features] hooks = false): the hooks will not run",
+            "  [warn] хуки Codex выключены в config.toml ([features] hooks = false): хуки не будут запускаться"
+        );
+    }
+    Ok(())
+}
+
+/// `[features] hooks = false` (or the old alias `codex_hooks`) in Codex's config.toml.
+fn codex_hooks_off(toml: &str) -> bool {
+    let mut section = "";
+    toml.lines().map(str::trim).any(|l| {
+        if l.starts_with('[') {
+            section = l;
+            return false;
+        }
+        let compact: String = l
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .collect();
+        section == "[features]" && matches!(compact.as_str(), "hooks=false" | "codex_hooks=false")
+    })
+}
+
 /// Our key in Antigravity's hooks.json, and its name before the rename.
 const AGY_KEY: &str = "context-toolkit";
 const AGY_OLD_KEY: &str = "ctxkit";
@@ -2279,6 +2403,22 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
             )
         }
     }
+}
+
+/// The rules block for a client other than Claude Code (`AGENTS.md` of DeepSeek Harness and Codex): no `Explore`,
+/// `checker`, advisor or Stop gate, which exist only in Claude Code; the same policy lines.
+fn other_client_rules(opts: &SetupOpts) -> String {
+    let extra = policy_lines(&opts.config, opts.lang);
+    let body = t(
+        opts.lang,
+        "## Context Discipline (Context Toolkit)\n\n\
+- Do not read long files whole: find the spot with a search first, then read a range (up to 450 lines).\n\
+- Run `context-toolkit check <cmd>` for build/test/lint when full verbose logs aren't needed.\n",
+        "## Экономия контекста (Инструменты контекста)\n\n\
+- Не читай длинные файлы целиком: сначала найди место поиском, затем читай диапазон (до 450 строк).\n\
+- Для сборок, тестов и `typecheck`, когда не нужен полный лог, запускай `context-toolkit check <cmd>`.\n",
+    );
+    format!("{MARKER_START}\n{body}{extra}{MARKER_END}")
 }
 
 /// The full rules block as `setup --with-rules` writes it with every policy on (`build_slots` 2), main
@@ -2830,6 +2970,8 @@ fn print_help() {
            --agy-file <path>      Другой путь к hooks.json Antigravity\n\
            --dsh                  Подключить Инструменты контекста в DeepSeek Harness Desktop (мост dsh-hooks-claude-code)\n\
            --dsh-home <path>      Другой домашний каталог DeepSeek Harness (по умолчанию: DSH_HOME или ~/.dsh)\n\
+           --codex                Подключить хуки Инструментов контекста в Codex (hooks.json; доверить их в Codex через /hooks)\n\
+           --codex-home <path>    Другой домашний каталог Codex (по умолчанию: CODEX_HOME или ~/.codex)\n\
            --hook-cmd <cmd>       Другая команда хука\n\
            --policy <list>        Политики <profile>/context-toolkit.json, которые проверяют хуки; включены ровно перечисленные, остальные выключены (без флага не меняются): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (через запятую; `none` выключает все). Печатает «было -> стало» по каждой политике; ключи файла, написанные вами, сохраняются; блок правил после --with-rules перечисляет включённые политики\n\
            --lang <en|ru>         Язык промптов, фрагментов, сообщений хуков и вывода setup (по умолчанию: en)\n\
@@ -2865,6 +3007,8 @@ fn print_help() {
            --agy-file <path>      Override Antigravity hooks.json path\n\
            --dsh                  Wire Context Toolkit into DeepSeek Harness Desktop (dsh-hooks-claude-code bridge)\n\
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
+           --codex                Wire Context Toolkit hooks into Codex (hooks.json; trust them in Codex with /hooks)\n\
+           --codex-home <path>    Override Codex home (default: CODEX_HOME or ~/.codex)\n\
            --hook-cmd <cmd>       Override hook command path\n\
            --policy <list>        Policies of <profile>/context-toolkit.json that hooks enforce; exactly the listed ones are on, the rest off (not changed without this flag): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (comma separated; `none` turns all off). Prints \"was -> became\" per policy; keys of the file you wrote yourself are kept; the rules block lists the policies that are on after --with-rules\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
@@ -3476,6 +3620,77 @@ mod tests {
             r"C:\Users\a\AppData\Roaming\npm\node_modules\claude.exe"
         ));
         assert!(!is_desktop_exe(""));
+    }
+
+    #[test]
+    fn codex_hooks_go_next_to_foreign_ones_and_out_again() {
+        let home = env::temp_dir().join("cg_codex_setup_test");
+        let _ = fs::remove_dir_all(&home);
+        // No Codex home: nothing is created.
+        update_codex_hooks(&home, "ctk --codex", false).unwrap();
+        assert!(!home.exists());
+
+        fs::create_dir_all(&home).unwrap();
+        let file = home.join("hooks.json");
+        let foreign = json!({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "node guard.mjs"}]}]}});
+        fs::write(&file, foreign.to_string()).unwrap();
+        update_codex_hooks(&home, "context-toolkit --codex", true).unwrap();
+        assert_eq!(
+            read_json_object(&file).unwrap(),
+            foreign,
+            "dry-run must not write"
+        );
+
+        update_codex_hooks(&home, "context-toolkit --codex", false).unwrap();
+        let once = fs::read_to_string(&file).unwrap();
+        let v: Value = serde_json::from_str(&once).unwrap();
+        let pre = v["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 2);
+        assert_eq!(pre[0]["matcher"], "Bash|apply_patch");
+        assert_eq!(pre[1], foreign["hooks"]["PreToolUse"][0]);
+        assert_eq!(v["hooks"]["PostToolUse"][0]["matcher"], "apply_patch");
+        assert!(
+            v["hooks"].get("Stop").is_none(),
+            "the gate is Claude Code only"
+        );
+        assert!(
+            pre[0]["hooks"][0].get("onFailure").is_none(),
+            "a Claude Code field"
+        );
+        update_codex_hooks(&home, "context-toolkit --codex", false).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), once, "idempotent");
+
+        uninstall::remove_codex_hooks(&home, false).unwrap();
+        assert_eq!(read_json_object(&file).unwrap(), foreign);
+        // a file that held only our hooks goes away
+        fs::remove_file(&file).unwrap();
+        update_codex_hooks(&home, "context-toolkit --codex", false).unwrap();
+        uninstall::remove_codex_hooks(&home, false).unwrap();
+        assert!(!file.exists());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn codex_hooks_off_reads_only_the_features_table() {
+        assert!(codex_hooks_off("[features]\nhooks = false\n"));
+        assert!(codex_hooks_off("[features]\ncodex_hooks=false # old\n"));
+        assert!(!codex_hooks_off("[features]\nhooks = true\n"));
+        assert!(!codex_hooks_off("[other]\nhooks = false\n"));
+        assert!(!codex_hooks_off(""));
+    }
+
+    #[test]
+    fn rules_for_other_clients_name_no_claude_only_tools() {
+        let opts = SetupOpts {
+            config: policy::parse(r#"{"policies":{"commit_hygiene":true}}"#).unwrap(),
+            ..SetupOpts::default()
+        };
+        let b = other_client_rules(&opts);
+        assert!(b.starts_with(MARKER_START) && b.ends_with(MARKER_END));
+        assert!(b.contains("context-toolkit check") && b.contains("Co-Authored-By"));
+        for w in ["Explore", "checker", "advisor", "Stop", "Read"] {
+            assert!(!b.contains(w), "{w}");
+        }
     }
 
     #[test]

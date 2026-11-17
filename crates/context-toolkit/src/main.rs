@@ -49,6 +49,9 @@ pub enum Client {
     Antigravity,
     /// DeepSeek Harness via @deepseek-ai/dsh-hooks-claude-code: Claude hook protocol, DSH tool names.
     Dsh,
+    /// Codex CLI (`~/.codex/hooks.json`): Claude hook protocol; the shell tool is `Bash` (PowerShell on Windows),
+    /// edits are `apply_patch` with the patch text in `tool_input.command`, there is no read tool and no `ask`.
+    Codex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,7 +147,7 @@ fn print_help() {
            context-toolkit report [--json]     per-day counters from Claude Code transcripts\n\
            context-toolkit check <cmd...>      run a build or test with short output\n\
            context-toolkit --version           print the version\n\n\
-         Without a subcommand it is the hook: it reads the call from stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness).\n\
+         Without a subcommand it is the hook: it reads the call from stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness, `--codex` Codex).\n\
          Formerly named ctxkit: the old name is still recognised, and `context-toolkit setup` moves an installation to the new one.",
         "Инструменты контекста {ver}: хуки и диагностика, которые держат контекст ИИ-агентов небольшим.\n\n\
          Использование:\n\
@@ -153,7 +156,7 @@ fn print_help() {
            context-toolkit report [--json]     счётчики по дням из транскриптов Claude Code\n\
            context-toolkit check <cmd...>      запустить сборку или тесты с коротким выводом\n\
            context-toolkit --version           показать версию\n\n\
-         Без подкоманды это сам хук: он читает вызов из stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness).\n\
+         Без подкоманды это сам хук: он читает вызов из stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness, `--codex` Codex).\n\
          Раньше назывались ctxkit: старое имя по-прежнему распознаётся, а `context-toolkit setup` переводит установку на новое."
     );
 }
@@ -184,6 +187,7 @@ fn main() {
             "--agy" => forced_client = Some(Client::Antigravity),
             "--claude" => forced_client = Some(Client::Claude),
             "--dsh" => forced_client = Some(Client::Dsh),
+            "--codex" => forced_client = Some(Client::Codex),
             "--post" => forced_post = true,
             _ => {}
         }
@@ -258,7 +262,9 @@ fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
 
     match client {
         Client::Antigravity => handle_antigravity(&call, forced_post, lang),
-        Client::Claude | Client::Dsh => handle_claude(&call, forced_post, lang, client),
+        Client::Claude | Client::Dsh | Client::Codex => {
+            handle_claude(&call, forced_post, lang, client)
+        }
     }
 }
 
@@ -268,10 +274,14 @@ fn handle_antigravity(call: &Value, forced_post: bool, lang: Lang) {
         return;
     }
 
-    let cwd: Option<PathBuf> = call.get("cwd").and_then(|v| v.as_str()).map(PathBuf::from);
     let tc = &call["toolCall"];
     let tool = tc["name"].as_str().unwrap_or("");
     let args = &tc["args"];
+    // The payload has no `cwd` (antigravity.google/docs/hooks): a command runs in its `Cwd`, else the first workspace.
+    let cwd: Option<PathBuf> = [&call["cwd"], &args["Cwd"], &call["workspacePaths"][0]]
+        .into_iter()
+        .find_map(|v| v.as_str().filter(|s| !s.is_empty()))
+        .map(PathBuf::from);
 
     let reason = match tool {
         "read_file" => {
@@ -377,8 +387,19 @@ fn claude_tool_name(tool: &str, client: Client) -> &str {
         (Client::Dsh, "apply_patch") => "apply_patch",
         (Client::Dsh, "bash") => "Bash",
         (Client::Dsh, "pwsh") => "PowerShell",
+        // Codex names its shell `Bash` on every system (PowerShell runs it on Windows): checked like
+        // Antigravity's `run_command`, in both dialects.
+        (Client::Codex, "Bash") => "run_command",
         _ => tool,
     }
+}
+
+/// The text of an `apply_patch` call: `input` (DeepSeek Harness), `patch`, or `command` (Codex).
+fn patch_text(input: &Value) -> &str {
+    ["input", "patch", "command"]
+        .into_iter()
+        .find_map(|k| input[k].as_str())
+        .unwrap_or("")
 }
 
 fn extract_patch_files(input: &Value) -> Vec<String> {
@@ -388,10 +409,7 @@ fn extract_patch_files(input: &Value) -> Vec<String> {
             files.push(path.to_string());
         }
     }
-    let patch_text = input["input"]
-        .as_str()
-        .or_else(|| input["patch"].as_str())
-        .unwrap_or("");
+    let patch_text = patch_text(input);
     for line in patch_text.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed
@@ -446,7 +464,7 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
 
         for path in files {
             if let Some(err) = backslash::post_syntax_error(&path, eff_cwd.as_deref()) {
-                let edit = if client == Client::Dsh {
+                let edit = if client == Client::Dsh || client == Client::Codex {
                     if tool == "apply_patch" {
                         "apply_patch"
                     } else {
@@ -487,38 +505,35 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
     }
 
     let path = input["file_path"].as_str().unwrap_or("");
-    let content = input["content"]
-        .as_str()
-        .or_else(|| input["new_string"].as_str())
-        .or_else(|| input["input"].as_str())
-        .or_else(|| input["patch"].as_str())
-        .unwrap_or("");
-    let command = input["command"].as_str().unwrap_or("");
+    // Codex keeps the patch of `apply_patch` in `command`: it is file content, not a shell command.
+    let (content, command) = if tool == "apply_patch" {
+        (patch_text(input), "")
+    } else {
+        let content = input["content"]
+            .as_str()
+            .or_else(|| input["new_string"].as_str())
+            .unwrap_or("");
+        (content, input["command"].as_str().unwrap_or(""))
+    };
 
     if let Some(reason) = backslash::pre_reason(tool, path, content, command, client, lang) {
         deny_claude(reason);
         return;
     }
 
-    let verdict = if tool == "Bash" || tool == "PowerShell" {
+    let verdict = if matches!(tool, "Bash" | "PowerShell" | "run_command") {
         if let Some(reason) =
             guard::shell_read_guard(tool, command, client, lang, eff_cwd.as_deref())
         {
             deny_claude(reason);
             return;
         }
-        let dialect = if tool == "PowerShell" {
-            Dialect::Ps
-        } else {
-            Dialect::Posix
+        let dialects: &[Dialect] = match tool {
+            "PowerShell" => &[Dialect::Ps],
+            "Bash" => &[Dialect::Posix],
+            _ => &[Dialect::Posix, Dialect::Ps],
         };
-        policy::shell(
-            &policy::load(),
-            command,
-            &[dialect],
-            lang,
-            eff_cwd.as_deref(),
-        )
+        policy::shell(&policy::load(), command, dialects, lang, eff_cwd.as_deref())
     } else if tool == "Write" {
         policy::write(&policy::load(), path, eff_cwd.as_deref(), lang)
     } else {
@@ -526,6 +541,8 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
     };
     match verdict {
         Some(policy::Verdict::Deny(r)) => deny_claude(r),
+        // Codex parses `ask` but does not support it: the hook run counts as failed and the call goes on anyway.
+        Some(policy::Verdict::Ask(_)) if client == Client::Codex => {}
         Some(policy::Verdict::Ask(r)) => ask_claude(r),
         None => {}
     }
