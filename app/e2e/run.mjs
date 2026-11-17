@@ -376,6 +376,9 @@ try {
   await page.keyboard.press('2')
   // a section is not drawn instantly: count with a wait, not right after the key press
   await waitFor(async () => (await page.locator('.node').count()) === 5, 'the radar must have 5 clients')
+  // a client without Doctor problems shows no warning sign, and the sign counts the same problems as the "Issues" panel
+  const radarText = await page.locator('.radar').innerText()
+  must(!radarText.includes('⚠ 0'), `the radar shows a zero warning: ${radarText}`)
   await page.keyboard.press('3')
   await waitFor(async () => (await page.locator('.pipe .hk').count()) > 0, 'no hooks in the pipeline')
   await page.keyboard.press('4')
@@ -394,11 +397,14 @@ try {
         const reach = await page.evaluate(() => {
           const wrap = document.querySelector('.tablewrap.scrollx')
           const heads = [...document.querySelectorAll('.pipe .h')]
+          const over = wrap.scrollWidth - wrap.clientWidth
           wrap.scrollLeft = wrap.scrollWidth
           const last = heads[heads.length - 1].getBoundingClientRect()
-          return { overflowX: getComputedStyle(wrap).overflowX, events: heads.length, lastRight: Math.round(last.right), wrapRight: Math.round(wrap.getBoundingClientRect().right) }
+          return { overflowX: getComputedStyle(wrap).overflowX, events: heads.length, over, lastRight: Math.round(last.right), wrapRight: Math.round(wrap.getBoundingClientRect().right) }
         })
         must(reach.overflowX === 'auto' && reach.lastRight <= reach.wrapRight + 1, `the last hooks event is unreachable: ${JSON.stringify(reach)}`)
+        // a few events share the width: no horizontal scroll (the columns once grew to the widest hook, ~450px each)
+        must(reach.over <= 0, `the hooks grid scrolls sideways at ${w}px: ${JSON.stringify(reach)}`)
         await page.evaluate(() => { document.querySelector('.tablewrap.scrollx').scrollLeft = 0 })
       }
       if (w === 1920) {
