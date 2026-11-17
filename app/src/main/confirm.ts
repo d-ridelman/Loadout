@@ -55,11 +55,22 @@ export const answerOf = (line: string): boolean | null => (line === 'loadout-con
 
 const WIDTH = 560
 
+let asking = false
+
 /**
  * Asks in a window of its own, owned by main: the page of the main window has no handle to it, so it cannot press OK for the
- * person (the property the OS message box gave). Closing the window, Esc or Cancel is a refusal.
+ * person (the property the OS message box gave). Closing the window, Esc or Cancel is a refusal. One question at a time: a page
+ * that asks again while a window is open gets a refusal, not a second window stacked on the first.
  */
 export function askConfirm(parent: BrowserWindow | null, o: Confirm, lang: string, hidden: boolean): Promise<boolean> {
+  if (asking) return Promise.resolve(false)
+  asking = true
+  return ask(parent, o, lang, hidden).finally(() => {
+    asking = false
+  })
+}
+
+function ask(parent: BrowserWindow | null, o: Confirm, lang: string, hidden: boolean): Promise<boolean> {
   return new Promise((resolve) => {
     const w = new BrowserWindow({
       // modal over the window that asked; the hidden QA window gets a plain one off screen: a modal child shown inactive off screen is

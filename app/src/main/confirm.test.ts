@@ -1,7 +1,36 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({ BrowserWindow: class {} }))
-const { answerOf, confirmHtml } = await import('./confirm')
+type Handler = (e: { message?: string }) => void
+const windows: FakeWindow[] = []
+class FakeWindow {
+  handlers: Record<string, Handler> = {}
+  closedHandler: (() => void) | null = null
+  destroyed = false
+  webContents = {
+    on: (ev: string, h: Handler) => void (this.handlers[ev] = h),
+    once: (ev: string, h: Handler) => void (this.handlers[ev] = h),
+    setWindowOpenHandler: () => {},
+    executeJavaScript: () => Promise.resolve(320),
+  }
+  constructor() {
+    windows.push(this)
+  }
+  on(ev: string, h: () => void): void {
+    if (ev === 'closed') this.closedHandler = h
+  }
+  loadURL(): Promise<void> {
+    return new Promise(() => {})
+  }
+  isDestroyed(): boolean {
+    return this.destroyed
+  }
+  close(): void {
+    this.destroyed = true
+    this.closedHandler?.()
+  }
+}
+vi.mock('electron', () => ({ BrowserWindow: FakeWindow }))
+const { answerOf, askConfirm, confirmHtml } = await import('./confirm')
 
 describe('confirm window page', () => {
   const o = { title: 'Loadout: <R2>?', message: 'Allow "this" & that?', detail: 'One <b>x</b>\n\nTwo in C:\\Users\\a&b', cancel: 'Cancel', ok: 'Enable' }
@@ -28,5 +57,19 @@ describe('confirm window page', () => {
     expect(answerOf('loadout-confirm:okay')).toBeNull()
     expect(answerOf('say loadout-confirm:ok')).toBeNull()
     expect(answerOf('')).toBeNull()
+  })
+
+  it('asks one question at a time: a second one while the first is open is refused without a window', async () => {
+    windows.length = 0
+    const first = askConfirm(null, o, 'en', false)
+    expect(await askConfirm(null, o, 'en', false)).toBe(false)
+    expect(windows).toHaveLength(1)
+    windows[0]!.handlers['console-message']!({ message: 'loadout-confirm:ok' })
+    expect(await first).toBe(true)
+    // the first answered: the next question gets its own window again
+    const third = askConfirm(null, o, 'en', false)
+    expect(windows).toHaveLength(2)
+    windows[1]!.close()
+    expect(await third).toBe(false)
   })
 })
