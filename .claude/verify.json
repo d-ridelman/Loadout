@@ -1,0 +1,30 @@
+{
+  "base": "origin/main",
+  "steps": [
+    { "name": "tools", "cmd": "node --test \"tools/*.test.mjs\"" },
+    { "name": "rust-fmt", "cmd": "cargo fmt --all -- --check" },
+    { "name": "typecheck", "cmd": "npm run typecheck", "cwd": "app" },
+    { "name": "unit", "cmd": "npx vitest run", "cwd": "app" },
+    { "name": "rust-test", "cmd": "cargo test -j 2 --workspace" },
+    { "name": "clippy", "cmd": "cargo clippy -j 2 --workspace --all-targets -- -D warnings" },
+    { "name": "ctk-guard", "cmd": "cargo build -j 2 --release -p context-toolkit && node crates/context-toolkit/tests/guard.test.mjs" },
+    { "name": "e2e", "cmd": "npm run e2e", "cwd": "app" }
+  ],
+  "release": {
+    "replace": "e2e",
+    "steps": [
+      { "name": "state-shots", "cmd": "npm run e2e", "cwd": "app", "env": { "E2E_UPDATE_SHOTS": "1" } },
+      { "name": "docs-shots", "cmd": "node e2e/docs-shots.mjs", "cwd": "app" },
+      { "name": "dist", "cmd": "npm run dist", "cwd": "app" },
+      { "name": "pack-check", "cmd": "npm run pack:check", "cwd": "app" }
+    ]
+  },
+  "rules": [
+    { "files": "^fixtures/", "run": ["rust-test", "e2e"], "why": "the fixtures' .md files are test data, not docs; the window reads the fixtures" },
+    { "files": "^(docs|state|mockup)/|[.]md$|^LICENSE|^[.]gitignore$", "run": [] },
+    { "files": "^tools/|^[.]claude/(gates|verify|settings)[.]json$", "run": ["tools"] },
+    { "files": "^crates/context-toolkit/|^Cargo[.](toml|lock)$", "run": ["rust-fmt", "rust-test", "clippy", "ctk-guard", "e2e"], "why": "a dependency update reaches the hook binary too" },
+    { "files": "^crates/", "run": ["rust-fmt", "rust-test", "clippy", "e2e"], "why": "the window runs the core" },
+    { "files": "^app/(src|e2e|scripts|build)/|^app/(package(-lock)?|tsconfig)[.]json$|^app/electron[.]vite[.]config[.]ts$", "run": ["typecheck", "unit", "e2e"] }
+  ]
+}

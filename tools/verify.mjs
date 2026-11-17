@@ -1,75 +1,93 @@
 // Verify a change: run only the checks the changed files need, cheapest first, stop at the first red one.
-//   node tools/verify.mjs            checks picked by the files changed against origin/main (or the last commit when the tree is clean)
-//   node tools/verify.mjs --all      every check except packaging
-//   node tools/verify.mjs --release  everything, plus the committed screenshots, the README screenshots, the installer and its check
+// Knows nothing of the project: the checks and the rules are in .claude/verify.json.
+//   node tools/verify.mjs            checks picked by the files changed against the base branch (or the last commit when the tree is clean)
+//   node tools/verify.mjs --all      every check
+//   node tools/verify.mjs --release  every check, with the release steps
 //   node tools/verify.mjs --dry      print what would run and why
-// One run at a time per working copy: a second one exits with code 3 (two e2e runs share a profile and lock the bundled binaries).
+//   node tools/verify.mjs --history 100   how the rules treat the last 100 commits: {"none","part","all"}
+// Needs Node.js 22 or newer.
+// One run at a time per working copy (exit 3 otherwise). A green run marks the change gates passed (tools/gate.mjs).
+//
+// .claude/verify.json
+//   { "base": "origin/main",
+//     "steps":   [{ "name": "unit", "cmd": "npm test", "cwd": "app", "env": { "X": "1" } }, …],   in run order, cheapest first
+//     "release": { "replace": "e2e", "steps": [ … ] },                                           optional: what --release adds
+//     "rules":   [{ "files": "^docs/|[.]md$", "run": [] }, { "files": "^src/", "run": ["unit", "e2e"] }, …] }
+//   The first rule whose regex matches a path decides; "run": "all" means every step; a path no rule matches gets every step.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { uptime } from 'node:os';
-import { load, signature, stamp } from './gate.mjs';
-
-/** Signatures of the change gates before a run (tools/gate.mjs): a green run marks them passed, as `gate.mjs run` would. */
-export const before = (root) => load(root).map((gate) => ({ gate, sig: signature(root, gate) }));
-/** Mark the gates whose files did not change during the run; returns the names marked. */
-export const passGates = (root, sigs) => sigs.filter(({ gate, sig }) => signature(root, gate) === sig).map(({ gate, sig }) => (stamp(root, gate, sig), gate.name));
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { load, marks, runsVerify, signature, stamp } from './gate.mjs';
 
-/** The checks in the order they run: cheap ones first, so a typo never waits for the window. */
-export const STEPS = [
-  { name: 'tools', cmd: 'node --test "tools/*.test.mjs"' },
-  { name: 'rust-fmt', cmd: 'cargo fmt --all -- --check' },
-  { name: 'typecheck', cmd: 'npm run typecheck', cwd: 'app' },
-  { name: 'unit', cmd: 'npx vitest run', cwd: 'app' },
-  { name: 'rust-test', cmd: 'cargo test -j 2 --workspace' },
-  { name: 'clippy', cmd: 'cargo clippy -j 2 --workspace --all-targets -- -D warnings' },
-  // the hook binary end to end, on a release build of its own
-  { name: 'ctk-guard', cmd: 'cargo build -j 2 --release -p context-toolkit && node crates/context-toolkit/tests/guard.test.mjs' },
-  { name: 'e2e', cmd: 'npm run e2e', cwd: 'app' },
-];
-const RELEASE = [
-  { name: 'state-shots', cmd: 'npm run e2e', cwd: 'app', env: { E2E_UPDATE_SHOTS: '1' } },
-  { name: 'docs-shots', cmd: 'node e2e/docs-shots.mjs', cwd: 'app' },
-  { name: 'dist', cmd: 'npm run dist', cwd: 'app' },
-  { name: 'pack-check', cmd: 'npm run pack:check', cwd: 'app' },
-];
-const ALL = STEPS.map((s) => s.name);
-const RUST = ['rust-fmt', 'rust-test', 'clippy'];
-const WINDOW = ['typecheck', 'unit', 'e2e'];
+export const config = (root) => JSON.parse(readFileSync(join(root, '.claude', 'verify.json'), 'utf8'));
 
-/** Which checks a changed path needs. Unknown paths get everything: the rules err on the side of more. */
-export function needs(path) {
-  const p = path.replace(/\\/g, '/');
-  // fixtures first: their .md files (agents, skills) are test data, not docs
-  if (/^fixtures\//.test(p)) return ['rust-test', 'e2e'];
-  if (/^(docs\/|state\/|mockup\/)|\.md$|^LICENSE|^\.gitignore$/.test(p)) return [];
-  if (/^tools\//.test(p) || p === '.claude/gates.json' || p === '.claude/settings.json') return ['tools'];
-  // the window runs the core and reads the fixtures, so the core and the fixtures need the window checks too
-  // a dependency update (root Cargo.*) reaches the hook binary too
-  if (/^(crates\/context-toolkit\/|Cargo\.(toml|lock)$)/.test(p)) return [...RUST, 'ctk-guard', 'e2e'];
-  if (/^(crates\/|Cargo\.(toml|lock)$)/.test(p)) return [...RUST, 'e2e'];
-  if (/^app\/(src|e2e|scripts|build)\//.test(p) || /^app\/(package(-lock)?\.json|tsconfig\.json|electron\.vite\.config\.ts)$/.test(p)) return WINDOW;
-  return ALL;
+/** Mistakes in the config that would quietly run less: an unknown step name, a release that replaces nothing, a bad regex. */
+export function problems(cfg) {
+  const out = []; const names = new Set((cfg.steps ?? []).map((s) => s.name));
+  if (!names.size) out.push('no steps');
+  for (const s of [...(cfg.steps ?? []), ...(cfg.release?.steps ?? [])]) if (!s.name || !s.cmd) out.push(`a step without a name or a cmd: ${JSON.stringify(s)}`);
+  for (const r of cfg.rules ?? []) {
+    if (typeof r.files !== 'string' || !r.files) { out.push(`a rule without "files": ${JSON.stringify(r)}`); continue; }
+    try { new RegExp(r.files); } catch { out.push(`rule "${r.files}": not a regex`); }
+    if (r.run !== 'all' && !Array.isArray(r.run)) out.push(`rule "${r.files}": run must be a list of step names or "all"`);
+    for (const n of Array.isArray(r.run) ? r.run : []) if (!names.has(n)) out.push(`rule "${r.files}": no step named "${n}"`);
+  }
+  if (cfg.release?.replace && !names.has(cfg.release.replace)) out.push(`release.replace: no step named "${cfg.release.replace}"`);
+  return out;
 }
 
-/** The checks for a set of changed paths, in run order. */
-export const pick = (paths) => {
-  const want = new Set(paths.flatMap(needs));
-  return STEPS.filter((s) => want.has(s.name));
+/** The step names a changed path needs under the config's rules. */
+export function needs(path, cfg) {
+  const p = path.replace(/\\/g, '/');
+  const rule = (cfg.rules ?? []).find((r) => new RegExp(r.files).test(p));
+  const all = cfg.steps.map((s) => s.name);
+  return !rule || rule.run === 'all' ? all : rule.run;
+}
+
+/** The steps for a set of changed paths, in run order, each once. */
+export const pick = (paths, cfg) => {
+  const want = new Set(paths.flatMap((p) => needs(p, cfg)));
+  return cfg.steps.filter((s) => want.has(s.name));
 };
+
+/** Every step, with the release steps when asked: they replace the step named in `release.replace`, or go last. */
+export function everything(cfg, release) {
+  const steps = [...cfg.steps];
+  if (!release || !cfg.release) return steps;
+  const at = steps.findIndex((s) => s.name === cfg.release.replace);
+  if (at < 0) steps.push(...cfg.release.steps); else steps.splice(at, 1, ...cfg.release.steps);
+  return steps;
+}
 
 const git = (root, args) => execFileSync('git', ['-c', 'core.quotepath=off', ...args], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split('\n').filter(Boolean);
 const tryGit = (root, args) => { try { return git(root, args); } catch { return []; } };
 
-/** Files changed against origin/main: committed on this branch, staged, unstaged and new; on a clean tree that matches main, the last commit. */
-export function changed(root) {
-  const base = tryGit(root, ['merge-base', 'HEAD', 'origin/main'])[0] ?? 'HEAD';
-  const files = new Set([...tryGit(root, ['diff', '--name-only', base]), ...tryGit(root, ['ls-files', '-o', '--exclude-standard'])]);
+/** Files changed against the base: committed on this branch, staged, unstaged and new; on a clean tree that matches the base, the last commit. */
+export function changed(root, base = 'origin/main') {
+  const from = tryGit(root, ['merge-base', 'HEAD', base])[0] ?? 'HEAD';
+  // `--relative`: paths from the project root, and only the project's own, when it is a package of a monorepo
+  const files = new Set([...tryGit(root, ['diff', '--name-only', '--relative', from]), ...tryGit(root, ['ls-files', '-o', '--exclude-standard'])]);
   // the last commit against its first parent (a merge too); the very first commit has none, so it is shown against nothing
-  if (!files.size) for (const f of tryGit(root, ['rev-parse', '-q', '--verify', 'HEAD~1']).length ? tryGit(root, ['diff', '--name-only', 'HEAD~1', 'HEAD']) : tryGit(root, ['show', '--name-only', '--format=', 'HEAD'])) files.add(f);
+  if (!files.size) for (const f of tryGit(root, ['rev-parse', '-q', '--verify', 'HEAD~1']).length ? tryGit(root, ['diff', '--name-only', '--relative', 'HEAD~1', 'HEAD']) : tryGit(root, ['show', '--name-only', '--relative', '--format=', 'HEAD'])) files.add(f);
   return [...files].sort();
 }
+
+/** How the rules would have treated the last `n` commits (merges left out): how many need nothing, some checks, or all. */
+export function history(root, cfg, n = 100) {
+  const tally = { none: 0, part: 0, all: 0 };
+  for (const sha of tryGit(root, ['log', '--no-merges', `-${n}`, '--format=%h', '--relative', '--', '.'])) {
+    const k = pick(tryGit(root, ['show', '--name-only', '--relative', '--format=', sha]), cfg).length;
+    tally[k === 0 ? 'none' : k === cfg.steps.length ? 'all' : 'part']++;
+  }
+  return tally;
+}
+
+/** Signatures of the change gates that run verify, before a run: a green run marks them passed. */
+export const before = (root) => load(root).filter(runsVerify).map((gate) => ({ gate, sig: signature(root, gate) }));
+/** Mark the gates whose files did not change during the run; returns the names marked. */
+export const passGates = (root, sigs) => sigs.filter(({ gate, sig }) => signature(root, gate) === sig).map(({ gate, sig }) => (stamp(root, gate, sig), gate.name));
 
 const gitDir = (root) => { const d = git(root, ['rev-parse', '--git-dir'])[0]; return isAbsolute(d) ? d : resolve(root, d); };
 /** The lock's run is still going: a real pid (not 0, not empty) that answers, written after this boot. */
@@ -87,19 +105,24 @@ const held = (lock) => {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const root = resolve(import.meta.dirname, '..');
-  const flags = new Set(process.argv.slice(2));
+  const cfg = config(root);
+  const base = cfg.base ?? 'origin/main';
+  const args = process.argv.slice(2); const flags = new Set(args);
+  const bad = problems(cfg);
+  if (bad.length) { console.error(`.claude/verify.json:\n- ${bad.join('\n- ')}`); process.exit(2); }
+  if (flags.has('--history')) { console.log(JSON.stringify(history(root, cfg, Number(args[args.indexOf('--history') + 1]) || 100))); process.exit(0); }
+  const full = flags.has('--all') || flags.has('--release');
   // signatures first: a file edited while the checks are being picked must not be marked as checked
   const sigs = flags.has('--dry') ? [] : before(root);
-  const files = changed(root);
-  // without origin/main the branch's own commits are not in `files`: only a full run may mark the gate then
-  const mayPass = flags.has('--all') || flags.has('--release') || tryGit(root, ['rev-parse', '-q', '--verify', 'origin/main']).length > 0;
-  const steps = flags.has('--all') || flags.has('--release') ? [...STEPS] : pick(files);
-  // the release refreshes state/ with its own e2e run: one run is enough
-  if (flags.has('--release')) steps.splice(steps.findIndex((s) => s.name === 'e2e'), 1, ...RELEASE);
+  const files = changed(root, base);
+  // without the base branch the branch's own commits are not in `files`: only a full run may mark the gate then
+  const mayPass = full || tryGit(root, ['rev-parse', '-q', '--verify', base]).length > 0;
+  const steps = full ? everything(cfg, flags.has('--release')) : pick(files, cfg);
   console.log(`changed files: ${files.length}${files.length ? ` (${files.slice(0, 8).join(', ')}${files.length > 8 ? ', …' : ''})` : ''}`);
   console.log(`checks: ${steps.map((s) => s.name).join(', ') || 'none needed'}`);
   if (flags.has('--dry')) process.exit(0);
-  if (!steps.length) { if (mayPass) passGates(root, sigs); process.exit(0); }
+  const say = (marked) => (!sigs.length ? '' : marked.length ? ` (gate passed: ${marked.join(', ')})` : mayPass ? '; files changed during the run, run it again to pass the gate' : `; no ${base}, so the gate is passed only by --all`);
+  if (!steps.length) { console.log(`OK: nothing to check${say(mayPass ? passGates(root, sigs) : [])}`); process.exit(0); }
 
   const lock = join(gitDir(root), 'verify.lock');
   if (existsSync(lock) && !held(lock)) rmSync(lock, { force: true });
@@ -108,6 +131,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     console.error(`another verify run is in progress (${lock}); wait for it, or stop it and delete the lock`);
     process.exit(3);
   }
+  // the gates' checks are «running» meanwhile: the Stop hook lets a turn end while verify works in the background
+  const flag = (gate) => join(marks(root), gate.name + '.running');
+  for (const { gate } of sigs) { mkdirSync(marks(root), { recursive: true }); writeFileSync(flag(gate), String(process.pid)); }
   const rows = [];
   let code = 0;
   try {
@@ -118,13 +144,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
       rows.push(`${s.name.padEnd(12)} ${String(Math.round((Date.now() - started) / 1000)).padStart(4)} s  ${rc === 0 ? 'ok' : `FAILED (${rc})`}`);
       if (rc !== 0) { code = rc; break; }
     }
-  } finally { rmSync(lock, { force: true }); }
-  console.log(`\n${rows.join('\n')}`);
-  if (code) console.log(`\nFAILED: fix the cause, not the check; after 3 rounds on the same failure, stop and ask a person.`);
-  else {
-    const marked = mayPass ? passGates(root, sigs) : [];
-    const note = marked.length ? ` (gate passed: ${marked.join(', ')})` : mayPass ? '; files changed during the run, run it again to pass the gate' : '; no origin/main, so the gate is passed only by --all';
-    console.log(`\nOK: verified${note}`);
+  } finally {
+    rmSync(lock, { force: true });
+    for (const { gate } of sigs) rmSync(flag(gate), { force: true });
   }
+  console.log(`\n${rows.join('\n')}`);
+  if (code) console.log('\nFAILED: fix the cause, not the check; after 3 rounds on the same failure, stop and ask a person.');
+  else console.log(`\nOK: verified${say(mayPass ? passGates(root, sigs) : [])}`);
   process.exit(code);
 }

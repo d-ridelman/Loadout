@@ -21,7 +21,7 @@ If `app/node_modules/electron/dist/electron.exe` is missing after `npm ci` (npm 
 
 ## Before you push
 
-The quick way: `node tools/verify.mjs` runs only the checks your changed files need, cheapest first, and stops at the first red one (`--dry` shows the plan, `--all` runs everything, `--release` adds the screenshots, the installer and its check). The rules are in `tools/verify.mjs` and tested in `tools/verify.test.mjs`.
+The quick way: `node tools/verify.mjs` runs only the checks your changed files need, cheapest first, and stops at the first red one (`--dry` shows the plan, `--all` runs everything, `--release` adds the screenshots, the installer and its check). The checks and the rules are in `.claude/verify.json` and tested in `tools/verify-rules.test.mjs`.
 
 All of these must pass:
 

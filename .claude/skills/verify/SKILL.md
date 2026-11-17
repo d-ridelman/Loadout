@@ -12,7 +12,7 @@ node tools/verify.mjs --all      # every check except packaging
 node tools/verify.mjs --release  # everything, plus state/ screenshots, README screenshots, the installer and pack:check
 ```
 
-What runs for which files (`tools/verify.mjs`, rules tested in `tools/verify.test.mjs`):
+What runs for which files (`.claude/verify.json`, rules tested in `tools/verify-rules.test.mjs`):
 
 | Changed | Checks |
 |---|---|
@@ -20,7 +20,7 @@ What runs for which files (`tools/verify.mjs`, rules tested in `tools/verify.tes
 | `crates/context-toolkit/` | the same, plus the hook binary end to end (`tests/guard.test.mjs`) |
 | `fixtures/` | cargo test, e2e |
 | `app/src`, `app/e2e`, `app/scripts`, app config | typecheck, vitest, e2e |
-| `tools/`, `.claude/gates.json` | `node --test` of tools |
+| `tools/`, `.claude/{gates,verify,settings}.json` | `node --test` of tools |
 | docs, `*.md`, `state/`, `mockup/` | nothing |
 | anything else | everything |
 

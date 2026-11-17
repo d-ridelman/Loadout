@@ -5,17 +5,36 @@
 //   node tools/gate.mjs run <name>…   runs the gates' commands one after another; green and the files untouched meanwhile — passed
 //   node tools/gate.mjs status        which gates are passed for the files as they are now
 // Mode "observe" (the default for a new gate): the hook only logs what it would have blocked to <git-dir>/gates/observe.log.
-import { appendFileSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+// The project may sit in a subdirectory of its repository (a monorepo): its root is where .claude/gates.json is.
+// Needs Node.js 22 or newer.
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const config = (root) => { try { return JSON.parse(readFileSync(join(root, '.claude', 'gates.json'), 'utf8')); } catch { return {}; } };
 export const load = (root) => config(root).gates ?? [];
 /** "enforce" blocks the turn; anything else only observes. */
 export const mode = (root) => (config(root).mode === 'enforce' ? 'enforce' : 'observe');
-export const marks = (root) => { const dir = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: root, encoding: 'utf8' }).trim(); return join(isAbsolute(dir) ? dir : resolve(root, dir), 'gates'); };
+const gitOut = (root, args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+/** The project root for a directory: the nearest one up that has .claude/gates.json, not above its repository (a worktree nested in
+ *  another checkout must not borrow that checkout's gates), or null. */
+export function projectRoot(dir) {
+  let top = null; try { top = resolve(gitOut(dir, ['rev-parse', '--show-toplevel'])); } catch { /* not a repository */ }
+  for (let d = resolve(dir); ; d = dirname(d)) {
+    if (existsSync(join(d, '.claude', 'gates.json'))) return d;
+    if (dirname(d) === d || (top && d.toLowerCase() === top.toLowerCase())) return null;
+  }
+}
+/** Where the marks live: the git directory (never committed, one per worktree), one folder per project of a monorepo. */
+export const marks = (root) => {
+  const dir = gitOut(root, ['rev-parse', '--git-dir']); const prefix = gitOut(root, ['rev-parse', '--show-prefix']).replace(/[\\/]+$/, '');
+  return join(isAbsolute(dir) ? dir : resolve(root, dir), 'gates', ...(prefix ? [prefix.replace(/[\\/]/g, '__')] : []));
+};
+/** The gate's command is the verify tool alone (flags allowed), which marks the gate itself: it knows when a pass is honest.
+ *  A compound command (`verify && more`) is an ordinary gate: only `gate.mjs run` marks it, and only when all of it is green. */
+export const runsVerify = (gate) => /^node\s+(\S*\/)?tools\/verify\.mjs(\s+--[\w-]+)*$/.test((gate.run ?? '').trim());
 /** The gate's files as they are now: tracked and new ones (ignored ones are not the project's), each with its size and time of change. */
 export function signature(root, gate) {
   const rule = new RegExp(gate.files); const sum = createHash('sha1');
@@ -27,8 +46,10 @@ export function stamp(root, gate, sig) { mkdirSync(marks(root), { recursive: tru
 const passed = (root, gate) => { try { return JSON.parse(readFileSync(join(marks(root), gate.name + '.json'), 'utf8')); } catch { return null; } };
 /** The gates not passed for the files as they are now. */
 export const stale = (root, gates = load(root)) => gates.filter((gate) => passed(root, gate)?.sig !== signature(root, gate));
-/** A check of the gate is under way (started within the last hour): the turn may end to wait for it. */
-export const running = (root, gates = load(root)) => new Set(gates.filter((gate) => { try { return Date.now() - statSync(join(marks(root), gate.name + '.running')).mtimeMs < 3600_000; } catch { return false; } }).map((gate) => gate.name));
+/** A check of the gate is under way: its flag names a process that is alive (a killed run leaves a flag with a dead pid). */
+export const running = (root, gates = load(root)) => new Set(gates.filter((gate) => {
+  try { const pid = Number(readFileSync(join(marks(root), gate.name + '.running'), 'utf8')); if (!(pid > 0)) return false; process.kill(pid, 0); return true; } catch { return false; }
+}).map((gate) => gate.name));
 
 /** The newest change time among the gate's files (0 when it has none). */
 export function newest(root, gate) {
@@ -57,10 +78,12 @@ export function touched(lines, gate, root, since = Infinity) {
   return shell && newest(root, gate) > since;
 }
 /** What the Stop hook answers. again: the turn was already sent back once for this stop. */
-export function verdict({ stale, touched, running, again }) {
+export function verdict({ stale, touched, running, again, root }) {
   const open = stale.filter((gate) => touched.has(gate.name) && !running.has(gate.name)); if (!open.length || again) return null;
+  // an absolute path when the root is known: the session may stand outside the project (the root of a monorepo)
+  const tool = root ? `"${join(root, 'tools', 'gate.mjs').replace(/\\/g, '/')}"` : 'tools/gate.mjs';
   return { decision: 'block', reason: 'Change gate: files changed in this session, and their check has not passed green since the last edit.\n'
-    + open.map((gate) => `- "${gate.name}": ${gate.why ?? 'check of ' + gate.files}. Run: node tools/gate.mjs run ${gate.name}`).join('\n')
+    + open.map((gate) => `- "${gate.name}": ${gate.why ?? 'check of ' + gate.files}. Run: node ${tool} run ${gate.name}`).join('\n')
     + '\nRed: fix the cause and repeat (never weaken the check). A long check may run in the background: the turn may end while it runs. A defect a person found: first a general check of its class, then the fix.' };
 }
 /** Observe mode: log what would have been blocked, block nothing. */
@@ -71,23 +94,27 @@ export function observe(root, out) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  const root = process.env.CLAUDE_PROJECT_DIR || process.cwd(); const [command] = process.argv.slice(2); const gates = load(root);
+  // the project this script belongs to (tools/..): not CLAUDE_PROJECT_DIR, which in a worktree may name the main checkout
+  const root = resolve(import.meta.dirname, '..'); const [command] = process.argv.slice(2); const gates = load(root);
   if (command === 'status') { const open = new Set(stale(root, gates).map((g) => g.name)); for (const gate of gates) console.log(`${open.has(gate.name) ? 'not passed' : 'passed    '}  ${gate.name}  ${gate.run}`); console.log(`mode: ${mode(root)}`); process.exit(open.size ? 1 : 0); }
   const chosen = process.argv.slice(3).map((n) => gates.find((g) => g.name === n));
   if (command !== 'run' || !chosen.length || chosen.some((g) => !g)) { console.error(`node tools/gate.mjs run <${gates.map((g) => g.name).join('|') || 'name'}> | status`); process.exit(2); }
   mkdirSync(marks(root), { recursive: true }); const flag = (gate) => join(marks(root), gate.name + '.running');
   // Every chosen gate is «running» from the start: one waiting for its turn must not hold the agent's stop.
-  for (const gate of chosen) writeFileSync(flag(gate), String(process.pid));
+  // A verify gate's flag belongs to verify itself: a second verify that exits at once must not wipe the flag of the one running.
+  const own = chosen.filter((gate) => !runsVerify(gate));
+  for (const gate of own) writeFileSync(flag(gate), String(process.pid));
   let failed = 0;
   try {
     for (const gate of chosen) {
       const before = signature(root, gate); let code = 1;
-      try { code = spawnSync(gate.run, { cwd: root, shell: true, stdio: 'inherit' }).status ?? 1; } finally { rmSync(flag(gate), { force: true }); }
+      try { code = spawnSync(gate.run, { cwd: root, shell: true, stdio: 'inherit' }).status ?? 1; } finally { if (own.includes(gate)) rmSync(flag(gate), { force: true }); }
       if (code !== 0) { console.error(`Gate "${gate.name}" not passed: the check ended with code ${code}.`); failed = code; continue; }
       // Files changed while the check ran: it checked something else.
       if (signature(root, gate) !== before) { console.error(`Gate "${gate.name}" not passed: files changed while the check ran. Repeat it.`); failed = 4; continue; }
+      if (runsVerify(gate)) continue; // verify has said itself whether it passed the gate
       stamp(root, gate, before); console.log(`Gate "${gate.name}" passed.`);
     }
-  } finally { for (const gate of chosen) rmSync(flag(gate), { force: true }); }
+  } finally { for (const gate of own) rmSync(flag(gate), { force: true }); }
   process.exit(failed);
 }

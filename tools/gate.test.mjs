@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { marks, signature, stamp, stale, touched, verdict } from './gate.mjs';
+import { marks, projectRoot, running, runsVerify, signature, stamp, stale, touched, verdict } from './gate.mjs';
 
 const repo = async () => {
   const root = await mkdtemp(join(tmpdir(), 'gate-')); execFileSync('git', ['init', '-q'], { cwd: root });
@@ -82,9 +82,63 @@ test('the hook blocks in enforce mode and only logs in observe mode', async () =
     await mkdir(join(root, '.claude'));
     await writeFile(join(root, '.claude', 'gates.json'), JSON.stringify({ mode: 'enforce', gates: [ui] }));
     assert.match(run(), /"decision":"block"/, 'enforce blocks');
+    const sub = join(root, 'app');
+    const fromSub = spawnSync(process.execPath, [hook], { input: JSON.stringify({ transcript_path: transcript, cwd: sub }), env: { ...process.env, CLAUDE_PROJECT_DIR: tmpdir() }, encoding: 'utf8' }).stdout;
+    assert.match(fromSub, /"decision":"block"/, 'the working copy is found from the session cwd, not from CLAUDE_PROJECT_DIR');
+    const away = spawnSync(process.execPath, [hook], { input: JSON.stringify({ transcript_path: transcript, cwd: tmpdir() }), env: { ...process.env, CLAUDE_PROJECT_DIR: root }, encoding: 'utf8' }).stdout;
+    assert.match(away, /"decision":"block"/, 'a session that went elsewhere falls back to the project it started in');
     await writeFile(join(root, '.claude', 'gates.json'), JSON.stringify({ gates: [ui] }));
     assert.equal(run(), '', 'observe (the default) prints nothing');
     const log = join(marks(root), 'observe.log');
     assert.ok(existsSync(log) && readFileSync(log, 'utf8').includes('"ui"'), 'and logs what it would have blocked');
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('only verify alone marks its own gate; a compound command is an ordinary gate', () => {
+  assert.equal(runsVerify({ run: 'node tools/verify.mjs' }), true);
+  assert.equal(runsVerify({ run: 'node tools/verify.mjs --all' }), true);
+  assert.equal(runsVerify({ run: 'node tools/verify.mjs && node -e process.exit(5)' }), false);
+  assert.equal(runsVerify({ run: 'npm test' }), false);
+});
+
+test('a check is running only while its process is alive', async () => {
+  const root = await repo();
+  try {
+    await mkdir(marks(root), { recursive: true });
+    await writeFile(join(marks(root), 'ui.running'), String(process.pid));
+    assert.deepEqual([...running(root, [ui])], ['ui'], 'a live pid');
+    await writeFile(join(marks(root), 'ui.running'), '999999');
+    assert.deepEqual([...running(root, [ui])], [], 'a killed run leaves a dead pid');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('the project is never looked for above its repository', async () => {
+  const outer = await repo();
+  try {
+    await mkdir(join(outer, '.claude')); await writeFile(join(outer, '.claude', 'gates.json'), JSON.stringify({ gates: [ui] }));
+    const inner = join(outer, 'nested'); await mkdir(inner); execFileSync('git', ['init', '-q'], { cwd: inner });
+    assert.equal(projectRoot(inner), null, 'a repository nested in another checkout does not borrow its gates');
+    assert.equal(projectRoot(join(outer, 'app')), outer);
+  } finally { await rm(outer, { recursive: true, force: true }); }
+});
+
+test('the message names the gate tool by its full path when the root is known', () => {
+  const out = verdict({ stale: [ui], touched: new Set(['ui']), running: new Set(), again: false, root: join('D:', 'mono', 'pkg') });
+  assert.match(out.reason, /node "D:\/mono\/pkg\/tools\/gate\.mjs" run ui/);
+});
+
+test('a package of a monorepo is its own project, with its own marks', async () => {
+  const mono = await repo();
+  try {
+    const pkg = join(mono, 'pkg');
+    await mkdir(join(pkg, '.claude'), { recursive: true }); await mkdir(join(pkg, 'app'));
+    await writeFile(join(pkg, 'app', 'a.css'), 'a{}');
+    await writeFile(join(pkg, '.claude', 'gates.json'), JSON.stringify({ mode: 'enforce', gates: [ui] }));
+    assert.equal(projectRoot(join(pkg, 'app')), pkg, 'the nearest .claude/gates.json up');
+    assert.equal(projectRoot(join(mono, 'src')), null, 'no project for the rest of the repository');
+    assert.notEqual(marks(pkg), marks(mono), 'marks of a package do not mix with the repository root');
+    const transcript = join(mono, 't.jsonl'); await writeFile(transcript, use('Edit', { file_path: join(pkg, 'app', 'a.css') }) + '\n');
+    const out = spawnSync(process.execPath, [join(import.meta.dirname, 'claude-stop-gate.mjs')], { input: JSON.stringify({ transcript_path: transcript, cwd: join(pkg, 'app') }), encoding: 'utf8' }).stdout;
+    assert.match(out, /"decision":"block"/, 'the hook checks the package from inside it');
+  } finally { await rm(mono, { recursive: true, force: true }); }
 });
