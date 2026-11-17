@@ -3,7 +3,15 @@
 //! safe here (loadout-ml cannot do this, its linked ONNX Runtime is built for the DLL runtime). The same file is in context-toolkit.
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
-        for lib in ["vcruntime.lib", "vcruntimed.lib", "msvcrt.lib", "msvcrtd.lib", "libucrt.lib", "libucrtd.lib", "libcmtd.lib"] {
+        for lib in [
+            "vcruntime.lib",
+            "vcruntimed.lib",
+            "msvcrt.lib",
+            "msvcrtd.lib",
+            "libucrt.lib",
+            "libucrtd.lib",
+            "libcmtd.lib",
+        ] {
             println!("cargo:rustc-link-arg-bins=/NODEFAULTLIB:{lib}");
         }
         for lib in ["libvcruntime.lib", "libcmt.lib", "ucrt.lib"] {
