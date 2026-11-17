@@ -23,7 +23,7 @@
   },
   "projects": {
     "{HOME}/work/proj": { "mcpServers": { "pm": { "command": "pm" } } },
-    "{HOME}/work/empty": {},
+    "{HOME}/work/app": {},
     "{HOME_UPPER}/work/up": { "mcpServers": { "pu": { "command": "pu" } } }
   }
 }

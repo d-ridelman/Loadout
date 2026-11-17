@@ -130,6 +130,20 @@ export function skillAlerts(notes: readonly string[]): { alerts: string[]; rest:
   return { alerts: notes.slice(1, -1), rest: [notes[0]!, notes[notes.length - 1]!] }
 }
 
+/** Risks the core flags for this write (`Plan.warn`): read before confirming, so they stand apart from the notes. */
+export function Warn({ lines }: { lines: readonly string[] }) {
+  if (lines.length === 0) return null
+  return (
+    <div className="alert-box" role="note" aria-label={t('Внимание', 'Warning')}>
+      {lines.map((n) => (
+        <p key={n}>
+          <b className="s-broken">⚠</b> {n}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 function title(p: Plan | undefined, intent: Intent): string {
   const op = p?.op ?? intent.op
   if (op === 'add') return t('Добавить MCP-сервер', 'Add MCP server')
@@ -219,6 +233,7 @@ export function PlanDialog({ entity, intent, onBack, onClose, onDone }: Props) {
         <>
           <Change file={state.plan.file} pointer={state.plan.pointer} from={state.plan.from} to={state.plan.to} />
           {state.plan.noop ? <p className="mute">{t('Запись уже в нужном состоянии, писать нечего.', 'The entry is already in the right state, nothing to write.')}</p> : null}
+          <Warn lines={state.plan.warn} />
           {state.plan.affects.length > 0 ? (
             <p className="s-stale">
               ◐ {t(
@@ -257,7 +272,7 @@ export function PlanDialog({ entity, intent, onBack, onClose, onDone }: Props) {
             </p>
           ) : null}
           <p className="mute small">
-            {state.plan.op === 'installSkill'
+            {state.plan.op === 'installSkill' || (state.plan.op === 'copy' && state.plan.kind === 'skill')
               ? t(
                   'Копия скила сохранится в бэкап операции, другие файлы не меняются. Откат — в журнале, пока скил не правили. Если источник изменится до записи, она не пройдёт.',
                   'A copy of the skill is saved in the operation backup; no other files change. Roll back from the journal while the skill is unedited. If the source changes before the write, it will not go through.',

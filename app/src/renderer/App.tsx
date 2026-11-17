@@ -13,6 +13,7 @@ import { Inspector, levelOk } from './views/Inspector'
 import { Journal } from './views/Journal'
 import { AddDialog } from './views/AddDialog'
 import { CopyDialog } from './views/CopyDialog'
+import { TransferDialog } from './views/TransferDialog'
 import { EditDialog } from './views/EditDialog'
 import { PlanDialog } from './views/PlanDialog'
 import { PluginDialog } from './views/PluginDialog'
@@ -42,6 +43,7 @@ type Flow =
   | Form
   | { type: 'plugin' }
   | { type: 'skill' }
+  | { type: 'transfer' }
 
 /** The form an intent came from, filled with it (env values stay in this state only, never saved). */
 function formOf(entity: Entity | null, intent: Intent): Form | undefined {
@@ -218,7 +220,16 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
   )
   const requestForm = useCallback(
     (type: 'edit' | 'copy', e: Entity) => {
-      if (!e.canEdit) return say(t('Эту запись править и копировать нельзя: она не в файле клиента', 'This entry cannot be edited or copied: it is not in a client file'), 'info')
+      // a plugin is never copied: its dialog only says what to do in each client, it needs no write level
+      if (type === 'copy' && e.kind === 'plugin' && e.copyWhy) return setFlow({ type, entity: e })
+      if (type === 'edit' ? !e.canEdit : !e.canCopy) {
+        return say(
+          type === 'edit'
+            ? t('Эту запись править нельзя: она не в файле клиента', 'This entry cannot be edited: it is not in a client file')
+            : t('Эту запись копировать нельзя: Loadout не знает, где она лежит целиком', 'This entry cannot be copied: Loadout does not know where it lies in full'),
+          'info',
+        )
+      }
       void ensureLevel('R2').then((ok) => ok && setFlow({ type, entity: e }))
     },
     [ensureLevel, say],
@@ -226,9 +237,10 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
 
   /** Opens a form that writes at R2, asking for the level first when it is lower. */
   const requestR2 = useCallback(
-    (type: 'add' | 'plugin' | 'skill') => void ensureLevel('R2').then((ok) => ok && setFlow({ type })),
+    (type: 'add' | 'plugin' | 'skill' | 'transfer') => void ensureLevel('R2').then((ok) => ok && setFlow({ type })),
     [ensureLevel],
   )
+  const requestTransfer = useCallback(() => requestR2('transfer'), [requestR2])
   const requestAdd = useCallback(() => requestR2('add'), [requestR2])
   const requestPlugin = useCallback(() => requestR2('plugin'), [requestR2])
   const requestSkill = useCallback(() => requestR2('skill'), [requestR2])
@@ -398,6 +410,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
       { label: t('Добавить MCP-сервер', 'Add MCP server'), hint: t('действие', 'action'), run: requestAdd },
       { label: t('Установить плагин Claude Code', 'Install Claude Code plugin'), hint: t('действие', 'action'), run: requestPlugin },
       { label: t('Установить скил из GitHub или папки', 'Install a skill from GitHub or a folder'), hint: t('действие', 'action'), run: requestSkill },
+      { label: t('Скопировать записи из другого клиента', 'Copy entries from another client'), hint: t('действие', 'action'), run: requestTransfer },
       ...(['R0', 'R1', 'R2'] as const)
         .filter((l) => l !== level)
         .map((l) => ({ label: t(`Уровень записи: ${levelLabel(l)}`, `Write level: ${levelLabel(l)}`), hint: t('действие', 'action'), run: () => void changeLevel(l) })),
@@ -475,6 +488,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
                 { name: t('MCP-сервер', 'MCP server'), sub: t('программа с инструментами для ИИ-клиента', 'a program with tools for an AI client'), run: requestAdd },
                 { name: t('Плагин Claude Code', 'Claude Code plugin'), sub: t('из маркетплейса на GitHub или из папки', 'from a marketplace on GitHub or a folder'), run: requestPlugin },
                 { name: t('Скил', 'Skill'), sub: t('инструкция для модели из GitHub или папки', 'instructions for the model from GitHub or a folder'), run: requestSkill },
+                { name: t('Из другого клиента', 'From another client'), sub: t('скилы, хуки и MCP одного клиента — другому, глобально или в проекте', 'skills, hooks and MCP of one client to another, globally or in a project'), run: requestTransfer },
               ].map((x, i) => (
                 <button
                   key={x.name}
@@ -693,6 +707,16 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
       ) : null}
       {flow?.type === 'skill' ? (
         <SkillDialog onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: null, intent })} />
+      ) : null}
+      {flow?.type === 'transfer' ? (
+        <TransferDialog
+          entities={entities}
+          onClose={closeFlow}
+          onDone={(m) => {
+            closeFlow()
+            say(m)
+          }}
+        />
       ) : null}
       {flow?.type === 'copy' ? (
         <CopyDialog entity={flow.entity} draft={flow.draft} onClose={closeFlow} onSubmit={(intent) => setFlow({ type: 'plan', entity: flow.entity, intent, back: formOf(flow.entity, intent) })} />

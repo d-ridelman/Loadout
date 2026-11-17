@@ -38,7 +38,16 @@ pub fn scan(c: &mut Ctx) {
     config(c);
     if let Some(v) = c.read_json(&c.home.join(".codex/hooks.json")) {
         if let Some(h) = v.get("hooks") {
-            scan_hooks(c, CLIENT, "~/.codex/hooks.json", "/hooks", "user", h);
+            let real = c.home.join(".codex/hooks.json");
+            scan_hooks(
+                c,
+                CLIENT,
+                "~/.codex/hooks.json",
+                "/hooks",
+                "user",
+                h,
+                Some(&real),
+            );
         }
     }
     let skills = c.home.join(".codex/skills");
@@ -113,35 +122,7 @@ fn config(c: &mut Ctx) {
         .detail(json!({ "sourceType": m.get("source_type").and_then(Value::as_str).and_then(mask::safe_version) }));
         c.push(e);
     }
-    for (name, m) in root
-        .get("mcp_servers")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flatten()
-    {
-        let state = if m.get("enabled").and_then(Value::as_bool) == Some(false) {
-            State::Off
-        } else {
-            State::On
-        };
-        let e = Entity::new(
-            CLIENT,
-            Kind::Mcp,
-            "user",
-            name.clone(),
-            state,
-            CONFIG,
-            format!("mcp_servers.{}", toml_key(name)),
-        )
-        .target(flag(&path, &["mcp_servers", name]))
-        .src(Src {
-            file: path.clone(),
-            format: Format::Toml,
-            path: vec!["mcp_servers".to_owned(), name.clone()],
-        })
-        .detail(mcp_detail(m));
-        c.push(e);
-    }
+    mcp_servers(c, &root, &path, CONFIG, "user");
     // `[apps.<id>] enabled`: the account's apps (connectors). The key is described in the Codex configuration reference;
     // `apps._default` is the default for the rest and does not count as an entry of its own.
     let default_on = root
@@ -175,6 +156,62 @@ fn config(c: &mut Ctx) {
         .target(flag(&path, &["apps", id]));
         c.push(e);
     }
+}
+
+/// `[mcp_servers.<name>]` of a parsed `config.toml` (the user one, or a project's `.codex/config.toml`).
+pub(crate) fn mcp_servers(
+    c: &mut Ctx,
+    root: &Value,
+    path: &std::path::Path,
+    shown: &str,
+    scope: &str,
+) {
+    for (name, m) in root
+        .get("mcp_servers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        let state = if m.get("enabled").and_then(Value::as_bool) == Some(false) {
+            State::Off
+        } else {
+            State::On
+        };
+        let e = Entity::new(
+            CLIENT,
+            Kind::Mcp,
+            scope,
+            name.clone(),
+            state,
+            shown,
+            format!("mcp_servers.{}", toml_key(name)),
+        )
+        .target(flag(path, &["mcp_servers", name]))
+        .src(Src {
+            file: path.to_path_buf(),
+            format: Format::Toml,
+            path: vec!["mcp_servers".to_owned(), name.clone()],
+        })
+        .detail(mcp_detail(m));
+        c.push(e);
+    }
+}
+
+/// `[projects."<path>"]` of the user `config.toml`: the project folders Codex knows and whether each is trusted.
+pub(crate) fn projects(home: &std::path::Path) -> Vec<(String, bool)> {
+    let text = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap_or_default();
+    let Ok(t) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    t.get("projects")
+        .and_then(|p| p.as_table())
+        .into_iter()
+        .flatten()
+        .map(|(k, v)| {
+            let trusted = v.get("trust_level").and_then(|x| x.as_str()) == Some("trusted");
+            (k.clone(), trusted)
+        })
+        .collect()
 }
 
 /// Cache of the remote plugin catalog: this is not a confirmed connection, just what the app has downloaded (CONCEPT.md §5.1, C0).

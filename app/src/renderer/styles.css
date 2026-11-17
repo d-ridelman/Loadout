@@ -316,6 +316,15 @@ html[data-fx='off'] .spin { animation: none; border-right-color: currentColor; o
 .catalog .pick[aria-pressed='true'] { border-color: var(--purple); background: rgba(189, 147, 249, 0.14); }
 .catalog .pick .badge { margin: 0 0 0 8px; min-width: 0; }
 .desc { display: block; margin-top: 2px; overflow-wrap: anywhere; }
+/* copying between clients (CopyDialog, TransferDialog): a refused client or entry is dimmed with its reason, which wraps as one block */
+.choices label.off { color: var(--mute); align-items: flex-start; }
+.choices label.off input { margin-top: 4px; }
+.choices.checks { max-height: 260px; overflow: auto; }
+.cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+.tfield { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.tfield select { align-self: flex-start; min-width: 260px; max-width: 100%; }
+.tlist .pitem { grid-template-columns: 1fr; align-items: start; }
+.tlist .alert-box { margin: 2px 0; }
 .choices .plist li { margin-bottom: 8px; }
 .choices .plist label { align-items: flex-start; }
 .choices .plist input[type='radio'] { margin-top: 3px; }

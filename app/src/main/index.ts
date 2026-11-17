@@ -32,8 +32,10 @@ import {
   validateJournal,
   validatePlan,
   validateProfiles,
+  validateProjects,
   validatePruned,
   validateScan,
+  PROJECT_RE,
 } from './validate'
 
 /**
@@ -526,6 +528,43 @@ void app.whenReady().then(() => {
       const sha = parseSha(batchSha)
       const n = validateName(name)
       return validateBatchApplied(await core('applyProfile', { name: n, batchSha: sha, maxLevel: grantedLevel() }))
+    })
+  })
+  // ---- copying entries to another client, globally or inside one known project (docs/TRANSFER.en.md) ----
+  ipcMain.handle('projects', (e) => {
+    guard(e)
+    return guarded(async () => validateProjects(await core('projects')))
+  })
+  ipcMain.handle('projectScan', (e, id: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      if (typeof id !== 'string' || !PROJECT_RE.test(id)) throw new Error(t('неверный номер проекта', 'invalid project id'))
+      return validateScan(await core('projectScan', { id }))
+    })
+  })
+  /** A copy batch holds copies only, each validated like a single intent. */
+  const copiesOf = (raw: unknown) => {
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > 200) throw new Error(t('неверный пакет копий', 'invalid batch of copies'))
+    return raw.map((r) => {
+      const i = validateIntent(r)
+      if (i.op !== 'copy') throw new Error(t('неверный пакет копий', 'invalid batch of copies'))
+      return i
+    })
+  }
+  ipcMain.handle('planCopies', (e, items: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      const bp = validateBatchPlan(await core('planCopies', { items: copiesOf(items) }))
+      const clients = [...new Set(bp.plans.map((p) => p.client))]
+      const running = [...new Set((await Promise.all(clients.map(runningOf))).flat())]
+      return { ...bp, running }
+    })
+  })
+  ipcMain.handle('applyCopies', (e, items: unknown, batchSha: unknown) => {
+    guard(e)
+    return guarded(async () => {
+      const sha = parseSha(batchSha)
+      return validateBatchApplied(await core('applyCopies', { items: copiesOf(items), batchSha: sha, maxLevel: grantedLevel() }))
     })
   })
   // ---- built-in Context Toolkit (CONCEPT.md §13): the binary ships with the app, the path is hardcoded ----

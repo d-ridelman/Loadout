@@ -20,6 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub mod retention;
 pub mod skill;
+pub(crate) mod transfer;
 
 pub use retention::{prune as prune_backups, Pruned};
 
@@ -94,6 +95,7 @@ fn allowed(home: &Path, file: &Path) -> bool {
         ".claude/settings.json",
         ".claude.json",
         ".codex/config.toml",
+        ".codex/hooks.json",
         "AppData/Roaming/Claude/claude_desktop_config.json",
         ".gemini/config/mcp_config.json",
         ".config/opencode/opencode.json",
@@ -112,7 +114,7 @@ fn allowed(home: &Path, file: &Path) -> bool {
                     .and_then(|r| r.strip_suffix("/cordis.patch.yml"))
                     .is_some_and(|n| !n.is_empty() && !n.contains('/') && n != "node_modules")
         });
-    fixed || patch
+    fixed || patch || transfer::project_file(home, file).is_some()
 }
 
 pub(crate) fn sha(bytes: &[u8]) -> String {
@@ -135,8 +137,15 @@ pub enum Intent {
         #[serde(default)]
         args: Vec<String>,
     },
-    /// Copy an MCP to another client (`to` is the client's short name).
-    Copy { entity: String, to: String },
+    /// Copy an MCP server, a skill or a hook to another client (`to` is the client's short name), in the same place:
+    /// a user entry to the user scope, a project entry to the same project. `project` is the opaque id of the project
+    /// the entry was found in (`projects.rs`); empty for an entry of the full scan.
+    Copy {
+        entity: String,
+        to: String,
+        #[serde(default)]
+        project: String,
+    },
     /// Add a new MCP server to a client: local (`command`, `args`, `env`) or remote (`url`).
     /// The `env` values are typed by the user; they do not reach the plan or journal, only the key names.
     Add {
@@ -201,6 +210,9 @@ pub struct Plan {
     pub affects: Vec<String>,
     /// What to know before confirming (what is not carried over, which `env` keys are copied).
     pub notes: Vec<String>,
+    /// Notes the window highlights: a risk to read before confirming (secrets landing in a project folder, a hook
+    /// that will not run until trusted).
+    pub warn: Vec<String>,
     /// Loadout trash: `out` moves the entry into it, `in` returns it from it, empty means untouched.
     /// The window picks the button label by this field, not by the text of `from`/`to` (it depends on the language).
     pub trash: String,
@@ -222,6 +234,8 @@ struct Prepared {
     trash: Option<TrashChange>,
     /// For moved and restored entries rollback is the inverse operation, not a restore of the whole file.
     inverse_enable: Option<bool>,
+    /// The file does not exist yet (`old` is empty): the write creates it, and the rollback removes it.
+    created: bool,
 }
 
 fn find<'a>(scan: &'a ScanResult, id: &str) -> Result<&'a Entity, String> {
@@ -331,6 +345,7 @@ fn plan_for(e: &Entity, op: &str, level: &str, at: (String, String), old: &[u8])
         noop: false,
         affects: Vec::new(),
         notes: Vec::new(),
+        warn: Vec::new(),
         trash: String::new(),
         base_sha: sha(old),
     }
@@ -543,6 +558,7 @@ fn prep_toggle(
                                 new: put.into_bytes(),
                                 trash,
                                 inverse_enable: Some(false),
+                                created: false,
                             });
                         }
                         let before = it.anchor.clone();
@@ -579,6 +595,7 @@ fn prep_toggle(
         new,
         trash,
         inverse_enable: inverse,
+        created: false,
     })
 }
 
@@ -662,6 +679,7 @@ fn prep_edit(
         new: new_text.into_bytes(),
         trash: None,
         inverse_enable: None,
+        created: false,
     })
 }
 
@@ -710,168 +728,6 @@ fn written_as(dest: Client, value: &Value) -> Value {
     } else {
         value.clone()
     }
-}
-
-/// An MCP entry in the target's format. What is not carried over is returned as key names.
-fn translate(v: &Value, to: Client) -> Result<(Value, Vec<String>), String> {
-    let obj = v
-        .as_object()
-        .ok_or_else(|| crate::tr!("запись не объект", "the entry is not an object"))?;
-    let mut out = serde_json::Map::new();
-    let mut skipped = Vec::new();
-    for (k, val) in obj {
-        match k.as_str() {
-            "command" | "args" | "env" | "url" => {
-                out.insert(k.clone(), val.clone());
-            }
-            "headers" | "http_headers" => {
-                let name = if to == Client::Codex {
-                    "http_headers"
-                } else {
-                    "headers"
-                };
-                out.insert(name.to_owned(), val.clone());
-            }
-            "type" => {} // derived from url
-            other => skipped.push(mask::scrub_words(other)),
-        }
-    }
-    if to == Client::ClaudeCode && out.contains_key("url") {
-        out.insert("type".to_owned(), json!("http"));
-    }
-    // an OpenCode remote server has no environment
-    if to == Client::OpenCode && !out.contains_key("command") && out.remove("env").is_some() {
-        skipped.push("env".to_owned());
-    }
-    skipped.sort();
-    Ok((Value::Object(out), skipped))
-}
-
-fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepared, String> {
-    let e = find(scan, id)?;
-    let s = e.src.clone().ok_or_else(|| {
-        crate::tr!(
-            "запись нельзя копировать: она не в файле клиента",
-            "the entry cannot be copied: it is not in a client file"
-        )
-    })?;
-    guard_file(home, &s.file)?;
-    let dest = Client::from_slug(to)
-        .ok_or_else(|| crate::tr!("неизвестный клиент-получатель", "unknown target client"))?;
-    if dest == e.client {
-        return Err(crate::tr!(
-            "получатель совпадает с источником",
-            "the target is the same as the source"
-        ));
-    }
-    let (file, format, root) = client_target(home, dest).ok_or_else(|| {
-        crate::tr!(
-            "в этого клиента копировать нельзя: формат файла не поддержан",
-            "copying into this client is not possible: the file format is not supported"
-        )
-    })?;
-    guard_file(home, &file)?;
-    let key = s.path.last().ok_or_else(empty_path)?.clone();
-    if mask::safe_name(&key).is_none() {
-        return Err(crate::tr!(
-            "имя записи недопустимо для копирования",
-            "the entry name is not valid for copying"
-        ));
-    }
-    let (_, src_text) = read_text(&s.file)?;
-    let entry = edit::get_value(s.format, &src_text, &s.path)?.ok_or_else(entry_missing)?;
-    let entry = if e.client == Client::OpenCode {
-        crate::opencode::to_common(&entry)
-    } else {
-        entry
-    };
-    let (old, text) = read_text(&file).map_err(|_| target_file_missing())?;
-    let mut path = mcp_root(dest, root, &text)?;
-    path.push(key.clone());
-    if edit::get_value(format, &text, &path)?.is_some()
-        || scan.entities.iter().any(|o| {
-            o.client == dest && o.kind == Kind::Mcp && o.scope == "user" && o.name == e.name
-        })
-    {
-        return Err(crate::tr!(
-            "в клиенте-получателе уже есть запись с таким именем",
-            "the target client already has an entry with this name"
-        ));
-    }
-    let (value, skipped) = translate(&entry, dest)?;
-    // An entry without command and url is dead at the target: this happens when the address lives in another key (`serverUrl`)
-    // and the translation does not know it. Better to refuse than to write a placeholder into someone else's config.
-    let has = |k: &str| {
-        value
-            .get(k)
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty())
-    };
-    if !has("command") && !has("url") {
-        let hint = if skipped.is_empty() {
-            String::new()
-        } else {
-            crate::tr!(
-                " (не распознаны ключи: {})",
-                " (unrecognized keys: {})",
-                skipped.join(", ")
-            )
-        };
-        return Err(crate::tr!(
-            "запись не переносится: после перевода у неё нет ни command, ни url{hint}",
-            "the entry is not copied: after translation it has neither command nor url{hint}"
-        ));
-    }
-    let new_text = edit::put_value(format, &text, &path, &written_as(dest, &value), false)?;
-
-    let mut plan = plan_for(e, "copy", "R2", locate(home, &file, format, &path, e), &old);
-    plan.client = dest;
-    plan.from = crate::tr!("нет записи", "no entry");
-    let shown = {
-        let t = tokens_of(&value);
-        if t.is_empty() {
-            value
-                .get("url")
-                .and_then(Value::as_str)
-                .map_or_else(String::new, |u| masked_line(&[u.to_owned()]))
-        } else {
-            masked_line(&t)
-        }
-    };
-    plan.to = crate::tr!("копия: {shown}", "copy: {shown}");
-    // what the target receives, not what the source has
-    let env_keys = mask::mcp_detail(&value)
-        .get("envKeys")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
-    if !env_keys.is_empty() {
-        plan.notes.push(crate::tr!(
-            "Копируются ключи env: {env_keys}. Значения (в том числе секреты) переносятся как есть и в окне не показываются.",
-            "env keys are copied: {env_keys}. Values (including secrets) are copied as is and are not shown in the window."
-        ));
-    }
-    if !skipped.is_empty() {
-        plan.notes.push(crate::tr!(
-            "Не переносятся: {}.",
-            "Not copied: {}.",
-            skipped.join(", ")
-        ));
-    }
-    Ok(Prepared {
-        plan,
-        entity: e.id.clone(),
-        file,
-        old,
-        new: new_text.into_bytes(),
-        trash: None,
-        inverse_enable: None,
-    })
 }
 
 fn prep_add(
@@ -1034,6 +890,7 @@ fn prep_add(
         noop: false,
         affects: Vec::new(),
         notes,
+        warn: Vec::new(),
         trash: String::new(),
         base_sha: sha(&old),
     };
@@ -1045,6 +902,7 @@ fn prep_add(
         new: new_text.into_bytes(),
         trash: None,
         inverse_enable: None,
+        created: false,
     })
 }
 
@@ -1083,7 +941,7 @@ fn prepare_raw(
             command,
             args,
         } => prep_edit(home, scan, entity, command, args),
-        Intent::Copy { entity, to } => prep_copy(home, scan, entity, to),
+        Intent::Copy { entity, to, .. } => transfer::prep_copy(home, scan, entity, to),
         Intent::Add {
             to,
             name,
@@ -1099,13 +957,52 @@ fn prepare_raw(
     }
 }
 
+/// The scan an intent is checked against: the full one, plus the entries of the project a copy comes from.
+fn scan_for(home: &Path, store: Option<&Path>, i: &Intent) -> Result<ScanResult, String> {
+    let mut scan = crate::scan_with(home, store);
+    if let Intent::Copy { project, .. } = i {
+        if !project.is_empty() {
+            let p = crate::projects::find(home, project).ok_or_else(|| {
+                crate::tr!(
+                    "проект не найден: обновите список",
+                    "project not found: refresh the list"
+                )
+            })?;
+            scan.entities
+                .extend(crate::projects::scan(home, &p).entities);
+        }
+    }
+    Ok(scan)
+}
+
+/// A copy of a skill: a folder, not a key in a file, so it goes through `skill.rs`.
+fn skill_copy(scan: &ScanResult, i: &Intent) -> bool {
+    matches!(i, Intent::Copy { entity, .. }
+        if scan.entities.iter().any(|e| e.id == *entity && e.kind == Kind::Skill))
+}
+
+/// The plan of any intent that a batch may hold.
+fn plan_in(
+    home: &Path,
+    store: Option<&Path>,
+    scan: &ScanResult,
+    i: &Intent,
+) -> Result<Plan, String> {
+    match i {
+        Intent::Copy { entity, to, .. } if skill_copy(scan, i) => {
+            skill::copy_check(home, scan, entity, to).map(|c| c.plan)
+        }
+        _ => prepare(home, store, scan, i).map(|p| p.plan),
+    }
+}
+
 /// Preview: writes nothing.
 pub fn plan(home: &Path, store: Option<&Path>, i: &Intent) -> Result<Plan, String> {
     if let Intent::InstallSkill { stage, sub, name } = i {
         return skill::plan(home, store, stage, sub, name);
     }
-    let scan = crate::scan_with(home, store);
-    prepare(home, store, &scan, i).map(|p| p.plan)
+    let scan = scan_for(home, store, i)?;
+    plan_in(home, store, &scan, i)
 }
 
 fn level_r1() -> String {
@@ -1147,6 +1044,15 @@ struct Manifest {
     file: String,
     from: String,
     to: String,
+    /// The opaque id of the project a skill copy went to: its rollback finds the folder again from the project list.
+    #[serde(default)]
+    project: String,
+    /// The operation created the file (it did not exist): the rollback removes it instead of restoring `before`.
+    #[serde(default)]
+    created: bool,
+    /// The operation also created the file's folder (`<p>/.codex`): the rollback removes it if it is empty.
+    #[serde(default)]
+    mkdir: bool,
 }
 
 /// Journal line: the manifest without the real path.
@@ -1255,7 +1161,7 @@ thread_local! {
 /// (the watcher does not see it), and the pid keeps two cores from writing to the same temp file.
 /// Right before `rename` the file is checked against `expect` (what it was at plan time): if a client managed to rewrite it
 /// while the backup and temp file were being written, there is no replacement and nothing is written.
-fn atomic_write(file: &Path, bytes: &[u8], expect: &[u8]) -> Result<(), String> {
+fn atomic_write(file: &Path, bytes: &[u8], expect: Option<&[u8]>) -> Result<(), String> {
     use std::io::Write;
     clean_stale_tmp(file);
     let mut name = file.as_os_str().to_owned();
@@ -1272,7 +1178,10 @@ fn atomic_write(file: &Path, bytes: &[u8], expect: &[u8]) -> Result<(), String> 
                 hook(file);
             }
         });
-        if std::fs::read(file).ok().as_deref() != Some(expect) {
+        // `None`: the file is being created and must still be absent (a rename would replace one that appeared)
+        let now = std::fs::read(file).ok();
+        if now.as_deref() != expect || (expect.is_none() && std::fs::symlink_metadata(file).is_ok())
+        {
             return Err(std::io::Error::other(crate::tr!(
                 "файл изменился перед заменой: его переписал другой процесс, запись отменена, повторите",
                 "the file changed just before the swap: another process rewrote it; nothing was written, try again"
@@ -1334,12 +1243,18 @@ fn commit(
         return fail(backup_not_written(e));
     }
     // a second time right before writing: between plan and backup the client could have rewritten the file
-    if std::fs::read(&p.file).ok().as_deref() != Some(p.old.as_slice()) {
+    // (or, for a new file, created it)
+    let expect = (!p.created).then_some(p.old.as_slice());
+    if std::fs::read(&p.file).ok().as_deref() != expect
+        || (p.created && std::fs::symlink_metadata(&p.file).is_ok())
+    {
         return fail(crate::tr!(
             "файл изменился во время записи бэкапа: повторите",
             "the file changed while the backup was being written: try again"
         ));
     }
+    let parent = p.file.parent().map(Path::to_path_buf);
+    let mkdir = p.created && parent.as_ref().is_some_and(|d| !d.exists());
     let m = Manifest {
         version: 2,
         id: id.clone(),
@@ -1362,6 +1277,9 @@ fn commit(
         file: p.plan.file.clone(),
         from: p.plan.from.clone(),
         to: p.plan.to.clone(),
+        project: String::new(),
+        created: p.created,
+        mkdir,
     };
     if let Err(e) = write_manifest(&dir, &m) {
         return fail(e);
@@ -1372,7 +1290,15 @@ fn commit(
             return fail(e);
         }
     }
-    if let Err(e) = atomic_write(&p.file, &p.new, &p.old) {
+    if let (true, Some(d)) = (mkdir, parent.as_ref()) {
+        if let Err(e) = std::fs::create_dir_all(d) {
+            return fail(crate::tr!("запись не удалась: {e}", "write failed: {e}"));
+        }
+    }
+    if let Err(e) = atomic_write(&p.file, &p.new, expect) {
+        if let (true, Some(d)) = (mkdir, parent.as_ref()) {
+            let _ = std::fs::remove_dir(d);
+        }
         // the move did not happen: the trash returns to its former state (no new copy, the stale one stays in place)
         if let Some(t) = p.trash.as_ref().filter(|t| t.after.is_some()) {
             match &t.before {
@@ -1446,7 +1372,14 @@ fn apply_one(
     if let Intent::InstallSkill { stage, sub, name } = i {
         return skill::apply(home, store, stage, sub, name, base_sha, max_level);
     }
-    let scan = crate::scan_with(home, Some(store));
+    let scan = scan_for(home, Some(store), i)?;
+    if let Intent::Copy { entity, to, .. } = i {
+        if skill_copy(&scan, i) {
+            need_level("R2", max_level)?;
+            let c = skill::copy_check(home, &scan, entity, to)?;
+            return skill::install(store, c, base_sha, batch);
+        }
+    }
     let p = prepare(home, Some(store), &scan, i)?;
     need_level(&p.plan.level, max_level)?;
     if base_sha.is_some_and(|b| b != p.plan.base_sha) {
@@ -1489,8 +1422,10 @@ pub struct BatchPlan {
 }
 
 pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchPlan {
-    let scan = crate::scan_with(home, store);
     let (mut plans, mut skipped) = (Vec::new(), Vec::new());
+    // one scan per project the batch copies from (a batch from the project window has one)
+    let mut scans: std::collections::HashMap<String, Result<ScanResult, String>> =
+        std::collections::HashMap::new();
     for i in items {
         if matches!(i, Intent::Add { .. } | Intent::InstallSkill { .. }) {
             skipped.push(crate::tr!(
@@ -1499,17 +1434,34 @@ pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchP
             ));
             continue;
         }
-        match prepare(home, store, &scan, i) {
-            Ok(p) => plans.push(p.plan),
-            Err(_) => skipped.push(
-                scan.entities
+        let key = match i {
+            Intent::Copy { project, .. } => project.clone(),
+            _ => String::new(),
+        };
+        let scan = match scans.entry(key).or_insert_with(|| scan_for(home, store, i)) {
+            Ok(s) => s,
+            Err(e) => {
+                skipped.push(e.clone());
+                continue;
+            }
+        };
+        match plan_in(home, store, scan, i) {
+            Ok(p) => plans.push(p),
+            Err(err) => {
+                let name = scan
+                    .entities
                     .iter()
                     .find(|e| e.id == i.entity())
                     .map_or_else(
                         || crate::tr!("запись исчезла", "the entry is gone"),
                         |e| e.name.clone(),
-                    ),
-            ),
+                    );
+                // a refused copy says why: the entry is there, the pair is not possible
+                skipped.push(match i {
+                    Intent::Copy { .. } => format!("{name}: {err}"),
+                    _ => name,
+                });
+            }
         }
     }
     let level = if plans.iter().any(|p| p.level == "R2") {
@@ -1559,10 +1511,10 @@ pub fn apply_batch(
     let batch = format!("{:013}", now_ms());
     let mut done = Vec::new();
     for (n, i) in items.iter().enumerate() {
-        let scan = crate::scan_with(home, Some(store));
-        match prepare(home, Some(store), &scan, i) {
+        let scan = scan_for(home, Some(store), i)?;
+        match plan_in(home, Some(store), &scan, i) {
             // already in the desired state: skip, it is not a bundle error
-            Ok(p) if p.plan.noop => continue,
+            Ok(p) if p.noop => continue,
             Ok(_) => {}
             // the entry was missing in the preview too (it skipped it): skip; but if it existed and vanished in the middle
             // of the bundle, skipping silently is not allowed: the bundle stops with an error
@@ -1712,7 +1664,7 @@ pub fn journal(home: &Path, store: &Path) -> Vec<Entry> {
                 Some(crate::tr!("уже откатано", "already rolled back"))
             } else {
                 match m.inverse_enable {
-                    None if m.op == "installSkill" => (!skill::can_rollback(home, m)).then(|| {
+                    None if skill::is_folder_op(m) => (!skill::can_rollback(home, m)).then(|| {
                         crate::tr!(
                             "скил изменён или удалён после установки",
                             "the skill was changed or removed after the install"
@@ -1813,7 +1765,7 @@ fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
             "the operation has already been rolled back"
         ));
     }
-    if m.op == "installSkill" {
+    if skill::is_folder_op(&m) {
         return skill::rollback(home, store, op, &m);
     }
     // The inverse operation when trash is involved or the file has changed since. Restoring from the owner's stash with an unchanged
@@ -1853,6 +1805,9 @@ fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
             "the file changed after the operation: the rollback would overwrite someone else's edits"
         ));
     }
+    if m.created {
+        return remove_created(store, op, &m, &file, &current);
+    }
     let before = std::fs::read(store.join(op).join("before"))
         .map_err(|_| crate::tr!("бэкап не найден", "backup not found"))?;
     if sha(&before) != m.sha_before {
@@ -1880,7 +1835,7 @@ fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
     if let Err(e) = write_manifest(&dir, &r) {
         return fail(e);
     }
-    if let Err(e) = atomic_write(&file, &before, &current) {
+    if let Err(e) = atomic_write(&file, &before, Some(current.as_slice())) {
         return fail(e);
     }
     // as after a write: do not wipe a client's fresh write, the rollback record stays
@@ -1889,6 +1844,62 @@ fn rollback_one(home: &Path, store: &Path, op: &str, max_level: &str) -> Result<
             "файл изменён другим процессом сразу после отката: проверьте результат",
             "the file was changed by another process right after the rollback: check the result"
         ));
+    }
+    Ok(Applied {
+        op: id,
+        entity: String::new(),
+        from: r.from,
+        to: r.to,
+    })
+}
+
+/// Rollback of an operation that created its file: the file (unchanged since, checked by the caller) goes to this rollback's
+/// backup and is removed, and so is the folder the operation created, if it is empty.
+fn remove_created(
+    store: &Path,
+    op: &str,
+    m: &Manifest,
+    file: &Path,
+    current: &[u8],
+) -> Result<Applied, String> {
+    let (id, dir) = new_op_dir(store)?;
+    let fail = |e: String| {
+        let _ = std::fs::remove_dir_all(&dir);
+        Err(e)
+    };
+    if let Err(e) = write_synced(&dir.join("before"), current) {
+        return fail(backup_not_written(e));
+    }
+    let r = Manifest {
+        id: id.clone(),
+        time: now_ms(),
+        op: "rollback".into(),
+        of: Some(op.to_owned()),
+        sha_before: m.sha_after.clone(),
+        sha_after: String::new(),
+        from: m.to.clone(),
+        to: m.from.clone(),
+        created: false,
+        mkdir: false,
+        ..m.clone()
+    };
+    if let Err(e) = write_manifest(&dir, &r) {
+        return fail(e);
+    }
+    if std::fs::read(file).ok().as_deref() != Some(current) {
+        return fail(crate::tr!(
+            "файл изменился перед удалением: его переписал другой процесс, откат отменён, повторите",
+            "the file changed just before removal: another process rewrote it; nothing was rolled back, try again"
+        ));
+    }
+    if let Err(e) = std::fs::remove_file(file) {
+        return fail(crate::tr!("откат не удался: {e}", "rollback failed: {e}"));
+    }
+    if m.mkdir {
+        // only an empty folder goes: `remove_dir` refuses one that holds anything
+        if let Some(d) = file.parent() {
+            let _ = std::fs::remove_dir(d);
+        }
     }
     Ok(Applied {
         op: id,

@@ -18,6 +18,7 @@ const ent = (id: string, logicalKey: string, extra: Partial<Entity> = {}): Entit
   detail: {},
   canToggle: false,
   canEdit: false,
+  canCopy: false,
   ...extra,
 })
 

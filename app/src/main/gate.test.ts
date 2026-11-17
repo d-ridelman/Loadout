@@ -43,6 +43,12 @@ describe('validateIntent', () => {
     expect(validateIntent({ op: 'toggle', entity: ENTITY, enable: false, path: 'C:\\x', lvl: 'R2' })).toEqual({ op: 'toggle', entity: ENTITY, enable: false })
     expect(validateIntent({ op: 'edit', entity: `${ENTITY}-2`, command: 'npx', args: ['-y', 'p'], file: 'C:\\x' })).toEqual({ op: 'edit', entity: `${ENTITY}-2`, command: 'npx', args: ['-y', 'p'] })
     expect(validateIntent({ op: 'copy', entity: ENTITY, to: 'codex', extra: 1 })).toEqual({ op: 'copy', entity: ENTITY, to: 'codex' })
+    // a project copy carries the core's opaque project id, never a path
+    expect(validateIntent({ op: 'copy', entity: ENTITY, to: 'codex', project: 'ab'.repeat(8) })).toEqual({ op: 'copy', entity: ENTITY, to: 'codex', project: 'ab'.repeat(8) })
+    expect(validateIntent({ op: 'copy', entity: ENTITY, to: 'codex', project: '' })).toEqual({ op: 'copy', entity: ENTITY, to: 'codex' })
+    for (const project of ['C:/work/app', '../x', 'AB'.repeat(8), 'a'.repeat(17), 7]) {
+      expect(() => validateIntent({ op: 'copy', entity: ENTITY, to: 'codex', project })).toThrow()
+    }
   })
   it.each([
     [null],

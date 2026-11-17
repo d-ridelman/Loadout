@@ -73,6 +73,7 @@ fn hooks(c: &mut Ctx) {
             &format!("/{}", crate::esc_ptr(group)),
             "user",
             events,
+            None, // another hook protocol: not copied (docs/TRANSFER.en.md)
         );
     }
 }

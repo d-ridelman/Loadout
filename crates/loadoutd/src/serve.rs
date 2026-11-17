@@ -220,6 +220,20 @@ impl Server {
                 Some(_) => Err(loadout_core::tr!("неверный maxLevel", "invalid maxLevel")),
             }
         };
+        // `items` of a copy batch: copies only, at most 200
+        let copies = || -> Result<Vec<write::Intent>, String> {
+            let items: Vec<write::Intent> = p
+                .get("items")
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .filter(|v: &Vec<write::Intent>| {
+                    v.len() <= 200 && v.iter().all(|i| matches!(i, write::Intent::Copy { .. }))
+                })
+                .ok_or_else(|| {
+                    loadout_core::tr!("неверный пакет копий", "invalid batch of copies")
+                })?;
+            Ok(items)
+        };
         let profile_name = || {
             str_of("name").and_then(|n| {
                 if loadout_core::profiles::valid_name(n) {
@@ -300,11 +314,39 @@ impl Server {
                     write::apply_batch(&self.home, &st, &items, str_of("batchSha")?, max_level()?)?;
                 json(&json!({ "batch": batch, "applied": applied }))?
             }
+            // known projects (opaque id and the folder as shown) and one project's entries, read only
+            "projects" => loadout_core::projects::listing(&self.home),
+            "projectScan" => {
+                let p =
+                    loadout_core::projects::find(&self.home, str_of("id")?).ok_or_else(|| {
+                        loadout_core::tr!(
+                            "проект не найден: обновите список",
+                            "project not found: refresh the list"
+                        )
+                    })?;
+                json(&loadout_core::projects::scan(&self.home, &p))?
+            }
+            // a batch of copies to another client (the copy window); profiles have their own methods
+            "planCopies" => json(&write::plan_batch(
+                &self.home,
+                self.backups.as_deref(),
+                &copies()?,
+            ))?,
+            "applyCopies" => {
+                let (batch, applied) = write::apply_batch(
+                    &self.home,
+                    &store()?,
+                    &copies()?,
+                    str_of("batchSha")?,
+                    max_level()?,
+                )?;
+                json(&json!({ "batch": batch, "applied": applied }))?
+            }
             _ => return Err(loadout_core::tr!("неизвестный метод", "unknown method")),
         };
         if matches!(
             method,
-            "apply" | "rollback" | "rollbackBatch" | "applyProfile"
+            "apply" | "rollback" | "rollbackBatch" | "applyProfile" | "applyCopies"
         ) {
             // the window learns about the change right away, not after the watcher fires
             self.rescan(true, false);
@@ -333,7 +375,8 @@ impl Server {
             Some(
                 m @ ("plan" | "apply" | "journal" | "rollback" | "rollbackBatch" | "profiles"
                 | "profileSave" | "profileDelete" | "planProfile" | "applyProfile"
-                | "profilesQuarantine" | "pruneBackups"),
+                | "profilesQuarantine" | "pruneBackups" | "projects" | "projectScan"
+                | "planCopies" | "applyCopies"),
             ) => match self.write_method(m, req.get("params").unwrap_or(&Value::Null)) {
                 Ok(v) => json!({ "result": v }),
                 Err(e) => json!({ "error": { "message": e } }),

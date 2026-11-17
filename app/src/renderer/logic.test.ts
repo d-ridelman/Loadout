@@ -20,6 +20,7 @@ const ent = (over: Partial<Entity>): Entity => ({
   detail: {},
   canToggle: false,
   canEdit: false,
+  canCopy: false,
   ...over,
 })
 

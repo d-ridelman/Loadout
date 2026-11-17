@@ -122,6 +122,15 @@ pub struct Src {
     pub path: Vec<String>,
 }
 
+/// The source of a copy to another client.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CopyFrom {
+    /// A value inside a file: an MCP entry, or a hook element (`[…, event, group, "hooks", n]`).
+    Entry(Src),
+    /// A skill folder (the one holding `SKILL.md`).
+    Dir(std::path::PathBuf),
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entity {
@@ -149,8 +158,20 @@ pub struct Entity {
     pub target: Option<Target>,
     #[serde(skip)]
     pub src: Option<Src>,
-    /// The entry can be edited and copied (has `src`).
+    /// Where a copy to another client is read from, when that is not `src` (a read-only project file, a skill folder,
+    /// a hook element). Unlike `src` it does not allow editing.
+    #[serde(skip)]
+    pub copy_from: Option<CopyFrom>,
+    /// The entry can be edited (has `src`).
     pub can_edit: bool,
+    /// The entry can be copied to another client (has `src` or `copy_from`); the core still checks the pair.
+    pub can_copy: bool,
+    /// Clients this entry cannot be copied to whatever the files hold, with the reason (`write/transfer.rs`).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub copy_why: std::collections::BTreeMap<String, String>,
+    /// Opaque id of the known project a `project:` entry belongs to (see `projects.rs`): the window sends it back, never a path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     /// Filled in at the end of a scan from `target`: the window uses it to decide whether to offer a switch.
     pub can_toggle: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -173,7 +194,7 @@ pub struct ScanResult {
 }
 
 /// FNV-1a 64: stable across Rust versions, unlike `DefaultHasher`.
-fn fnv1a(parts: &[&str]) -> String {
+pub(crate) fn fnv1a(parts: &[&str]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for p in parts {
         for b in p.bytes().chain(std::iter::once(0u8)) {
@@ -231,7 +252,11 @@ impl Entity {
             fs_named: false,
             target: None,
             src: None,
+            copy_from: None,
             can_edit: false,
+            can_copy: false,
+            copy_why: Default::default(),
+            project: None,
             can_toggle: false,
             toggle_why: None,
             toggle_level: None,
@@ -246,6 +271,11 @@ impl Entity {
 
     pub fn src(mut self, s: Src) -> Self {
         self.src = Some(s);
+        self
+    }
+
+    pub fn copy_from(mut self, c: CopyFrom) -> Self {
+        self.copy_from = Some(c);
         self
     }
 

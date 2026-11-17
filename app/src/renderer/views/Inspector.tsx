@@ -85,9 +85,9 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy, e
           {strip}
           <p className="mute">
             {t(`В ${client?.name} этой сущности нет.`, `This entity is not in ${client?.name}.`)}
-            {/* copying works for MCP servers in a client file, and not into DeepSeek (tagged YAML) */}
-            {sel.client !== 'deepseek' && CLIENTS.some((c) => row.cells[c.id]?.instances.some((x) => x.kind === 'mcp' && x.canEdit))
-              ? ' ' + t('MCP-сервер можно скопировать сюда из ячейки другого клиента: «Копировать в клиент…».', 'An MCP server can be copied here from another client’s cell: “Copy to client…”.')
+            {/* a copy from another client's cell is possible when that entry can be copied and this client is not refused for it */}
+            {CLIENTS.some((c) => row.cells[c.id]?.instances.some((x) => x.canCopy && !x.copyWhy?.[sel.client]))
+              ? ' ' + t('Запись можно скопировать сюда из ячейки другого клиента: «Копировать в клиент…».', 'The entry can be copied here from another client’s cell: “Copy to client…”.')
               : null}
           </p>
         </Panel>
@@ -156,14 +156,15 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy, e
           {enable ? t('Включить', 'Enable') : e.toggleLevel === 'R2' ? t('Выключить (в корзину)', 'Disable (move to trash)') : t('Выключить', 'Disable')}
         </button>
         {e.canEdit ? (
-          <>
-            <button title={t('Заменить команду и аргументы', 'Replace the command and arguments')} onClick={() => onEdit(e)}>
-              {t('Править команду…', 'Edit command…')}
-            </button>
-            <button title={t('Скопировать запись в другой клиент', 'Copy the entry to another client')} onClick={() => onCopy(e)}>
-              {t('Копировать в клиент…', 'Copy to client…')}
-            </button>
-          </>
+          <button title={t('Заменить команду и аргументы', 'Replace the command and arguments')} onClick={() => onEdit(e)}>
+            {t('Править команду…', 'Edit command…')}
+          </button>
+        ) : null}
+        {/* a plugin is never copied, but the dialog says for each client what to do instead */}
+        {e.canCopy || (e.kind === 'plugin' && e.copyWhy) ? (
+          <button title={t('Скопировать запись в другой клиент', 'Copy the entry to another client')} onClick={() => onCopy(e)}>
+            {t('Копировать в клиент…', 'Copy to client…')}
+          </button>
         ) : null}
         {/* the path shown in "file" above: the one a toggle writes */}
         <button onClick={() => void window.loadout.copyText((e.toggleAt ?? e.origin).file)}>{t('Копировать путь', 'Copy path')}</button>

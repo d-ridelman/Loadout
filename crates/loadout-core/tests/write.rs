@@ -644,6 +644,7 @@ fn copy_translates_between_json_and_toml_keeps_secrets_inside_the_core() {
     let to_codex = Intent::Copy {
         entity: id.clone(),
         to: "codex".into(),
+        project: String::new(),
     };
     let p = plan_s(&e, &to_codex).unwrap();
     assert_eq!(
@@ -676,6 +677,7 @@ fn copy_translates_between_json_and_toml_keeps_secrets_inside_the_core() {
         &Intent::Copy {
             entity: remote.clone(),
             to: "claude-code".into(),
+            project: String::new(),
         },
     )
     .unwrap();
@@ -686,6 +688,7 @@ fn copy_translates_between_json_and_toml_keeps_secrets_inside_the_core() {
         &Intent::Copy {
             entity: remote,
             to: "claude-code".into(),
+            project: String::new(),
         },
         &p.base_sha,
     )
@@ -830,7 +833,8 @@ fn copy_refuses_same_client_deepseek_and_taken_names() {
                 &e,
                 &Intent::Copy {
                     entity: id.clone(),
-                    to: to.into()
+                    to: to.into(),
+                    project: String::new(),
                 }
             )
             .is_err(),
@@ -844,6 +848,7 @@ fn copy_refuses_same_client_deepseek_and_taken_names() {
         &Intent::Copy {
             entity: local,
             to: "claude-desktop".into(),
+            project: String::new(),
         },
     );
     assert!(ok.is_ok(), "{ok:?}");
@@ -871,7 +876,8 @@ fn plugin_files_deepseek_and_denied_entries_have_no_write_target() {
         &e,
         &Intent::Copy {
             entity: ds.id.clone(),
-            to: "codex".into()
+            to: "codex".into(),
+            project: String::new(),
         }
     )
     .is_err());
@@ -1036,6 +1042,7 @@ fn plan_and_journal_have_no_home_path_and_edit_keeps_crlf() {
         &Intent::Copy {
             entity: b,
             to: "claude-desktop".into(),
+            project: String::new(),
         },
     )
     .unwrap();
@@ -1064,6 +1071,7 @@ fn copy_refuses_an_entry_that_would_be_dead_at_the_receiver() {
         &Intent::Copy {
             entity: id,
             to: "codex".into(),
+            project: String::new(),
         },
     )
     .unwrap_err();
@@ -1748,6 +1756,7 @@ fn every_write_changes_exactly_the_file_and_key_its_plan_and_journal_name() {
             let copy = Intent::Copy {
                 entity: x.id.clone(),
                 to: (*c).to_owned(),
+                project: String::new(),
             };
             if plan_s(&e, &copy).is_ok() {
                 let what = format!("copy {:?} {} -> {c}", x.client, x.name);
@@ -1944,6 +1953,7 @@ fn opencode_copy_translates_both_ways() {
     let i = Intent::Copy {
         entity: id,
         to: "claude-code".into(),
+        project: String::new(),
     };
     let p = plan_s(&e, &i).unwrap();
     assert!(
@@ -1966,6 +1976,7 @@ fn opencode_copy_translates_both_ways() {
     let i = Intent::Copy {
         entity: from,
         to: "opencode".into(),
+        project: String::new(),
     };
     let p = plan_s(&e, &i).unwrap();
     assert_eq!(
