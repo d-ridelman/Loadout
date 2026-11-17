@@ -113,12 +113,12 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
 
   return (
     <>
-      <PageHead title={t('Матрица', 'Matrix')} sub={t('Что установлено в каждом клиенте. Выберите ячейку, справа появятся подробности.', 'What is installed in each client. Select a cell to see the details on the right.')} />
+      <PageHead title={t('Матрица', 'Matrix')} topic="matrix" sub={t('Что установлено в каждом клиенте. Выберите ячейку, справа появятся подробности.', 'What is installed in each client. Select a cell to see the details on the right.')} />
       <div className="bar">
         <input
           ref={searchRef}
           type="search"
-          placeholder={t('Поиск ( / )', 'Search ( / )')}
+          placeholder={t('Найти по названию ( / )', 'Find by name ( / )')}
           aria-label={t('Поиск', 'Search')}
           value={filters.q}
           onChange={(e) => setFilters({ ...filters, q: e.target.value })}
@@ -168,7 +168,6 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
           ))}
           <li><span className="more">+N</span> {t('ещё N записей в других областях', 'N more entries in other scopes')}</li>
           <li><span className="delta">Δ</span> {t('изменилось на диске только что, метка гаснет через несколько секунд', 'just changed on disk, the mark fades after a few seconds')}</li>
-          <li><span className="mono">FX</span> {t('в шапке: анимации окна (выкл, лёгкие, полные)', 'in the header: window animations (off, light, full)')}</li>
         </ul>
       </details>
 
@@ -184,9 +183,9 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
         >
           <thead>
             <tr>
-              <th scope="col">{t('СУЩНОСТЬ', 'ENTITY')}</th>
+              <th scope="col">{t('Название', 'Name')}</th>
               {CLIENTS.map((c) => (
-                <th key={c.id} scope="col">{c.name.toUpperCase()}</th>
+                <th key={c.id} scope="col">{c.name}</th>
               ))}
             </tr>
           </thead>

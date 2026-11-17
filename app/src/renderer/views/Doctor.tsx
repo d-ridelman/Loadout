@@ -16,6 +16,7 @@ export function Doctor({ findings, onShow }: { findings: Finding[]; onShow: (e: 
     <>
       <PageHead
         title={`${t('Доктор', 'Doctor')} · ${count(findings.length, ['находка', 'находки', 'находок'], ['finding', 'findings'])}`}
+        topic="doctor"
         sub={t(
           'Проверка конфигов: сломанные записи, расхождения версий и записи, которые лежат в нескольких местах. К каждой находке есть подсказка, как её исправить.',
           'A check of the configs: broken entries, version mismatches and entries found in several places. Each finding comes with a hint on how to fix it.',

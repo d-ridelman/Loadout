@@ -96,6 +96,12 @@ const shotDir = process.env.E2E_SHOTS ?? (process.env.E2E_UPDATE_SHOTS === '1' ?
 if (shotDir !== stateDir && !process.env.E2E_SHOTS) rmSync(shotDir, { recursive: true, force: true })
 mkdirSync(shotDir, { recursive: true })
 
+/** The header's single "Add" list: opens it and picks the item whose name starts with `name` (MCP server, plugin, skill). */
+async function addItem(page, name) {
+  await page.locator('header .addmenu > button').click()
+  await page.locator('#addpop').getByRole('button', { name: new RegExp(`^${name}`) }).click()
+}
+
 async function shot(page, name) {
   await page.screenshot({ path: join(shotDir, `${name}.png`) })
 }
@@ -119,6 +125,30 @@ async function headerLayout(page, label) {
   must(m.over <= 0, `${label}: the header goes under the window buttons by ${m.over}px`)
 }
 
+/**
+ * Crisp text, measured: no visible text under 12px (11px mono was the softest text in the window), and the mono face only on code,
+ * paths, keys, numbers and marks, never on labels and prose. Lists offenders by tag, class and the first words.
+ */
+async function typeCheck(page, label) {
+  const bad = await page.evaluate(() => {
+    const MONO_OK = 'code, kbd, pre, .mono, .wrap, .hk, .g, .sev, .logo, .delta, .more, .pipe .h, .rowname, input[spellcheck="false"], textarea[spellcheck="false"]'
+    const out = []
+    for (const el of document.querySelectorAll('body *')) {
+      const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())
+      if (!own || el.getClientRects().length === 0) continue
+      const cs = getComputedStyle(el)
+      if (cs.visibility === 'hidden') continue
+      const size = parseFloat(cs.fontSize)
+      const mono = /JetBrains Mono/i.test(cs.fontFamily.split(',')[0])
+      const what = `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} "${el.textContent.trim().slice(0, 30)}"`
+      if (size < 12) out.push(`${size}px ${what}`)
+      else if (mono && !el.closest(MONO_OK)) out.push(`mono ${what}`)
+    }
+    return out
+  })
+  must(bad.length === 0, `${label}: small or mono UI text: ${JSON.stringify(bad.slice(0, 8))}`)
+}
+
 /** A measurement, not "by eye": no horizontal page scroll, no clipped names, the header and cell columns are aligned. */
 async function layout(page, label) {
   const m = await page.evaluate(() => {
@@ -130,9 +160,19 @@ async function layout(page, label) {
     const misaligned = ths.length && cells.length === ths.length
       ? ths.filter((th, i) => Math.abs(th.getBoundingClientRect().left - cells[i].getBoundingClientRect().left) > 1.5).length
       : 0
-    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length }
+    // an empty field's placeholder must fit its box (the search hint was cut to "Найти по названию (")
+    const ctx = document.createElement('canvas').getContext('2d')
+    const cutHints = [...document.querySelectorAll('input[placeholder]')].filter((i) => {
+      if (i.value || i.getClientRects().length === 0) return false
+      const cs = getComputedStyle(i)
+      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+      return ctx.measureText(i.placeholder).width > i.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) + 1
+    }).map((i) => i.placeholder)
+    return { hscroll: de.scrollWidth - de.clientWidth, clipped, misaligned, cols: ths.length, cutHints }
   })
   log(`  measurement ${label}:`, JSON.stringify(m))
+  must(m.cutHints.length === 0, `${label}: placeholders cut: ${JSON.stringify(m.cutHints)}`)
+  await typeCheck(page, label)
   await headerLayout(page, label)
   must(m.hscroll <= 0, `${label}: horizontal page scroll (${m.hscroll}px)`)
   must(m.clipped === 0, `${label}: clipped names: ${m.clipped}`)
@@ -321,7 +361,8 @@ try {
     const legend = page.locator('details.legend-box')
     await legend.locator('summary').click()
     const text = await legend.innerText()
-    for (const s of ['включено', 'выключено', 'сломано', 'расхождение версий','только в приложении', 'не определено', '+N', 'Δ', 'FX']) must(text.includes(s), `the legend lacks "${s}": ${text}`)
+    // FX left the legend: it is not a mark of the table and lives in Help → Appearance now
+    for (const s of ['включено', 'выключено', 'сломано', 'расхождение версий','только в приложении', 'не определено', '+N', 'Δ']) must(text.includes(s), `the legend lacks "${s}": ${text}`)
     must((await legend.boundingBox()).y < (await page.locator('#grid').boundingBox()).y, 'the legend must be above the table')
     await shot(page, 'b2-legend-1280')
     await resize(app, 1920, 1080)
@@ -572,30 +613,46 @@ try {
   await shot(page, 'm3-journal-empty-1280')
   await page.keyboard.press('1')
 
+  // ---- a newcomer's path: R0 → a cell → "Disable" in the inspector → the OS asks once → the preview; no header list, no keys ----
+  // (formerly the button was inactive at R0 and the hint sent the person to the header: the dead end the owner called too hard)
   await clickCell('p1', 2)
   must(await levelIs('R0'), 'the default level is R0')
   must((await page.locator('#scanlines').count()) === 0, 'scanline stripes (a linear horizontal ripple) must be removed')
-  await page.keyboard.press('Space')
-  must((await dialog.count()) === 0, 'at R0 the preview does not open')
-  must((await page.locator('#notice').innerText()).includes('R0'), 'at R0 there is no explanation')
-  must(readFileSync(cfg, 'utf8') === original, 'at R0 the file must not change')
-  must(await page.getByRole('button', { name: 'Выключить', exact: true }).isDisabled(), 'at R0 the button in the inspector is inactive')
-
-  // a refusal in the OS dialog leaves R0, consent raises to R1
+  const offBtn = page.locator('aside').getByRole('button', { name: 'Выключить', exact: true })
+  must(!(await offBtn.isDisabled()), 'at R0 the inspector button must be active: it asks for permission and goes on')
+  must((await page.locator('aside').innerText()).includes('спросит разрешение'), 'at R0 the inspector does not say what the button will do')
+  for (const [w, h] of SIZES) {
+    await resize(app, w, h)
+    await page.waitForTimeout(150)
+    await layout(page, `novice inspector ${w}`)
+    await shot(page, `n1-inspector-r0-${w}`)
+  }
+  await resize(app, 1280, 800)
+  // a refusal in the OS dialog (Space and the button both ask) leaves R0, opens nothing and writes nothing
   await stubDialog(0)
-  const askedBefore = await app.evaluate(() => globalThis.__asked)
+  let askedBefore = await app.evaluate(() => globalThis.__asked)
+  await page.locator('#grid').focus()
+  await page.keyboard.press('Space')
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'Space at R0 did not ask for permission')
+  await page.locator('#notice').waitFor({ timeout: 5000 })
+  must((await page.locator('#notice').innerText()).includes('R0'), 'a refusal does not say the level stayed R0')
+  must((await dialog.count()) === 0, 'after a refusal the preview must not open')
+  must(readFileSync(cfg, 'utf8') === original, 'after a refusal the file must not change')
+  // the header list asks the same OS dialog; a refusal there leaves R0 too
+  askedBefore = await app.evaluate(() => globalThis.__asked)
   await levelSel.selectOption('R1')
   await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'the OS dialog was not asked')
   // a negative check: the select is controlled and shows R0 at once, so give a wrong level time to arrive, then ask main too
   await page.waitForTimeout(600)
   must(await levelIs('R0'), 'a refusal in the OS dialog must leave R0')
   must((await page.evaluate(() => window.loadout.getWriteLevel())) === 'R0', 'a refusal in the OS dialog must leave R0 in main')
+  // consent: the same button raises the level to what this entry needs (R1, a flag) and opens the preview
   await stubDialog(1)
-  await levelSel.selectOption('R1')
-  await waitFor(() => levelIs('R1'), 'the level switched to R1')
-  await clickCell('p1', 2)
-  await page.keyboard.press('Space')
+  askedBefore = await app.evaluate(() => globalThis.__asked)
+  await offBtn.click()
   await dialog.waitFor({ timeout: 8000 })
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'the button must ask the OS dialog exactly once')
+  await waitFor(() => levelIs('R1'), 'the button raised the level to R1')
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   const dText = await dialog.innerText()
   must(dText.includes('~/.codex/config.toml') && dText.includes('включено') && dText.includes('выключено'), `preview without the file and values: ${dText}`)
@@ -825,7 +882,7 @@ try {
   // adding a new MCP: env values go only to the core, the rollback restores the file byte for byte
   await page.keyboard.press('1')
   // a taken name is reported by the form itself, before any plan
-  await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
+  await addItem(page, 'MCP-сервер')
   await dialog.getByLabel('Клиент').selectOption({ label: 'Antigravity' })
   await dialog.getByLabel('Имя', { exact: true }).fill('tool-a')
   await dialog.getByLabel('Команда', { exact: true }).fill('npx')
@@ -837,7 +894,7 @@ try {
   // a refusal of the core is shown as the core said it, and "Back to the form" keeps everything typed, env included
   writeFileSync(cfg, cfgBeforeCopy.toString('utf8').replace('\n', '\r\n'))
   const addEnv = 'API_TOKEN=FAKE-SECRET-ADDED'
-  await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
+  await addItem(page, 'MCP-сервер')
   await dialog.getByLabel('Клиент').selectOption({ label: 'ChatGPT / Codex' })
   await dialog.getByLabel('Имя', { exact: true }).fill('e2e-added')
   await dialog.getByLabel('Команда', { exact: true }).fill('npx')
@@ -882,7 +939,7 @@ try {
   }
   must((await mpErr(marketDir, false)).includes('предпросмотр'), 'adding a marketplace without a preview must refuse')
   // marketplace → catalog → install by picking from the list
-  await page.getByRole('button', { name: 'Установить плагин', exact: true }).click()
+  await addItem(page, 'Плагин Claude Code')
   await dialog.getByRole('button', { name: 'Добавить маркетплейс…' }).click()
   await dialog.getByLabel('Источник маркетплейса').fill(marketDir)
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
@@ -917,7 +974,7 @@ try {
   const badPlan = await page.evaluate(async () => (await window.loadout.plan({ op: 'installSkill', stage: '../../x', sub: '', name: 'a' })).ok)
   must(badPlan === false, 'a skill install plan with a path instead of a preparation number must be rejected')
   const skillDir = join(home, '.claude', 'skills', 'web-search')
-  await page.getByRole('button', { name: 'Установить скил', exact: true }).click()
+  await addItem(page, 'Скил')
   await dialog.getByLabel('Источник скила').fill('acme/skills')
   await dialog.getByRole('button', { name: 'Что будет скачано' }).click()
   await dialog.getByText(/Будет скачано:.*git .*clone --depth 1 .*acme\/skills\.git/).waitFor({ timeout: 8000 })
@@ -1382,9 +1439,63 @@ try {
   must(realBackups() === realBackupsBefore, 'setup created a backup in the real owner profile')
   await waitFor(() => levelIs('R0'), 'the level went back to R0')
 
-  // reduced motion → "FX: off" by default is applied on load; here we check the switch
-  await page.getByLabel('Уровень эффектов').selectOption('off')
-  must((await page.evaluate(() => document.documentElement.dataset.fx)) === 'off', 'FX did not turn off')
+  // ---- help in the window: F1 / the header button, getting started, sections, questions, shortcuts, appearance ----
+  {
+    const help = page.getByRole('dialog', { name: 'Справка' })
+    await page.keyboard.press('F1')
+    await help.waitFor({ timeout: 5000 })
+    await page.keyboard.press('Escape')
+    await help.waitFor({ state: 'detached', timeout: 5000 })
+    await page.getByRole('button', { name: /^Справка/ }).click()
+    await help.waitFor({ timeout: 5000 })
+    const tab = (name) => help.getByRole('button', { name, exact: true })
+    await tab('С чего начать').click()
+    must((await help.locator('ol.steps li').count()) === 3, 'getting started must be three steps')
+    await tab('Вопросы и ответы').click()
+    const qs = help.locator('.faq details')
+    must((await qs.count()) >= 8, `too few questions in the FAQ: ${await qs.count()}`)
+    await qs.filter({ hasText: 'Как выключить MCP-сервер' }).locator('summary').click()
+    must((await help.innerText()).includes('спросит разрешение'), 'the FAQ answer on disabling does not say that Loadout asks for permission')
+    for (const [w, h] of SIZES) {
+      await resize(app, w, h)
+      await page.waitForTimeout(150)
+      await layout(page, `help ${w}`)
+      await shot(page, `h1-help-faq-${w}`)
+    }
+    await resize(app, 1280, 800)
+    const vh = await axeCheck(page, 'help')
+    must(vh.length === 0, `axe: help: ${vh.map((x) => x.id).join(', ')}`)
+    await tab('Клавиши').click()
+    must((await help.innerText()).includes('F1'), 'the shortcuts tab lacks F1')
+    // reduced motion → "FX: off" by default is applied on load; here we check the switch, which lives in Help → Appearance now
+    await tab('Вид').click()
+    await help.getByLabel('Анимация').selectOption('off')
+    must((await page.evaluate(() => document.documentElement.dataset.fx)) === 'off', 'FX did not turn off')
+    // Tab from a block the script focused stays inside the dialog
+    await page.evaluate(() => document.querySelector('.help-body')?.setAttribute('tabindex', '-1'))
+    await page.locator('.help-body').focus()
+    await page.keyboard.press('Tab')
+    must(await page.evaluate(() => !!document.activeElement?.closest('[role=dialog]')), 'Tab left the help dialog')
+    await page.keyboard.press('Escape')
+    await help.waitFor({ state: 'detached', timeout: 5000 })
+    await waitFor(() => page.evaluate(() => document.activeElement?.textContent?.startsWith('Справка') ?? false), 'focus did not return to the Help button')
+    // a section's "More in Help" opens the help on that section
+    await page.keyboard.press('4')
+    await page.locator('main').getByRole('button', { name: 'Подробнее в справке' }).click()
+    await help.locator('#help-doctor.hit').waitFor({ timeout: 5000 })
+    must((await page.evaluate(() => document.activeElement?.id)) === 'help-doctor', 'the help did not focus the section it was opened for')
+    await shot(page, 'h2-help-section-1280')
+    // the welcome card comes back from the help
+    await tab('С чего начать').click()
+    await help.getByRole('button', { name: 'Показать приветствие снова' }).click()
+    await page.getByRole('region', { name: 'Loadout: что это и чего ждать' }).waitFor({ timeout: 5000 })
+    await page.getByRole('button', { name: 'Понятно, начать' }).click()
+    // a term explains itself on keyboard focus, not only on hover
+    await page.locator('header .term').focus()
+    must(await page.locator('header .term .tip').isVisible(), 'the write level term shows no explanation on focus')
+    await shot(page, 'h3-term-1280')
+    await page.locator('#grid').focus()
+  }
 
   must(pageErrors.length === 0, `page errors: ${pageErrors.join(' | ')}`)
   await close(session)
@@ -1446,7 +1557,11 @@ try {
     await both('upd-available')
     // a toast and the update card at the same time: both whole, no overlap, at the narrowest window too
     await up.getByLabel('Уровень записи').selectOption('R0')
-    await up.getByRole('button', { name: 'Добавить MCP' }).click()
+    // at R0 "Add" asks for R2 in the OS dialog; a refusal gives the info toast this check needs
+    await ua.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false })
+    })
+    await addItem(up, 'MCP-сервер')
     const toast = up.locator('#notice')
     await toast.waitFor({ timeout: 5000 })
     must((await up.locator('.toasts[role=status] #notice').count()) === 1, 'an info toast must sit in the status live region')
@@ -1655,7 +1770,7 @@ try {
     await en.keyboard.press('Escape')
     // add: a taken name (the form says so before any plan) and a core plan — both in English
     const enDialog = en.locator('[role=dialog][aria-modal=true]')
-    await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
+    await addItem(en, 'MCP server')
     await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
     await enDialog.getByLabel('Name', { exact: true }).fill('tool-a')
     await enDialog.getByLabel('Command', { exact: true }).fill('npx')
@@ -1663,7 +1778,7 @@ try {
     await enOk('add: taken name')
     await shot(en, 'en-add-error-1280')
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
-    await en.getByRole('button', { name: 'Add MCP', exact: true }).click()
+    await addItem(en, 'MCP server')
     await enDialog.getByLabel('Client').selectOption({ label: 'Antigravity' })
     await enDialog.getByLabel('Name', { exact: true }).fill('en-added')
     await enDialog.getByLabel('Command', { exact: true }).fill('npx')
@@ -1673,7 +1788,7 @@ try {
     await shot(en, 'en-add-plan-1280')
     await enDialog.getByRole('button', { name: 'Cancel' }).click()
     // plugin install: preview
-    await en.getByRole('button', { name: 'Install plugin', exact: true }).click()
+    await addItem(en, 'Claude Code plugin')
     await enDialog.getByRole('button', { name: 'Add marketplace…' }).click()
     await enDialog.getByLabel('Marketplace source').fill(enMarket)
     await enDialog.getByRole('button', { name: 'Preview' }).click()
@@ -1691,7 +1806,7 @@ try {
     await enDialog.waitFor({ state: 'detached', timeout: 8000 })
     await enOk('plugin installed')
     // skill: showing "what will be downloaded", download, choice and the core plan
-    await en.getByRole('button', { name: 'Install skill', exact: true }).click()
+    await addItem(en, 'Skill')
     await enDialog.getByLabel('Skill source').fill('acme/skills')
     await enDialog.getByRole('button', { name: 'What will be downloaded' }).click()
     await enDialog.getByText(/Will download:/).waitFor({ timeout: 8000 })

@@ -167,6 +167,7 @@ export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
     <>
       <PageHead
         title={t('Профили', 'Profiles')}
+        topic="profiles"
         sub={t(
           'Профиль запоминает, что включено. Сохраните текущее состояние под именем, и потом к нему можно вернуться одной кнопкой.',
           'A profile remembers what is turned on. Save the current state under a name and return to it later with one button.',

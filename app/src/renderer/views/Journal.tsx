@@ -63,6 +63,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
     <>
       <PageHead
         title={t('Журнал', 'Journal')}
+        topic="journal"
         sub={t(
           'Записи, которые сделал Loadout. Запись можно откатить после предпросмотра, если файл с тех пор не меняли.',
           'Writes made by Loadout. You can roll one back after a preview if the file has not changed since.',

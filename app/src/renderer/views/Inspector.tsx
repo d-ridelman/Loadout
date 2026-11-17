@@ -3,7 +3,7 @@ import type { Entity, Level, WriteLevel } from '../../shared/model'
 import { t } from '../../shared/i18n'
 import { GLYPH } from '../aggregate'
 import type { Row } from '../aggregate'
-import { Glyph, KindBadge, levelLabel, Panel, Path, pickLevel, Rich } from '../ui'
+import { Glyph, KindBadge, levelLabel, Panel, Path, Rich, Term } from '../ui'
 import type { Sel } from './Matrix'
 
 /** Whether the current write level is enough for the operation. */
@@ -55,14 +55,16 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
     return (
       <>
         <h2>{t('Инспектор', 'Inspector')}</h2>
-        <p className="mute">{t('Выберите ячейку матрицы.', 'Select a matrix cell.')}</p>
+        {/* the first state teaches the next step: what to click and what appears here */}
+        <p>{t('Нажмите на значок в таблице — здесь появятся подробности о записи и кнопки «Включить» и «Выключить».', 'Click a mark in the table: the details of the entry and the Enable and Disable buttons appear here.')}</p>
+        <p className="mute small">{t('По таблице можно ходить стрелками, Space включает и выключает выбранное.', 'The arrow keys move through the table; Space enables or disables the selection.')}</p>
       </>
     )
   }
   const client = CLIENTS.find((c) => c.id === sel.client)
   const cell = row.cells[sel.client]
   const strip = (
-    <div className="strip" aria-label={t('Состояние по клиентам', 'State by client')}>
+    <div className="strip" role="img" aria-label={t('Состояние по клиентам: ', 'State by client: ') + CLIENTS.map((c) => `${c.name} — ${GLYPH[row.cells[c.id]?.state ?? 'none'].label}`).join(', ')}>
       {CLIENTS.map((c) => (
         <span key={c.id} title={`${c.name}: ${GLYPH[row.cells[c.id]?.state ?? 'none'].label}`}>
           <Glyph state={row.cells[c.id]?.state ?? 'none'} />
@@ -95,6 +97,8 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
     .map(([k, v]) => [k, show(v)] as const)
     .filter((kv): kv is readonly [string, string] => kv[1] !== null)
 
+  const enable = e.state === 'off' || e.state === 'unknown'
+  const short = !levelOk(level, e.toggleLevel ?? 'R1')
   return (
     <>
       <h2>{t('Инспектор', 'Inspector')}</h2>
@@ -103,20 +107,13 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
           <KindBadge kinds={[e.kind]} /> <b>{row.name}</b>
         </div>
         {strip}
+        {/* what a person needs first: where, in what state, and which file a change goes to; the rest is under "Technical details" */}
         <dl className="kv">
           <dt>{t('клиент', 'client')}</dt><dd>{client?.name}</dd>
           <dt>{t('состояние', 'state')}</dt><dd className={`s-${e.state}`}>{GLYPH[e.state].ch} {GLYPH[e.state].label}</dd>
-          <dt>{t('область', 'scope')}</dt><dd>{e.scope}</dd>
           {e.version ? (<><dt>{t('версия', 'version')}</dt><dd>{e.version}</dd></>) : null}
-          <dt>{t('файл', 'file')}</dt><dd className="wrap"><Path p={e.origin.file} /></dd>
-          <dt>{t('указатель', 'pointer')}</dt><dd className="wrap">{e.origin.pointer}</dd>
-          {/* found in one file, switched in another (a Claude Code plugin: settings.json → enabledPlugins) */}
-          {e.toggleAt ? (
-            <>
-              <dt>{t('переключатель', 'switch')}</dt>
-              <dd className="wrap"><Path p={e.toggleAt.file} /> · {e.toggleAt.pointer}</dd>
-            </>
-          ) : null}
+          {/* found in one file, switched in another (a Claude Code plugin: settings.json → enabledPlugins): the file a toggle writes */}
+          <dt>{t('файл', 'file')}</dt><dd className="wrap"><Path p={(e.toggleAt ?? e.origin).file} /></dd>
         </dl>
       </Panel>
 
@@ -127,7 +124,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
             {cell.instances.map((x) => (
               <li key={x.id}>
                 <button aria-pressed={x.id === e.id} onClick={() => onPick(x.id)}>
-                  <Glyph state={x.state} /> {x.scope}
+                  <Glyph state={x.state} /><span className="vh">{GLYPH[x.state].label}, </span> {x.scope}
                   {x.kind !== e.kind || cell.instances.some((y) => y !== x && y.kind !== x.kind) ? ` · ${x.kind}` : ''}
                 </button>
               </li>
@@ -143,56 +140,56 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
         </Panel>
       ) : null}
 
-      {details.length > 0 ? (
-        <>
-          <h3>{t('Содержимое', 'Contents')}</h3>
-          <dl className="kv detail">
-            {details.map(([k, v]) => (
-              <div key={k} className="kvrow">
-                <dt>{detailLabel(k)}</dt>
-                <dd className="wrap">{v}</dd>
-              </div>
-            ))}
-          </dl>
-          <p className="mute small">{t('Значения env и заголовков не показываются: только имена ключей. Команды показаны без секретов.', 'Env and header values are not shown, only key names. Commands are shown without secrets.')}</p>
-        </>
-      ) : null}
-
+      {/* an action never waits behind a header setting: a button whose level is not granted yet asks for it (the OS dialog) and goes on */}
       <div className="actions col">
-        <button onClick={() => void window.loadout.copyText(e.origin.file)}>{t('Копировать путь', 'Copy path')}</button>
         <button
-          disabled={!e.canToggle || !levelOk(level, e.toggleLevel ?? 'R1')}
-          title={
-            !e.canToggle
-              ? e.toggleWhy
-              : !levelOk(level, e.toggleLevel ?? 'R1')
-                ? pickLevel(e.toggleLevel ?? 'R1')
-                : t('Предпросмотр, затем запись (Space)', 'Preview, then write (Space)')
-          }
-          onClick={() => onToggle(e, e.state === 'off' || e.state === 'unknown')}
+          className={e.canToggle ? 'primary' : undefined}
+          disabled={!e.canToggle}
+          title={!e.canToggle ? e.toggleWhy : t('Покажет, что изменится, и подождёт подтверждения (Space)', 'Shows what will change and waits for your confirmation (Space)')}
+          onClick={() => onToggle(e, enable)}
         >
-          {e.state === 'off' || e.state === 'unknown' ? t('Включить', 'Enable') : e.toggleLevel === 'R2' ? t('Выключить (в корзину)', 'Disable (move to trash)') : t('Выключить', 'Disable')}
+          {enable ? t('Включить', 'Enable') : e.toggleLevel === 'R2' ? t('Выключить (в корзину)', 'Disable (move to trash)') : t('Выключить', 'Disable')}
         </button>
         {e.canEdit ? (
           <>
-            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? t('Заменить команду и аргументы', 'Replace the command and arguments') : pickLevel('R2')} onClick={() => onEdit(e)}>
+            <button title={t('Заменить команду и аргументы', 'Replace the command and arguments')} onClick={() => onEdit(e)}>
               {t('Править команду…', 'Edit command…')}
             </button>
-            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? t('Скопировать запись в другой клиент', 'Copy the entry to another client') : pickLevel('R2')} onClick={() => onCopy(e)}>
+            <button title={t('Скопировать запись в другой клиент', 'Copy the entry to another client')} onClick={() => onCopy(e)}>
               {t('Копировать в клиент…', 'Copy to client…')}
             </button>
           </>
         ) : null}
+        {/* the path shown in "file" above: the one a toggle writes */}
+        <button onClick={() => void window.loadout.copyText((e.toggleAt ?? e.origin).file)}>{t('Копировать путь', 'Copy path')}</button>
       </div>
       <p className="mute small">
         {!e.canToggle
           ? t(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}.`, `Cannot toggle: ${e.toggleWhy ?? 'not supported'}.`)
-          : level === 'R0'
-            ? t(`Сейчас «${levelLabel('R0')}»: окно ничего не пишет. Уровень записи выбирается в шапке окна.`, `The level is “${levelLabel('R0')}” now: the window writes nothing. Pick the write level in the window header.`)
-            : !levelOk(level, e.toggleLevel ?? 'R1')
-              ? t(`Для этой записи нужен уровень «${levelLabel('R2')}»: у неё нет флага, выключение выносит её в корзину Loadout.`, `This entry needs the “${levelLabel('R2')}” level: it has no flag, so disabling moves it to the Loadout trash.`)
-              : t('Запись пойдёт через предпросмотр, бэкап и проверку; откат — в журнале.', 'The write goes through preview, backup and verification; rollback is in the journal.')}
+          : short
+            ? t(
+                `Сейчас «${levelLabel(level)}». Loadout сначала спросит разрешение (окно Windows), потом покажет, что изменится.${e.toggleLevel === 'R2' ? ' У этой записи нет флага: выключение вынесет её в корзину Loadout, включение вернёт.' : ''}`,
+                `The level is “${levelLabel(level)}” now. Loadout asks for permission first (a Windows dialog), then shows what will change.${e.toggleLevel === 'R2' ? ' This entry has no flag: disabling moves it to the Loadout trash, enabling puts it back.' : ''}`,
+              )
+            : t('Сначала предпросмотр, потом запись с бэкапом; откатить можно в журнале.', 'A preview first, then the write with a backup; you can roll it back in the journal.')}
       </p>
+
+      <details className="tech">
+        <summary>{t('Технические подробности', 'Technical details')}</summary>
+        <dl className="kv">
+          <div className="kvrow"><dt><Term tip={t('Где лежит запись: user — для всех проектов, project и local — для одной папки, managed — задано администратором', 'Where the entry lives: user is for all projects, project and local for one folder, managed is set by an administrator')}>{t('область', 'scope')}</Term></dt><dd>{e.scope}</dd></div>
+          <div className="kvrow"><dt>{t('найдено в', 'found in')}</dt><dd className="wrap"><Path p={e.origin.file} /></dd></div>
+          <div className="kvrow"><dt><Term tip={t('Путь к записи внутри файла (JSON Pointer)', 'The path to the entry inside the file (JSON Pointer)')}>{t('указатель', 'pointer')}</Term></dt><dd className="wrap">{e.origin.pointer}</dd></div>
+          {e.toggleAt ? <div className="kvrow"><dt>{t('переключатель', 'switch')}</dt><dd className="wrap">{e.toggleAt.pointer}</dd></div> : null}
+          {details.map(([k, v]) => (
+            <div key={k} className="kvrow">
+              <dt>{detailLabel(k)}</dt>
+              <dd className="wrap">{v}</dd>
+            </div>
+          ))}
+        </dl>
+        {details.length > 0 ? <p className="mute small">{t('Значения env и заголовков не показываются: только имена ключей. Команды показаны без секретов.', 'Env and header values are not shown, only key names. Commands are shown without secrets.')}</p> : null}
+      </details>
     </>
   )
 }

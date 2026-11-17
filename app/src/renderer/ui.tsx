@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import type { ReactNode } from 'react'
 import { t } from '../shared/i18n'
 import type { EntityState, Kind, WriteLevel } from '../shared/model'
@@ -24,8 +25,21 @@ export function Glyph({ state, pulse }: { state: EntityState | 'none'; pulse?: b
   )
 }
 
+/** A kind in the person's words (one entry), not the config key. */
+export const kindLabel = (k: Kind): string =>
+  ({
+    plugin: t('плагин', 'plugin'),
+    mcp: 'MCP',
+    skill: t('скил', 'skill'),
+    hook: t('хук', 'hook'),
+    agent: t('агент', 'agent'),
+    command: t('команда', 'command'),
+    connector: t('коннектор', 'connector'),
+    marketplace: t('маркетплейс', 'marketplace'),
+  })[k] ?? k
+
 export function KindBadge({ kinds }: { kinds: readonly Kind[] }) {
-  return <span className={`badge k-${kinds[0] ?? 'plugin'}`}>{kinds.join('+')}</span>
+  return <span className={`badge k-${kinds[0] ?? 'plugin'}`}>{kinds.map(kindLabel).join(' + ')}</span>
 }
 
 export function Panel({ title, children, className = '' }: { title?: string; children: ReactNode; className?: string }) {
@@ -37,12 +51,40 @@ export function Panel({ title, children, className = '' }: { title?: string; chi
   )
 }
 
-/** Section title with a one-line explanation under it: the same size and spacing on every page. */
-export function PageHead({ title, sub, children }: { title: ReactNode; sub: ReactNode; children?: ReactNode }) {
+/**
+ * A term with its explanation: dotted underline, the explanation shows on hover and on keyboard focus (not a `title`,
+ * which the keyboard never reaches) and is the term's accessible description.
+ */
+export function Term({ tip, children }: { tip: string; children: ReactNode }) {
+  const id = useId()
+  return (
+    <span className="term" tabIndex={0} aria-describedby={id} onKeyDown={(e) => e.key === 'Escape' && e.currentTarget.blur()}>
+      {children}
+      <span role="tooltip" id={id} className="tip">{tip}</span>
+    </span>
+  )
+}
+
+/** Opens the in-window help at a topic; set once by App (the help lives there). */
+export let openHelp: (topic?: string) => void = () => undefined
+export const setOpenHelp = (f: (topic?: string) => void): void => {
+  openHelp = f
+}
+
+/** Section title with a one-line explanation under it and a link to the section's help: the same size and spacing on every page. */
+export function PageHead({ title, sub, topic, children }: { title: ReactNode; sub: ReactNode; topic?: string; children?: ReactNode }) {
   return (
     <div className="pagehead">
       <h2>{title}</h2>
-      <p className="mute">{sub}</p>
+      <p className="mute">
+        {sub}
+        {topic ? (
+          <>
+            {' '}
+            <button className="linkish" onClick={() => openHelp(topic)}>{t('Подробнее в справке', 'More in Help')}</button>
+          </>
+        ) : null}
+      </p>
       {children}
     </div>
   )

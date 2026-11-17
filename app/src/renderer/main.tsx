@@ -1,5 +1,4 @@
-import '@fontsource/inter/400.css'
-import '@fontsource/inter/600.css'
+// UI text is Segoe UI (hinted for ClearType at 100–125 % scale; Inter rendered ~15 % softer there); the mono face is for code only
 import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/700.css'
 import { StrictMode, useRef, useState } from 'react'

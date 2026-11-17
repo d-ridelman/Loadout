@@ -171,6 +171,7 @@ export function Ctxkit({ level, onNotice }: Props) {
     <>
       <PageHead
         title={t('Инструменты контекста', 'Context Toolkit')}
+        topic="ctxkit"
         sub={t(
           'Встроенный набор хуков, который не даёт агентам Claude Code засорять контекст. Здесь его ставят, проверяют и отключают.',
           'A bundled set of hooks that keeps Claude Code agents from filling up their context. Install it, check it and turn it off here.',
