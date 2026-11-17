@@ -260,7 +260,11 @@ fn guard_file(home: &Path, file: &Path) -> Result<(), String> {
             "файл клиента — символьная ссылка: запись заменила бы ссылку, а не файл",
             "the client file is a symbolic link: writing would replace the link, not the file"
         )),
-        _ => Ok(()),
+        // a project file, on the write and on the rollback alike: no folder on the way may lead outside the project
+        _ => match transfer::project_file(home, file) {
+            Some(p) => transfer::inside(&p, file),
+            None => Ok(()),
+        },
     }
 }
 
@@ -1445,7 +1449,27 @@ pub fn plan_batch(home: &Path, store: Option<&Path>, items: &[Intent]) -> BatchP
                 continue;
             }
         };
+        // Two entries of one batch bound for the same place (a project's `.mcp.json` and local scope both name a server):
+        // each plan alone sees a free name, so the second is set aside here instead of failing halfway through the write.
+        let place = |p: &Plan| {
+            let what = if p.kind == Kind::Hook {
+                p.to.as_str()
+            } else {
+                ""
+            };
+            (p.client, p.file.clone(), p.pointer.clone(), what.to_owned())
+        };
         match plan_in(home, store, scan, i) {
+            Ok(p)
+                if matches!(i, Intent::Copy { .. })
+                    && plans.iter().any(|q| place(q) == place(&p)) =>
+            {
+                skipped.push(crate::tr!(
+                    "{}: в пакете уже есть запись с тем же местом назначения",
+                    "{}: the batch already has an entry bound for the same place",
+                    p.name
+                ));
+            }
             Ok(p) => plans.push(p),
             Err(err) => {
                 let name = scan

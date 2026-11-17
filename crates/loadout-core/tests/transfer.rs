@@ -466,6 +466,68 @@ fn a_batch_copies_several_kinds_and_rolls_back_as_a_whole() {
 }
 
 #[test]
+fn a_batch_sets_aside_a_second_entry_bound_for_the_same_place() {
+    let e = env();
+    let p = app(&e);
+    // the same server name in the project's shared `.mcp.json` and in its local scope
+    let claude = e.home.join(".claude.json");
+    let key = p.claude_key.clone().unwrap();
+    let text = fs::read_to_string(&claude).unwrap().replace(
+        &format!("\"{key}\": {{}}"),
+        &format!(
+            "\"{key}\": {{ \"mcpServers\": {{ \"shared-tool\": {{ \"command\": \"other\" }} }} }}"
+        ),
+    );
+    fs::write(&claude, text).unwrap();
+    let s = projects::scan(&e.home, &p);
+    let twins: Vec<_> = s
+        .entities
+        .iter()
+        .filter(|x| {
+            x.client == Client::ClaudeCode && x.kind == Kind::Mcp && x.name == "shared-tool"
+        })
+        .map(|x| copy(&x.id, "codex", &p.id))
+        .collect();
+    assert_eq!(twins.len(), 2);
+    let bp = write::plan_batch(&e.home, Some(&e.store), &twins);
+    assert_eq!(bp.plans.len(), 1);
+    assert!(bp.skipped[0].contains("shared-tool"), "{:?}", bp.skipped);
+    let (_, done) = write::apply_batch(&e.home, &e.store, &twins, &bp.batch_sha, ML).unwrap();
+    assert_eq!(
+        done.len(),
+        1,
+        "the batch writes the first and skips the second"
+    );
+}
+
+#[test]
+fn a_rollback_does_not_follow_a_project_folder_that_became_a_junction() {
+    let e = env();
+    let p = app(&e);
+    let s = projects::scan(&e.home, &p);
+    let m = find(&s, Client::ClaudeCode, Kind::Mcp, "shared-tool");
+    let (_, op) = run(&e, &copy(&m.id, "codex", &p.id)).unwrap();
+    // `.codex` moves outside and a junction takes its place
+    let outside = e.home.join("elsewhere");
+    fs::rename(p.dir.join(".codex"), &outside).unwrap();
+    // `mklink` takes `/x` in a path for a switch: the project key is written with forward slashes
+    let back = |q: &Path| q.to_string_lossy().replace('/', "\\");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(back(&p.dir.join(".codex")))
+        .arg(back(&outside))
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+    assert!(write::rollback(&e.home, &e.store, &op, ML).is_err());
+    assert!(
+        outside.join("config.toml").is_file(),
+        "nothing outside the project was removed"
+    );
+    let _ = fs::remove_dir(p.dir.join(".codex"));
+}
+
+#[test]
 fn a_plugin_is_never_copied_and_every_target_says_why() {
     let e = env();
     let r = loadout_core::scan(&e.home);

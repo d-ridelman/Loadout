@@ -117,7 +117,12 @@ fn target_of(home: &Path, m: &Manifest) -> Option<PathBuf> {
     } else {
         Some(crate::projects::find(home, &m.project)?)
     };
-    skill_root(home, client, project.as_ref()).map(|r| r.join(&m.name))
+    let target = skill_root(home, client, project.as_ref())?.join(&m.name);
+    // as on the write: a project folder that became a junction since does not lead the rollback outside the project
+    match &project {
+        Some(p) if super::transfer::inside(p, &target).is_err() => None,
+        _ => Some(target),
+    }
 }
 
 /// Tree files in order: `(path with /, full path, size)`. Links and reparse points are refused, `.git` is skipped.
@@ -675,6 +680,13 @@ pub(super) fn install(
         });
     let _ = std::fs::remove_dir_all(&tmp);
     if let Err(e) = placed {
+        // the folders made for this copy go too (only empty ones: `remove_dir` refuses otherwise)
+        if made_root {
+            let _ = std::fs::remove_dir(root);
+        }
+        if made_outer {
+            let _ = std::fs::remove_dir(outer);
+        }
         return fail(bad(
             &format!("скил не установлен: {e}"),
             &format!("the skill was not installed: {e}"),
