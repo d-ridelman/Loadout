@@ -1289,6 +1289,8 @@ try {
   must(!(await page.locator('main').innerText()).includes('прежняя версия'), 'a clean fixture copy must have no line about a previous version')
   // the top of the section as a newcomer sees it: what it is, three steps, the client table with the state of each client
   await waitFor(async () => !(await page.locator('table[aria-label="Клиенты Инструментов контекста"]').innerText()).includes('…'), 'the client states are loaded')
+  // a notice left by an earlier step would cover the table: close it as a user would
+  for (const close of await page.locator('.toast .toast-close').all()) await close.click().catch(() => {})
   for (const [w, h] of [[1280, 800], [1920, 1080]]) {
     await resize(app, w, h)
     await page.evaluate(() => { document.querySelector('main')?.scrollTo(0, 0); window.scrollTo(0, 0) })
@@ -1715,8 +1717,10 @@ try {
     must((await help.innerText()).includes('спросит разрешение'), 'the FAQ answer on disabling does not say that Loadout asks for permission')
     // Context Toolkit has its own questions: what it is, where to start, which clients, how to remove it, the terms
     for (const q of ['Что такое Инструменты контекста', 'С чего начать в Инструментах контекста', 'Какие клиенты поддерживают Инструменты контекста', 'Как убрать Инструменты контекста', 'шлюз Stop, советник']) must((await help.innerText()).includes(q), `the FAQ lacks the question "${q}"`)
-    await qs.filter({ hasText: 'С чего начать в Инструментах контекста' }).locator('summary').click()
+    const start = qs.filter({ hasText: 'С чего начать в Инструментах контекста' })
+    await start.locator('summary').click()
     must((await help.innerText()).includes('/hooks'), 'the Context Toolkit answer does not tell about /hooks in Codex')
+    await start.evaluate((d) => d.scrollIntoView({ block: 'center' }))
     await shot(page, 'h3-help-ctxkit-faq-1280')
     for (const [w, h] of SIZES) {
       await resize(app, w, h)
