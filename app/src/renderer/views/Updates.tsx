@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getLang, t } from '../../shared/i18n'
 import type { UpdateErrorReason, UpdatesInfo, UpdateState } from '../../shared/model'
 
@@ -95,6 +95,7 @@ export function Updates() {
   const [open, setOpen] = useState(false)
   const [dismissed, setDismissed] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     void api().updates().then(setInfo, () => undefined)
@@ -103,9 +104,14 @@ export function Updates() {
   useEffect(() => {
     if (!open) return
     // a dialog or the palette above the window takes Escape for itself (App.tsx)
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !document.querySelector('.modal, .palette') && setOpen(false)
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // capture phase: React closes the dialog in its own listener, after which `.modal` would already be gone
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || document.querySelector('.modal, .palette')) return
+      setOpen(false)
+      btnRef.current?.focus() // focus goes back where the panel was opened from
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [open])
 
   const online = info ? info.supported && info.auto : false
@@ -127,6 +133,7 @@ export function Updates() {
     <>
       <span id="privacy">{privacy}</span>
       <button
+        ref={btnRef}
         className={`upd-btn${fresh ? ' s-on' : ''}`}
         aria-expanded={open}
         aria-controls="updates"
@@ -147,8 +154,8 @@ export function Updates() {
           </label>
           <p className="mute small">
             {t(
-              'При запуске и раз в сутки, пока окно открыто. Скачивание — только по кнопке, установка — по «Перезапустить и обновить» или при выходе после скачивания.',
-              'At startup and once a day while the window is open. Download only on your click; install on “Restart and update” or when you quit after the download.',
+              'При запуске и раз в сутки, пока окно открыто (после сбоя — раз в час). Скачивание — только по кнопке, установка — по «Перезапустить и обновить» или при выходе после скачивания.',
+              'At startup and once a day while the window is open (hourly after a failure). Download only on your click; install on “Restart and update” or when you quit after the download.',
             )}
           </p>
           {info.supported ? (

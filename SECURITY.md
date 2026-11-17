@@ -52,7 +52,7 @@ The installer and the app are not code-signed, so updates cannot rely on a signa
 
 - electron-updater checks the Authenticode signature of a downloaded update only when the build's `resources/app-update.yml` has a `publisherName`. Loadout's build has none (the packaged-build check verifies that), so the check is skipped rather than rejecting every update of an unsigned build.
 - `latest.yml` comes over HTTPS from the GitHub release of this repository and carries the SHA-512 and size of the installer. The downloaded file, whether whole or assembled from the changed blocks, must match that SHA-512, otherwise it is deleted and nothing is installed. Only the full installer named there is accepted (the web installer is turned off).
-- The installer runs silently (`/S --updated`) into the folder of the current installation and starts the new version; `%APPDATA%\loadout-app` stays.
+- The installer runs silently (`/S --updated`) into the folder of the current installation; after "Restart and update" it starts the new version, after an install on quit it does not. `%APPDATA%\loadout-app` stays.
 
 What this does not protect against: whoever can publish a release in this repository (for example with a stolen GitHub account of the owner) can ship any code, exactly as with an installer downloaded by hand from Releases. A code signature would add a second, independent key; there is none yet.
 
@@ -60,7 +60,7 @@ Versions 0.0.7 and older have no updater: install 1.0.0 by hand once.
 
 ## Processes Loadout starts
 
-The window starts `loadout.exe` (the core, from the app folder), the bundled `context-toolkit.exe`, `tasklist` (to warn when a client whose file is about to change is running), and, on the actions above, `claude` and `git` from `PATH`. It starts them without a shell, with fixed flags; the arguments built from your input are checked first (a source can never become a flag or a second command). Commands of MCP servers from the configs are never run. To install an update, electron-updater starts the downloaded and verified installer from `%LOCALAPPDATA%\loadout-app-updater` with `/S --updated --force-run` after Loadout closes.
+The window starts `loadout.exe` (the core, from the app folder), the bundled `context-toolkit.exe`, `tasklist` (to warn when a client whose file is about to change is running), and, on the actions above, `claude` and `git` from `PATH`. It starts them without a shell, with fixed flags; the arguments built from your input are checked first (a source can never become a flag or a second command). Commands of MCP servers from the configs are never run. To install an update, electron-updater starts the downloaded and verified installer from `%LOCALAPPDATA%\loadout-app-updater`: on "Restart and update" with `/S --updated --force-run`, and Loadout quits right after; on quit after a download with `/S --updated`, without starting the new version. If the installer cannot be started directly, electron-updater tries `elevate.exe` from the app folder, or opens the installer with its usual window.
 
 `context-toolkit.exe` starts a few processes of its own: `claude --version` through `cmd.exe` on a preview (to check the Claude Code version), `powershell.exe Get-Process` when the Claude Desktop checkbox is on (Desktop must be closed), and `--version` of an old `ctxkit.exe` when it moves an earlier installation (to make sure the file is ours before deleting it).
 

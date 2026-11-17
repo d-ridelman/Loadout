@@ -1274,6 +1274,7 @@ try {
     await both('upd-panel-error')
     await up.keyboard.press('Escape')
     await pop.waitFor({ state: 'detached', timeout: 5000 })
+    must(await btn.evaluate((el) => el === document.activeElement), 'Escape did not return focus to the version button')
     const card = up.getByRole('status', { name: 'Обновление Loadout' })
     await card.getByText(/^Нет связи с GitHub/).waitFor({ timeout: 5000 })
     await both('upd-error')

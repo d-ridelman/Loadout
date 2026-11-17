@@ -157,6 +157,15 @@ describe('Updates', () => {
     expect(fresh.u.state).toEqual({ status: 'available', version: '1.0.1' })
   })
 
+  it('a late download error after the update is ready (cache bookkeeping) keeps the ready update', () => {
+    const { updater, u } = setup()
+    updater.emit('update-available', { version: '2.0.0' })
+    void u.download()
+    updater.emit('update-downloaded', {})
+    updater.emit('error', new Error('EBUSY: resource busy or locked, copyfile current.blockmap'))
+    expect(u.state).toEqual({ status: 'ready', version: '2.0.0' })
+  })
+
   it('a failed install start (the updater reports an error once ready) is shown, not swallowed', () => {
     const { updater, u } = setup()
     updater.emit('update-available', { version: '2.0.0' })

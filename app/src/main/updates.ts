@@ -114,6 +114,8 @@ export class Updates {
   }
 
   private fail(e: unknown): void {
+    // the file is already downloaded and verified; a late error of the download's cache bookkeeping does not undo that
+    if (this.state.status === 'ready' && this.phase !== 'install') return
     // a failed check is not a check: the next hourly tick tries again instead of waiting a day
     if (this.phase === 'check') this.lastCheckAt = undefined
     this.set({ status: 'error', reason: errorReason(e, this.phase), quiet: this.phase === 'check' && !this.manual })
@@ -146,7 +148,9 @@ export class Updates {
   /** Silent install, then the new version starts by itself. */
   install(): boolean {
     if (this.state.status !== 'ready') return false
-    // an error from here on (the installer file is gone, it cannot start) is shown instead of a button that does nothing
+    // an error reported synchronously (no installer file) is shown instead of a button that does nothing; one that comes
+    // after the quit has started has no window to reach
+    // shortcut: a failed async installer start is only logged by electron-updater, upgrade if users report silent no-updates
     this.phase = 'install'
     this.o.updater.quitAndInstall(true, true)
     return true
