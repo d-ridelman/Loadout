@@ -1328,6 +1328,9 @@ fn remove_our_hook_event(hooks: &mut Map<String, Value>, event: &str, current: O
         return;
     };
     let kept = strip_our_hooks(list.clone(), current);
+    if kept == *list {
+        return; // nothing of ours: the event stays as it is, an empty `[]` of the user's included
+    }
     if kept.is_empty() {
         hooks.remove(event);
     } else {
@@ -3350,6 +3353,10 @@ mod tests {
         hooks.insert("Stop".to_string(), json!([ours]));
         remove_our_hook_event(&mut hooks, "Stop", None);
         assert!(hooks.get("Stop").is_none());
+        // an event with nothing of ours stays as the user wrote it, an empty one too
+        hooks.insert("Stop".to_string(), json!([]));
+        remove_our_hook_event(&mut hooks, "Stop", None);
+        assert_eq!(hooks["Stop"], json!([]));
     }
 
     #[test]

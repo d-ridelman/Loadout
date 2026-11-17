@@ -1197,8 +1197,8 @@ const cases = [
     const mdAfter = readFileSync(join(p, 'CLAUDE.md'), 'utf8');
     if (!mdAfter.includes('added before') || !mdAfter.includes('added after') || !mdAfter.startsWith('# Mine\nkeep\n') || /(context-toolkit|ctxkit):/.test(mdAfter)) return `CLAUDE.md: ${JSON.stringify(mdAfter)}`;
 
-    // An edit of form only (CRLF line breaks, blank lines at the end, another indent) is an edit too: the backup bytes
-    // come back only for a file untouched since setup, otherwise only our parts are cut out
+    // An edit of form only (CRLF line breaks, another indent) is an edit too: the backup bytes come back only for a
+    // file untouched since setup, otherwise only our parts are cut out
     const q = join(dir, 'form-edits-test');
     mkdirSync(q, { recursive: true });
     const runQ = (...a) => spawnSync(exe, ['setup', '--profile', q, '--claude-json', cj, '--skip-version-check', ...a], { encoding: 'utf8' });
@@ -1214,7 +1214,30 @@ const cases = [
     const mdQ = readFileSync(join(q, 'CLAUDE.md'), 'utf8');
     if (!mdQ.startsWith('# Mine\r\nkeep\r\n') || /(context-toolkit|ctxkit):/.test(mdQ)) return `CLAUDE.md (form): ${JSON.stringify(mdQ)}`;
     const sQ = JSON.parse(readFileSync(join(q, 'settings.json'), 'utf8'));
-    return (sQ.model === 'opus' && !/context-toolkit|ctxkit/i.test(JSON.stringify(sQ))) || `settings.json (form): ${JSON.stringify(sQ)}`;
+    if (sQ.model !== 'opus' || /context-toolkit|ctxkit/i.test(JSON.stringify(sQ))) return `settings.json (form): ${JSON.stringify(sQ)}`;
+
+    // An empty hook event of the user's own is not ours: an untouched file comes back byte for byte, and a file
+    // that held nothing else is not deleted as "made by setup"
+    for (const [i, own] of ['{"hooks":{"Stop":[]},"x":1}', '{"hooks":{"Stop":[]}}'].entries()) {
+      const r = join(dir, `empty-event-${i}`);
+      mkdirSync(r, { recursive: true });
+      writeFileSync(join(r, 'settings.json'), own);
+      const runR = (...a) => spawnSync(exe, ['setup', '--profile', r, '--claude-json', cj, '--skip-version-check', ...a], { encoding: 'utf8' });
+      if (runR().status !== 0) return `setup (empty event ${own}) failed`;
+      const ur = runR('--uninstall');
+      if (ur.status !== 0) return `uninstall (empty event): ${ur.stderr}`;
+      if (!existsSync(join(r, 'settings.json')) || readFileSync(join(r, 'settings.json'), 'utf8') !== own) return `settings.json with an empty event of the user's: ${existsSync(join(r, 'settings.json')) ? readFileSync(join(r, 'settings.json'), 'utf8') : 'deleted'} / ${ur.stdout}`;
+    }
+    // the first line of the user's after our block keeps its indent (Markdown code and nested lists depend on it)
+    const ind = join(dir, 'indent-after-test');
+    mkdirSync(ind, { recursive: true });
+    writeFileSync(join(ind, 'CLAUDE.md'), '# Mine\n');
+    const runI = (...a) => spawnSync(exe, ['setup', '--profile', ind, '--claude-json', cj, '--skip-version-check', ...a], { encoding: 'utf8' });
+    if (runI('--with-rules').status !== 0) return 'setup (indent) failed';
+    writeFileSync(join(ind, 'CLAUDE.md'), `${readFileSync(join(ind, 'CLAUDE.md'), 'utf8')}    indented code\n`);
+    if (runI('--uninstall').status !== 0) return 'uninstall (indent) failed';
+    const mdI = readFileSync(join(ind, 'CLAUDE.md'), 'utf8');
+    return mdI === '# Mine\n\n    indented code\n' || `indent after the block: ${JSON.stringify(mdI)}`;
   }],
 
   // Safe failure: broken or odd hook input is a silent pass (exit 0, empty stdout), never a block or a crash

@@ -62,7 +62,8 @@ fn join_cut(before: &str, after: &str) -> String {
     } else {
         "\n"
     };
-    let (before, after) = (before.trim_end(), after.trim_start());
+    // only line breaks go from the start of `after`: the indent of the user's next line is part of their text
+    let (before, after) = (before.trim_end(), after.trim_start_matches(['\r', '\n']));
     match (before.is_empty(), after.is_empty()) {
         (true, true) => String::new(),
         (true, false) => after.to_string(),
@@ -120,7 +121,8 @@ fn read_backups(dir: &Path, name: &str) -> Vec<Saved> {
 /// rolled-back `result` is exactly what setup made of it: setup trims the end of the text and appends its block, so a
 /// file untouched since then comes out of the block cut as `join_cut(backup, "")`. Restoring that backup's bytes gives
 /// the user's file back byte for byte (a missing final newline, extra blank lines at the end). Any edit after setup,
-/// of form too (line breaks, blank lines), makes it no match: then only our block is cut out.
+/// of form too (line breaks, indents), makes it no match: then only our block is cut out. Blank lines and spaces
+/// right before the block, and blank lines right after it, are what the cut drops, so they do not count.
 fn exact_text_backup<'a>(
     result: &str,
     backups: &'a [Saved],
@@ -234,6 +236,10 @@ fn remove_rules_block(path: &Path, backup_dir: &Path, dry_run: bool) -> Result<(
 fn canon_settings(v: &Value) -> Value {
     let mut v = v.clone();
     if let Some(root) = v.as_object_mut() {
+        // an empty event the user had (`"Stop": []`) is gone once our hook is taken out of it: the same settings
+        if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
+            hooks.retain(|_, list| list.as_array().is_none_or(|a| !a.is_empty()));
+        }
         for k in ["hooks", "env"] {
             if root
                 .get(k)
@@ -1024,9 +1030,9 @@ mod tests {
         assert_eq!(hit.1, original.as_bytes());
         assert!(exact_text_backup("# Mine\r\nchanged\r\n", &backups, clean).is_none());
         assert!(exact_text_backup("anything", &backups[1..], clean).is_none());
-        // an edit of form only after setup (LF instead of CRLF, more blank lines) is an edit: no byte restore
+        // an edit of form only after setup (LF instead of CRLF, an indent) is an edit: no byte restore
         assert!(exact_text_backup("# Mine\nkeep\n", &backups, clean).is_none());
-        assert!(exact_text_backup("# Mine\r\nkeep\r\n\r\n", &backups, clean).is_none());
+        assert!(exact_text_backup("# Mine\r\n  keep\r\n", &backups, clean).is_none());
         // trailing blank lines and a missing final newline of the original come back
         for t in [
             "two blank\r\n\r\n\r\n",
@@ -1143,6 +1149,8 @@ mod tests {
         assert_eq!(join_cut("a", "\r\nb\r\n"), "a\r\n\r\nb\r\n");
         assert_eq!(join_cut("a\r\nkeep", ""), "a\r\nkeep\r\n");
         assert_eq!(join_cut("a", "b"), "a\n\nb");
+        // the indent of the user's line after the block is theirs
+        assert_eq!(join_cut("a\n\n", "\n    code\n"), "a\n\n    code\n");
     }
 
     #[test]
