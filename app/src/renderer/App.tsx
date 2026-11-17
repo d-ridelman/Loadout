@@ -64,7 +64,7 @@ const navSub = (v: View): string =>
     doctor: t('найденные проблемы', 'problems found'),
     journal: t('история и откат', 'history and undo'),
     profiles: t('наборы включённого', 'sets of what is on'),
-    ctxkit: t('для опытных', 'for advanced users'),
+    ctxkit: t('экономия лимитов', 'saving limits'),
   })[v]
 
 /** Functions, not constants: labels depend on the language, which is chosen after the module is imported. */

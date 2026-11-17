@@ -439,7 +439,7 @@ pub fn run_setup(args: &[String]) -> i32 {
             if let Err(e) = upsert_claude_md(
                 &dsh_agents,
                 &dsh_backup,
-                &other_client_rules(&opts),
+                &other_client_rules(&opts, true),
                 opts.dry_run,
             ) {
                 eprintln!("ERR: {e}");
@@ -451,7 +451,7 @@ pub fn run_setup(args: &[String]) -> i32 {
             if let Err(e) = upsert_claude_md(
                 &codex.join("AGENTS.md"),
                 &codex.join("backups"),
-                &other_client_rules(&opts),
+                &other_client_rules(&opts, false),
                 opts.dry_run,
             ) {
                 eprintln!("ERR: {e}");
@@ -2444,8 +2444,17 @@ fn rules_snippet(opts: &SetupOpts, settings: &Value) -> String {
 
 /// The rules block for a client other than Claude Code (`AGENTS.md` of DeepSeek Harness and Codex): no `Explore`,
 /// `checker`, advisor or Stop gate, which exist only in Claude Code; the same policy lines.
-fn other_client_rules(opts: &SetupOpts) -> String {
-    let extra = policy_lines(&opts.config, opts.lang);
+/// `hook_asks`: false for Codex, whose hooks cannot ask, so the asking policies keep the rule but not the claim.
+fn other_client_rules(opts: &SetupOpts, hook_asks: bool) -> String {
+    let mut extra = policy_lines(&opts.config, opts.lang);
+    if !hook_asks {
+        for claim in [
+            ": the Context Toolkit hook asks.",
+            ": хук Инструментов контекста спросит.",
+        ] {
+            extra = extra.replace(claim, ".");
+        }
+    }
     let body = t(
         opts.lang,
         "## Context Discipline (Context Toolkit)\n\n\
@@ -3734,15 +3743,26 @@ mod tests {
 
     #[test]
     fn rules_for_other_clients_name_no_claude_only_tools() {
-        let opts = SetupOpts {
-            config: policy::parse(r#"{"policies":{"commit_hygiene":true}}"#).unwrap(),
-            ..SetupOpts::default()
-        };
-        let b = other_client_rules(&opts);
-        assert!(b.starts_with(MARKER_START) && b.ends_with(MARKER_END));
-        assert!(b.contains("context-toolkit check") && b.contains("Co-Authored-By"));
-        for w in ["Explore", "checker", "advisor", "Stop", "Read"] {
-            assert!(!b.contains(w), "{w}");
+        let all = r#"{"policies":{"commit_hygiene":true,"confirm_irreversible":true,"stray_files":true}}"#;
+        for lang in [Lang::En, Lang::Ru] {
+            let opts = SetupOpts {
+                config: policy::parse(all).unwrap(),
+                lang,
+                ..SetupOpts::default()
+            };
+            let dsh = other_client_rules(&opts, true);
+            let codex = other_client_rules(&opts, false);
+            for b in [&dsh, &codex] {
+                assert!(b.starts_with(MARKER_START) && b.ends_with(MARKER_END));
+                assert!(b.contains("context-toolkit check") && b.contains("Co-Authored-By"));
+                assert!(b.contains("git push") && b.contains("report*.md"));
+                for w in ["Explore", "checker", "advisor", "Stop", "Read"] {
+                    assert!(!b.contains(w), "{w}");
+                }
+            }
+            // Codex hooks cannot ask: its block keeps the rules but does not promise that the hook asks
+            assert_eq!(dsh.matches(t(lang, "hook asks", "спросит")).count(), 2);
+            assert_eq!(codex.matches(t(lang, "hook asks", "спросит")).count(), 0);
         }
     }
 

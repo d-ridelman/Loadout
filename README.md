@@ -73,7 +73,7 @@ Operation backups and the Loadout trash keep client configs **in full and as pla
 |---|---|
 | ![Install skill](docs/screenshots/en-install-skill.png) | ![Profiles](docs/screenshots/en-profiles.png) |
 
-| Context Toolkit: form and policies | Context Toolkit: diagnostics and efficiency |
+| Context Toolkit: clients and what each gets | Context Toolkit: diagnostics and efficiency |
 |---|---|
 | ![Context Toolkit form](docs/screenshots/en-context-toolkit.png) | ![Context Toolkit efficiency](docs/screenshots/en-context-toolkit-efficiency.png) |
 

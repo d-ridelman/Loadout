@@ -42,8 +42,8 @@ export const ctxClients = (): CtxClientRow[] => [
     name: 'Antigravity',
     flag: 'antigravity',
     gets: t(
-      'Проверка команд оболочки (cat большого файла, рекурсивный grep, код с обратными слешами) и защиты.',
-      'Checks shell commands (cat of a large file, recursive grep, code with backslashes) and safeguards.',
+      'Проверка команд оболочки (cat большого файла, рекурсивный grep, код с обратными слешами) и защиты для команд.',
+      'Checks shell commands (cat of a large file, recursive grep, code with backslashes) and the safeguards for commands.',
     ),
     lacks: t(
       'Каждую команду Antigravity будет показывать вам на подтверждение (кроме разрешённых «Always Allow»). В разработке: ограничение чтения файлов и проверка правок — ответ «пропустить» в двух версиях документации Antigravity значит разное. Шлюза Stop и блока правил нет.',
@@ -81,5 +81,7 @@ export function clientNow(id: CtxClient, s: CtxkitStatus['clients'] | undefined)
   if (v === undefined) return { text: '…', cls: 'mute' }
   if (v === 'absent') return { text: t('не найден на этом компьютере', 'not on this computer'), cls: 'mute' }
   if (id === 'opencode') return { text: t('○ не поддерживается', '○ not supported'), cls: 's-off' }
-  return v === 'on' ? { text: t('● стоят', '● installed'), cls: 's-on' } : { text: t('○ не стоят', '○ not installed'), cls: 's-off' }
+  if (v === 'off') return { text: t('○ не стоят', '○ not installed'), cls: 's-off' }
+  // Codex runs a new hook only after it is trusted: "installed" alone would read as "working"
+  return id === 'codex' ? { text: t('● стоят; доверьте им в /hooks', '● installed; trust them in /hooks'), cls: 's-on' } : { text: t('● стоят', '● installed'), cls: 's-on' }
 }

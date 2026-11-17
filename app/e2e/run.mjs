@@ -1506,6 +1506,8 @@ try {
   await undoGoBtn.waitFor({ timeout: 30000 })
   await waitFor(() => undoGoBtn.isDisabled().then((d) => !d), 'after the rollback preview the rollback button is available')
   const undoPreview = await page.locator('pre.out').innerText()
+  // the fixture has (old-name) hooks in Antigravity and DeepSeek Harness, unticked: the rollback card names what it would leave behind
+  must((await page.locator('section[aria-label="Откат"]').innerText()).includes('Хуки стоят и в: Antigravity, DeepSeek Harness'), 'the rollback card does not warn about installed but unticked clients')
   must(undoPreview.includes('[dry-run]') && undoPreview.includes('Не тронуто') && undoPreview.includes('sonnet') && undoPreview.includes('fable'), `the rollback preview lacks the "not touched" list with model and advisorModel: ${undoPreview.slice(0, 600)}`)
   must(![realHome, realHome.replaceAll('\\', '/')].some((h) => undoPreview.toLowerCase().includes(h.toLowerCase())), 'the rollback preview showed the path of the real profile')
   must(englishLeft(undoPreview).length === 0, `English phrases in the Russian rollback preview: ${englishLeft(undoPreview).slice(0, 5).join(' // ')}`)

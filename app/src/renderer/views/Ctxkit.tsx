@@ -426,8 +426,8 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
         <h3>{t('Откат: убрать Инструменты контекста', 'Rollback: remove Context Toolkit')}</h3>
         <p className="small">
           {t(
-            'Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; у Codex, Antigravity и DeepSeek Harness — только если они отмечены в «Куда поставить» выше (отметьте те, куда ставили). Чужие хуки остаются. Если без наших частей файл совпадает с копией, сделанной до установки, он возвращается к ней байт в байт; иначе (например, установка поменяла модель или effort, или вы правили файл) из него вырезаются только наши части.',
-            'The rollback removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; for Codex, Antigravity and DeepSeek Harness only if they are ticked under “Where to install” above (tick the ones you installed to). Foreign hooks stay. If the file without our parts matches the copy made before the install, it goes back to that copy byte for byte; otherwise (the install changed the model or effort, or you edited the file) only our parts are cut out.',
+            'Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; у Codex, Antigravity и DeepSeek Harness — только если они отмечены в «Куда поставить» выше (отметьте те, у кого в столбце «Сейчас» написано «стоят»). Чужие хуки остаются. Если без наших частей файл совпадает с копией, сделанной до установки, он возвращается к ней байт в байт; иначе (например, установка поменяла модель или effort, или вы правили файл) из него вырезаются только наши части.',
+            'The rollback removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; for Codex, Antigravity and DeepSeek Harness only if they are ticked under “Where to install” above (tick the ones whose “Now” column says “installed”). Foreign hooks stay. If the file without our parts matches the copy made before the install, it goes back to that copy byte for byte; otherwise (the install changed the model or effort, or you edited the file) only our parts are cut out.',
           )}
         </p>
         <p className="mute small">
@@ -436,6 +436,18 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
             'The model, advisor, effort, Claude Desktop presets and the Explore and checker agents are not restored: the rollback does not know their previous values. The output lists their current values and the path to the settings.json backup you can restore them from by hand. To only turn the safeguards off and keep the hooks, pick “Turn all off” under Policies above and press Apply.',
           )}
         </p>
+        {(() => {
+          // the rollback removes the hooks binary always, but other clients' hooks only when ticked: name the ones it would orphan
+          const left = status.status === 'ready' ? ctxClients().filter((c) => c.flag && status.data.clients[c.id] === 'on' && !opts[c.flag]).map((c) => c.name) : []
+          return left.length ? (
+            <p className="s-stale small" role="note">
+              {t(
+                `Хуки стоят и в: ${left.join(', ')}. Отметьте их выше в «Куда поставить», иначе откат их не уберёт и они будут вызывать удалённую программу.`,
+                `Hooks are also installed in: ${left.join(', ')}. Tick them above under “Where to install”, otherwise the rollback leaves them in place, calling a removed program.`,
+              )}
+            </p>
+          ) : null
+        })()}
         <div className="actions">
           <button type="button" ref={undoPreviewRef} disabled={!!busy} aria-busy={busy === 'undoPreview'} onClick={() => void run('uninstall', true)}>
             {spin('undoPreview', t('Считаю…', 'Working…')) ?? t('Показать, что уберёт откат', 'Show what the rollback removes')}

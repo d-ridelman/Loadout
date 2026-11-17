@@ -560,6 +560,9 @@ const cases = [
     if (!reason(cx('Bash', { command: `python -c "print('a${B}nb')"` })).includes('apply_patch')) return 'inline backslash names apply_patch';
     const patch = `*** Begin Patch\n*** Add File: ${TMP}patch.py\n+s=open(p).read()\n+s=s.replace("a${B}n","b")\n+open(p,'w').write(s)\n*** End Patch\n`;
     if (decisionOf(cx('apply_patch', { command: patch })) !== 'deny') return 'a backslash patch';
+    // a normal edit of a source file that holds `.write(` and `.replace("...\n")` passes: apply_patch is Codex's only edit tool
+    const edit = `*** Begin Patch\n*** Update File: src/util.py\n@@\n s = open(p).read()\n-s = s.replace("a${B}n", "b")\n+s = s.replace("a${B}n", "c")\n open(p, 'w').write(s)\n*** End Patch\n`;
+    if (cx('apply_patch', { command: edit }) !== '') return 'an ordinary source edit was blocked';
     // the patch text is file content, not a shell command: `cat <big file>` inside it is not a read
     if (cx('apply_patch', { command: `*** Begin Patch\n*** Add File: ${TMP}notes.md\n+cat "${bigFile}"\n*** End Patch\n` }) !== '') return 'patch text taken for a command';
     const on = P('codex', { commit_hygiene: true, confirm_irreversible: true });

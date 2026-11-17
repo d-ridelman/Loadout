@@ -358,14 +358,25 @@ fn write_reason(path: &str, content: &str, lang: Lang) -> Option<&'static str> {
             // The word must end: `fix-2.js`, `fixPaths.js`, `replace_paths.py`, not `fixtures.js`.
             Regex::new(r#"(?:^|[-_.])(?i:patch(?:es)?|fix(?:es|up)?|edit|rep(?:lace)?|sub|tmp)(?:[-_.\dA-Z]|$)"#).unwrap()
         });
-    let base = Path::new(path)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    let throwaway = (path.is_empty()
-        && (content.contains("*** Update File:") || content.contains("*** Add File:")))
-        || re_dir.is_match(path)
-        || re_base.is_match(base);
+    // A patch (`apply_patch`, path empty) is throwaway by the files it touches, like a write: a patch to an ordinary
+    // source file that happens to hold `.write(` and `.replace(` is a normal edit (in Codex it is the only edit tool).
+    let throwaway_file = |p: &str| {
+        let b = Path::new(p)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        re_dir.is_match(p) || re_base.is_match(b)
+    };
+    let throwaway = if path.is_empty() {
+        content.lines().any(|l| {
+            let l = l.trim();
+            l.strip_prefix("*** Add File:")
+                .or_else(|| l.strip_prefix("*** Update File:"))
+                .is_some_and(|p| throwaway_file(p.trim()))
+        })
+    } else {
+        throwaway_file(path)
+    };
     if !throwaway {
         return None;
     }
