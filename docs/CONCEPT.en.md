@@ -9,7 +9,7 @@ Labels in the tables: **[verified]** — seen on this machine: file, directory a
 
 ## 1. Problem and goal
 
-Agent entries are scattered across five clients and dozens of files in different formats (JSON, TOML, YAML, directories with `SKILL.md`). The question "where is glidehand installed and is it enabled in Codex?" can only be answered by hand.
+Agent entries are scattered across six clients and dozens of files in different formats (JSON, JSONC, TOML, YAML, directories with `SKILL.md`). The question "where is glidehand installed and is it enabled in Codex?" can only be answered by hand.
 
 Goal: to see at a glance **what is installed, enabled and broken where**, and to manage it safely.
 
@@ -50,6 +50,11 @@ Non-goals (v1):
 | | providers, model | `~/.dsh/settings.yaml.imported`: `llm-pi-ai.providers.*` (keys only as `apiKeyEnv`, i.e. environment variable names), `agent-default-model`, `agent-presets` | YAML | verified (keys) |
 | | separate MCP fragment | `~/.dsh/rea-ida-mcp.json` — `{command, args}` of one server (looks like a draft from which the `ida` entry was built) | JSON | hypothesis about its purpose |
 | | skills | `~/.dsh/skills/<name>/` (62 directories), plus `~/.dsh/vendor/ponytail` | MD | verified |
+| **OpenCode** (`sst/opencode`) | config | `~/.config/opencode/opencode.json` and `opencode.jsonc` (the same path on Windows), OpenCode merges both. Two schemas: V1 is `mcp.<name>` with `enabled`, `agent`, `command`, `plugin`; V2 is `mcp.servers.<name>` with the inverse `disabled`, `agents`, `commands`, `plugins`. OpenCode rejects unknown top-level keys, so a write follows the schema of the file itself, and Loadout adds nothing to a file that shows no schema | JSONC | verified (opencode.ai/docs; this machine has V2, keys) |
+| | MCP | `{type: "local", command: [program, …args], environment?, cwd?}` or `{type: "remote", url, headers?, oauth?}`; turned off by a flag (R1) | JSONC | verified |
+| | agents, commands | maps in the config and `agent(s)/<name>.md`, `command(s)/<name>.md` (the name is the file name; this machine has `command/`) | JSONC + MD | verified |
+| | plugins, skills | `plugin(s)` in the config (a name, `[name, options]` or `{package, options}`), local `plugin(s)/`; skills `skill(s)/<name>/SKILL.md` | JSONC + JS/TS + MD | verified |
+| | not read | project `opencode.json` and `.opencode/` (no file lists the projects), the legacy global `config.json` (V1), `AGENTS.md` rules, `tui.json`, the system `%ProgramData%\opencode` | — | — |
 | | memory, instructions | `~/.dsh/memory/`, `~/.dsh/AGENTS.md` | MD | verified |
 | | TUI settings | `~/.dsh-tui/settings.json` (`version, values, imported`) | JSON | verified |
 | | secrets | `~/.dsh/.credentials.yaml` | YAML | **never read** |

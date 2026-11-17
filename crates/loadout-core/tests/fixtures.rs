@@ -868,7 +868,9 @@ fn opencode_inventory_from_a_jsonc_v2_config() {
         serde_json::json!(["Authorization"])
     );
     assert_eq!(one(Kind::Agent, "reviewer").state, State::Off);
-    assert_eq!(one(Kind::Agent, "planner").state, State::On);
+    let planner = one(Kind::Agent, "planner");
+    assert_eq!(planner.state, State::On);
+    assert_eq!(planner.detail["model"], "anthropic/claude-sonnet-5-5");
     one(Kind::Command, "ship");
     one(Kind::Command, "review");
     let p = one(Kind::Plugin, "opencode-acme-plugin");

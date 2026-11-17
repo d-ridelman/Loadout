@@ -735,6 +735,10 @@ fn translate(v: &Value, to: Client) -> Result<(Value, Vec<String>), String> {
     if to == Client::ClaudeCode && out.contains_key("url") {
         out.insert("type".to_owned(), json!("http"));
     }
+    // an OpenCode remote server has no environment
+    if to == Client::OpenCode && !out.contains_key("command") && out.remove("env").is_some() {
+        skipped.push("env".to_owned());
+    }
     skipped.sort();
     Ok((Value::Object(out), skipped))
 }
@@ -831,7 +835,8 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
         }
     };
     plan.to = crate::tr!("копия: {shown}", "copy: {shown}");
-    let env_keys = mask::mcp_detail(&entry)
+    // what the target receives, not what the source has
+    let env_keys = mask::mcp_detail(&value)
         .get("envKeys")
         .and_then(Value::as_array)
         .map(|a| {

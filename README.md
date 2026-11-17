@@ -2,7 +2,7 @@
 
 # Loadout
 
-**A Windows app that shows the plugins, MCP servers, skills and hooks of five AI coding clients in one matrix and edits their configs safely: preview, backup, journal, rollback.**
+**A Windows app that shows the plugins, MCP servers, skills and hooks of six AI coding clients in one matrix and edits their configs safely: preview, backup, journal, rollback.**
 
 [English](README.md) · [Русский](README.ru.md)
 
@@ -20,17 +20,17 @@
 
 ## Why
 
-Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity and DeepSeek Harness each keep plugins, MCP servers, skills, agents, hooks and commands in their own files and formats (JSON, TOML, YAML). Finding out what is enabled where, or moving a server from one client to another, means editing config files by hand.
+Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity, DeepSeek Harness and OpenCode each keep plugins, MCP servers, skills, agents, hooks and commands in their own files and formats (JSON, JSONC, TOML, YAML). Finding out what is enabled where, or moving a server from one client to another, means editing config files by hand.
 
-Loadout reads all five clients, shows everything in one matrix and changes only the value you touched.
+Loadout reads all six clients, shows everything in one matrix and changes only the value you touched.
 
 ## Features
 
 - **First launch**: a card says what Loadout is, that it writes nothing without a preview and your confirmation, and that the only thing it does online by itself is the update check. Close it once and it does not come back.
-- **Matrix** of every entry across the five clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). "What the marks mean" above the table explains every mark, `+N`, the `Δ` of a fresh change and the FX switch. The inspector on the right shows the file, the key and the contents without secrets.
+- **Matrix** of every entry across the six clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). "What the marks mean" above the table explains every mark, `+N`, the `Δ` of a fresh change and the FX switch. The inspector on the right shows the file, the key and the contents without secrets.
 - **Radar, hooks, doctor.** A per-client overview, the hook pipeline by lifecycle event, and findings: broken entries, version mismatches, the same entry in several scopes, empty marketplaces, broken links to a cleaned cache, piles of third-party backups, MCP configs with secret keys. The Doctor groups findings by severity and says how to fix each one; the "broken: N" counter in the footer opens it.
 - **Messages** after an action pop up above the footer in colour (done, error, info) and in full; screen readers announce them.
-- **Toggle** an entry that has an on/off flag: plugins, connectors, Codex entries (write level R1). Most MCP servers have no such flag: disabling one **moves it to the Loadout trash**, and enabling puts it back in the same place (R2). **Edit an MCP command, copy it to another client** (R2); JSON, TOML and YAML are translated for you.
+- **Toggle** an entry that has an on/off flag: plugins, connectors, Codex and OpenCode entries (write level R1). Most MCP servers have no such flag: disabling one **moves it to the Loadout trash**, and enabling puts it back in the same place (R2). **Edit an MCP command, copy it to another client** (R2); JSON, TOML and YAML are translated for you.
 - **Add an MCP server** from the window. The `env` values you type go to the core and are not shown in the preview, the journal or the inspector.
 - **Install a Claude Code plugin from a marketplace.** Add a marketplace by GitHub `owner/repo`, an `https://` or SSH address, or a local folder, then pick a plugin from its catalog. Before anything runs, the window shows the exact `claude plugin …` command.
 - **Install a skill** into `~/.claude/skills` from a GitHub repository or a local folder. The window first says what will be downloaded and where, then shows a plan with the files and a warning when the skill contains code. The installation goes into the journal and can be rolled back.
@@ -147,7 +147,8 @@ Known limitations:
 - macOS and Linux;
 - project-level settings (`.claude/settings.json` in a project, `.mcp.json`): plugins enabled only there show as "unknown";
 - the MCP check that starts a server and asks for its tools;
-- a Claude Code profile other than `~/.claude` (`CLAUDE_CONFIG_DIR`) is not read.
+- a Claude Code profile other than `~/.claude` (`CLAUDE_CONFIG_DIR`) is not read;
+- OpenCode: only the global `~/.config/opencode` is read; project `opencode.json`, the legacy V1 `config.json`, `AGENTS.md` rules and the system config in `%ProgramData%\opencode` are not.
 
 Open work is in [TODO.md](TODO.md): one dated item, comparing advisor and `checker` calls by day after 22.11.2026.
 

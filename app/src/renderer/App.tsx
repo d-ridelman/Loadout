@@ -410,8 +410,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             <h2 id="welcome-title">{t('Loadout: что это и чего ждать', 'Loadout: what it is and what to expect')}</h2>
             <p>
               {t(
-                'Loadout собирает в одну таблицу плагины, MCP-серверы, скилы и хуки пяти ИИ-клиентов: Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity и DeepSeek. Данные он берёт из их конфигов на этом компьютере.',
-                'Loadout puts the plugins, MCP servers, skills and hooks of five AI clients into one table: Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity and DeepSeek. It reads their configs on this computer.',
+                'Loadout собирает в одну таблицу плагины, MCP-серверы, скилы и хуки шести ИИ-клиентов: Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity, DeepSeek и OpenCode. Данные он берёт из их конфигов на этом компьютере.',
+                'Loadout puts the plugins, MCP servers, skills and hooks of six AI clients into one table: Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity, DeepSeek and OpenCode. It reads their configs on this computer.',
               )}
             </p>
             <p>

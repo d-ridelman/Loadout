@@ -9,7 +9,7 @@
 
 ## 1. Боль и цель
 
-Сущности агента размазаны по пяти клиентам и десяткам файлов в разных форматах (JSON, TOML, YAML, каталоги с `SKILL.md`). Ответить на «где стоит glidehand и включён ли он в Codex?» можно только руками.
+Сущности агента размазаны по шести клиентам и десяткам файлов в разных форматах (JSON, JSONC, TOML, YAML, каталоги с `SKILL.md`). Ответить на «где стоит glidehand и включён ли он в Codex?» можно только руками.
 
 Цель: за один взгляд видеть, **что где установлено, включено и сломано**, и безопасно этим управлять.
 
@@ -50,6 +50,11 @@
 | | провайдеры, модель | `~/.dsh/settings.yaml.imported`: `llm-pi-ai.providers.*` (ключи только как `apiKeyEnv`, то есть имена переменных окружения), `agent-default-model`, `agent-presets` | YAML | проверено (ключи) |
 | | отдельный фрагмент MCP | `~/.dsh/rea-ida-mcp.json` — `{command, args}` одного сервера (похоже на заготовку, из которой собрана запись `ida`) | JSON | гипотеза про назначение |
 | | скилы | `~/.dsh/skills/<имя>/` (62 каталога), плюс `~/.dsh/vendor/ponytail` | MD | проверено |
+| **OpenCode** (`sst/opencode`) | конфиг | `~/.config/opencode/opencode.json` и `opencode.jsonc` (тот же путь на Windows), OpenCode сливает оба. Две схемы: V1 — `mcp.<имя>` с `enabled`, `agent`, `command`, `plugin`; V2 — `mcp.servers.<имя>` с обратным `disabled`, `agents`, `commands`, `plugins`. Неизвестные ключи верхнего уровня OpenCode отвергает, поэтому запись идёт в схеме самого файла, а файл без признаков схемы Loadout не дополняет | JSONC | проверено (документация opencode.ai/docs, на этой машине — V2, ключи) |
+| | MCP | `{type: "local", command: [программа, …аргументы], environment?, cwd?}` или `{type: "remote", url, headers?, oauth?}`; выключение флагом (R1) | JSONC | проверено |
+| | агенты, команды | карты в конфиге и `agent(s)/<имя>.md`, `command(s)/<имя>.md` (имя — имя файла; на этой машине `command/`) | JSONC + MD | проверено |
+| | плагины, скилы | `plugin(s)` в конфиге (имя, `[имя, опции]` или `{package, options}`), локальные `plugin(s)/`; скилы `skill(s)/<имя>/SKILL.md` | JSONC + JS/TS + MD | проверено |
+| | не читается | проектные `opencode.json` и `.opencode/` (списка проектов в файлах нет), устаревший глобальный `config.json` (V1), правила `AGENTS.md`, `tui.json`, системный `%ProgramData%\opencode` | — | — |
 | | память, инструкции | `~/.dsh/memory/`, `~/.dsh/AGENTS.md` | MD | проверено |
 | | TUI-настройки | `~/.dsh-tui/settings.json` (`version, values, imported`) | JSON | проверено |
 | | секреты | `~/.dsh/.credentials.yaml` | YAML | **никогда не читаем** |

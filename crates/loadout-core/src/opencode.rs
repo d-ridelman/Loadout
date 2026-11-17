@@ -32,11 +32,13 @@ pub(crate) enum Gen {
 
 /// The generation by the file's own keys; `None` when nothing tells them apart (then nothing is written there).
 pub(crate) fn generation(root: &Value) -> Option<Gen> {
+    // by the value types, not the key names: a V2 server may be called `url` or `type`, and its value is then an object
     let server_like = |v: &Value| {
         v.as_object().is_some_and(|o| {
-            ["type", "command", "url", "enabled"]
-                .iter()
-                .any(|k| o.contains_key(*k))
+            o.get("type").is_some_and(Value::is_string)
+                || o.get("command").is_some_and(Value::is_array)
+                || o.get("url").is_some_and(Value::is_string)
+                || o.get("enabled").is_some_and(Value::is_boolean)
         })
     };
     let mcp = root.get("mcp").and_then(Value::as_object);
@@ -190,6 +192,9 @@ fn mcp(c: &mut Ctx, path: &Path, file: &str, root: &Value, g: Gen) {
     };
     let ptr: String = base.iter().map(|k| format!("/{}", esc_ptr(k))).collect();
     for (name, cfg) in servers.and_then(Value::as_object).into_iter().flatten() {
+        if !cfg.is_object() {
+            continue;
+        }
         let Some(shown) = mask::safe_name(name) else {
             c.warnings.push(crate::tr!(
                 "{file}: MCP-сервер с недопустимым именем пропущен",
@@ -251,11 +256,14 @@ fn named_map(c: &mut Ctx, file: &str, root: &Value, key: &str, kind: Kind) {
             file,
             format!("/{key}/{}", esc_ptr(name)),
         )
-        .detail(
-            json!({ "model": v.get("model").and_then(Value::as_str).and_then(mask::safe_version) }),
-        );
+        .detail(json!({ "model": v.get("model").and_then(Value::as_str).and_then(model_name) }));
         c.push(e);
     }
+}
+
+/// An OpenCode model is `provider/model[#variant]`: shown through the name filter, which allows `/`.
+fn model_name(s: &str) -> Option<&str> {
+    mask::safe_name(s)
 }
 
 /// `plugin` (V1: a name or `[name, options]`) and `plugins` (V2: a name or `{package, options}`). Options are not shown.
@@ -294,9 +302,18 @@ const PLUGIN_EXT: [&str; 6] = ["js", "ts", "mjs", "cjs", "mts", "cts"];
 /// The shown name of a plugin spec: an npm package (`name@1.2.0` → name and version) or the last part of a local path
 /// (`./plugins/local`, `file:///…/x.js`; `…/x/index.ts` is `x`). `None` for a name the masking filter refuses.
 fn plugin_name(spec: &str) -> Option<(String, Option<String>, bool)> {
+    // an address (`https://user:pass@host/x.tgz`): only the part after the credentials and the query is looked at
+    let spec = match spec.split_once("://") {
+        Some((_, rest)) if !spec.starts_with("file:") => {
+            let rest = rest.split(['?', '#']).next().unwrap_or("");
+            &rest[rest.rfind('@').map_or(0, |i| i + 1)..]
+        }
+        _ => spec,
+    };
     let local = spec.starts_with(['.', '/', '\\'])
         || spec.starts_with("file:")
-        || spec.as_bytes().get(1) == Some(&b':');
+        || spec.as_bytes().get(1) == Some(&b':')
+        || spec.contains('/') && !spec.starts_with('@');
     if !local {
         let (name, version) = match spec.rfind('@').filter(|i| *i > 0) {
             Some(i) => (&spec[..i], mask::safe_version(&spec[i + 1..])),
@@ -324,6 +341,13 @@ fn plugin_dir(c: &mut Ctx, dir: &Path) {
     let mut items: Vec<_> = rd
         .flatten()
         .map(|e| e.path())
+        .filter(|p| {
+            let n = p
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            !n.starts_with('.') && n != "node_modules"
+        })
         .filter(|p| {
             p.is_dir()
                 || p.extension()
@@ -384,9 +408,7 @@ fn md_dir(c: &mut Ctx, dir: &Path, kind: Kind) {
             c.tilde(&p),
             "frontmatter",
         )
-        .detail(
-            json!({ "model": fm.get("model").map(String::as_str).and_then(mask::safe_version) }),
-        )
+        .detail(json!({ "model": fm.get("model").map(String::as_str).and_then(model_name) }))
         .fs_named();
         c.push(e);
     }
@@ -412,6 +434,13 @@ mod tests {
             Some(Gen::V1)
         );
         assert_eq!(g(r#"{"mcp":{"old":{"enabled":false}}}"#), Some(Gen::V1));
+        // V2 servers named like V1 keys
+        assert_eq!(
+            g(
+                r#"{"mcp":{"servers":{"url":{"type":"remote","url":"https://h/mcp"},"type":{"type":"local","command":["x"]}}}}"#
+            ),
+            Some(Gen::V2)
+        );
         // V2 `mcp.timeout` is not a server
         assert_eq!(
             g(r#"{"mcp":{"timeout":{"catalog":1}},"providers":{}}"#),
@@ -465,5 +494,17 @@ mod tests {
             n("C:\\u\\p\\status.js"),
             Some(("status".into(), None, true))
         );
+        // credentials and the query of an address never become the name
+        for url in [
+            "https://deploy:hunter2pass@host.example/x.tgz",
+            "https://deploy:hunter2pass@host.example",
+        ] {
+            let (name, _, _) = n(url).unwrap();
+            assert!(
+                !name.contains("hunter2pass") && !name.contains("deploy"),
+                "{name}"
+            );
+        }
+        assert_eq!(n("https://h.example/p/x.tgz?token=abc").unwrap().0, "x.tgz");
     }
 }

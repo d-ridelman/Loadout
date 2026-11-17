@@ -97,4 +97,5 @@ export const clientShort: Record<string, string> = {
   codex: 'ChatGPT / Codex',
   antigravity: 'Antigravity',
   deepseek: 'DeepSeek',
+  opencode: 'OpenCode',
 }

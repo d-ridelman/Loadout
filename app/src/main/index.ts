@@ -229,6 +229,8 @@ const CLIENT_PROCESSES: Partial<Record<ClientId, string[]>> = {
   // names taken from a real machine: the DeepSeek window is called "DeepSeek Harness", Antigravity has a shell and the CLI `agy`
   antigravity: ['antigravity.exe', 'agy.exe'],
   deepseek: ['deepseek harness.exe'],
+  // the desktop app and its CLI as installed on a real machine (OpenCode 2.3.0)
+  opencode: ['opencode.exe', 'opencode-cli.exe'],
 }
 
 function runningOf(client: ClientId): Promise<string[]> {
