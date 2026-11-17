@@ -37,7 +37,7 @@ npm run e2e          # builds the core, context-toolkit.exe and the window, driv
 
 `crates/context-toolkit` also has `node crates/context-toolkit/tests/guard.test.mjs` (needs `cargo build --release` first). To check the packaged build: `npm run pack`, then `npm run pack:check` (it reads your real configs, read-only, level R0).
 
-The e2e run opens app windows and takes screenshots, so run it when the machine is idle. The screenshots go to a temporary directory that the run prints at the end, so the tree stays clean; `E2E_UPDATE_SHOTS=1 npm run e2e` (or `node tools/verify.mjs --release`) refreshes the committed ones in `state/` when the window really changed. There are no pauses after file writes (the plan reads the disk itself); the short pauses that remain are deliberate: the layout settling before a screenshot, a negative check that must give a wrong state time to appear, a section loading before the English text check. A new wait waits for a condition the app shows.
+The e2e run opens app windows and takes screenshots, so run it when the machine is idle. The screenshots go to a temporary directory that the run prints at the end, so the tree stays clean; `E2E_UPDATE_SHOTS=1 npm run e2e` (or `node tools/verify.mjs --release`) refreshes the committed ones in `state/` when the window really changed. No pause waits for the file watcher after a config write (the plan reads the disk itself). The short pauses that remain are deliberate: a section or the layout settling before a screenshot, a layout or accessibility measurement or the English text check; and a negative check that must give a wrong state time to appear. A new wait waits for a condition the app shows.
 
 ## Rules that matter
 

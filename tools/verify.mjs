@@ -88,15 +88,18 @@ const held = (lock) => {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const root = resolve(import.meta.dirname, '..');
   const flags = new Set(process.argv.slice(2));
+  // signatures first: a file edited while the checks are being picked must not be marked as checked
+  const sigs = flags.has('--dry') ? [] : before(root);
   const files = changed(root);
+  // without origin/main the branch's own commits are not in `files`: only a full run may mark the gate then
+  const mayPass = flags.has('--all') || flags.has('--release') || tryGit(root, ['rev-parse', '-q', '--verify', 'origin/main']).length > 0;
   const steps = flags.has('--all') || flags.has('--release') ? [...STEPS] : pick(files);
   // the release refreshes state/ with its own e2e run: one run is enough
   if (flags.has('--release')) steps.splice(steps.findIndex((s) => s.name === 'e2e'), 1, ...RELEASE);
   console.log(`changed files: ${files.length}${files.length ? ` (${files.slice(0, 8).join(', ')}${files.length > 8 ? ', …' : ''})` : ''}`);
   console.log(`checks: ${steps.map((s) => s.name).join(', ') || 'none needed'}`);
   if (flags.has('--dry')) process.exit(0);
-  const sigs = before(root);
-  if (!steps.length) { passGates(root, sigs); process.exit(0); }
+  if (!steps.length) { if (mayPass) passGates(root, sigs); process.exit(0); }
 
   const lock = join(gitDir(root), 'verify.lock');
   if (existsSync(lock) && !held(lock)) rmSync(lock, { force: true });
@@ -119,8 +122,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   console.log(`\n${rows.join('\n')}`);
   if (code) console.log(`\nFAILED: fix the cause, not the check; after 3 rounds on the same failure, stop and ask a person.`);
   else {
-    const marked = passGates(root, sigs);
-    console.log(`\nOK: verified${marked.length ? ` (gate passed: ${marked.join(', ')})` : '; files changed during the run, run it again to pass the gate'}`);
+    const marked = mayPass ? passGates(root, sigs) : [];
+    const note = marked.length ? ` (gate passed: ${marked.join(', ')})` : mayPass ? '; files changed during the run, run it again to pass the gate' : '; no origin/main, so the gate is passed only by --all';
+    console.log(`\nOK: verified${note}`);
   }
   process.exit(code);
 }
