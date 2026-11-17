@@ -89,8 +89,12 @@ async function resize(app, w, h) {
   await app.evaluate(({ BrowserWindow }, [ww, hh]) => BrowserWindow.getAllWindows()[0].setSize(ww, hh), [w, h])
 }
 
-// `E2E_SHOTS` sends the screenshots to another directory (a temporary one), leaving the committed ones in state/ untouched
-const shotDir = process.env.E2E_SHOTS ?? stateDir
+// Screenshots go to a temporary directory by default, so a run leaves the tree clean (dynamic text such as the scan time makes every
+// PNG differ). `E2E_UPDATE_SHOTS=1` refreshes the committed ones in state/; `E2E_SHOTS` names another directory.
+// one directory per working copy: a run in another worktree must not wipe or mix in this one's screens
+const shotDir = process.env.E2E_SHOTS ?? (process.env.E2E_UPDATE_SHOTS === '1' ? stateDir : join(tmpdir(), `loadout-e2e-shots-${createHash('sha1').update(repo).digest('hex').slice(0, 8)}`))
+if (shotDir !== stateDir && !process.env.E2E_SHOTS) rmSync(shotDir, { recursive: true, force: true })
+mkdirSync(shotDir, { recursive: true })
 
 async function shot(page, name) {
   await page.screenshot({ path: join(shotDir, `${name}.png`) })
@@ -524,7 +528,11 @@ try {
   const stubDialog = (answer) =>
     app.evaluate(({ dialog }, a) => {
       globalThis.__answer = a
-      dialog.showMessageBox = async () => ({ response: globalThis.__answer, checkboxChecked: false })
+      globalThis.__asked ??= 0
+      dialog.showMessageBox = async () => {
+        globalThis.__asked++
+        return { response: globalThis.__answer, checkboxChecked: false }
+      }
     }, answer)
   const dialog = page.locator('[role=dialog][aria-modal=true]')
   const asOff = original.replace('[plugins."p1@bundled"]\nenabled = true', '[plugins."p1@bundled"]\nenabled = false')
@@ -575,9 +583,13 @@ try {
 
   // a refusal in the OS dialog leaves R0, consent raises to R1
   await stubDialog(0)
+  const askedBefore = await app.evaluate(() => globalThis.__asked)
   await levelSel.selectOption('R1')
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'the OS dialog was not asked')
+  // a negative check: the select is controlled and shows R0 at once, so give a wrong level time to arrive, then ask main too
   await page.waitForTimeout(600)
   must(await levelIs('R0'), 'a refusal in the OS dialog must leave R0')
+  must((await page.evaluate(() => window.loadout.getWriteLevel())) === 'R0', 'a refusal in the OS dialog must leave R0 in main')
   await stubDialog(1)
   await levelSel.selectOption('R1')
   await waitFor(() => levelIs('R1'), 'the level switched to R1')
@@ -603,15 +615,14 @@ try {
   must(readFileSync(cfg, 'utf8') === original, 'cancel must not change the file')
 
   // a file with mixed line endings: the plan refuses, and Esc closes the window even if focus is not on "Apply"
+  // no pause after writing: the plan reads the file from disk, and a change of line endings alone sends no `changed` event to wait for
   writeFileSync(cfg, original.replace('\n', '\r\n'))
-  await page.waitForTimeout(600)
   await page.keyboard.press('Space')
   await dialog.locator('[role=alert]').waitFor({ timeout: 8000 })
   must((await dialog.locator('[role=alert]').innerText()).includes('смешанные'), 'mixed line endings must make the plan refuse')
   await page.keyboard.press('Escape')
   must((await dialog.count()) === 0, 'Esc did not close the preview with a plan error')
   writeFileSync(cfg, original)
-  await page.waitForTimeout(600)
 
   // the file changed between the preview and the write: the write refuses, the foreign edit is intact
   await page.locator('#grid').focus()
@@ -625,8 +636,7 @@ try {
   must((await dialog.locator('[role=alert]').innerText()).includes('изменился'), 'a stale plan must be rejected')
   must(readFileSync(cfg, 'utf8') === touched, 'the refusal must not touch the file')
   await dialog.getByRole('button', { name: 'Отмена' }).click()
-  writeFileSync(cfg, original)
-  await page.waitForTimeout(600) // the watcher noticed the file coming back before a new plan is built
+  writeFileSync(cfg, original) // a comment line changes no entry: no `changed` event follows, the next plan reads the disk
 
   // a plain write
   await page.locator('#grid').focus()
@@ -826,7 +836,6 @@ try {
   await dialog.waitFor({ state: 'detached', timeout: 8000 })
   // a refusal of the core is shown as the core said it, and "Back to the form" keeps everything typed, env included
   writeFileSync(cfg, cfgBeforeCopy.toString('utf8').replace('\n', '\r\n'))
-  await page.waitForTimeout(600)
   const addEnv = 'API_TOKEN=FAKE-SECRET-ADDED'
   await page.getByRole('button', { name: 'Добавить MCP', exact: true }).click()
   await dialog.getByLabel('Клиент').selectOption({ label: 'ChatGPT / Codex' })
@@ -849,7 +858,6 @@ try {
   }
   must(kept.to === 'codex' && kept.name === 'e2e-added' && kept.command === 'npx' && kept.args === '-y\nsome-mcp' && kept.env === addEnv, `"Back to the form" lost what was typed: ${JSON.stringify({ ...kept, env: kept.env === addEnv })}`)
   writeFileSync(cfg, cfgBeforeCopy)
-  await page.waitForTimeout(600)
   await shot(page, 'm4-add-dialog-1280')
   await dialog.getByRole('button', { name: 'Предпросмотр' }).click()
   const addText = await openPlan()
@@ -1773,6 +1781,7 @@ try {
   session = undefined
 
   log('OK: all scenarios passed')
+  log(`screenshots: ${shotDir}`)
 } catch (e) {
   console.error('FAILED:', e instanceof Error ? e.message : e)
   if (session) await close(session).catch(() => {})
