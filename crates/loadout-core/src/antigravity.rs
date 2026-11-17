@@ -29,13 +29,35 @@ pub fn scan(c: &mut Ctx) {
     }
     hooks(c);
     plugins(c);
-    for (rel, scope) in [
-        (".gemini/config/skills", "user"),
-        (".gemini/antigravity/builtin/skills", "builtin"),
-        (".gemini/antigravity-cli/builtin/skills", "builtin"),
-    ] {
-        let dir = c.home.join(rel);
-        scan_skills(c, CLIENT, &dir, scope);
+    let user = c.home.join(".gemini/config/skills");
+    scan_skills(c, CLIENT, &user, "user");
+    builtin_skills(c);
+}
+
+/// The app and the CLI ship the same built-in skills: one entry per name, the CLI copy is named in the note.
+fn builtin_skills(c: &mut Ctx) {
+    let start = c.entities.len();
+    let app = c.home.join(".gemini/antigravity/builtin/skills");
+    scan_skills(c, CLIENT, &app, "builtin");
+    let mid = c.entities.len();
+    let cli = c.home.join(".gemini/antigravity-cli/builtin/skills");
+    scan_skills(c, CLIENT, &cli, "builtin");
+    let cli: Vec<Entity> = c.entities.drain(mid..).collect();
+    for e in cli {
+        match c.entities[start..mid].iter_mut().find(|a| a.name == e.name) {
+            Some(a) => {
+                let also = crate::tr!(
+                    "этот же встроенный навык есть у Antigravity CLI: {}",
+                    "the Antigravity CLI ships the same built-in skill: {}",
+                    e.origin.file
+                );
+                a.note = Some(match a.note.take() {
+                    Some(n) => format!("{n}; {also}"),
+                    None => also,
+                });
+            }
+            None => c.entities.push(e),
+        }
     }
 }
 

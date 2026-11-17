@@ -626,6 +626,34 @@ fn long_skill_directory_names_are_not_masked() {
     );
 }
 
+/// The Antigravity app and its CLI ship the same built-in skills: one entry per name, not two `builtin` rows.
+#[test]
+fn antigravity_builtin_skills_are_not_listed_twice() {
+    let md = |n: &str| format!("---\nname: {n}\n---\n");
+    let (b1, b2) = (md("b1"), md("b2"));
+    let h = synthetic_home(&[
+        (".gemini/antigravity/builtin/skills/b1/SKILL.md", &b1),
+        (".gemini/antigravity-cli/builtin/skills/b1/SKILL.md", &b1),
+        (".gemini/antigravity-cli/builtin/skills/b2/SKILL.md", &b2),
+    ]);
+    let r = loadout_core::scan(&h.0);
+    let names: Vec<&str> = r
+        .entities
+        .iter()
+        .filter(|e| e.client == Client::Antigravity && e.scope == "builtin")
+        .map(|e| e.name.as_str())
+        .collect();
+    assert_eq!(names, ["b1", "b2"]);
+    let b1 = r.entities.iter().find(|e| e.name == "b1").unwrap();
+    assert!(
+        b1.note
+            .as_deref()
+            .is_some_and(|n| n.contains("antigravity-cli")),
+        "{:?}",
+        b1.note
+    );
+}
+
 #[test]
 fn missing_home_is_not_an_error() {
     let r = loadout_core::scan(Path::new("Z:/definitely/not/here"));
