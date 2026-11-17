@@ -6,7 +6,7 @@ import { t } from '../../shared/i18n'
 /**
  * "Similar to this" for a skill: up to three skills with a close description, found by a small model on this computer. The model
  * is downloaded only on a click; the descriptions never leave the computer. Shown as a hint ("may be similar"), never as a
- * duplicate: the measurement found no reliable duplicates, only useful neighbours (ml-eval, about one in three is a good pick).
+ * duplicate: the measurement found no reliable duplicates, only useful neighbours (ml-eval stage 3: about two picks in five are close).
  */
 export function Similar({ e, entities, onShow }: { e: Entity; entities: Entity[]; onShow: (x: Entity) => void }) {
   const [info, setInfo] = useState<SimilarInfo | null>(null)

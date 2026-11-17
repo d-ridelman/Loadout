@@ -21,7 +21,7 @@
   },
   "rules": [
     { "files": "^fixtures/", "run": ["rust-test", "e2e"], "why": "the fixtures' .md files are test data, not docs; the window reads the fixtures" },
-    { "files": "^(docs|state|mockup)/|[.]md$|^LICENSE|^[.]gitignore$", "run": [] },
+    { "files": "^(docs|state|mockup|licenses)/|[.]md$|^LICENSE|^[.]gitignore$", "run": [] },
     { "files": "^tools/|^[.]claude/(gates|verify|settings)[.]json$", "run": ["tools"] },
     { "files": "^crates/context-toolkit/|^Cargo[.](toml|lock)$", "run": ["rust-fmt", "rust-test", "clippy", "ctk-guard", "e2e"], "why": "a dependency update reaches the hook binary too" },
     { "files": "^crates/", "run": ["rust-fmt", "rust-test", "clippy", "e2e"], "why": "the window runs the core" },

@@ -107,6 +107,11 @@ try {
   // the built-in Context Toolkit from resources: version, diagnostics and a report on the real transcripts (read-only, nothing is applied)
   must(existsSync(join(unpacked, 'resources', 'context-toolkit.exe')), 'the build has no resources/context-toolkit.exe')
   must(existsSync(join(unpacked, 'resources', 'loadout-ml.exe')), 'the build has no resources/loadout-ml.exe ("Similar skills")')
+  // the core programs start without the VC++ Redistributable installed: its DLLs sit next to them
+  for (const dll of ['vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll']) {
+    must(existsSync(join(unpacked, 'resources', dll)), `the build has no resources/${dll} (the VC++ runtime of loadout.exe and loadout-ml.exe)`)
+  }
+  must(existsSync(join(unpacked, 'resources', 'licenses', 'THIRD_PARTY_NOTICES.md')) && existsSync(join(unpacked, 'resources', 'licenses', 'onnxruntime-ThirdPartyNotices.txt')), 'the build has no third-party notices in resources/licenses')
   await page.keyboard.press('7')
   await page.getByText('context-toolkit 0.', { exact: false }).first().waitFor({ timeout: 20_000 })
   await page.locator('ul[aria-label="Находки диагностики"] li').first().waitFor({ timeout: 30_000 })

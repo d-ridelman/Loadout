@@ -10,7 +10,9 @@ description = "loadout-ml: text vectors for 'similar to this' (MiniLM int8 throu
 
 [dependencies]
 serde_json.workspace = true
-# ONNX Runtime linked in (download-binaries fetches the static build when this crate is built): no DLL beside the exe.
+# ONNX Runtime linked in (download-binaries fetches the static build when this crate is built, sha256-checked by ort-sys):
+# no onnxruntime.dll beside the exe. That build has DirectML, so the exe imports DirectML, D3D12 and DXGI of Windows (System32),
+# and it needs the VC++ runtime (msvcp140, vcruntime140_1), which the installer ships next to it (app/scripts/bundle-vcruntime.mjs).
 # One text at a time: the int8 model quantizes per tensor, so padding in a batch would change a text's vector (ml-eval runtime probe).
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-24"] }
 tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }

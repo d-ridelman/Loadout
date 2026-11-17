@@ -35,6 +35,14 @@ describe('similar to this: ranking', () => {
     expect(nearest(items[0]!, items, vec, 1).map((n) => n.id)).toEqual(['b'])
   })
 
+  it('of copies with the same text, the one in the client of the selected cell is shown', () => {
+    const copies = [ent('t', 'T', { client: 'codex' }), ent('x1', 'X', { client: 'deepseek' }), ent('x2', 'X', { client: 'codex' }), ent('x3', 'X', { client: 'opencode' })]
+    const same = (e: Entity) => (e.id === 't' ? [1, 0] : [0.6, 0.8])
+    expect(nearest(copies[0]!, copies, same).map((n) => n.id)).toEqual(['x2'])
+    // without a copy in that client the first one found stays
+    expect(nearest(ent('u', 'U', { client: 'claude-code' }), copies.slice(1), (e) => (e.id === 'u' ? [1, 0] : [0.6, 0.8])).map((n) => n.id)).toEqual(['x1'])
+  })
+
   it('a target without a vector or a vector of another length gives nothing for it', () => {
     expect(nearest(ent('x', 'X'), items, vec)).toEqual([])
     expect(nearest(items[0]!, [...items, ent('z', 'Z')], (e) => (e.id === 'z' ? [1, 0, 0] : vecs[e.id]))).toHaveLength(3)

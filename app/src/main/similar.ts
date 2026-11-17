@@ -124,7 +124,7 @@ export interface Neighbour {
 export function nearest(target: Entity, items: Entity[], vec: (e: Entity) => number[] | undefined, k = 3): Neighbour[] {
   const t = vec(target)
   if (!t) return []
-  const best = new Map<string, Neighbour>()
+  const best = new Map<string, Neighbour & { client: string }>()
   for (const e of items) {
     if (e.logicalKey === target.logicalKey) continue
     const v = vec(e)
@@ -132,9 +132,14 @@ export function nearest(target: Entity, items: Entity[], vec: (e: Entity) => num
     let score = 0
     for (let i = 0; i < t.length; i++) score += t[i]! * v[i]!
     const was = best.get(e.logicalKey)
-    if (!was || score > was.score) best.set(e.logicalKey, { id: e.id, score })
+    // the same skill in several clients has the same text: show the copy in the client of the selected cell when there is one
+    const better = !was || score > was.score || (score === was.score && e.client === target.client && was.client !== target.client)
+    if (better) best.set(e.logicalKey, { id: e.id, score, client: e.client })
   }
-  return [...best.values()].sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, k)
+  return [...best.values()]
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+    .slice(0, k)
+    .map(({ id, score }) => ({ id, score }))
 }
 
 const EMBED_TIMEOUT_MS = 120_000

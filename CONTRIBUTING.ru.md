@@ -15,6 +15,8 @@ cargo build --release
 cd app && npm ci
 ```
 
+Первая `cargo build` ещё и скачивает ONNX Runtime для `loadout-ml.exe` («Похожие скилы») с `cdn.pyke.io` (крейт `ort` сверяет sha256). После смены зависимостей обновите список лицензий: `node tools/notices.mjs` (пишет `licenses/THIRD_PARTY_NOTICES.md`).
+
 Если после `npm ci` нет `app/node_modules/electron/dist/electron.exe` (npm не запустил скрипты установки пакетов), скачайте его: `node node_modules/electron/install.js`.
 
 `npm run dev` открывает окно в режиме разработки. Оно читает ваши настоящие конфиги и хранит данные в `%APPDATA%\loadout-app`, как установленная копия. Чтобы работать на копии, задайте `LOADOUT_HOME` (домашний каталог с конфигами клиентов) и `LOADOUT_USER_DATA` (папка данных окна); в установленной сборке эти переменные не действуют.

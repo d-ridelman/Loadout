@@ -8,5 +8,7 @@ node_modules/
 /app/out/
 /app/dist/
 /app/build/context-toolkit.exe
+# the VC++ runtime DLLs copied from Visual Studio by scripts/bundle-vcruntime.mjs
+/app/build/vcruntime/
 # the bundled binary of the old name, left by an earlier build
 /app/build/ctxkit.exe

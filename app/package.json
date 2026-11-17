@@ -16,9 +16,9 @@
     "e2e": "npm run core && node scripts/bundle-context-toolkit.mjs && electron-vite build && node e2e/run.mjs",
     "docs-shots": "npm run core && node scripts/bundle-context-toolkit.mjs && electron-vite build && node e2e/docs-shots.mjs",
     "bundle:context-toolkit": "node scripts/bundle-context-toolkit.mjs",
-    "pack": "npm run core && node scripts/bundle-context-toolkit.mjs && electron-vite build && electron-builder --win --dir --publish never",
+    "pack": "npm run core && node scripts/bundle-context-toolkit.mjs && node scripts/bundle-vcruntime.mjs && electron-vite build && electron-builder --win --dir --publish never",
     "pack:check": "node e2e/pack-check.mjs",
-    "dist": "npm run core && node scripts/bundle-context-toolkit.mjs && electron-vite build && electron-builder --win --publish never"
+    "dist": "npm run core && node scripts/bundle-context-toolkit.mjs && node scripts/bundle-vcruntime.mjs && electron-vite build && electron-builder --win --publish never"
   },
   "author": "Loadout contributors",
   "build": {
@@ -29,6 +29,8 @@
     "extraResources": [
       { "from": "../target/release/loadout.exe", "to": "loadout.exe" },
       { "from": "../target/release/loadout-ml.exe", "to": "loadout-ml.exe" },
+      { "from": "build/vcruntime", "to": ".", "filter": ["*.dll"] },
+      { "from": "../licenses", "to": "licenses", "filter": ["THIRD_PARTY_NOTICES.md", "onnxruntime-ThirdPartyNotices.txt"] },
       { "from": "build/icon.png", "to": "icon.png" },
       { "from": "build/context-toolkit.exe", "to": "context-toolkit.exe" }
     ],
