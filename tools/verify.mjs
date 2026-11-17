@@ -7,6 +7,12 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { uptime } from 'node:os';
+import { load, signature, stamp } from './gate.mjs';
+
+/** Signatures of the change gates before a run (tools/gate.mjs): a green run marks them passed, as `gate.mjs run` would. */
+export const before = (root) => load(root).map((gate) => ({ gate, sig: signature(root, gate) }));
+/** Mark the gates whose files did not change during the run; returns the names marked. */
+export const passGates = (root, sigs) => sigs.filter(({ gate, sig }) => signature(root, gate) === sig).map(({ gate, sig }) => (stamp(root, gate, sig), gate.name));
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -88,7 +94,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   if (flags.has('--release')) steps.splice(steps.findIndex((s) => s.name === 'e2e'), 1, ...RELEASE);
   console.log(`changed files: ${files.length}${files.length ? ` (${files.slice(0, 8).join(', ')}${files.length > 8 ? ', …' : ''})` : ''}`);
   console.log(`checks: ${steps.map((s) => s.name).join(', ') || 'none needed'}`);
-  if (flags.has('--dry') || !steps.length) process.exit(0);
+  if (flags.has('--dry')) process.exit(0);
+  const sigs = before(root);
+  if (!steps.length) { passGates(root, sigs); process.exit(0); }
 
   const lock = join(gitDir(root), 'verify.lock');
   if (existsSync(lock) && !held(lock)) rmSync(lock, { force: true });
@@ -110,6 +118,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   } finally { rmSync(lock, { force: true }); }
   console.log(`\n${rows.join('\n')}`);
   if (code) console.log(`\nFAILED: fix the cause, not the check; after 3 rounds on the same failure, stop and ask a person.`);
-  else console.log('\nOK: verified');
+  else {
+    const marked = passGates(root, sigs);
+    console.log(`\nOK: verified${marked.length ? ` (gate passed: ${marked.join(', ')})` : '; files changed during the run, run it again to pass the gate'}`);
+  }
   process.exit(code);
 }

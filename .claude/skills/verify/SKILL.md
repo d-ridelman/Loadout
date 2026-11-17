@@ -33,8 +33,9 @@ the committed ones in `state/`.
 - **Done means verified.** Report the table `verify` prints. A change that skipped it is not done.
 - **A change never weakens its own check.** Do not edit a test, a threshold or a gate in the same change to make it pass, unless the
   change is about that check; then say so and why.
-- **Flaky is a bug.** No `waitForTimeout`, sleeps or retries to make a test pass: wait for a condition the app shows. If the cause cannot
-  be found, delete the test and write down why in the commit message.
+- **Flaky is a bug.** Never add a `waitForTimeout`, a sleep or a retry to make a test pass: wait for a condition the app shows. The
+  short pauses already in `run.mjs` are deliberate (layout settling before a screenshot, a negative check, a section loading before the
+  English text check). If the cause of a flake cannot be found, delete the test and write down why in the commit message.
 - **Three rounds, then a person.** The same failure after three attempts: stop and report what you tried.
 - **A defect found by hand becomes a check of its class** (a property, an e2e assertion, a Doctor rule), shown red before the fix.
 - **Properties for promises.** Core promises (a toggle and its rollback keep every byte) are property tests (`proptest`,
@@ -51,4 +52,5 @@ the committed ones in `state/`.
 
 `.claude/gates.json` and the Stop hook in `.claude/settings.json` watch the files above. The gate is in **observe** mode: it only logs
 to `<git-dir>/gates/observe.log` what it would have blocked. Switch `"mode"` to `"enforce"` once the log shows no false alarms.
-`node tools/gate.mjs status` shows whether the files as they are now passed.
+A green `node tools/verify.mjs` marks the gate passed for the files as they are (unless they changed during the run);
+`node tools/gate.mjs status` shows whether they did.

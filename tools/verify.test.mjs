@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { needs, pick, STEPS } from './verify.mjs';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { stale } from './gate.mjs';
+import { before, needs, passGates, pick, STEPS } from './verify.mjs';
 
 const names = (paths) => pick(paths).map((s) => s.name);
 
@@ -29,6 +33,23 @@ test('the Context Toolkit also runs its hook binary end to end', () => {
 test('an unknown path gets every check', () => {
   assert.equal(needs('somewhere/new.file').length, STEPS.length);
   assert.equal(needs('app/README.md').length, 0, 'markdown is docs wherever it is');
+});
+
+test('a green verify passes the change gate, unless its files changed during the run', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'verify-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    await mkdir(join(root, '.claude')); await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'src', 'a.rs'), 'fn a() {}');
+    await writeFile(join(root, '.claude', 'gates.json'), JSON.stringify({ gates: [{ name: 'verify', files: '^src/', run: 'node tools/verify.mjs' }] }));
+    let sigs = before(root);
+    assert.deepEqual(passGates(root, sigs), ['verify']);
+    assert.deepEqual(stale(root).map((g) => g.name), [], 'marked passed');
+    sigs = before(root);
+    await writeFile(join(root, 'src', 'a.rs'), 'fn a() { 1; }');
+    assert.deepEqual(passGates(root, sigs), [], 'an edit during the run: no mark');
+    assert.deepEqual(stale(root).map((g) => g.name), ['verify']);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('the change gate watches exactly the files that need a check', () => {
