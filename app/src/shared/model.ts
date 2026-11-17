@@ -299,6 +299,29 @@ export type ScanResponse =
   | { ok: true; data: ScanResult; ms: number }
   | { ok: false; error: string }
 
+/**
+ * App update state, as main sends it to the window: only a checked version, a percent and a fixed error text
+ * (no release notes or raw error messages from the network). `quiet`: an error of a background check, shown only in the panel.
+ */
+export type UpdateState =
+  | { status: 'idle' }
+  | { status: 'checking'; manual: boolean }
+  | { status: 'latest'; checkedAt: number }
+  | { status: 'available'; version: string }
+  | { status: 'downloading'; version: string; percent: number }
+  | { status: 'ready'; version: string }
+  | { status: 'error'; message: string; quiet: boolean }
+
+export interface UpdatesInfo {
+  /** The installed version. */
+  version: string
+  /** "Check for updates automatically" (on by default). */
+  auto: boolean
+  /** false in a development run: electron-updater works only in an installed build. */
+  supported: boolean
+  state: UpdateState
+}
+
 /** The preload → renderer bridge. The window has nothing else. */
 export interface LoadoutApi {
   scan: () => Promise<ScanResponse>
@@ -341,6 +364,16 @@ export interface LoadoutApi {
   skillFetch: (source: string, dryRun: boolean) => Promise<Result<SkillFetch>>
   /** Subscribe to config changes; returns the unsubscribe function. */
   onChanged: (cb: (e: ChangedEvent) => void) => () => void
+  /** App updates: the page only asks; main decides what is allowed in the current state. */
+  updates: () => Promise<UpdatesInfo>
+  setAutoUpdate: (on: boolean) => Promise<UpdatesInfo>
+  checkUpdates: () => Promise<void>
+  downloadUpdate: () => Promise<void>
+  /** Quits and installs the downloaded update; main refuses while a write or an install is in progress. */
+  installUpdate: () => Promise<Result<boolean>>
+  /** Opens the release notes of the offered version in the browser (main builds the address). */
+  openReleaseNotes: () => Promise<void>
+  onUpdates: (cb: (info: UpdatesInfo) => void) => () => void
 }
 
 export const CLIENTS: readonly { id: ClientId; name: string }[] = [

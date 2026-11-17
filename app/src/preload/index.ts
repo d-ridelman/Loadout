@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import type { ChangedEvent, LoadoutApi } from '../shared/model'
+import type { ChangedEvent, LoadoutApi, UpdatesInfo } from '../shared/model'
 
 const api: LoadoutApi = {
   scan: () => ipcRenderer.invoke('scan'),
@@ -36,6 +36,19 @@ const api: LoadoutApi = {
     ipcRenderer.on('changed', handler)
     return () => {
       ipcRenderer.removeListener('changed', handler)
+    }
+  },
+  updates: () => ipcRenderer.invoke('updates:get'),
+  setAutoUpdate: (on) => ipcRenderer.invoke('updates:setAuto', on),
+  checkUpdates: () => ipcRenderer.invoke('updates:check'),
+  downloadUpdate: () => ipcRenderer.invoke('updates:download'),
+  installUpdate: () => ipcRenderer.invoke('updates:install'),
+  openReleaseNotes: () => ipcRenderer.invoke('updates:notes'),
+  onUpdates: (cb) => {
+    const handler = (_e: IpcRendererEvent, info: UpdatesInfo) => cb(info)
+    ipcRenderer.on('updates', handler)
+    return () => {
+      ipcRenderer.removeListener('updates', handler)
     }
   },
 }

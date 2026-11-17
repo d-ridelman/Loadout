@@ -24,6 +24,7 @@ import type { Filters, Sel } from './views/Matrix'
 import { Palette } from './views/Palette'
 import type { PaletteItem } from './views/Palette'
 import { Radar } from './views/Radar'
+import { Updates } from './views/Updates'
 
 type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal' | 'profiles' | 'ctxkit'
 /** A form before the write preview; `draft` is what was typed, when the preview sends the person back to it. */
@@ -462,7 +463,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         {problems > 0 ? <span className="s-broken">✕ {t('сломано', 'broken')}: {problems}</span> : null}
         {warnings.length > 0 ? <span className="s-stale">◐ {t('предупреждений', 'warnings')}: {warnings.length}</span> : null}
         <span className="sp" />
-        <span>{t('? — клавиши · данные читаются с диска, ничего не отправляется', '? — shortcuts · data is read from disk, nothing is sent')}</span>
+        <Updates />
       </footer>
 
       {help ? (
