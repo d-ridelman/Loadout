@@ -1,4 +1,4 @@
-//! Loadout core: read-only (R0). A scanner for five clients: Claude Code, Claude Desktop, Codex, Antigravity, DeepSeek.
+//! Loadout core: read-only (R0). A scanner for six clients: Claude Code, Claude Desktop, Codex, Antigravity, DeepSeek, OpenCode.
 
 pub mod antigravity;
 pub mod claude_code;
@@ -12,6 +12,7 @@ pub mod frontmatter;
 pub mod i18n;
 pub mod mask;
 pub mod model;
+pub mod opencode;
 pub mod profiles;
 pub mod trash;
 pub mod watch;
@@ -90,6 +91,20 @@ impl Ctx {
             Ok(v) => Some(v),
             Err(e) => {
                 let w = crate::tr!("{}: не JSON ({})", "{}: not JSON ({})", self.tilde(p), e);
+                self.warnings.push(w);
+                None
+            }
+        }
+    }
+
+    /// [`Ctx::read_json`] for JSONC files (comments, trailing commas): OpenCode's `opencode.json(c)`.
+    pub fn read_jsonc(&mut self, p: &Path) -> Option<Value> {
+        let text = self.read_text(p)?;
+        let body = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        match jsonc_parser::parse_to_serde_value(body, &Default::default()) {
+            Ok(v) => v,
+            Err(e) => {
+                let w = crate::tr!("{}: не JSONC ({})", "{}: not JSONC ({})", self.tilde(p), e);
                 self.warnings.push(w);
                 None
             }
@@ -498,6 +513,7 @@ pub fn scan_with(home: &Path, store: Option<&Path>) -> ScanResult {
     codex::scan(&mut c);
     antigravity::scan(&mut c);
     deepseek::scan(&mut c);
+    opencode::scan(&mut c);
     if let Some(store) = store {
         trash::inject(&mut c, store);
     }

@@ -12,15 +12,18 @@ pub enum Client {
     Antigravity,
     #[serde(rename = "deepseek")]
     DeepSeek,
+    #[serde(rename = "opencode")]
+    OpenCode,
 }
 
 impl Client {
-    pub const ALL: [Client; 5] = [
+    pub const ALL: [Client; 6] = [
         Client::ClaudeCode,
         Client::ClaudeDesktop,
         Client::Codex,
         Client::Antigravity,
         Client::DeepSeek,
+        Client::OpenCode,
     ];
 
     /// Short name for the CLI and JSON (matches `serde`).
@@ -31,6 +34,7 @@ impl Client {
             Client::Codex => "codex",
             Client::Antigravity => "antigravity",
             Client::DeepSeek => "deepseek",
+            Client::OpenCode => "opencode",
         }
     }
 

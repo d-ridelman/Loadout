@@ -33,11 +33,12 @@ pub struct Facts {
 }
 
 /// Directories where third-party installers run wild and backup copies pile up (checked on this machine).
-pub const BACKUP_DIRS: [(Client, &str); 4] = [
+pub const BACKUP_DIRS: [(Client, &str); 5] = [
     (Client::ClaudeCode, ".claude"),
     (Client::Codex, ".codex"),
     (Client::Antigravity, ".gemini/config"),
     (Client::DeepSeek, ".dsh"),
+    (Client::OpenCode, ".config/opencode"),
 ];
 
 pub fn is_backup_name(name: &str) -> bool {

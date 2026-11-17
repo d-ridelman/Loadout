@@ -199,9 +199,157 @@ fn round_trip(
     Ok(())
 }
 
+/// An OpenCode config in JSONC around one MCP server: the generation, where the flag is (or that it is absent),
+/// trailing commas, `//` comments on their own lines and at line ends, CRLF and a BOM.
+#[derive(Debug, Clone)]
+struct Oc {
+    v2: bool,
+    /// `None`: no flag key, the server is on by default; `Some(true)`: the flag is the first key, `Some(false)`: the last
+    flag_first: Option<bool>,
+    trailing: bool,
+    comments: Vec<(usize, bool)>,
+    crlf: bool,
+    bom: bool,
+}
+
+fn oc() -> impl Strategy<Value = Oc> {
+    (
+        any::<bool>(),
+        proptest::option::of(any::<bool>()),
+        any::<bool>(),
+        proptest::collection::vec((0usize..64, any::<bool>()), 0..5),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(|(v2, flag_first, trailing, comments, crlf, bom)| Oc {
+            v2,
+            flag_first,
+            trailing,
+            comments,
+            crlf,
+            bom,
+        })
+}
+
+fn oc_text(o: &Oc) -> String {
+    let t = if o.trailing { "," } else { "" };
+    let flag = if o.v2 {
+        "\"disabled\": false"
+    } else {
+        "\"enabled\": true"
+    };
+    let mut keys = vec![
+        "\"type\": \"local\"".to_owned(),
+        "\"command\": [\"npx\", \"-y\", \"demo-mcp\"]".to_owned(),
+        "\"environment\": { \"TOKEN\": \"x\" }".to_owned(),
+    ];
+    match o.flag_first {
+        Some(true) => keys.insert(0, flag.to_owned()),
+        Some(false) => keys.push(flag.to_owned()),
+        None => {}
+    }
+    let pad = if o.v2 { "        " } else { "      " };
+    let n = keys.len();
+    let body: Vec<String> = keys
+        .into_iter()
+        .enumerate()
+        .map(|(i, k)| format!("{pad}{k}{}", if i + 1 < n { "," } else { t }))
+        .collect();
+    let mut lines = vec!["{".to_owned(), "  \"mcp\": {".to_owned()];
+    if o.v2 {
+        lines.push("    \"servers\": {".into());
+    }
+    lines.push(format!("{}\"demo\": {{", &pad[2..]));
+    lines.extend(body);
+    lines.push(format!("{}}}{t}", &pad[2..]));
+    if o.v2 {
+        lines.push(format!("    }}{t}"));
+    }
+    lines.push(format!("  }}{t}"));
+    lines.push("}".into());
+    for &(i, at_end) in &o.comments {
+        let n = lines.len();
+        if at_end {
+            lines[i % n].push_str(" // kept by the user");
+        } else {
+            lines.insert(i % (n + 1), "  // kept by the user".into());
+        }
+    }
+    let nl = if o.crlf { "\r\n" } else { "\n" };
+    let body = lines.join(nl) + nl;
+    if o.bom {
+        format!("\u{feff}{body}")
+    } else {
+        body
+    }
+}
+
+fn mcp_state(home: &Path, name: &str) -> Option<(String, State)> {
+    loadout_core::scan(home)
+        .entities
+        .into_iter()
+        .find(|e| e.client == Client::OpenCode && e.kind == Kind::Mcp && e.name == name)
+        .map(|e| (e.id, e.state))
+}
+
+fn opencode_round_trip(o: &Oc) -> Result<(), TestCaseError> {
+    let e = env();
+    let path = e.home.join(".config/opencode/opencode.jsonc");
+    let original = oc_text(o);
+    fs::write(&path, &original).unwrap();
+    let (id, state) = mcp_state(&e.home, "demo")
+        .ok_or_else(|| TestCaseError::fail(format!("demo is not recognised in {original:?}")))?;
+    prop_assert_eq!(state, State::On);
+
+    let op = toggle(&e, &id, false);
+    let after = fs::read_to_string(&path).unwrap();
+    let (gone, added) = middle(&original, &after);
+    match (o.flag_first, o.v2) {
+        (Some(_), true) => prop_assert_eq!((gone, added), ("fals".to_owned(), "tru".to_owned())),
+        (Some(_), false) => prop_assert_eq!((gone, added), ("tru".to_owned(), "fals".to_owned())),
+        // no flag: the key is only inserted, nothing else moves
+        (None, v2) => prop_assert!(
+            gone.is_empty()
+                && added.contains(if v2 {
+                    "\"disabled\": true"
+                } else {
+                    "\"enabled\": false"
+                }),
+            "{:?} → {:?}",
+            original,
+            after
+        ),
+    }
+    prop_assert_eq!(mcp_state(&e.home, "demo").map(|x| x.1), Some(State::Off));
+
+    write::rollback(&e.home, &e.store, &op, ML).map_err(TestCaseError::fail)?;
+    prop_assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        original.clone(),
+        "rollback is byte for byte"
+    );
+
+    toggle(&e, &id, false);
+    toggle(&e, &id, true);
+    let back = fs::read_to_string(&path).unwrap();
+    if o.flag_first.is_some() {
+        prop_assert_eq!(back, original, "off and on again is byte for byte");
+    } else {
+        // the inserted key stays with the "on" value
+        prop_assert!(middle(&original, &back).0.is_empty(), "{:?}", back);
+        prop_assert_eq!(mcp_state(&e.home, "demo").map(|x| x.1), Some(State::On));
+    }
+    Ok(())
+}
+
 proptest! {
     // each case copies the fixture home: keep the count modest so `cargo test` stays fast
     #![proptest_config(ProptestConfig::with_cases(40))]
+
+    #[test]
+    fn opencode_jsonc_toggle_and_rollback_keep_every_byte(o in oc()) {
+        opencode_round_trip(&o)?;
+    }
 
     #[test]
     fn codex_toml_toggle_and_rollback_keep_every_byte(s in style()) {

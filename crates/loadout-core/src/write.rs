@@ -92,6 +92,8 @@ fn allowed(home: &Path, file: &Path) -> bool {
         ".codex/config.toml",
         "AppData/Roaming/Claude/claude_desktop_config.json",
         ".gemini/config/mcp_config.json",
+        ".config/opencode/opencode.json",
+        ".config/opencode/opencode.jsonc",
     ]
     .iter()
     .any(|rel| norm(&home.join(rel)) == norm(file));
@@ -608,7 +610,13 @@ fn prep_edit(
         ));
     }
     let (old, text) = read_text(&s.file)?;
-    let entry = edit::get_value(s.format, &text, &s.path)?.ok_or_else(entry_missing)?;
+    let raw = edit::get_value(s.format, &text, &s.path)?.ok_or_else(entry_missing)?;
+    let opencode = e.client == Client::OpenCode;
+    let entry = if opencode {
+        crate::opencode::to_common(&raw)
+    } else {
+        raw
+    };
     if entry.get("command").and_then(Value::as_str).is_none() {
         return Err(crate::tr!(
             "у записи нет command: это не локальный сервер (адрес править нельзя)",
@@ -620,8 +628,15 @@ fn prep_edit(
         p.push(k.to_owned());
         p
     };
-    let mut new_text = edit::put_value(s.format, &text, &key("command"), &json!(command), true)?;
-    if !args.is_empty() || entry.get("args").is_some() {
+    let mut new_text = if opencode {
+        // OpenCode keeps the program and its arguments in one `command` array
+        let mut all = vec![command.to_owned()];
+        all.extend(args.iter().cloned());
+        edit::put_value(s.format, &text, &key("command"), &json!(all), true)?
+    } else {
+        edit::put_value(s.format, &text, &key("command"), &json!(command), true)?
+    };
+    if !opencode && (!args.is_empty() || entry.get("args").is_some()) {
         new_text = edit::put_value(s.format, &new_text, &key("args"), &json!(args), true)?;
     }
     let at = locate(home, &s.file, s.format, &s.path, e);
@@ -661,8 +676,36 @@ fn client_target(home: &Path, c: Client) -> Option<(PathBuf, Format, &'static st
             "mcpServers",
         ),
         Client::Codex => (home.join(".codex/config.toml"), Format::Toml, "mcp_servers"),
+        // the key path depends on the file's schema generation: see `mcp_root`
+        Client::OpenCode => {
+            let dir = home.join(crate::opencode::DIR);
+            let file = crate::opencode::FILES
+                .iter()
+                .map(|f| dir.join(f))
+                .find(|p| p.is_file())
+                .unwrap_or_else(|| dir.join(crate::opencode::FILES[0]));
+            (file, Format::Json, "mcp")
+        }
         Client::DeepSeek => return None,
     })
+}
+
+/// Keys from the target file's root to its MCP object.
+fn mcp_root(dest: Client, root: &str, text: &str) -> Result<Vec<String>, String> {
+    if dest == Client::OpenCode {
+        crate::opencode::servers_path_of(text)
+    } else {
+        Ok(vec![root.to_owned()])
+    }
+}
+
+/// A translated entry as the target client writes it.
+fn written_as(dest: Client, value: &Value) -> Value {
+    if dest == Client::OpenCode {
+        crate::opencode::from_common(value)
+    } else {
+        value.clone()
+    }
 }
 
 /// An MCP entry in the target's format. What is not carried over is returned as key names.
@@ -729,8 +772,14 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
     }
     let (_, src_text) = read_text(&s.file)?;
     let entry = edit::get_value(s.format, &src_text, &s.path)?.ok_or_else(entry_missing)?;
+    let entry = if e.client == Client::OpenCode {
+        crate::opencode::to_common(&entry)
+    } else {
+        entry
+    };
     let (old, text) = read_text(&file).map_err(|_| target_file_missing())?;
-    let path = vec![root.to_owned(), key.clone()];
+    let mut path = mcp_root(dest, root, &text)?;
+    path.push(key.clone());
     if edit::get_value(format, &text, &path)?.is_some()
         || scan.entities.iter().any(|o| {
             o.client == dest && o.kind == Kind::Mcp && o.scope == "user" && o.name == e.name
@@ -765,7 +814,7 @@ fn prep_copy(home: &Path, scan: &ScanResult, id: &str, to: &str) -> Result<Prepa
             "the entry is not copied: after translation it has neither command nor url{hint}"
         ));
     }
-    let new_text = edit::put_value(format, &text, &path, &value, false)?;
+    let new_text = edit::put_value(format, &text, &path, &written_as(dest, &value), false)?;
 
     let mut plan = plan_for(e, "copy", "R2", locate(home, &file, format, &path, e), &old);
     plan.client = dest;
@@ -893,12 +942,12 @@ fn prep_add(
         shown.extend(args.iter().cloned());
     } else {
         let u = url.trim();
-        // The remote server form is verified only for Claude Code (`type: http` + `url`) and Codex (`url`);
-        // shortcut: Desktop and Antigravity, after checking against their documentation
-        if !matches!(dest, Client::ClaudeCode | Client::Codex) {
+        // The remote server form is verified only for Claude Code (`type: http` + `url`), Codex (`url`) and OpenCode
+        // (`type: remote` + `url`); shortcut: Desktop and Antigravity, after checking against their documentation
+        if !matches!(dest, Client::ClaudeCode | Client::Codex | Client::OpenCode) {
             return Err(crate::tr!(
-                "удалённый сервер можно добавить только в Claude Code и Codex: форма записи у остальных клиентов не проверена",
-                "a remote server can only be added to Claude Code and Codex: the entry format for other clients has not been verified"
+                "удалённый сервер можно добавить только в Claude Code, Codex и OpenCode: форма записи у остальных клиентов не проверена",
+                "a remote server can only be added to Claude Code, Codex and OpenCode: the entry format for other clients has not been verified"
             ));
         }
         let host = u.split_once("://").map_or("", |(_, rest)| {
@@ -922,7 +971,8 @@ fn prep_add(
         shown = vec![u.to_owned()];
     }
     let (old, text) = read_text(&file).map_err(|_| target_file_missing())?;
-    let path = vec![root.to_owned(), name.to_owned()];
+    let mut path = mcp_root(dest, root, &text)?;
+    path.push(name.to_owned());
     if edit::get_value(format, &text, &path)?.is_some()
         || scan
             .entities
@@ -934,7 +984,13 @@ fn prep_add(
             "this client already has an entry with this name"
         ));
     }
-    let new_text = edit::put_value(format, &text, &path, &Value::Object(value.clone()), false)?;
+    let new_text = edit::put_value(
+        format,
+        &text,
+        &path,
+        &written_as(dest, &Value::Object(value)),
+        false,
+    )?;
     let env_keys: Vec<String> = env.iter().map(|p| mask::scrub_words(&p.key)).collect();
     let mut notes = vec![crate::tr!(
         "Новая запись добавляется в конфиг клиента; клиент подхватит её при следующем запуске.",
@@ -949,7 +1005,10 @@ fn prep_add(
     }
     let pointer = match format {
         Format::Toml => crate::codex::toml_key(root) + "." + &crate::codex::toml_key(name),
-        _ => format!("/{root}/{}", crate::esc_ptr(name)),
+        _ => path
+            .iter()
+            .map(|k| format!("/{}", crate::esc_ptr(k)))
+            .collect(),
     };
     let plan = Plan {
         op: "add".into(),

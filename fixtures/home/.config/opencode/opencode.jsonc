@@ -1,0 +1,37 @@
+{
+  // OpenCode global config, V2 schema: comments and trailing commas are part of the fixture
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "acme": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": { "baseURL": "https://llm.example.com/v1", "apiKey": "FAKE-SECRET-OCPROVIDER" },
+    },
+  },
+  "mcp": {
+    "servers": {
+      // the same server as in Antigravity: one matrix row
+      "tool-a": {
+        "type": "local",
+        "command": ["npx", "-y", "tool-a-mcp", "--token", "FAKE-SECRET-OCARG"],
+        "environment": { "API_KEY": "FAKE-SECRET-OCENV" },
+      },
+      "oc-remote": {
+        "type": "remote",
+        "url": "https://mcp.example.com/mcp?key=FAKE-SECRET-OCQUERY",
+        "headers": { "Authorization": "Bearer FAKE-SECRET-OCHDR" },
+        "oauth": { "client_secret": "FAKE-SECRET-OCOAUTH" },
+        "disabled": true,
+      },
+    },
+  },
+  "agents": {
+    "reviewer": { "system": "FAKE-SECRET-OCPROMPT", "model": "anthropic/claude-sonnet-5-5", "disabled": true },
+  },
+  "commands": {
+    "ship": { "template": "FAKE-SECRET-OCTEMPLATE", "description": "Release" },
+  },
+  "plugins": [
+    "opencode-acme-plugin@1.2.0",
+    { "package": "@acme/opencode-plugin", "options": { "token": "FAKE-SECRET-OCPLUGIN" } },
+  ],
+}
