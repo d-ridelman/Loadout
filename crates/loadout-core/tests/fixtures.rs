@@ -689,6 +689,14 @@ fn codex_remote_plugins_carry_the_manifest_display_name() {
             r#"{ "name": "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789" }"#,
         ),
         (&format!("{root}/app-ffee00112233/.keep"), ""),
+        (
+            &format!("{root}/app-123456abcdef/1/.codex-plugin/plugin.json"),
+            "{ broken",
+        ),
+        (
+            &format!("{root}/app-123456abcdef/1/.claude-plugin/plugin.json"),
+            r#"{ "name": "fallback" }"#,
+        ),
     ]);
     let r = loadout_core::scan(&h.0);
     let shown = |id: &str| {
@@ -714,6 +722,11 @@ fn codex_remote_plugins_carry_the_manifest_display_name() {
         "a token-like name is dropped"
     );
     assert_eq!(shown("app-ffee00112233"), None, "no manifest");
+    assert_eq!(
+        shown("app-123456abcdef").as_deref(),
+        Some("fallback"),
+        "a broken .codex-plugin manifest falls back to .claude-plugin"
+    );
 }
 
 /// Version directories (`1.9.0`, `1.10.0`, sha prefixes) do not sort as strings: the newest manifest names the plugin.

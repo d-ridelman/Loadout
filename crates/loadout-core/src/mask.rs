@@ -474,8 +474,10 @@ pub(crate) fn is_spaced_path(s: &str) -> bool {
             && w.chars().all(|c| c.is_ascii_alphabetic());
         letters || matches!(w, "(x86)" | "(x64)" | "(arm64)")
     };
+    // only a plain space separates folder words: a tab or NBSP would slip past the word check below
     s.contains(' ')
-        && !last.contains(char::is_whitespace)
+        && !s.chars().any(|c| c.is_whitespace() && c != ' ')
+        && !last.contains(' ')
         && dirs
             .iter()
             .filter(|d| d.contains(' '))
@@ -959,6 +961,7 @@ mod tests {
                 r#""C:\Program Files\App\Run.exe Hunter2 More\x.js""#,
                 "Hunter2",
             ),
+            ("\"C:\\Program Files\\A.exe\tPw1\tX\\o.txt\" --wait", "Pw1"),
         ] {
             let out = mask_line(line);
             assert!(!out.contains(secret), "{line} -> {out}");
@@ -970,10 +973,11 @@ mod tests {
             r"C:\Tools\Srv.exe Summer2024 Data\cfg.json",
             r"C:\Program Files\App\Run.exe Hunter2 More\x.js",
             "/opt/App/Server Hunter2pw Data/cfg.json",
+            "C:\\Program Files\\A.exe\tPw1\tX\\o.txt",
         ] {
             let out = mcp_detail(&json!({ "command": cmd }))["command"].to_string();
             assert!(
-                !["hunter", "secretpw", "Summer2024", "Hunter2"]
+                !["hunter", "secretpw", "Summer2024", "Hunter2", "Pw1"]
                     .iter()
                     .any(|s| out.contains(s)),
                 "{cmd} -> {out}"

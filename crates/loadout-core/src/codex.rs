@@ -217,14 +217,16 @@ fn display_name(c: &mut Ctx, dir: &std::path::Path) -> Option<String> {
     let mut manifests: Vec<_> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
-        .filter_map(|v| {
+        .flat_map(|v| {
             [".codex-plugin", ".claude-plugin"]
-                .iter()
-                .map(|d| v.path().join(d).join("plugin.json"))
-                .find(|p| p.is_file())
+                .map(|d| (v.path().join(d).join("plugin.json"), d == ".codex-plugin"))
         })
+        .filter(|(p, _)| p.is_file())
         .collect();
-    manifests.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    // newest manifest first; a broken one is skipped, so `.claude-plugin` still serves when `.codex-plugin` cannot be read
+    manifests
+        .sort_by_key(|(p, main)| (std::fs::metadata(p).and_then(|m| m.modified()).ok(), *main));
+    let manifests: Vec<_> = manifests.into_iter().map(|(p, _)| p).collect();
     manifests.iter().rev().find_map(|p| {
         let m = c.read_json(p)?;
         let name = m
