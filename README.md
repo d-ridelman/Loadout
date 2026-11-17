@@ -166,8 +166,6 @@ Known limitations:
 - a Claude Code profile other than `~/.claude` (`CLAUDE_CONFIG_DIR`) is not read;
 - OpenCode: the global `~/.config/opencode` is read and written; the system config in `%ProgramData%\opencode` is shown as scope `managed` and only read (an administrator changes it). Project `opencode.json` files are not read: OpenCode keeps its list of projects only inside its SQLite database. `AGENTS.md` rules and `tui.json` have no entries to show; the old `config.json` is not among the files OpenCode V2 reads.
 
-Open work is in [TODO.md](TODO.md): one dated item, comparing advisor and `checker` calls by day after 22.11.2026.
-
 ## Security
 
 How to report a vulnerability and what the app reads and writes: [SECURITY.md](SECURITY.md).

@@ -167,8 +167,6 @@ npm run dist                   # установщик NSIS в app/dist (без �
 - профиль Claude Code не из `~/.claude` (`CLAUDE_CONFIG_DIR`) не читается;
 - OpenCode: глобальный `~/.config/opencode` читается и правится; системный конфиг `%ProgramData%\opencode` показывается как область `managed` и только читается (его меняет администратор). Проектные `opencode.json` не читаются: список проектов OpenCode хранит только в своей базе SQLite. В правилах `AGENTS.md` и `tui.json` нет записей для показа; старый `config.json` OpenCode V2 не читает.
 
-Открытая работа записана в [TODO.md](TODO.md): один пункт со сроком, сравнить вызовы advisor и `checker` по дням после 22.11.2026.
-
 ## Безопасность
 
 Как сообщить об уязвимости и что приложение читает и пишет: [SECURITY.ru.md](SECURITY.ru.md).
