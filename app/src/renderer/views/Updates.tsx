@@ -140,8 +140,8 @@ export function Updates() {
           </div>
           <p className="mute small">
             {t(
-              'Проверка обращается только к GitHub (github.com и его сервер загрузки файлов) и ничего не сообщает о вас, ваших клиентах и настройках. GitHub видит то же, что в любом запросе: IP-адрес и время; User-Agent общий — «electron-builder».',
-              'The check contacts only GitHub (github.com and its file download server) and says nothing about you, your clients or your settings. GitHub sees what any request shows: the IP address and the time; the User-Agent is the generic “electron-builder”.',
+              'Проверка обращается только к GitHub (github.com и его сервер загрузки файлов) и ничего не сообщает о вас, ваших клиентах и настройках. GitHub видит то же, что в любом запросе: IP-адрес, время и язык системы; User-Agent общий — «electron-builder».',
+              'The check contacts only GitHub (github.com and its file download server) and says nothing about you, your clients or your settings. GitHub sees what any request shows: the IP address, the time and the system language; the User-Agent is the generic “electron-builder”.',
             )}
           </p>
         </section>

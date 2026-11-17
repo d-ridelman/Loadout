@@ -31,7 +31,7 @@ At the default level R0 no client file is written. Client files change only afte
 - **`~/.claude/skills/<name>`** when you install a skill.
 - **Claude Code plugins** are installed by the `claude` CLI itself (`claude plugin marketplace add`, `claude plugin install`); the window shows the exact command first.
 - **Context Toolkit** (`setup`, only on "Apply" or "Roll back"): Claude Code `settings.json`, `CLAUDE.md`, `~/.claude/hooks/context-toolkit.exe`, `~/.local/bin/context-toolkit.exe`, the `Explore` and `checker` agents, `context-toolkit.json`; with the matching checkbox also the Claude Desktop presets, Antigravity `hooks.json` and the DeepSeek Harness files.
-- **Its own data** in `%APPDATA%\loadout-app`: `settings.json` (language and write level), `backups\` (operation backups with manifests, from which the journal is built, the trash, `profiles.json`, and `staging\`, where a downloaded skill waits for your confirmation) and Electron's own browser data (the effects setting is kept in its local storage).
+- **Its own data** in `%APPDATA%\loadout-app`: `settings.json` (language, write level and the automatic update check), `.updaterId` (a random id electron-updater creates for staged rollouts; Loadout sends a fixed all-zero value in its place, so it never leaves the machine), `backups\` (operation backups with manifests, from which the journal is built, the trash, `profiles.json`, and `staging\`, where a downloaded skill waits for your confirmation) and Electron's own browser data (the effects setting is kept in its local storage). A downloaded update waits in `%LOCALAPPDATA%\loadout-app-updater`.
 
 ## Copies contain secrets
 
@@ -39,10 +39,24 @@ Operation backups and the trash keep client files **in full and as plain text, i
 
 ## Network
 
-Loadout has no telemetry, no update check and no network code of its own. Network access happens only on explicit actions:
+Loadout has no telemetry. On its own it goes online for one thing only, the update check; everything else needs an explicit action:
 
+- **the update check** (on by default; the version button at the right end of the footer opens the panel with the "Check for updates automatically" checkbox and "Check now"). About 10 seconds after start and then once a day while the window is open, electron-updater in the main process asks GitHub for the latest release of this repository: `github.com/d-ridelman/Loadout/releases.atom`, `…/releases/latest` and that release's `latest.yml`. Downloads go from `github.com` to GitHub's file server (`release-assets.githubusercontent.com` at the time of writing). `api.github.com` is not used. The requests carry nothing about you, your clients or your settings: the User-Agent is the generic `electron-builder`, the `x-user-staging-id` header is a fixed all-zero value. GitHub sees what any request shows: the IP address, the time and the system language (`Accept-Language`). With the checkbox off there are no automatic requests; "Check now" still works on click;
+- downloading an update starts only on "Download" (`.blockmap` lets it fetch only the changed blocks), installing only on "Restart and update" or when you quit Loadout after the download;
 - installing a plugin or adding a marketplace runs `claude`, which downloads from the source you entered;
 - installing a skill from GitHub runs `git ls-remote` and `git clone` against the repository you entered (a local folder needs no network).
+
+## Updates and the unsigned installer
+
+The installer and the app are not code-signed, so updates cannot rely on a signature. This is what checks them instead:
+
+- electron-updater checks the Authenticode signature of a downloaded update only when the build's `resources/app-update.yml` has a `publisherName`. Loadout's build has none (the packaged-build check verifies that), so the check is skipped rather than rejecting every update of an unsigned build.
+- `latest.yml` comes over HTTPS from the GitHub release of this repository and carries the SHA-512 and size of the installer. The downloaded file, whether whole or assembled from the changed blocks, must match that SHA-512, otherwise it is deleted and nothing is installed. Only the full installer named there is accepted (the web installer is turned off).
+- The installer runs silently (`/S --updated`) into the folder of the current installation and starts the new version; `%APPDATA%\loadout-app` stays.
+
+What this does not protect against: whoever can publish a release in this repository (for example with a stolen GitHub account of the owner) can ship any code, exactly as with an installer downloaded by hand from Releases. A code signature would add a second, independent key; there is none yet.
+
+Versions 0.0.7 and older have no updater: install 1.0.0 by hand once.
 
 ## Processes Loadout starts
 
@@ -52,6 +66,6 @@ The window starts `loadout.exe` (the core, from the app folder), the bundled `co
 
 ## Known limits
 
-- The installer and the app are not code-signed.
+- The installer and the app are not code-signed; updates are checked by the SHA-512 in `latest.yml` (see above).
 - A secret written in a skill description as ordinary words (not shaped like a token) is not masked.
 - Windows only; the app was tested on Windows 11.

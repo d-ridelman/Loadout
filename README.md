@@ -36,6 +36,7 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 - **Journal** of the writes above: toggles, the trash, MCP edits, copies and additions, profile batches and skill installs. Each one rolls back from the journal after the same preview (file, key, before → after). Before any write the file is copied to a backup. Plugin and marketplace installs run through `claude` itself and are not in the journal (remove a plugin with `claude plugin uninstall`); Context Toolkit has its own rollback.
 - **Context Toolkit** built in: preview, apply, roll back, optional policies, and an "Efficiency" report (see below).
 - **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; core messages follow the choice too.
+- **Updates from GitHub releases.** Loadout checks for a new version about 10 seconds after start and once a day, offers it in a small card, downloads it only on "Download" (just the changed blocks) and installs it on "Restart and update". The check goes only to GitHub and carries nothing about you or your configs; turn it off in the update panel (the version button at the right end of the footer). Details: [SECURITY.md](SECURITY.md#network).
 - **Client files are read-only by default** (R0). Raising the write level needs an OS confirmation dialog. Only one window runs at a time; a second launch brings the first one forward.
 
 ### Safe write pipeline
@@ -44,7 +45,7 @@ plan → preview → hash lock (`base_sha`) → backup + manifest → temp file 
 
 ### Copies and secrets
 
-Operation backups and the Loadout trash keep client configs **in full and as plain text, including the `env` values of MCP servers (keys and tokens)**. A masked copy could not give an exact rollback. They live in `%APPDATA%\loadout-app\backups` (the folder is named after the package, `loadout-app`), inside your Windows profile; Loadout sets no permissions of its own, so access is the same as for your other profile files. Nothing is sent anywhere. The dialog that enables writing (R1/R2) says so too.
+Operation backups and the Loadout trash keep client configs **in full and as plain text, including the `env` values of MCP servers (keys and tokens)**. A masked copy could not give an exact rollback. They live in `%APPDATA%\loadout-app\backups` (the folder is named after the package, `loadout-app`), inside your Windows profile; Loadout sets no permissions of its own, so access is the same as for your other profile files. They are never sent anywhere. The dialog that enables writing (R1/R2) says so too.
 
 - The last 100 operations not older than 90 days are kept. Older ones are deleted before a new write, by the "Clean up old copies…" button in the journal, and by `loadout prune` (default folder `%APPDATA%\loadout-app\backups`, another one with `--backups`). Rolling back an operation whose copy was deleted is refused with a clear message.
 - The trash (`backups\trash`) is not cleaned automatically: it holds the only copy of a trashed MCP entry, which goes back into the client file when you turn the entry on. Profiles (`backups\profiles.json`) live in the same folder.
@@ -96,6 +97,7 @@ The window starts only the `context-toolkit.exe` shipped with it, never one from
 1. Download `Loadout.Setup.<version>.exe` from [Releases](https://github.com/d-ridelman/Loadout/releases/latest) and run it. By default it installs for the current user into `%LOCALAPPDATA%\Programs\Loadout`; the installer also offers an install for all users and another folder (the paths below assume the default).
 2. **The installer is not signed.** Windows SmartScreen may warn about an unrecognized app; open the details in its dialog and choose to run the installer anyway. The SHA-256 of the installer is in the release notes.
 3. Silent install: `Loadout.Setup.<version>.exe /S`.
+4. Starting with 1.0.0, Loadout updates itself from Releases (see Features); 0.0.7 and older have to be replaced by hand once. Updates are not signed either: they are checked by the SHA-512 that the release's `latest.yml` carries ([SECURITY.md](SECURITY.md#updates-and-the-unsigned-installer)).
 
 Installing plugins needs the `claude` CLI (Claude Code); installing skills from GitHub needs `git` in `PATH`.
 
@@ -118,7 +120,7 @@ npm run e2e                    # builds everything and drives the real window on
 npm run dist                   # NSIS installer in app/dist (unsigned)
 ```
 
-`npm run e2e`, `npm run dist` and `npm run docs-shots` build the core and copy `context-toolkit.exe` into `app/build` themselves (`npm run bundle:context-toolkit`). More checks and the rules for changes: [CONTRIBUTING.md](CONTRIBUTING.md).
+`npm run e2e`, `npm run dist` and `npm run docs-shots` build the core and copy `context-toolkit.exe` into `app/build` themselves (`npm run bundle:context-toolkit`). A release needs three files from `app/dist` uploaded as they are: `Loadout.Setup.<version>.exe`, its `.blockmap` and `latest.yml` (without `latest.yml` installed copies do not see the release; the release must not be a draft or a pre-release). More checks and the rules for changes: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Repository layout
 
@@ -139,7 +141,7 @@ Version 0.0.7, Windows only. Milestones M0–M5 and the built-in Context Toolkit
 
 Known limitations:
 
-- code signing and auto-update (they need a code-signing certificate and a publishing address);
+- code signing (it needs a code-signing certificate): updates are verified by SHA-512 only;
 - macOS and Linux;
 - project-level settings (`.claude/settings.json` in a project, `.mcp.json`): plugins enabled only there show as "unknown";
 - the MCP check that starts a server and asks for its tools;
