@@ -11,15 +11,34 @@ interface Props {
   onClose: () => void
 }
 
+/** The mark the core puts in place of a value it hides from the window (crates/loadout-core/src/mask.rs, `MASK`). */
+const MASK = '<masked>'
+
+/** A mask typed back (or left from a prefill) would be written into the client config instead of the real value. */
+export const hasMask = (command: string, args: readonly string[]): boolean => command.includes(MASK) || args.some((a) => a.includes(MASK))
+
 /**
- * Edit an MCP command (R2). The window does not receive the current values (they are masked in the list), so the new command
- * is entered in full: the core replaces `command` and `args` and leaves the rest (env, headers) alone.
+ * The form starts from the current command when the core showed all of it. If any part is hidden, the form starts empty:
+ * a prefilled mask could be saved over the real secret.
+ */
+export function prefill(e: Entity): { command: string; args: string; masked: boolean } {
+  const command = typeof e.detail['command'] === 'string' ? e.detail['command'] : ''
+  const args = Array.isArray(e.detail['args']) ? e.detail['args'].filter((a): a is string => typeof a === 'string') : []
+  if (hasMask(command, args)) return { command: '', args: '', masked: true }
+  return { command, args: args.join('\n'), masked: false }
+}
+
+/**
+ * Edit an MCP command (R2). The core replaces `command` and `args` and leaves the rest (env, headers) alone. The form starts
+ * from the current value unless the core masked part of it (then the command is typed in full).
  */
 export function EditDialog({ entity, draft, onSubmit, onClose }: Props) {
-  const [command, setCommand] = useState(draft?.command ?? '')
-  const [args, setArgs] = useState(draft?.args.join('\n') ?? '')
+  const [start] = useState(() => prefill(entity))
+  const [command, setCommand] = useState(draft?.command ?? start.command)
+  const [args, setArgs] = useState(draft?.args.join('\n') ?? start.args)
   const lines = args.split('\n').filter((l) => l !== '')
-  const ok = command.trim() !== '' && command.length <= 500 && lines.length <= 64 && lines.every((l) => l.length <= 500)
+  const masked = hasMask(command, lines)
+  const ok = command.trim() !== '' && command.length <= 500 && lines.length <= 64 && lines.every((l) => l.length <= 500) && !masked
   return (
     <Modal label={t(`Править команду: ${entity.name}`, `Edit command: ${entity.name}`)} onEscape={onClose}>
       <h2>
@@ -43,14 +62,25 @@ export function EditDialog({ entity, draft, onSubmit, onClose }: Props) {
           {t('Аргументы, по одному в строке', 'Arguments, one per line')}
           <textarea value={args} onChange={(e) => setArgs(e.target.value)} rows={5} placeholder={t('-y\nпакет@1.2.3', '-y\npackage@1.2.3')} spellCheck={false} />
         </label>
+        {start.masked ? (
+          <p className="s-stale">
+            ◐ {t(
+              'Часть текущей команды скрыта, потому что похожа на секрет, поэтому поля пустые: введите команду и аргументы целиком.',
+              'Part of the current command is hidden because it looks like a secret, so the fields are empty: type the command and arguments in full.',
+            )}
+          </p>
+        ) : null}
+        {masked ? (
+          <p className="s-broken" role="alert">{t(`Уберите ${MASK}: вместо секрета в конфиг записалась бы эта метка.`, `Remove ${MASK}: this mark would be written to the config instead of the secret.`)}</p>
+        ) : null}
         <p className="mute small">
           {t(
-            'Старые значения не показываются: в списке они скрыты, чтобы секреты не попадали в окно. Заменяются только команда и аргументы, ключи env и заголовки остаются.',
-            'Old values are not shown: they are hidden in the list so secrets never reach the window. Only the command and arguments are replaced; env keys and headers stay.',
+            'Заменяются только команда и аргументы, ключи env и заголовки остаются как есть.',
+            'Only the command and arguments are replaced; env keys and headers stay as they are.',
           )}
         </p>
         <div className="actions">
-          <button type="submit" disabled={!ok}>{t('Предпросмотр', 'Preview')}</button>
+          <button type="submit" className="primary" disabled={!ok}>{t('Предпросмотр', 'Preview')}</button>
           <button type="button" onClick={onClose}>{t('Отмена', 'Cancel')}</button>
         </div>
       </form>

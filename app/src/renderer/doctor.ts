@@ -14,6 +14,8 @@ export interface Finding {
   what: string
   /** Why it matters or where it comes from. */
   why: string
+  /** What the person can do about it ("How to fix"). */
+  fix: string
   /** The client the finding belongs to; scanner warnings have none. The Radar counts problems by this field. */
   client?: ClientId
   /** The entity that "Show" leads to. */
@@ -48,6 +50,10 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
         `Их оставляют установщики сторонних инструментов при правке конфигов. Loadout рядом с конфигами копий не создаёт и эти не трогает: свои бэкапы он хранит отдельно, в ${BACKUP_DIR_HINT}.`,
         `Third-party installers leave these when they edit configs. Loadout makes no copies next to the configs and leaves these alone: it keeps its own backups separately, in ${BACKUP_DIR_HINT}.`,
       ),
+      fix: t(
+        'Если старые копии не нужны, удалите их сами (например, в Проводнике). Работе клиента они не мешают.',
+        'If you no longer need the old copies, delete them yourself (in File Explorer, for example). They do not get in the client’s way.',
+      ),
     })
   }
 
@@ -66,6 +72,10 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       why: t(
         'Цель ссылок (кеш npx) удалена; пакеты, пока их не скачают заново, не запустятся.',
         'The link target (npx cache) was deleted; the packages will not start until they are downloaded again.',
+      ),
+      fix: t(
+        'Скачайте пакеты заново средствами самого клиента (переустановка пакета или его команда обновления). Loadout ссылки не правит.',
+        'Download the packages again with the client itself (reinstall the package or run its update command). Loadout does not repair the links.',
       ),
     })
   }
@@ -90,6 +100,10 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
         'Обычно он остаётся после удаления плагинов или добавлен заранее.',
         'It usually remains after its plugins were removed, or was added in advance.',
       ),
+      fix:
+        e.client === 'claude-code'
+          ? t(`Нужен — ничего делать не надо. Не нужен — удалите его командой \`claude plugin marketplace remove ${e.name}\`.`, `If you need it, there is nothing to do. If not, remove it with \`claude plugin marketplace remove ${e.name}\`.`)
+          : t('Нужен — ничего делать не надо. Не нужен — удалите его в настройках клиента.', 'If you need it, there is nothing to do. If not, remove it in the client’s settings.'),
       entity: e,
     })
   }
@@ -120,6 +134,15 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       why: broken
         ? t('Клиент не сможет загрузить эту запись, пока то, на что она указывает, не появится на месте.', 'The client cannot load this entry until what it points to is back in place.')
         : t('В одной области записано несколько версий: какая из них загрузится, решает клиент.', 'Several versions are recorded in one scope: which one loads is up to the client.'),
+      fix: broken
+        ? t(
+            'Нажмите «Показать»: в инспекторе видно, в каком файле запись. Верните на место то, на что она указывает, или выключите её.',
+            'Press “Show”: the inspector names the file of the entry. Put back what it points to, or disable the entry.',
+          )
+        : t(
+            'Обновите или переустановите его средствами клиента, чтобы осталась одна версия, затем пересканируйте (клавиша R).',
+            'Update or reinstall it with the client so that one version is left, then rescan (key R).',
+          ),
       entity: e,
     })
   }
@@ -145,6 +168,10 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
         ),
         what: t(`Одна и та же запись найдена в областях: ${scopes.join(', ')}.`, `The same entry is found in scopes: ${scopes.join(', ')}.`),
         why: t('Какая из них действует, решает клиент: правка одной может ничего не изменить.', 'Which one applies is up to the client: editing one of them may change nothing.'),
+        fix: t(
+          'Нажмите «Показать»: в инспекторе перечислены все копии и их файлы. Лишнюю выключите, а если нужны обе, правьте ту, что действует.',
+          'Press “Show”: the inspector lists every copy and its file. Disable the spare one; if you need both, edit the one that takes effect.',
+        ),
         entity: first,
       })
     }
@@ -167,6 +194,10 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
         'Их флаг включения лежит там, куда Loadout не заглядывает: в управляемых настройках, в проекте, которого уже нет на диске, или в конфиге без ключа enabled. Причина у каждой записи — в инспекторе.',
         'Their enable flag is where Loadout does not look: in managed settings, in a project that is no longer on disk, or in a config without an enabled key. Each entry states its reason in the inspector.',
       ),
+      fix: t(
+        'Обычно ничего. Включён ли плагин, видно в самом клиенте. Строки, где состояние не определено ни в одном клиенте, матрица по умолчанию прячет (галочка «скрыть «не определено»»).',
+        'Usually nothing. The client itself shows whether the plugin is on. Rows whose state is unknown in every client are hidden in the matrix by default (the “hide "unknown"” checkbox).',
+      ),
     })
   }
 
@@ -185,6 +216,10 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
           'Значения лежат в файле клиента; Loadout показывает только имена ключей, не значения.',
           "The values sit in the client's file; Loadout shows only the key names, not the values.",
         ),
+        fix: t(
+          'Ничего, пока файл клиента остаётся только на этом компьютере. Если он попадает в git или облако, перенесите секреты в переменные окружения.',
+          'Nothing, as long as the client file stays on this computer. If it goes into git or a cloud folder, move the secrets into environment variables.',
+        ),
         entity: e,
       })
     }
@@ -197,11 +232,21 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       title: t('Предупреждение сканера', 'Scanner warning'),
       what: w,
       why: t('Файл или его часть не прочитаны: записей оттуда в списке нет.', 'A file or part of it was not read: its entries are missing from the list.'),
+      fix: t(
+        'Откройте файл из предупреждения в редакторе и исправьте место, на которое оно указывает, затем пересканируйте (клавиша R).',
+        'Open the file named in the warning, fix the place it points to, then rescan (key R).',
+      ),
     }),
   )
 
-  const rank: Record<Severity, number> = { error: 0, warn: 1, info: 2 }
-  return out.sort((a, b) => rank[a.severity] - rank[b.severity])
+  return out.sort((a, b) => RANK[a.severity] - RANK[b.severity])
+}
+
+const RANK: Record<Severity, number> = { error: 0, warn: 1, info: 2 }
+
+/** Findings by severity, most serious first; empty groups are left out. */
+export function groupFindings(list: readonly Finding[]): { severity: Severity; items: Finding[] }[] {
+  return (['error', 'warn', 'info'] as const).map((severity) => ({ severity, items: list.filter((f) => f.severity === severity) })).filter((g) => g.items.length > 0)
 }
 
 export function asStrings(v: unknown): string[] {

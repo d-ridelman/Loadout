@@ -1,6 +1,18 @@
 import type { ReactNode } from 'react'
-import type { EntityState, Kind } from '../shared/model'
+import { t } from '../shared/i18n'
+import type { EntityState, Kind, WriteLevel } from '../shared/model'
 import { GLYPH } from './aggregate'
+
+/** A toast's tone: colour, glyph and the ARIA role (an error interrupts the screen reader, the rest wait their turn). */
+export type Tone = 'ok' | 'error' | 'info'
+export type Notify = (message: string, tone?: Tone) => void
+
+/** The write level in words first (what the window may do), the code after it for those who know it. */
+export const levelLabel = (l: WriteLevel): string =>
+  l === 'R0' ? t('Только чтение · R0', 'Read-only · R0') : l === 'R1' ? t('Вкл/выкл · R1', 'On/off · R1') : t('Все правки · R2', 'All edits · R2')
+
+/** "Pick level X in the header" for a disabled button's hint. */
+export const pickLevel = (l: WriteLevel): string => t(`Выберите в шапке окна уровень записи «${levelLabel(l)}»`, `Pick the write level “${levelLabel(l)}” in the window header`)
 
 /** State as a glyph plus color: color alone carries no meaning (accessibility, CONCEPT.md §8). */
 export function Glyph({ state, pulse }: { state: EntityState | 'none'; pulse?: boolean }) {
@@ -19,9 +31,49 @@ export function KindBadge({ kinds }: { kinds: readonly Kind[] }) {
 export function Panel({ title, children, className = '' }: { title?: string; children: ReactNode; className?: string }) {
   return (
     <section className={`hud card ${className}`}>
-      {title ? <h2>{title}</h2> : null}
+      {title ? <h3>{title}</h3> : null}
       {children}
     </section>
+  )
+}
+
+/** Section title with a one-line explanation under it: the same size and spacing on every page. */
+export function PageHead({ title, sub, children }: { title: ReactNode; sub: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="pagehead">
+      <h2>{title}</h2>
+      <p className="mute">{sub}</p>
+      {children}
+    </div>
+  )
+}
+
+/** Text split on backtick pairs: `x` parts become code. An odd number of backticks leaves the text as it is. */
+export function codeSpans(s: string): (string | { code: string })[] {
+  const parts = s.split('`')
+  if (parts.length < 3 || parts.length % 2 === 0) return [s]
+  return parts.flatMap((p, i): (string | { code: string })[] => (i % 2 ? [{ code: p }] : p ? [p] : []))
+}
+
+/** Plain text where `code` in backticks shows as code instead of raw backtick characters. */
+export function Rich({ text }: { text: string }) {
+  return (
+    <>
+      {codeSpans(text).map((p, i) => (typeof p === 'string' ? p : <code key={i}>{p.code}</code>))}
+    </>
+  )
+}
+
+const TOAST_GLYPH: Record<Tone, string> = { ok: '●', error: '✕', info: 'i' }
+
+/** A pop-up message above the footer: full text, colour plus a glyph, and a close button. */
+export function Toast({ id, tone, text, onClose }: { id: string; tone: Tone; text: string; onClose: () => void }) {
+  return (
+    <div id={id} className={`hud toast toast-${tone}`}>
+      <span className="g" aria-hidden="true">{TOAST_GLYPH[tone]}</span>
+      <span className="toast-text"><Rich text={text} /></span>
+      <button className="toast-close" aria-label={t('Закрыть уведомление', 'Close the notification')} onClick={onClose}>×</button>
+    </div>
   )
 }
 

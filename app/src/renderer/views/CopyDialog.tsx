@@ -41,7 +41,7 @@ export function CopyDialog({ entity, draft, onSubmit, onClose }: Props) {
         )}
       </p>
       <div className="actions">
-        <button disabled={to === null} onClick={() => to && onSubmit({ op: 'copy', entity: entity.id, to })}>{t('Предпросмотр', 'Preview')}</button>
+        <button className="primary" disabled={to === null} onClick={() => to && onSubmit({ op: 'copy', entity: entity.id, to })}>{t('Предпросмотр', 'Preview')}</button>
         <button onClick={onClose}>{t('Отмена', 'Cancel')}</button>
       </div>
     </Modal>

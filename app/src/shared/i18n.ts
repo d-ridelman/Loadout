@@ -25,3 +25,12 @@ export function plural(n: number, ru: readonly [string, string, string], en: rea
   const b = a % 10
   return a > 10 && a < 20 ? ru[2] : b === 1 ? ru[0] : b > 1 && b < 5 ? ru[1] : ru[2]
 }
+
+/** A number with its noun: `count(5, ['запись', 'записи', 'записей'], ['entry', 'entries'])` → "5 записей". */
+export const count = (n: number, ru: readonly [string, string, string], en: readonly [string, string]): string => `${n} ${plural(n, ru, en)}`
+
+/** The one time format of the window: 24-hour HH:MM, day-month-year dates (en-GB, not en-US, for the same order). */
+const locale = (): string => (current === 'en' ? 'en-GB' : 'ru-RU')
+export const fmtTime = (d: Date | number): string => new Date(d).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+export const fmtDateTime = (d: Date | number): string =>
+  new Date(d).toLocaleString(locale(), { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })

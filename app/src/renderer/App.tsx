@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getLang, t } from '../shared/i18n'
+import { count, fmtTime, t } from '../shared/i18n'
 import type { Lang } from '../shared/i18n'
 import { CLIENTS } from '../shared/model'
 import type { ClientId, Entity, Intent, ScanResult, WriteLevel } from '../shared/model'
@@ -25,8 +25,10 @@ import { Palette } from './views/Palette'
 import type { PaletteItem } from './views/Palette'
 import { Radar } from './views/Radar'
 import { Updates } from './views/Updates'
-
-type View = 'matrix' | 'radar' | 'hooks' | 'doctor' | 'journal' | 'profiles' | 'ctxkit'
+import { DEFAULT_FILTERS, restoreUi } from './keep'
+import type { Ui, View } from './keep'
+import { levelLabel, Toast } from './ui'
+import type { Tone } from './ui'
 /** A form before the write preview; `draft` is what was typed, when the preview sends the person back to it. */
 type Form =
   | { type: 'edit'; entity: Entity; draft?: Extract<Intent, { op: 'edit' }> }
@@ -63,16 +65,14 @@ const views = (): readonly { id: View; label: string }[] => [
   { id: 'ctxkit', label: t('Инструменты контекста', 'Context Toolkit') },
 ]
 
-const levelLabel = (l: WriteLevel): string =>
-  l === 'R0'
-    ? t('R0 · только чтение', 'R0 · read-only')
-    : l === 'R1'
-      ? t('R1 · флаги', 'R1 · flags')
-      : t('R2 · полная запись', 'R2 · full write')
+/** "Writing is off" with the level to pick, in the words of the header list. */
+const needLevel = (have: WriteLevel, need: WriteLevel): string =>
+  t(
+    `Сейчас «${levelLabel(have)}». Для этого выберите в шапке окна, в списке «Запись», уровень «${levelLabel(need)}»`,
+    `The level is “${levelLabel(have)}” now. For this, pick “${levelLabel(need)}” in the Write list in the window header`,
+  )
 
 const fxLabel = (m: Fx): string => (m === 'off' ? t('выкл', 'off') : m === 'low' ? t('лёгкие', 'light') : t('полные', 'full'))
-
-const DEFAULT_FILTERS: Filters = { q: '', group: 'all', state: 'all', hideUnknown: true, client: null }
 
 function initialFx(): Fx {
   try {
@@ -96,11 +96,11 @@ function applyFilters(rows: Row[], f: Filters): Row[] {
   })
 }
 
-export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void }) {
+export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: Ui) => void; kept?: Ui }) {
   const [scan, setScan] = useState<ScanState>({ status: 'loading' })
-  const [view, setView] = useState<View>('matrix')
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
-  const [sel, setSel] = useState<Sel | null>(null)
+  const [view, setView] = useState<View>(() => restoreUi(kept).view)
+  const [filters, setFilters] = useState<Filters>(() => restoreUi(kept).filters)
+  const [sel, setSel] = useState<Sel | null>(() => restoreUi(kept).sel)
   const [palette, setPalette] = useState(false)
   const [help, setHelp] = useState(false)
   const [fx, setFx] = useState<Fx>(initialFx)
@@ -109,15 +109,19 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
   /** The write level is kept by the main process; this is only its mirror. */
   const [level, setLevel] = useState<WriteLevel>('R0')
   const [flow, setFlow] = useState<Flow | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ text: string; tone: Tone } | null>(null)
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const say = useCallback((m: string) => {
-    setNotice(m)
+  const say = useCallback((text: string, tone: Tone = 'ok') => {
+    setNotice({ text, tone })
     clearTimeout(noticeTimer.current)
-    noticeTimer.current = setTimeout(() => setNotice(null), 8000)
+    // an error stays longer: it usually needs reading, not a glance
+    noticeTimer.current = setTimeout(() => setNotice(null), tone === 'error' ? 15000 : 8000)
   }, [])
+  /** The first-run card: main says whether it was closed before (settings.json, `welcomed`). */
+  const [welcome, setWelcome] = useState(false)
   useEffect(() => {
     void window.loadout.getWriteLevel().then(setLevel, () => undefined)
+    void window.loadout.welcome().then(setWelcome, () => undefined)
     return () => clearTimeout(noticeTimer.current)
   }, [])
   const changeLevel = useCallback(
@@ -125,7 +129,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
       try {
         setLevel(await window.loadout.setWriteLevel(next))
       } catch {
-        say(t('Не удалось сменить уровень записи', 'Could not change the write level'))
+        say(t('Не удалось сменить уровень записи', 'Could not change the write level'), 'error')
       }
     },
     [say],
@@ -140,42 +144,33 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
 
   const requestToggle = useCallback(
     (e: Entity, enable: boolean) => {
-      if (!e.canToggle) return say(t(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}`, `Cannot toggle: ${e.toggleWhy ?? 'not supported'}`))
+      if (!e.canToggle) return say(t(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}`, `Cannot toggle: ${e.toggleWhy ?? 'not supported'}`), 'info')
       const need = e.toggleLevel ?? 'R1'
-      if (!levelOk(level, need))
-        return say(
-          t(
-            `Запись выключена (${level}): для этой записи включите уровень ${need} в шапке окна`,
-            `Writing is off (${level}): enable level ${need} in the window header for this entry`,
-          ),
-        )
+      if (!levelOk(level, need)) return say(needLevel(level, need), 'info')
       setFlow({ type: 'plan', entity: e, intent: { op: 'toggle', entity: e.id, enable } })
     },
     [level, say],
   )
   const requestForm = useCallback(
     (type: 'edit' | 'copy', e: Entity) => {
-      if (!e.canEdit) return say(t('Эту запись править и копировать нельзя: она не в файле клиента', 'This entry cannot be edited or copied: it is not in a client file'))
-      if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
+      if (!e.canEdit) return say(t('Эту запись править и копировать нельзя: она не в файле клиента', 'This entry cannot be edited or copied: it is not in a client file'), 'info')
+      if (!levelOk(level, 'R2')) return say(needLevel(level, 'R2'), 'info')
       setFlow({ type, entity: e })
     },
     [level, say],
   )
 
-  const requestAdd = useCallback(() => {
-    if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
-    setFlow({ type: 'add' })
-  }, [level, say])
-
-  const requestPlugin = useCallback(() => {
-    if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
-    setFlow({ type: 'plugin' })
-  }, [level, say])
-
-  const requestSkill = useCallback(() => {
-    if (!levelOk(level, 'R2')) return say(t(`Запись выключена (${level}): включите уровень R2 в шапке окна`, `Writing is off (${level}): enable level R2 in the window header`))
-    setFlow({ type: 'skill' })
-  }, [level, say])
+  /** Opens a form that writes at R2, or says which level to pick. */
+  const requestR2 = useCallback(
+    (type: 'add' | 'plugin' | 'skill') => {
+      if (!levelOk(level, 'R2')) return say(needLevel(level, 'R2'), 'info')
+      setFlow({ type })
+    },
+    [level, say],
+  )
+  const requestAdd = useCallback(() => requestR2('add'), [requestR2])
+  const requestPlugin = useCallback(() => requestR2('plugin'), [requestR2])
+  const requestSkill = useCallback(() => requestR2('skill'), [requestR2])
 
   /** Entries that changed in the last refresh from disk (highlighted for a few seconds). */
   const [fresh, setFresh] = useState<ReadonlySet<string>>(new Set())
@@ -374,8 +369,8 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
             className={`mono level ${level === 'R0' ? 's-on' : 's-stale'}`}
             aria-label={t('Уровень записи', 'Write level')}
             title={t(
-              'R0 — только чтение; R1 — включать и выключать по флагам; R2 — ещё корзина, правка команд, копирование, профили и применение Инструментов контекста. Повышение подтверждается окном системы',
-              'R0 — read-only; R1 — enable and disable by flags; R2 — also trash, command editing, copying, profiles and applying Context Toolkit. Raising the level is confirmed by a system dialog',
+              'Только чтение (R0): окно ничего не пишет. Вкл/выкл (R1): включает и выключает записи флагом в конфиге клиента. Все правки (R2): ещё корзина, правка и копирование команд, новые MCP, плагины, скилы, профили и Инструменты контекста. Любая запись идёт через предпросмотр; повышение уровня подтверждается окном Windows',
+              'Read-only (R0): the window writes nothing. On/off (R1): turns entries on and off by a flag in the client config. All edits (R2): also the trash, editing and copying commands, new MCP servers, plugins, skills, profiles and Context Toolkit. Every write goes through a preview; raising the level is confirmed by a Windows dialog',
             )}
             value={level}
             onChange={(e) => void changeLevel(e.target.value as WriteLevel)}
@@ -391,7 +386,7 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         <button onClick={requestSkill} aria-label={t('Установить скил', 'Install skill')} title={t('Установить скил Claude Code из GitHub или папки, с журналом и откатом (R2)', 'Install a Claude Code skill from GitHub or a folder, with journal and rollback (R2)')}>{t('+ Скил', '+ Skill')}</button>
         <button onClick={() => void load(scan.status === 'ready')} aria-label={t('Пересканировать (клавиша R)', 'Rescan (key R)')}>{t('Скан', 'Scan')}</button>
         <button onClick={() => setPalette(true)} aria-label={t('Палитра команд', 'Command palette')}>Ctrl+K</button>
-        <select aria-label={t('Язык', 'Language')} title={t('Язык', 'Language')} className="mono" value={lang} onChange={(e) => onLang(e.target.value as Lang)}>
+        <select aria-label={t('Язык', 'Language')} title={t('Язык', 'Language')} className="mono" value={lang} onChange={(e) => onLang(e.target.value as Lang, { view, sel, filters })}>
           <option value="ru">RU</option>
           <option value="en">EN</option>
         </select>
@@ -407,6 +402,40 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
       </nav>
 
       <main tabIndex={-1}>
+        {welcome ? (
+          <section className="hud card welcome" aria-labelledby="welcome-title">
+            <h2 id="welcome-title">{t('Loadout: что это и чего ждать', 'Loadout: what it is and what to expect')}</h2>
+            <p>
+              {t(
+                'Loadout собирает в одну таблицу плагины, MCP-серверы, скилы и хуки пяти ИИ-клиентов: Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity и DeepSeek. Данные он берёт из их конфигов на этом компьютере.',
+                'Loadout puts the plugins, MCP servers, skills and hooks of five AI clients into one table: Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity and DeepSeek. It reads their configs on this computer.',
+              )}
+            </p>
+            <p>
+              {t(
+                `Без вашей команды Loadout ничего не меняет. Уровень записи сейчас «${levelLabel(level)}»; чтобы что-то включить или поправить, поднимите его в шапке окна. Перед каждой записью окно покажет, что изменится, и подождёт подтверждения. Правки конфигов можно откатить в журнале.`,
+                `Loadout changes nothing unless you tell it to. The write level is “${levelLabel(level)}” now; to turn something on or edit it, raise the level in the window header. Before every write the window shows what will change and waits for you to confirm. Config edits can be rolled back in the journal.`,
+              )}
+            </p>
+            <p>
+              {t(
+                'Сам Loadout выходит в сеть только для проверки обновлений на GitHub. Её можно выключить кнопкой с номером версии в правом нижнем углу. Плагины, маркетплейсы и скилы скачиваются, только когда вы нажмёте кнопку.',
+                'On its own, Loadout goes online only to check GitHub for updates. You can turn that off with the version button in the bottom-right corner. Plugins, marketplaces and skills are downloaded only when you press the button.',
+              )}
+            </p>
+            <div className="actions">
+              <button
+                className="primary"
+                onClick={() => {
+                  setWelcome(false)
+                  void window.loadout.welcomeDone().catch(() => undefined)
+                }}
+              >
+                {t('Понятно, начать', 'Got it, start')}
+              </button>
+            </div>
+          </section>
+        ) : null}
         {scan.status === 'loading' ? (
           <div className="state" role="status">
             <span className="pulse">◌</span> {t('Сканирование конфигов клиентов…', 'Scanning client configs…')}
@@ -414,23 +443,31 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
         ) : scan.status === 'error' ? (
           <div className="hud state error" role="alert">
             <h2>{t('Не удалось получить данные', 'Could not get the data')}</h2>
-            <p>{scan.error}</p>
-            <button onClick={() => void load()}>{t('Повторить', 'Retry')}</button>
+            <p>{t('Loadout не смог прочитать конфиги клиентов. Нажмите «Повторить». Если ошибка вернётся, перезапустите Loadout, а если и это не поможет, переустановите его.', 'Loadout could not read the client configs. Press Retry. If the error comes back, restart Loadout, and if that does not help either, reinstall it.')}</p>
+            <details>
+              <summary>{t('Подробности для отчёта об ошибке', 'Details for a bug report')}</summary>
+              <p className="mono small wrap">{scan.error}</p>
+            </details>
+            <button className="primary" onClick={() => void load()}>{t('Повторить', 'Retry')}</button>
           </div>
         ) : view === 'matrix' ? (
-          <Matrix rows={visible} total={rows.length} filters={filters} setFilters={setFilters} sel={sel} onSelect={setSel} searchRef={searchRef} fresh={fresh} />
-        ) : view === 'radar' ? (
-          <Radar rows={rows} findings={findings} activeClient={filters.client} onClient={filterClient} onDoctor={() => setView('doctor')} />
-        ) : view === 'hooks' ? (
-          <Hooks hooks={hooks} onShow={showEntity} />
-        ) : view === 'doctor' ? (
-          <Doctor findings={findings} onShow={showEntity} />
-        ) : view === 'journal' ? (
-          <Journal level={level} refreshKey={rev} onNotice={say} />
-        ) : view === 'profiles' ? (
-          <Profiles level={level} refreshKey={rev} onNotice={say} />
+          <Matrix rows={visible} total={rows.length} filters={filters} setFilters={setFilters} sel={sel} onSelect={setSel} searchRef={searchRef} fresh={fresh} onRescan={() => void load(true)} onAdd={requestAdd} />
         ) : (
-          <Ctxkit level={level} onNotice={say} />
+          <div className="page">
+            {view === 'radar' ? (
+              <Radar rows={rows} findings={findings} activeClient={filters.client} onClient={filterClient} onDoctor={() => setView('doctor')} />
+            ) : view === 'hooks' ? (
+              <Hooks hooks={hooks} onShow={showEntity} />
+            ) : view === 'doctor' ? (
+              <Doctor findings={findings} onShow={showEntity} />
+            ) : view === 'journal' ? (
+              <Journal level={level} refreshKey={rev} onNotice={say} />
+            ) : view === 'profiles' ? (
+              <Profiles level={level} refreshKey={rev} onNotice={say} entities={entities} />
+            ) : (
+              <Ctxkit level={level} onNotice={say} />
+            )}
+          </div>
         )}
       </main>
 
@@ -449,26 +486,42 @@ export function App({ lang, onLang }: { lang: Lang; onLang: (l: Lang) => void })
 
       <footer>
         <span>
-          {t(
-            `${entities.length} записей · ${rows.length} строк · ${CLIENTS.length} клиентов`,
-            `${entities.length} entries · ${rows.length} rows · ${CLIENTS.length} clients`,
-          )}
+          {[
+            count(entities.length, ['запись', 'записи', 'записей'], ['entry', 'entries']),
+            count(rows.length, ['строка', 'строки', 'строк'], ['row', 'rows']),
+            count(CLIENTS.length, ['клиент', 'клиента', 'клиентов'], ['client', 'clients']),
+          ].join(' · ')}
         </span>
         {updatedAt ? (
           <span title={t('Ядро следит за конфигами клиентов и присылает изменения само; если слежение не поднялось, обновляйте вручную', 'The core watches client configs and pushes changes by itself; if watching did not start, refresh manually')}>
-            {t('обновлено', 'updated')} {updatedAt.toLocaleTimeString(getLang() === 'en' ? 'en-US' : 'ru-RU')}
+            {t('обновлено', 'updated')} {fmtTime(updatedAt)}
           </span>
         ) : null}
-        {notice ? <span role="status" id="notice" className="s-stale">{notice}</span> : null}
-        {problems > 0 ? <span className="s-broken">✕ {t('сломано', 'broken')}: {problems}</span> : null}
-        {warnings.length > 0 ? <span className="s-stale">◐ {t('предупреждений', 'warnings')}: {warnings.length}</span> : null}
+        {problems > 0 ? (
+          <button className="foot-link s-broken" onClick={() => setView('doctor')} aria-label={t(`Сломано: ${problems}. Открыть Доктора`, `Broken: ${problems}. Open Doctor`)}>
+            ✕ {t('сломано', 'broken')}: {problems}
+          </button>
+        ) : null}
+        {warnings.length > 0 ? (
+          <button className="foot-link s-stale" onClick={() => setView('doctor')} aria-label={t(`Предупреждений сканера: ${warnings.length}. Открыть Доктора`, `Scanner warnings: ${warnings.length}. Open Doctor`)}>
+            ◐ {t('предупреждений', 'warnings')}: {warnings.length}
+          </button>
+        ) : null}
         <span className="sp" />
         <Updates />
       </footer>
 
+      {/* always in the DOM: a screen reader announces text that appears inside an existing live region */}
+      <div className="toasts" role="status" aria-live="polite">
+        {notice && notice.tone !== 'error' ? <Toast id="notice" tone={notice.tone} text={notice.text} onClose={() => setNotice(null)} /> : null}
+      </div>
+      <div className="toasts" role="alert">
+        {notice?.tone === 'error' ? <Toast id="notice" tone="error" text={notice.text} onClose={() => setNotice(null)} /> : null}
+      </div>
+
       {help ? (
         <div className="hud help" role="dialog" aria-label={t('Клавиши', 'Shortcuts')}>
-          <h2>{t('Клавиши', 'Shortcuts')}</h2>
+          <h3>{t('Клавиши', 'Shortcuts')}</h3>
           <dl className="kv">
             <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>{t('строка вниз / вверх', 'row down / up')}</dd>
             <dt><kbd>h</kbd> <kbd>l</kbd></dt><dd>{t('клиент влево / вправо', 'client left / right')}</dd>

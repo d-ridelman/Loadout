@@ -1,11 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
-import type { BatchPlan, Profile, ProfileItem, WriteLevel } from '../../shared/model'
-import { t } from '../../shared/i18n'
+import type { BatchPlan, Entity, Profile, ProfileItem, WriteLevel } from '../../shared/model'
+import { count, t } from '../../shared/i18n'
+import { PageHead, pickLevel } from '../ui'
+import type { Notify } from '../ui'
 import { levelOk } from './Inspector'
 import { Modal } from './Modal'
 
 const clientName = (id: string) => CLIENTS.find((c) => c.id === id)?.name ?? id
+const entries = (n: number): string => count(n, ['запись', 'записи', 'записей'], ['entry', 'entries'])
+
+/**
+ * The profile describes the current state exactly: every entry exists and is on or off as the profile says (the same match
+ * and the same "on" as the core uses when it captures and applies a profile). An empty profile matches nothing.
+ */
+export function matchesNow(p: Profile, entities: readonly Entity[]): boolean {
+  return (
+    p.items.length > 0 &&
+    p.items.every((it) => {
+      const hits = entities.filter((e) => e.canToggle && e.client === it.client && e.kind === it.kind && e.scope === it.scope && e.name === it.name)
+      return hits.length > 0 && hits.every((e) => (e.state === 'on' || e.state === 'stale' ? true : e.state === 'off' ? false : null) === it.enable)
+    })
+  )
+}
 
 interface BatchProps {
   name: string
@@ -47,7 +64,7 @@ function BatchDialog({ name, onClose, onDone }: BatchProps) {
     setApplyError(null)
     const r = await window.loadout.applyProfile(name, state.plan.batchSha).catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('запись не удалась', 'write failed') }))
     setBusy(false)
-    if (r.ok) onDone(t(`Профиль «${name}» применён: ${r.data.applied.length} записей. Откатить пакет можно в журнале`, `Profile “${name}” applied: ${r.data.applied.length} entries. You can roll the batch back in the journal`))
+    if (r.ok) onDone(t(`Профиль «${name}» применён: ${entries(r.data.applied.length)}. Откатить пакет можно в журнале`, `Profile “${name}” applied: ${entries(r.data.applied.length)}. You can roll the batch back in the journal`))
     else setApplyError(r.error)
   }
 
@@ -93,7 +110,7 @@ function BatchDialog({ name, onClose, onDone }: BatchProps) {
       )}
       {applyError ? <p className="s-broken" role="alert">{applyError}</p> : null}
       <div className="actions">
-        <button ref={applyRef} disabled={state.status !== 'ready' || changes.length === 0 || busy} onClick={() => void apply()}>
+        <button ref={applyRef} className="primary" disabled={state.status !== 'ready' || changes.length === 0 || busy} onClick={() => void apply()}>
           {busy ? t('Записываю…', 'Writing…') : t('Применить', 'Apply')}
         </button>
         {applyError ? <button onClick={() => void build()}>{t('Обновить предпросмотр', 'Refresh preview')}</button> : null}
@@ -105,18 +122,22 @@ function BatchDialog({ name, onClose, onDone }: BatchProps) {
 
 interface Props {
   level: WriteLevel
-  onNotice: (message: string) => void
+  onNotice: Notify
   /** Changes when the data is refreshed: a profile whose entries have disappeared is re-checked on apply. */
   refreshKey: number
+  /** The current scan: the profile that matches it is marked. */
+  entities: readonly Entity[]
 }
 
 /** Profiles: named sets of "what is enabled". Applying one is a batch through the same write pipeline (R2). */
-export function Profiles({ level, onNotice, refreshKey }: Props) {
+export function Profiles({ level, onNotice, refreshKey, entities }: Props) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [draft, setDraft] = useState<Record<string, ProfileItem[]>>({})
   const [applying, setApplying] = useState<string | null>(null)
+  /** The profile whose delete button was pressed once: the second press, on "Delete for good", deletes. */
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const r = await window.loadout.profiles().catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('профили не прочитаны', 'could not read profiles') }))
@@ -142,8 +163,14 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
   const canApply = levelOk(level, 'R2')
   const nameOk = /^[\p{L}\p{N} _.-]{1,40}$/u.test(name) && name.trim() === name
   return (
-    <div className="page">
-      <h2>{t('Профили', 'Profiles')}</h2>
+    <>
+      <PageHead
+        title={t('Профили', 'Profiles')}
+        sub={t(
+          'Профиль запоминает, что включено. Сохраните текущее состояние под именем, и потом к нему можно вернуться одной кнопкой.',
+          'A profile remembers what is turned on. Save the current state under a name and return to it later with one button.',
+        )}
+      />
       <div className="hud card">
         <form
           className="form"
@@ -157,10 +184,10 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('Например: рабочий', 'For example: work')} maxLength={40} aria-label={t('Имя профиля', 'Profile name')} />
           </label>
           <div className="actions">
-            <button type="submit" disabled={!nameOk}>{t('Снять с текущего состояния', 'Capture current state')}</button>
+            <button type="submit" className="primary" disabled={!nameOk}>{t('Снять с текущего состояния', 'Capture current state')}</button>
           </div>
         </form>
-        <p className="mute small">{t('Профиль хранит, что должно быть включено. Применение пишет в конфиги клиентов, поэтому нужен уровень R2; сами профили можно создавать и менять на любом уровне.', 'A profile stores what should be enabled. Applying writes to client configs, so level R2 is required; profiles themselves can be created and edited at any level.')}</p>
+        <p className="mute small">{t('Применение профиля пишет в конфиги клиентов, поэтому нужен уровень «Все правки · R2». Сами профили можно создавать и менять на любом уровне.', 'Applying a profile writes to client configs, so it needs the “All edits · R2” level. Profiles themselves can be created and edited at any level.')}</p>
       </div>
       {error ? <p className="s-broken" role="alert">{error}</p> : null}
       {error?.includes('profiles.json') ? (
@@ -185,16 +212,23 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
       {profiles === null ? (
         error ? null : <p className="mute" role="status">{t('Читаю профили…', 'Reading profiles…')}</p>
       ) : profiles.length === 0 ? (
-        <div className="hud card"><p>{t('Профилей пока нет.', 'No profiles yet.')}</p></div>
+        <div className="hud card">
+          <p>{t('Профилей пока нет.', 'No profiles yet.')}</p>
+          <p className="mute">{t('Введите имя выше и нажмите «Снять с текущего состояния»: профиль запомнит, какие плагины и MCP-серверы сейчас включены.', 'Type a name above and press “Capture current state”: the profile remembers which plugins and MCP servers are on now.')}</p>
+        </div>
       ) : (
         <div className="cards">
           {profiles.map((p) => {
             const items = draft[p.name] ?? p.items
             const dirty = draft[p.name] !== undefined
+            const current = matchesNow(p, entities)
             return (
-              <section key={p.name} className="hud card" aria-label={t(`Профиль ${p.name}`, `Profile ${p.name}`)}>
-                <h3>{p.name}</h3>
-                <p className="mute small">{t(`${items.length} записей, из них включено ${items.filter((i) => i.enable).length}`, `${items.length} entries, ${items.filter((i) => i.enable).length} enabled`)}</p>
+              <section key={p.name} className={`hud card${current ? ' current' : ''}`} aria-label={t(`Профиль ${p.name}`, `Profile ${p.name}`)}>
+                <h3>
+                  {p.name}
+                  {current ? <span className="badge now">{t('● совпадает с текущим состоянием', '● matches the current state')}</span> : null}
+                </h3>
+                <p className="mute small">{t(`${entries(items.length)}, из них включено ${items.filter((i) => i.enable).length}`, `${entries(items.length)}, ${items.filter((i) => i.enable).length} enabled`)}</p>
                 <details>
                   <summary>{t('Записи профиля', 'Profile entries')}</summary>
                   <ul className="plist">
@@ -215,10 +249,12 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
                     ))}
                   </ul>
                 </details>
-                <div className="actions col">
+                {/* apply and save on the left, delete on the far right: the destructive button is not next to the main one */}
+                <div className="actions split">
                   <button
+                    className="primary"
                     disabled={!canApply}
-                    title={canApply ? t('Предпросмотр и запись пакета', 'Preview and write the batch') : t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header')}
+                    title={canApply ? t('Предпросмотр и запись пакета', 'Preview and write the batch') : pickLevel('R2')}
                     onClick={() => setApplying(p.name)}
                   >
                     {t('Применить…', 'Apply…')}
@@ -229,7 +265,25 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
                   >
                     {t('Сохранить изменения', 'Save changes')}
                   </button>
-                  <button className="danger" onClick={() => void run(window.loadout.deleteProfile(p.name), t(`Профиль «${p.name}» удалён`, `Profile “${p.name}” deleted`))}>{t('Удалить профиль', 'Delete profile')}</button>
+                  <span className="sp" />
+                  {deleting === p.name ? (
+                    <>
+                      <span className="s-broken small">{t('Профиль удалится без отката.', 'The profile is deleted with no rollback.')}</span>
+                      <button
+                        className="danger"
+                        autoFocus
+                        onClick={() => {
+                          setDeleting(null)
+                          void run(window.loadout.deleteProfile(p.name), t(`Профиль «${p.name}» удалён`, `Profile “${p.name}” deleted`))
+                        }}
+                      >
+                        {t('Удалить навсегда', 'Delete for good')}
+                      </button>
+                      <button onClick={() => setDeleting(null)}>{t('Не удалять', 'Keep it')}</button>
+                    </>
+                  ) : (
+                    <button className="danger" onClick={() => setDeleting(p.name)}>{t('Удалить профиль…', 'Delete profile…')}</button>
+                  )}
                 </div>
               </section>
             )
@@ -246,6 +300,6 @@ export function Profiles({ level, onNotice, refreshKey }: Props) {
           }}
         />
       ) : null}
-    </div>
+    </>
   )
 }

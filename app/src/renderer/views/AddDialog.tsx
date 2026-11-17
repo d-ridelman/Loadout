@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { ClientId, Entity, Intent } from '../../shared/model'
 import { t } from '../../shared/i18n'
+import { Rich } from '../ui'
 import { Modal } from './Modal'
 
 type AddIntent = Extract<Intent, { op: 'add' }>
@@ -120,13 +121,15 @@ export function AddDialog({ entities, draft, onSubmit, onClose }: Props) {
           </>
         )}
         <p className="mute small">
-          {t(
-            'Пакет не скачивается: в конфиг клиента записывается строка запуска, а `npx`/`uvx` загрузит пакет при первом запуске клиента. Значения env в предпросмотре и журнале не показываются.',
-            'The package is not downloaded: the client config gets a launch command, and `npx`/`uvx` fetches the package on the client’s first launch. Env values are not shown in the preview or journal.',
-          )}
+          <Rich
+            text={t(
+              'Пакет не скачивается: в конфиг клиента записывается строка запуска, а `npx`/`uvx` загрузит пакет при первом запуске клиента. Значения env в предпросмотре и журнале не показываются.',
+              'The package is not downloaded: the client config gets a launch command, and `npx`/`uvx` fetches the package on the client’s first launch. Env values are not shown in the preview or journal.',
+            )}
+          />
         </p>
         <div className="actions">
-          <button type="submit" disabled={!ok}>{t('Предпросмотр', 'Preview')}</button>
+          <button type="submit" className="primary" disabled={!ok}>{t('Предпросмотр', 'Preview')}</button>
           <button type="button" onClick={onClose}>{t('Отмена', 'Cancel')}</button>
         </div>
       </form>

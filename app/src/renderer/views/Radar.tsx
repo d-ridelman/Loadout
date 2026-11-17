@@ -4,7 +4,7 @@ import type { ClientId } from '../../shared/model'
 import { clientStat, GROUPS } from '../aggregate'
 import type { Row } from '../aggregate'
 import type { Finding } from '../doctor'
-import { Panel } from '../ui'
+import { PageHead, Panel } from '../ui'
 
 const POS: readonly [number, number][] = [
   [50, 6], [91, 40], [76, 90], [24, 90], [9, 40],
@@ -21,6 +21,14 @@ interface Props {
 
 export function Radar({ rows, findings, activeClient, onClient, onDoctor }: Props) {
   return (
+    <>
+    <PageHead
+      title={t('Радар', 'Radar')}
+      sub={t(
+        'Сколько строк матрицы у каждого клиента и сколько проблем у него нашёл Доктор. Нажмите на клиента, чтобы отфильтровать матрицу.',
+        'How many matrix rows each client has and how many problems the Doctor found in it. Click a client to filter the matrix.',
+      )}
+    />
     <div className="radar">
       <Panel title={t('Радар клиентов', 'Client radar')}>
         <div className="rwrap">
@@ -81,5 +89,6 @@ export function Radar({ rows, findings, activeClient, onClient, onDoctor }: Prop
         </Panel>
       </div>
     </div>
+    </>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getLang, t } from '../../shared/i18n'
+import { fmtTime, t } from '../../shared/i18n'
 import type { UpdateErrorReason, UpdatesInfo, UpdateState } from '../../shared/model'
 
 const api = () => window.loadout
@@ -30,7 +30,7 @@ function Status({ s, onNote, panel = false }: { s: UpdateState; onNote: (m: stri
     case 'checking':
       return <p className="mute">{t('Проверяем…', 'Checking…')}</p>
     case 'latest': {
-      const at = new Date(s.checkedAt).toLocaleTimeString(getLang() === 'en' ? 'en-US' : 'ru-RU', { hour: '2-digit', minute: '2-digit' })
+      const at = fmtTime(s.checkedAt)
       return <p className="mute">{t(`У вас последняя версия (проверено в ${at})`, `You have the latest version (checked at ${at})`)}</p>
     }
     case 'available':
@@ -38,7 +38,7 @@ function Status({ s, onNote, panel = false }: { s: UpdateState; onNote: (m: stri
         <>
           <p>{t(`Доступна версия ${s.version}`, `Version ${s.version} is available`)}</p>
           <div className="upd-actions">
-            <button onClick={() => void api().downloadUpdate()}>{t('Скачать', 'Download')}</button>
+            <button className="primary" onClick={() => void api().downloadUpdate()}>{t('Скачать', 'Download')}</button>
             <button className="upd-link" onClick={() => void api().openReleaseNotes()}>{t('Что нового (GitHub)', 'What’s new (GitHub)')}</button>
           </div>
         </>
@@ -59,7 +59,7 @@ function Status({ s, onNote, panel = false }: { s: UpdateState; onNote: (m: stri
         <>
           <p>{t(`Версия ${s.version} скачана и проверена`, `Version ${s.version} is downloaded and verified`)}</p>
           <div className="upd-actions">
-            <button className="upd-go" onClick={() => void install()}>{t('Перезапустить и обновить', 'Restart and update')}</button>
+            <button className="primary" onClick={() => void install()}>{t('Перезапустить и обновить', 'Restart and update')}</button>
           </div>
           <p className="mute small">{t('Если не сейчас, обновление установится при выходе из Loadout.', 'If not now, the update is installed when you quit Loadout.')}</p>
         </>
@@ -145,7 +145,7 @@ export function Updates() {
       </button>
       {open ? (
         <section id="updates" className="hud upd-pop" role="dialog" aria-label={t('Обновления', 'Updates')}>
-          <h2>{t('Обновления', 'Updates')}</h2>
+          <h3>{t('Обновления', 'Updates')}</h3>
           <p>{t(`Установлена версия ${info.version}`, `Installed version ${info.version}`)}</p>
           <label className="upd-auto">
             {/* focus moves into the panel when it opens */}

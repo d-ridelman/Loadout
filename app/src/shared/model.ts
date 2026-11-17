@@ -333,6 +333,9 @@ export interface LoadoutApi {
   /** Interface language (saved or from the system locale) and changing it: the core restarts with the new message language. */
   getLang: () => Promise<Lang>
   setLang: (lang: Lang) => Promise<Lang>
+  /** Whether to show the first-run card; `welcomeDone` saves that it was closed. */
+  welcome: () => Promise<boolean>
+  welcomeDone: () => Promise<void>
   getWriteLevel: () => Promise<WriteLevel>
   setWriteLevel: (level: WriteLevel) => Promise<WriteLevel>
   plan: (intent: Intent) => Promise<PlanResponse>

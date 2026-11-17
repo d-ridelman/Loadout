@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CtxkitDoctor, CtxkitReport, CtxkitStatus, FindingSeverity, SetupOptions, SetupResult, WriteLevel } from '../../shared/model'
 import { MAX_BUILD_SLOTS } from '../../shared/model'
-import { getLang, t } from '../../shared/i18n'
-import { chars, daysDesc, pct, policiesNow, segments, stopGateOff, summarize } from '../ctxkit-stats'
+import { count, fmtTime, getLang, t } from '../../shared/i18n'
+import { chars, daysDesc, fixPatch, pct, policiesNow, policySet, segments, stopGateOff, summarize, tickPolicy } from '../ctxkit-stats'
+import type { PolicySet } from '../ctxkit-stats'
+import { PageHead, pickLevel, Rich } from '../ui'
+import type { Notify } from '../ui'
 
 // t() only during render: the language is chosen before the first render, not when the module is imported
 const sev = (s: FindingSeverity): { ch: string; label: string; cls: string } =>
@@ -75,11 +78,11 @@ function useLoaded<T>(load: () => Promise<{ ok: true; data: T } | { ok: false; e
   return [s, () => setN((x) => x + 1), busy, at]
 }
 
-const clock = (d: Date) => d.toLocaleTimeString(getLang() === 'ru' ? 'ru-RU' : 'en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+const NO_POLICIES: PolicySet = { commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 }
 
 interface Props {
   level: WriteLevel
-  onNotice: (message: string) => void
+  onNotice: Notify
 }
 
 /** Built-in Context Toolkit (CONCEPT.md §13): install and apply, diagnostics, effectiveness from transcript counters. */
@@ -94,13 +97,15 @@ export function Ctxkit({ level, onNotice }: Props) {
   const [result, setResult] = useState<(SetupResult & { kind: 'setup' | 'uninstall' }) | null>(null)
   const [busy, setBusy] = useState<Busy | null>(null)
   const undoPreviewRef = useRef<HTMLButtonElement>(null)
+  const previewRef = useRef<HTMLButtonElement>(null)
   const [refocus, setRefocus] = useState(false)
   useEffect(() => {
     if (!refocus || busy) return
     undoPreviewRef.current?.focus() // the red button disappeared along with the focus
     setRefocus(false)
   }, [refocus, busy])
-  const [error, setError] = useState<string | null>(null)
+  /** The last failure, shown in the card of the action that failed (apply or rollback). */
+  const [error, setError] = useState<{ text: string; kind: 'setup' | 'uninstall' } | null>(null)
 
   // The Stop gate checkbox takes its initial value from the profile (gate off: "Apply" must not silently turn it on),
   // but does not overwrite a choice the user has already made.
@@ -118,6 +123,15 @@ export function Ctxkit({ level, onNotice }: Props) {
     setOpts({ ...opts, ...patch })
     setPreviewKey(null) // different settings mean a different preview
   }
+  // policies on now (from the doctor): what the checkboxes show under "keep", and where a first tick starts from
+  const nowPolicies = doctor.status === 'ready' ? policySet(doctor.data) : null
+  const shownPolicies: PolicySet = opts.policyMode === 'on' ? opts : opts.policyMode === 'off' ? NO_POLICIES : (nowPolicies ?? opts)
+  // under "keep" a tick must start from the real state: until the doctor answers, the checkboxes wait
+  const policyWait = opts.policyMode === 'keep' && doctor.status !== 'ready'
+  const tick = (patch: Partial<PolicySet>) => {
+    setOpts(tickPolicy(opts, patch, nowPolicies))
+    setPreviewKey(null)
+  }
 
   const run = useCallback(
     async (kind: 'setup' | 'uninstall', dryRun: boolean) => {
@@ -127,14 +141,14 @@ export function Ctxkit({ level, onNotice }: Props) {
       const call = kind === 'setup' ? window.loadout.ctxkitSetup(opts, dryRun) : window.loadout.ctxkitUninstall({ antigravity: opts.antigravity, dsh: opts.dsh }, dryRun)
       const r = await call.catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : t('не удалось', 'failed') }))
       setBusy(null)
-      if (!r.ok) return setError(r.error)
+      if (!r.ok) return setError({ text: r.error, kind })
       setResult({ ...r.data, kind })
       // a real run may have written some files even with a non-zero exit code: re-read the status and diagnostics in any case
       if (!dryRun) {
         reloadStatus()
         reloadDoctor()
       }
-      if (r.data.code !== 0) return setError(t(`Инструменты контекста завершились с кодом ${r.data.code}: подробности в выводе ниже`, `Context Toolkit exited with code ${r.data.code}: see the output below`))
+      if (r.data.code !== 0) return setError({ text: t(`Инструменты контекста завершились с кодом ${r.data.code}: подробности в выводе ниже`, `Context Toolkit exited with code ${r.data.code}: see the output below`), kind })
       if (dryRun) setPreviewKey(kind === 'setup' ? key : undoKey)
       else {
         onNotice(
@@ -155,8 +169,14 @@ export function Ctxkit({ level, onNotice }: Props) {
   const spin = (b: Busy, text: string) => (busy === b ? <><span className="spin" aria-hidden="true" />{text}</> : null)
 
   return (
-    <div className="page">
-      <h2>{t('Инструменты контекста', 'Context Toolkit')}</h2>
+    <>
+      <PageHead
+        title={t('Инструменты контекста', 'Context Toolkit')}
+        sub={t(
+          'Встроенный набор хуков, который не даёт агентам Claude Code засорять контекст. Здесь его ставят, проверяют и отключают.',
+          'A bundled set of hooks that keeps Claude Code agents from filling up their context. Install it, check it and turn it off here.',
+        )}
+      />
       <p className="mute small">
         {t(
           'Встроенный набор, который держит контекст агентов в рамках: ограничивает чтение целых файлов, ловит битые экранирования, сжимает вывод сборок и подсказывает агентам дешёвый поиск и независимую проверку. Основную модель Claude Code, effort и модель советника окно меняет, только если выбрать их в форме ниже (по умолчанию «Не менять»); пресеты Claude Desktop правятся только по галочке ниже. Хуки пишутся в настройки клиентов, поэтому применение и откат требуют уровня R2.',
@@ -235,8 +255,8 @@ export function Ctxkit({ level, onNotice }: Props) {
               </select>
               <span id="ctx-policy-hint" className="mute small">
                 {t(
-                  'Хуки сами ничего из этого не включают: политики живут в context-toolkit.json профиля. «Включить выбранные» оставляет включёнными ровно отмеченные ниже, остальные выключает; ключи файла, написанные вами, сохраняются. Предпросмотр покажет по строке на каждую политику (выкл -> вкл) на языке, выбранном ниже.',
-                  'Hooks turn none of this on by themselves: the policies live in the profile context-toolkit.json. “Turn on the selected” leaves exactly the ticked ones below on and turns the rest off; keys of the file you wrote yourself are kept. The preview shows one line per policy (off -> on) in the language chosen below.',
+                  'Политики живут в context-toolkit.json профиля. Пока выбрано «Не менять», галочки показывают, что включено сейчас; любая галочка сама переключает список на «Включить выбранные», и тогда включёнными останутся ровно отмеченные. Ключи файла, написанные вами, сохраняются. Предпросмотр покажет по строке на каждую политику (выкл -> вкл).',
+                  'The policies live in the profile context-toolkit.json. While “Keep as is” is selected, the checkboxes show what is on now; any tick switches the list to “Turn on the selected” by itself, and then exactly the ticked ones stay on. Keys of the file you wrote yourself are kept. The preview shows one line per policy (off -> on).',
                 )}
                 {(() => {
                   const now = doctor.status === 'ready' ? policiesNow(doctor.data) : null
@@ -245,22 +265,22 @@ export function Ctxkit({ level, onNotice }: Props) {
                 })()}
               </span>
             </div>
-            <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.commitHygiene} onChange={(e) => change({ commitHygiene: e.target.checked })} /> {t('Гигиена коммитов: хук блокирует коммит со строками Co-Authored-By и Generated with', 'Commit hygiene: the hook blocks a commit with Co-Authored-By or Generated with lines')}</label>
-            <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.confirmIrreversible} onChange={(e) => change({ confirmIrreversible: e.target.checked })} /> {t('Подтверждение необратимого: хук спрашивает перед git push, reset --hard, rm -rf и подобным', 'Confirm irreversible commands: the hook asks before git push, reset --hard, rm -rf and the like')}</label>
-            <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.strayFiles} onChange={(e) => change({ strayFiles: e.target.checked })} /> {t('Неожиданные файлы-отчёты: хук спрашивает перед записью report*.md, summary*.md и подобных в корень проекта', 'Stray report files: the hook asks before a report*.md, summary*.md or similar is written at the project root')}</label>
+            <label><input type="checkbox" disabled={policyWait} checked={shownPolicies.commitHygiene} onChange={(e) => tick({ commitHygiene: e.target.checked })} /> {t('Гигиена коммитов: хук блокирует коммит со строками Co-Authored-By и Generated with', 'Commit hygiene: the hook blocks a commit with Co-Authored-By or Generated with lines')}</label>
+            <label><input type="checkbox" disabled={policyWait} checked={shownPolicies.confirmIrreversible} onChange={(e) => tick({ confirmIrreversible: e.target.checked })} /> {t('Подтверждение необратимого: хук спрашивает перед git push, reset --hard, rm -rf и подобным', 'Confirm irreversible commands: the hook asks before git push, reset --hard, rm -rf and the like')}</label>
+            <label><input type="checkbox" disabled={policyWait} checked={shownPolicies.strayFiles} onChange={(e) => tick({ strayFiles: e.target.checked })} /> {t('Неожиданные файлы-отчёты: хук спрашивает перед записью report*.md, summary*.md и подобных в корень проекта', 'Stray report files: the hook asks before a report*.md, summary*.md or similar is written at the project root')}</label>
             <div className="inline-row">
-              <label><input type="checkbox" disabled={opts.policyMode !== 'on'} checked={opts.buildSlots} onChange={(e) => change({ buildSlots: e.target.checked })} /> {t('Лимит параллельных сборок: context-toolkit check запускает не больше N сборок и тестов одновременно', 'Parallel build limit: context-toolkit check runs at most N builds and tests at once')}</label>
+              <label><input type="checkbox" disabled={policyWait} checked={shownPolicies.buildSlots} onChange={(e) => tick({ buildSlots: e.target.checked })} /> {t('Лимит параллельных сборок: context-toolkit check запускает не больше N сборок и тестов одновременно', 'Parallel build limit: context-toolkit check runs at most N builds and tests at once')}</label>
               <input
                 type="number"
                 min={1}
                 max={MAX_BUILD_SLOTS}
                 step={1}
-                value={opts.buildSlotsN}
-                disabled={opts.policyMode !== 'on' || !opts.buildSlots}
+                value={shownPolicies.buildSlotsN}
+                disabled={policyWait || !shownPolicies.buildSlots}
                 aria-label={t('Лимит параллельных сборок, от 1 до 8', 'Parallel build limit, 1 to 8')}
                 onChange={(e) => {
                   const n = Math.trunc(Number(e.target.value))
-                  if (Number.isFinite(n)) change({ buildSlotsN: Math.min(MAX_BUILD_SLOTS, Math.max(1, n)) })
+                  if (Number.isFinite(n)) tick({ buildSlotsN: Math.min(MAX_BUILD_SLOTS, Math.max(1, n)) })
                 }}
               />
             </div>
@@ -303,51 +323,78 @@ export function Ctxkit({ level, onNotice }: Props) {
             </select>
             <span id="ctx-advisor-hint" className="mute small">{t('advisorModel ставится только если выбрать модель здесь; «без советника» убирает его.', 'advisorModel is set only if you pick a model here; “no advisor” removes it.')}</span>
           </div>
-          <div className="actions col">
-            <button type="submit" disabled={!!busy} aria-busy={busy === 'preview'}>
+          <div className="actions">
+            <button type="submit" ref={previewRef} disabled={!!busy} aria-busy={busy === 'preview'}>
               {spin('preview', t('Считаю…', 'Working…')) ?? t('Предпросмотр (ничего не пишет)', 'Preview (writes nothing)')}
             </button>
             <button
               type="button"
+              className="primary"
               disabled={!canApply}
               aria-busy={busy === 'apply'}
-              title={level !== 'R2' ? t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header') : previewKey !== key ? t('Сначала предпросмотр с этими настройками', 'Preview these settings first') : t('Установить бинарь, прописать хуки и настройки', 'Install the binary, register hooks and settings')}
+              title={level !== 'R2' ? pickLevel('R2') : previewKey !== key ? t('Сначала предпросмотр с этими настройками', 'Preview these settings first') : t('Установить бинарь, прописать хуки и настройки', 'Install the binary, register hooks and settings')}
               onClick={() => void run('setup', false)}
             >
               {spin('apply', t('Применяю…', 'Applying…')) ?? t('Применить: установить или обновить', 'Apply: install or update')}
             </button>
-            <button type="button" ref={undoPreviewRef} disabled={!!busy} aria-busy={busy === 'undoPreview'} title={t('Показать, что уберёт откат (ничего не пишет)', 'Show what the rollback would remove (writes nothing)')} onClick={() => void run('uninstall', true)}>
-              {spin('undoPreview', t('Считаю…', 'Working…')) ?? t('Откатить Инструменты контекста', 'Roll back Context Toolkit')}
-            </button>
-            {previewKey === undoKey || busy === 'undo' ? (
-              <button
-                type="button"
-                className="danger"
-                disabled={!canUndo}
-                aria-busy={busy === 'undo'}
-                title={level !== 'R2' ? t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header') : t('Убрать хуки Инструментов контекста, блок правил в CLAUDE.md и бинарь хуков', 'Remove the Context Toolkit hooks, the CLAUDE.md rules block and the hooks binary')}
-                onClick={() => void run('uninstall', false)}
-              >
-                {spin('undo', t('Откатываю…', 'Rolling back…')) ?? t('Откатить: убрать хуки, блок правил и бинарь', 'Roll back: remove hooks, rules block and binary')}
-              </button>
-            ) : null}
           </div>
           <p className="mute small status-line" role="status">{busy ? BUSY_TEXT[busy]() : ''}</p>
         </form>
-        {error ? <p className="s-broken" role="alert">{error}</p> : null}
-        {result ? (
+        {error?.kind === 'setup' ? <p className="s-broken" role="alert">{error.text}</p> : null}
+        {result?.kind === 'setup' ? (
           <>
             <p className="mute small">
-              {result.kind === 'uninstall'
-                ? result.dryRun ? t('Предпросмотр отката: файлы не менялись.', 'Rollback preview: no files were changed.') : t('Откат выполнен.', 'Rolled back.')
-                : result.dryRun ? t('Предпросмотр: файлы не менялись.', 'Preview: no files were changed.') : t('Применено.', 'Applied.')}{' '}
+              {result.dryRun ? t('Предпросмотр: файлы не менялись.', 'Preview: no files were changed.') : t('Применено.', 'Applied.')}{' '}
               {t('Вывод Инструментов контекста:', 'Context Toolkit output:')}
             </p>
             <pre className="out" aria-label={t('Вывод Инструментов контекста', 'Context Toolkit output')} tabIndex={0}>{result.output || t('(пусто)', '(empty)')}</pre>
           </>
         ) : null}
         <p className="mute small">{t('Перед записью Инструменты контекста сами делают копии изменяемых файлов в каталог backups рядом с ними. Применение повторяемо: уже настроенное они не трогают.', 'Before writing, Context Toolkit copies the files it changes into a backups folder next to them. Applying is repeatable: anything already configured is left alone.')}</p>
-        <p className="mute small">{t('Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; Antigravity и DeepSeek Harness, если они отмечены выше. Модель, советник, effort, пресеты Claude Desktop и агентов Explore и checker он не трогает: в выводе виден список «оставлено» и путь к копии settings.json.', 'Rolling back removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; Antigravity and DeepSeek Harness if they are ticked above. It does not touch the model, advisor, effort, Claude Desktop presets or the Explore and checker agents: the output lists what was left as is and the path to the settings.json backup.')}</p>
+      </section>
+
+      {/* the rollback is a card of its own, below "Apply": the red button never sits next to the main one */}
+      <section className="hud card" aria-label={t('Откат', 'Rollback')}>
+        <h3>{t('Откат: убрать Инструменты контекста', 'Rollback: remove Context Toolkit')}</h3>
+        <p className="small">
+          {t(
+            'Откат убирает только то, что поставил «Применить»: хуки Инструментов контекста (и шлюз Stop), блок правил в CLAUDE.md и бинарь хуков; Antigravity и DeepSeek Harness, если они отмечены в форме выше. Файл, который после установки никто не трогал, возвращается байт в байт таким, каким был до неё; в изменённом файле вырезаются только наши части.',
+            'The rollback removes only what “Apply” installed: the Context Toolkit hooks (and the Stop gate), the rules block in CLAUDE.md and the hooks binary; Antigravity and DeepSeek Harness if they are ticked in the form above. A file nobody touched since the install comes back byte for byte as it was before it; in a changed file only our parts are cut out.',
+          )}
+        </p>
+        <p className="mute small">
+          {t(
+            'Модель, советник, effort, пресеты Claude Desktop и агенты Explore и checker откат не возвращает: прежние значения ему неизвестны. В выводе будут их текущие значения и путь к копии settings.json, из которой их можно вернуть вручную. Чтобы только выключить защиты и оставить хуки, выберите выше в «Политиках» «Выключить все» и нажмите «Применить».',
+            'The model, advisor, effort, Claude Desktop presets and the Explore and checker agents are not restored: the rollback does not know their previous values. The output lists their current values and the path to the settings.json backup you can restore them from by hand. To only turn the safeguards off and keep the hooks, pick “Turn all off” under Policies above and press Apply.',
+          )}
+        </p>
+        <div className="actions">
+          <button type="button" ref={undoPreviewRef} disabled={!!busy} aria-busy={busy === 'undoPreview'} onClick={() => void run('uninstall', true)}>
+            {spin('undoPreview', t('Считаю…', 'Working…')) ?? t('Показать, что уберёт откат', 'Show what the rollback removes')}
+          </button>
+          {previewKey === undoKey || busy === 'undo' ? (
+            <button
+              type="button"
+              className="danger"
+              disabled={!canUndo}
+              aria-busy={busy === 'undo'}
+              title={level !== 'R2' ? pickLevel('R2') : t('Убрать хуки Инструментов контекста, блок правил в CLAUDE.md и бинарь хуков', 'Remove the Context Toolkit hooks, the CLAUDE.md rules block and the hooks binary')}
+              onClick={() => void run('uninstall', false)}
+            >
+              {spin('undo', t('Откатываю…', 'Rolling back…')) ?? t('Откатить: убрать хуки, блок правил и бинарь', 'Roll back: remove hooks, rules block and binary')}
+            </button>
+          ) : null}
+        </div>
+        {error?.kind === 'uninstall' ? <p className="s-broken" role="alert">{error.text}</p> : null}
+        {result?.kind === 'uninstall' ? (
+          <>
+            <p className="mute small">
+              {result.dryRun ? t('Предпросмотр отката: файлы не менялись.', 'Rollback preview: no files were changed.') : t('Откат выполнен.', 'Rolled back.')}{' '}
+              {t('Вывод Инструментов контекста:', 'Context Toolkit output:')}
+            </p>
+            <pre className="out" aria-label={t('Вывод Инструментов контекста', 'Context Toolkit output')} tabIndex={0}>{result.output || t('(пусто)', '(empty)')}</pre>
+          </>
+        ) : null}
       </section>
 
       <section className="hud card" aria-label={t('Диагностика', 'Diagnostics')}>
@@ -358,15 +405,32 @@ export function Ctxkit({ level, onNotice }: Props) {
           <p className="s-broken" role="alert">{doctor.error}</p>
         ) : (
           <ul className="plist all" aria-label={t('Находки диагностики', 'Diagnostic findings')} aria-busy={doctorBusy}>
-            {doctor.data.findings.map((f) => (
-              <li key={f.id} className="pitem">
-                <span>
-                  <span className={sev(f.severity).cls}>{sev(f.severity).ch} {sev(f.severity).label}</span> · {f.message}
-                  {f.detail ? <span className="mute"> ({f.detail})</span> : null}
-                  {f.fix ? <span className="s-stale"> → {f.fix}</span> : null}
-                </span>
-              </li>
-            ))}
+            {doctor.data.findings.map((f) => {
+              // a fix that is a plain `context-toolkit setup ...` is an action of this window: a button fills the form
+              const patch = fixPatch(f.fix)
+              return (
+                <li key={f.id} className="pitem">
+                  <span>
+                    <span className={sev(f.severity).cls}>{sev(f.severity).ch} {sev(f.severity).label}</span> · <Rich text={f.message} />
+                    {f.detail ? <span className="mute"> (<Rich text={f.detail} />)</span> : null}
+                    {f.fix && !patch ? <span className="fix"> {t('Как исправить:', 'How to fix:')} <Rich text={f.fix} /></span> : null}
+                  </span>
+                  {patch ? (
+                    <button
+                      type="button"
+                      disabled={!!busy}
+                      onClick={() => {
+                        change(patch)
+                        previewRef.current?.scrollIntoView({ block: 'center' })
+                        previewRef.current?.focus()
+                      }}
+                    >
+                      {t('Исправить: настроить форму «Применить»', 'Fix: set up the Apply form')}
+                    </button>
+                  ) : null}
+                </li>
+              )
+            })}
           </ul>
         )}
         <div className="actions col">
@@ -392,9 +456,9 @@ export function Ctxkit({ level, onNotice }: Props) {
           </button>
           <span className="mute small" role="status">
             {reportBusy
-              ? t(`Считаю по транскриптам за ${days} дн., это может занять до минуты`, `Counting transcripts for ${days} days, this can take up to a minute`)
+              ? t(`Считаю по транскриптам за ${count(days, ['день', 'дня', 'дней'], ['day', 'days'])}, это может занять до минуты`, `Counting transcripts for ${count(days, ['день', 'дня', 'дней'], ['day', 'days'])}, this can take up to a minute`)
               : reportAt && report.status === 'ready'
-                ? t(`Посчитано в ${clock(reportAt)}`, `Counted at ${clock(reportAt)}`)
+                ? t(`Посчитано в ${fmtTime(reportAt)}`, `Counted at ${fmtTime(reportAt)}`)
                 : ''}
           </span>
         </div>
@@ -453,6 +517,6 @@ export function Ctxkit({ level, onNotice }: Props) {
           </div>
         ) : null}
       </section>
-    </div>
+    </>
   )
 }

@@ -1,5 +1,5 @@
 import { t } from '../shared/i18n'
-import type { CtxkitDoctor, CtxkitReport, DayStats } from '../shared/model'
+import type { CtxkitDoctor, CtxkitReport, DayStats, SetupOptions } from '../shared/model'
 
 /** Totals for the period. Arithmetic over Context Toolkit counters only: there are no "saved tokens" here, the report has no "before" baseline. */
 export interface Summary {
@@ -98,4 +98,55 @@ export function policiesNow(d: CtxkitDoctor): { text: string; broken: boolean } 
   if (!f) return null
   if (f.severity === 'warn' || f.severity === 'error') return { text: f.message, broken: true }
   return { text: f.detail ?? '', broken: false }
+}
+
+export type PolicySet = Pick<SetupOptions, 'commitHygiene' | 'confirmIrreversible' | 'strayFiles' | 'buildSlots' | 'buildSlotsN'>
+const NO_POLICIES: PolicySet = { commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 }
+
+/**
+ * The policies that are on now, as form checkboxes, from the same `policies` finding (`commit_hygiene, build_slots=3`).
+ * No file means none is on; `null` means the file is broken and the state is unknown.
+ */
+export function policySet(d: CtxkitDoctor): PolicySet | null {
+  const now = policiesNow(d)
+  if (!now) return NO_POLICIES
+  if (now.broken) return null
+  const on = new Map(now.text.split(',').map((s) => s.trim().split('=') as [string, string | undefined]))
+  const n = Number(on.get('build_slots'))
+  return {
+    commitHygiene: on.has('commit_hygiene'),
+    confirmIrreversible: on.has('confirm_irreversible'),
+    strayFiles: on.has('stray_files'),
+    buildSlots: on.has('build_slots'),
+    buildSlotsN: Number.isInteger(n) && n >= 1 ? n : 2,
+  }
+}
+
+/**
+ * A tick on a policy checkbox. "Turn on the selected" turns everything unticked off, so leaving "keep" starts from what is
+ * on now (nothing gets switched off silently), and leaving "turn all off" starts from nothing.
+ */
+export function tickPolicy(o: SetupOptions, patch: Partial<PolicySet>, now: PolicySet | null): SetupOptions {
+  if (o.policyMode === 'on') return { ...o, ...patch }
+  const from = o.policyMode === 'keep' && now ? now : NO_POLICIES
+  return { ...o, ...from, ...patch, policyMode: 'on' }
+}
+
+/**
+ * A doctor fix that is a plain `context-toolkit setup` command, as settings for the "Apply" form; `null` for anything else
+ * (prose, or a command with placeholders the person has to choose).
+ */
+export function fixPatch(fix: string | null): Partial<SetupOptions> | null {
+  const m = /^context-toolkit setup((?: --[\w-]+(?: [a-z]+)?)*)$/.exec(fix?.trim() ?? '')
+  if (!m) return null
+  const patch: Partial<SetupOptions> = {}
+  const words = (m[1] ?? '').trim().split(/\s+/).filter(Boolean)
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]
+    if (w === '--with-rules') patch.withRules = true
+    else if (w === '--main-model' && /^(sonnet|opus|haiku)$/.test(words[i + 1] ?? '')) patch.mainModel = words[++i] as SetupOptions['mainModel']
+    else if (w === '--effort' && /^(low|medium|high|xhigh)$/.test(words[i + 1] ?? '')) patch.effort = words[++i] as SetupOptions['effort']
+    else return null
+  }
+  return patch
 }

@@ -104,15 +104,15 @@ export function SkillDialog({ onClose, onSubmit }: Props) {
         {error ? <p className="s-broken" role="alert">{error}</p> : null}
         <div className="actions">
           {fetched ? (
-            <button type="button" disabled={!chosen?.name} onClick={() => chosen && onSubmit({ op: 'installSkill', stage: fetched.stage, sub: chosen.sub, name: chosen.name })}>
+            <button type="button" className="primary" disabled={!chosen?.name} onClick={() => chosen && onSubmit({ op: 'installSkill', stage: fetched.stage, sub: chosen.sub, name: chosen.name })}>
               {t('Предпросмотр установки', 'Preview installation')}
             </button>
           ) : preview ? (
-            <button type="button" disabled={busy} onClick={() => void call(false)}>
+            <button type="button" className="primary" disabled={busy} onClick={() => void call(false)}>
               {busy ? (local ? t('Копирую…', 'Copying…') : t('Скачиваю…', 'Downloading…')) : local ? t('Скопировать и показать', 'Copy and show') : t('Скачать и показать', 'Download and show')}
             </button>
           ) : (
-            <button type="submit" disabled={!source.trim() || busy}>{local ? t('Что будет скопировано', 'What will be copied') : t('Что будет скачано', 'What will be downloaded')}</button>
+            <button type="submit" className="primary" disabled={!source.trim() || busy}>{local ? t('Что будет скопировано', 'What will be copied') : t('Что будет скачано', 'What will be downloaded')}</button>
           )}
           <button type="button" onClick={onClose}>{t('Отмена', 'Cancel')}</button>
         </div>

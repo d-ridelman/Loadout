@@ -19,6 +19,7 @@ import { Sidecar } from './sidecar'
 import { tidyHome } from './tidy'
 import { autoCheckOn, notesUrl, Updates } from './updates'
 import type { UpdaterLike } from './updates'
+import { welcomeDue } from './welcome'
 import {
   validateApplied,
   validateBatchApplied,
@@ -97,7 +98,8 @@ function ensureSidecar(): Sidecar | string {
   if (sidecar) return sidecar
   const bin = sidecarPath()
   if (!existsSync(bin) || !basename(bin).toLowerCase().startsWith('loadout')) {
-    return tidy(t(`ядро не найдено: ${bin}. Соберите его командой «cargo build --release» в корне проекта.`, `core not found: ${bin}. Build it with "cargo build --release" in the project root.`))
+    // what to do, in user words; a development build gets here only without `cargo build --release`, which a developer knows
+    return tidy(t(`ядро не найдено: нет файла ${bin}. Переустановите Loadout.`, `core not found: there is no file ${bin}. Reinstall Loadout.`))
   }
   // The backups directory is always passed; the right to write is checked by main (level R1) before every `apply` and `rollback`.
   const args = ['serve', '--backups', backupsDir(), '--lang', getLang()]
@@ -167,7 +169,7 @@ function readSettings(): Record<string, unknown> {
 }
 
 /** Settings keys are written one at a time: writing one does not erase the others. */
-function saveSetting(key: 'writeLevel' | 'lang' | 'autoUpdate', value: string | boolean): void {
+function saveSetting(key: 'writeLevel' | 'lang' | 'autoUpdate' | 'welcomed', value: string | boolean): void {
   mkdirSync(app.getPath('userData'), { recursive: true })
   writeFileSync(settingsFile(), JSON.stringify({ ...readSettings(), [key]: value }))
 }
@@ -278,7 +280,7 @@ async function core(method: string, params?: Record<string, unknown>): Promise<u
       const g = s.generation
       const st = await s.request('status', undefined, g)
       const ok = typeof st === 'object' && st !== null && (st as Record<string, unknown>)['protocol'] === CORE_PROTOCOL
-      if (!ok) throw new Error(t('ядро другой версии: запись отключена. Пересоберите ядро (cargo build --release)', 'the core is a different version: writing is disabled. Rebuild the core (cargo build --release)'))
+      if (!ok) throw new Error(t('ядро другой версии, поэтому запись отключена. Переустановите Loadout.', 'the core is a different version, so writing is disabled. Reinstall Loadout.'))
       verifiedGeneration = g
     }
     return await s.request(method, params, verifiedGeneration)
@@ -376,6 +378,8 @@ void app.whenReady().then(() => {
     }
     return lang
   })
+  ipcMain.handle('welcome:get', (e) => (guard(e), welcomeDue(readSettings())))
+  ipcMain.handle('welcome:done', (e) => (guard(e), saveSetting('welcomed', true)))
   ipcMain.handle('writeLevel:get', (e) => (guard(e), readWriteLevel()))
   ipcMain.handle('writeLevel:set', async (e, raw: unknown) => {
     guard(e)

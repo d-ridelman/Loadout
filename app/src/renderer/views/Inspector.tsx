@@ -3,7 +3,7 @@ import type { Entity, Level, WriteLevel } from '../../shared/model'
 import { t } from '../../shared/i18n'
 import { GLYPH } from '../aggregate'
 import type { Row } from '../aggregate'
-import { Glyph, KindBadge, Panel, Path } from '../ui'
+import { Glyph, KindBadge, levelLabel, Panel, Path, pickLevel, Rich } from '../ui'
 import type { Sel } from './Matrix'
 
 /** Whether the current write level is enough for the operation. */
@@ -121,7 +121,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
 
       {cell.instances.length > 1 ? (
         <>
-          <h2>{t('Записи', 'Entries')} ({cell.instances.length})</h2>
+          <h3>{t('Записи', 'Entries')} ({cell.instances.length})</h3>
           <ul className="instances">
             {cell.instances.map((x) => (
               <li key={x.id}>
@@ -138,13 +138,13 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
       {e.note ? (
         <Panel className="note">
           <b className="s-stale">{t('Замечание', 'Note')}</b>
-          <p>{e.note}</p>
+          <p><Rich text={e.note} /></p>
         </Panel>
       ) : null}
 
       {details.length > 0 ? (
         <>
-          <h2>{t('Содержимое', 'Contents')}</h2>
+          <h3>{t('Содержимое', 'Contents')}</h3>
           <dl className="kv detail">
             {details.map(([k, v]) => (
               <div key={k} className="kvrow">
@@ -165,7 +165,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
             !e.canToggle
               ? e.toggleWhy
               : !levelOk(level, e.toggleLevel ?? 'R1')
-                ? t(`Включите уровень ${e.toggleLevel ?? 'R1'} в шапке окна`, `Enable level ${e.toggleLevel ?? 'R1'} in the window header`)
+                ? pickLevel(e.toggleLevel ?? 'R1')
                 : t('Предпросмотр, затем запись (Space)', 'Preview, then write (Space)')
           }
           onClick={() => onToggle(e, e.state === 'off' || e.state === 'unknown')}
@@ -174,10 +174,10 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
         </button>
         {e.canEdit ? (
           <>
-            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? t('Заменить команду и аргументы', 'Replace the command and arguments') : t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header')} onClick={() => onEdit(e)}>
+            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? t('Заменить команду и аргументы', 'Replace the command and arguments') : pickLevel('R2')} onClick={() => onEdit(e)}>
               {t('Править команду…', 'Edit command…')}
             </button>
-            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? t('Скопировать запись в другой клиент', 'Copy the entry to another client') : t('Включите уровень R2 в шапке окна', 'Enable level R2 in the window header')} onClick={() => onCopy(e)}>
+            <button disabled={!levelOk(level, 'R2')} title={levelOk(level, 'R2') ? t('Скопировать запись в другой клиент', 'Copy the entry to another client') : pickLevel('R2')} onClick={() => onCopy(e)}>
               {t('Копировать в клиент…', 'Copy to client…')}
             </button>
           </>
@@ -187,9 +187,9 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
         {!e.canToggle
           ? t(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}.`, `Cannot toggle: ${e.toggleWhy ?? 'not supported'}.`)
           : level === 'R0'
-            ? t('Запись выключена (R0). Уровень включается в шапке окна.', 'Writing is off (R0). Set the level in the window header.')
+            ? t(`Сейчас «${levelLabel('R0')}»: окно ничего не пишет. Уровень записи выбирается в шапке окна.`, `The level is “${levelLabel('R0')}” now: the window writes nothing. Pick the write level in the window header.`)
             : !levelOk(level, e.toggleLevel ?? 'R1')
-              ? t(`Для этой записи нужен уровень ${e.toggleLevel}: у неё нет флага, выключение выносит её в корзину Loadout.`, `This entry needs level ${e.toggleLevel}: it has no flag, so disabling moves it to the Loadout trash.`)
+              ? t(`Для этой записи нужен уровень «${levelLabel('R2')}»: у неё нет флага, выключение выносит её в корзину Loadout.`, `This entry needs the “${levelLabel('R2')}” level: it has no flag, so disabling moves it to the Loadout trash.`)
               : t('Запись пойдёт через предпросмотр, бэкап и проверку; откат — в журнале.', 'The write goes through preview, backup and verification; rollback is in the journal.')}
       </p>
     </>

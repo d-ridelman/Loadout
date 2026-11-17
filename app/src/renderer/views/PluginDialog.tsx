@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { t } from '../../shared/i18n'
 import type { Marketplace } from '../../shared/model'
+import { Rich } from '../ui'
 import { Modal } from './Modal'
 
 interface Props {
@@ -28,6 +29,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [output, setOutput] = useState<string | null>(null)
+  const [refreshed, setRefreshed] = useState(false)
 
   const load = useCallback(async (prefer?: (list: Marketplace[]) => string | undefined) => {
     const r = await window.loadout.marketplaces()
@@ -59,7 +61,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
         return setError(t(`Команда не удалась (код ${r.data.code})`, `The command failed (code ${r.data.code})`))
       }
       setCommand(null)
-      if (kind === 'install') return onDone(t(`Плагин установлен: ${value}. Выключить — в матрице, удалить — claude plugin uninstall`, `Plugin installed: ${value}. Disable it in the matrix, remove it with claude plugin uninstall`))
+      if (kind === 'install') return onDone(t(`Плагин установлен: ${value}. Выключить можно в матрице, удалить — командой \`claude plugin uninstall\``, `Plugin installed: ${value}. Disable it in the matrix, remove it with \`claude plugin uninstall\``))
       // the new marketplace is the one that was not in the list before adding
       const before = new Set(markets?.map((m) => m.name))
       setAdding(false)
@@ -102,13 +104,36 @@ export function PluginDialog({ onClose, onDone }: Props) {
               </select>
             </label>
             {!adding ? (
-              <button type="button" onClick={() => (setAdding(true), reset())}>
-                {t('Добавить маркетплейс…', 'Add marketplace…')}
-              </button>
+              <>
+                <button
+                  type="button"
+                  disabled={busy}
+                  title={t('Перечитать каталоги маркетплейсов с диска (в сеть не ходит)', 'Read the marketplace catalogs from disk again (no network)')}
+                  onClick={() => {
+                    reset()
+                    void load().then(() => setRefreshed(true))
+                  }}
+                >
+                  {t('Обновить каталог', 'Refresh catalog')}
+                </button>
+                <button type="button" onClick={() => (setAdding(true), reset())}>
+                  {t('Добавить маркетплейс…', 'Add marketplace…')}
+                </button>
+              </>
             ) : null}
           </div>
         ) : null}
         {markets === null && !error ? <p className="mute">{t('Читаю маркетплейсы…', 'Reading marketplaces…')}</p> : null}
+        {refreshed && !adding ? (
+          <p className="mute small" role="status">
+            <Rich
+              text={t(
+                'Каталог перечитан с диска. Чтобы скачать свежий список плагинов из источника маркетплейса, выполните `claude plugin marketplace update` и нажмите «Обновить каталог» ещё раз.',
+                'The catalog was read from disk again. To download a fresh plugin list from the marketplace source, run `claude plugin marketplace update` and press “Refresh catalog” again.',
+              )}
+            />
+          </p>
+        ) : null}
 
         {adding ? (
           <form
@@ -142,11 +167,11 @@ export function PluginDialog({ onClose, onDone }: Props) {
             {command?.kind === 'add' ? <p className="s-stale">◐ {t('Будет выполнено:', 'Will run:')} <span className="mono">{command.text}</span></p> : null}
             <div className="actions">
               {command?.kind === 'add' ? (
-                <button type="button" disabled={busy} onClick={() => void run('add', false, source.trim())}>
+                <button type="button" className="primary" disabled={busy} onClick={() => void run('add', false, source.trim())}>
                   {busy ? t('Добавляю…', 'Adding…') : t('Добавить маркетплейс', 'Add marketplace')}
                 </button>
               ) : (
-                <button type="submit" disabled={!source.trim() || busy}>{t('Предпросмотр', 'Preview')}</button>
+                <button type="submit" className="primary" disabled={!source.trim() || busy}>{t('Предпросмотр', 'Preview')}</button>
               )}
               {markets && markets.length > 0 ? (
                 <button type="button" onClick={() => (setAdding(false), reset())}>{t('Отмена', 'Cancel')}</button>
@@ -195,10 +220,12 @@ export function PluginDialog({ onClose, onDone }: Props) {
                 {shown.length === 0 ? <li className="mute">{t('Плагинов нет', 'No plugins')}</li> : null}
               </ul>
               <p className="mute small">
-                {t(
-                  'Установка идёт через `claude`, скачивает код плагина и выполняется без перезапуска приложений.',
-                  'Installation runs through `claude`, downloads the plugin code and happens without restarting apps.',
-                )}
+                <Rich
+                  text={t(
+                    'Установка идёт через `claude`, скачивает код плагина и выполняется без перезапуска приложений.',
+                    'Installation runs through `claude`, downloads the plugin code and happens without restarting apps.',
+                  )}
+                />
               </p>
               {command?.kind === 'install' ? <p className="s-stale">◐ {t('Будет выполнено:', 'Will run:')} <span className="mono">{command.text}</span></p> : null}
             </>
@@ -208,7 +235,7 @@ export function PluginDialog({ onClose, onDone }: Props) {
         {output ? <pre className="out" aria-label={t('Вывод claude', 'claude output')} tabIndex={0}>{output}</pre> : null}
         <div className="actions">
           {command?.kind === 'install' ? (
-            <button type="button" disabled={busy} onClick={() => void run('install', false, spec)}>{busy ? t('Устанавливаю…', 'Installing…') : t('Установить', 'Install')}</button>
+            <button type="button" className="primary" disabled={busy} onClick={() => void run('install', false, spec)}>{busy ? t('Устанавливаю…', 'Installing…') : t('Установить', 'Install')}</button>
           ) : null}
           <button type="button" onClick={onClose}>{t('Закрыть', 'Close')}</button>
         </div>

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { Entity, Intent, JournalEntry, Plan } from '../../shared/model'
-import { t } from '../../shared/i18n'
-import { Path } from '../ui'
+import { count, plural, t } from '../../shared/i18n'
+import { Path, Rich } from '../ui'
 import { Modal } from './Modal'
 
 type PlanState =
@@ -112,13 +112,22 @@ export function RollbackDialog({ rows, batch, onClose, onDone }: RollbackProps) 
       </p>
       {error ? <p className="s-broken" role="alert">{error}</p> : null}
       <div className="actions">
-        <button ref={applyRef} disabled={busy || rows.length === 0} onClick={() => void run()}>
+        <button ref={applyRef} className="primary" disabled={busy || rows.length === 0} onClick={() => void run()}>
           {busy ? t('Откатываю…', 'Rolling back…') : t('Откатить', 'Roll back')}
         </button>
         <button onClick={onClose}>{t('Отмена', 'Cancel')}</button>
       </div>
     </Modal>
   )
+}
+
+/**
+ * The core's skill plan notes are: a size summary first, the file list last, and warnings (commands run by SKILL.md,
+ * code files) in between (crates/loadout-core/src/write/skill.rs). The warnings are shown apart and highlighted.
+ */
+export function skillAlerts(notes: readonly string[]): { alerts: string[]; rest: string[] } {
+  if (notes.length < 3) return { alerts: [], rest: [...notes] }
+  return { alerts: notes.slice(1, -1), rest: [notes[0]!, notes[notes.length - 1]!] }
 }
 
 function title(p: Plan | undefined, intent: Intent): string {
@@ -212,14 +221,30 @@ export function PlanDialog({ entity, intent, onBack, onClose, onDone }: Props) {
           {state.plan.affects.length > 0 ? (
             <p className="s-stale">
               ◐ {t(
-                `Этот же ключ меняет ещё ${state.plan.affects.length} ${state.plan.affects.length === 1 ? 'запись' : 'записей'}: так устроено в самом клиенте.`,
-                `This same key also changes ${state.plan.affects.length} more ${state.plan.affects.length === 1 ? 'entry' : 'entries'}: that is how the client works.`,
+                `Этот же ключ меняет ещё ${count(state.plan.affects.length, ['запись', 'записи', 'записей'], ['entry', 'entries'])}: так устроено в самом клиенте.`,
+                `This same key also changes ${state.plan.affects.length} more ${plural(state.plan.affects.length, ['', '', ''], ['entry', 'entries'])}: that is how the client works.`,
               )}
             </p>
           ) : null}
-          {state.plan.notes.map((n) => (
-            <p key={n} className="s-stale">◐ {n}</p>
-          ))}
+          {(() => {
+            const { alerts, rest } = state.plan.op === 'installSkill' ? skillAlerts(state.plan.notes) : { alerts: [], rest: state.plan.notes }
+            return (
+              <>
+                {alerts.length > 0 ? (
+                  <div className="alert-box" role="note" aria-label={t('Внимание: скил с кодом', 'Warning: a skill with code')}>
+                    <b className="s-broken">{t('⚠ Скил может запускать программы на этом компьютере', '⚠ This skill can run programs on this computer')}</b>
+                    {alerts.map((n) => (
+                      <p key={n}><Rich text={n} /></p>
+                    ))}
+                    <p className="mute small">{t('Устанавливайте его, только если доверяете источнику и прочитали его файлы.', 'Install it only if you trust the source and have read its files.')}</p>
+                  </div>
+                ) : null}
+                {rest.map((n) => (
+                  <p key={n} className="s-stale">◐ <Rich text={n} /></p>
+                ))}
+              </>
+            )
+          })()}
           {state.plan.running.length > 0 ? (
             <p className="s-stale">
               ◐ {t(
@@ -243,7 +268,7 @@ export function PlanDialog({ entity, intent, onBack, onClose, onDone }: Props) {
       )}
       {applyError ? <p className="s-broken" role="alert">{applyError}</p> : null}
       <div className="actions">
-        <button ref={applyRef} disabled={state.status !== 'ready' || state.plan.noop || busy} onClick={() => void apply()}>
+        <button ref={applyRef} className="primary" disabled={state.status !== 'ready' || state.plan.noop || busy} onClick={() => void apply()}>
           {busy ? t('Записываю…', 'Writing…') : applyLabel(plan, intent)}
         </button>
         {applyError ? <button onClick={() => void build()}>{t('Обновить предпросмотр', 'Refresh preview')}</button> : null}

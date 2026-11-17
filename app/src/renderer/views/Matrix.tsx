@@ -4,7 +4,7 @@ import { CLIENTS } from '../../shared/model'
 import type { ClientId, EntityState } from '../../shared/model'
 import { GLYPH, GROUPS } from '../aggregate'
 import type { Group, Row } from '../aggregate'
-import { Glyph, KindBadge } from '../ui'
+import { Glyph, KindBadge, PageHead } from '../ui'
 
 export interface Sel {
   rowKey: string
@@ -43,9 +43,22 @@ interface Props {
   searchRef: RefObject<HTMLInputElement | null>
   /** Entries that changed in the last refresh from disk: marked with a Δ badge (not by color alone). */
   fresh: ReadonlySet<string>
+  onRescan: () => void
+  onAdd: () => void
 }
 
-export function Matrix({ rows, total, filters, setFilters, sel, onSelect, searchRef, fresh }: Props) {
+/** What each mark of the table means, beyond its one-word name (t() during render only). */
+const legendHint = (k: EntityState | 'none'): string | null =>
+  (
+    {
+      broken: t('запись указывает на то, чего нет', 'the entry points to something missing'),
+      cloud: t('облачный коннектор', 'cloud connector'),
+      unknown: t('флаг лежит там, куда Loadout не заглядывает', 'the flag is somewhere Loadout does not read'),
+      none: t('в этом клиенте нет', 'not in this client'),
+    } as Partial<Record<EntityState | 'none', string>>
+  )[k] ?? null
+
+export function Matrix({ rows, total, filters, setFilters, sel, onSelect, searchRef, fresh, onRescan, onAdd }: Props) {
   // The selected row may have disappeared (refresh from disk, filter): then there is no selected cell and movement starts from the first row.
   const foundRow = sel ? rows.findIndex((r) => r.key === sel.rowKey) : -1
   const curRow = Math.max(0, foundRow)
@@ -80,6 +93,7 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
 
   return (
     <>
+      <PageHead title={t('Матрица', 'Matrix')} sub={t('Что установлено в каждом клиенте. Выберите ячейку, справа появятся подробности.', 'What is installed in each client. Select a cell to see the details on the right.')} />
       <div className="bar">
         <input
           ref={searchRef}
@@ -116,11 +130,27 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
           {t('скрыть «не определено»', 'hide "unknown"')}
         </label>
         {filters.client ? (
-          <button onClick={() => setFilters({ ...filters, client: null })}>
-            {t('клиент', 'client')}: {CLIENTS.find((c) => c.id === filters.client)?.name} ✕
+          <button onClick={() => setFilters({ ...filters, client: null })} aria-label={t(`Снять фильтр по клиенту ${CLIENTS.find((c) => c.id === filters.client)?.name}`, `Clear the ${CLIENTS.find((c) => c.id === filters.client)?.name} client filter`)}>
+            {t('клиент', 'client')}: {CLIENTS.find((c) => c.id === filters.client)?.name} <span aria-hidden="true">✕</span>
           </button>
         ) : null}
       </div>
+
+      {/* above the table, not under it: under a long table the legend was out of sight */}
+      <details className="legend-box">
+        <summary>{t('Что значат значки', 'What the marks mean')}</summary>
+        <ul className="legend">
+          {(Object.keys(GLYPH) as (EntityState | 'none')[]).map((k) => (
+            <li key={k}>
+              <Glyph state={k} /> {GLYPH[k].label}
+              {legendHint(k) ? <span className="mute">: {legendHint(k)}</span> : null}
+            </li>
+          ))}
+          <li><span className="more">+N</span> {t('ещё N записей в других областях', 'N more entries in other scopes')}</li>
+          <li><span className="delta">Δ</span> {t('изменилось на диске только что, метка гаснет через несколько секунд', 'just changed on disk, the mark fades after a few seconds')}</li>
+          <li><span className="mono">FX</span> {t('в шапке: анимации окна (выкл, лёгкие, полные)', 'in the header: window animations (off, light, full)')}</li>
+        </ul>
+      </details>
 
       <div className="hud tablewrap">
         <table
@@ -177,23 +207,28 @@ export function Matrix({ rows, total, filters, setFilters, sel, onSelect, search
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={CLIENTS.length + 1} className="empty">
-                  {total === 0
-                    ? t('Сущностей не найдено: клиенты не установлены или их конфиги пусты.', 'No entities found: the clients are not installed or their configs are empty.')
-                    : t('Ничего не найдено по фильтрам', 'Nothing matches the filters')}
+                  {total === 0 ? (
+                    <>
+                      <p>{t('Не найдено ни одного клиента: в домашней папке нет конфигов Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity и DeepSeek, или они пусты.', 'No client found: the home folder has no configs of Claude Code, Claude Desktop, ChatGPT / Codex, Antigravity or DeepSeek, or they are empty.')}</p>
+                      <p>{t('Установите клиент или добавьте в него MCP-сервер, затем пересканируйте.', 'Install a client or add an MCP server to one, then rescan.')}</p>
+                      <div className="actions center">
+                        <button className="primary" onClick={onRescan}>{t('Пересканировать', 'Rescan')}</button>
+                        <button onClick={onAdd}>{t('Добавить MCP…', 'Add MCP…')}</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p>{t('По фильтрам ничего не найдено.', 'Nothing matches the filters.')}</p>
+                      <div className="actions center">
+                        <button onClick={() => setFilters({ q: '', group: 'all', state: 'all', hideUnknown: false, client: null })}>{t('Сбросить фильтры', 'Clear the filters')}</button>
+                      </div>
+                    </>
+                  )}
                 </td>
               </tr>
             ) : null}
           </tbody>
         </table>
-      </div>
-
-      <div className="legend">
-        {(Object.keys(GLYPH) as (EntityState | 'none')[]).map((k) => (
-          <span key={k}>
-            <Glyph state={k} /> {GLYPH[k].label}
-          </span>
-        ))}
-        <span>{t('+N — ещё записей в других областях', '+N — more entries in other scopes')}</span>
       </div>
     </>
   )

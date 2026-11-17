@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
 import type { JournalEntry, WriteLevel } from '../../shared/model'
 import { BACKUP_DIR_HINT, backupNotice } from '../../shared/backups'
-import { getLang, t } from '../../shared/i18n'
+import { fmtDateTime, t } from '../../shared/i18n'
+import { PageHead, pickLevel } from '../ui'
+import type { Notify } from '../ui'
 import { levelOk } from './Inspector'
 import { RollbackDialog } from './PlanDialog'
 
@@ -16,7 +18,7 @@ interface Props {
   level: WriteLevel
   /** Changes on every data refresh: the journal is re-read because `canRollback` depends on the current file. */
   refreshKey: number
-  onNotice: (message: string) => void
+  onNotice: Notify
 }
 
 /** Journal of our operations (CONCEPT.md §5, step 8). Changes made to clients from outside do not appear here. */
@@ -47,9 +49,10 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
     setBusy('prune')
     try {
       const r = await window.loadout.pruneBackups()
-      onNotice(r.ok ? t(`Старые копии удалены: операций ${r.data.removed}, осталось ${r.data.kept}`, `Old copies removed: ${r.data.removed} operations, ${r.data.kept} kept`) : r.error)
+      if (r.ok) onNotice(t(`Старые копии удалены: операций ${r.data.removed}, осталось ${r.data.kept}`, `Old copies removed: ${r.data.removed} operations, ${r.data.kept} kept`))
+      else onNotice(r.error, 'error')
     } catch (e) {
-      onNotice(e instanceof Error ? e.message : t('очистка не удалась', 'cleanup failed'))
+      onNotice(e instanceof Error ? e.message : t('очистка не удалась', 'cleanup failed'), 'error')
     } finally {
       setBusy(null)
       void load()
@@ -58,7 +61,13 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
 
   return (
     <>
-      <h2>{t('Журнал', 'Journal')}</h2>
+      <PageHead
+        title={t('Журнал', 'Journal')}
+        sub={t(
+          'Записи, которые сделал Loadout. Запись можно откатить после предпросмотра, если файл с тех пор не меняли.',
+          'Writes made by Loadout. You can roll one back after a preview if the file has not changed since.',
+        )}
+      />
       <details className="small">
         <summary>{t('Где хранятся копии и что в них', 'Where the copies are kept and what is in them')}</summary>
         <p className="mute small">{backupNotice(BACKUP_DIR_HINT)}</p>
@@ -98,7 +107,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
                   j.batch !== null && state.rows.findIndex((x) => x.batch === j.batch) === i && state.rows.some((x) => x.batch === j.batch && x.canRollback)
                 return (
                   <tr key={j.id}>
-                    <td className="mono nw">{new Date(j.time).toLocaleString(getLang() === 'en' ? 'en-GB' : 'ru-RU', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                    <td className="mono nw">{fmtDateTime(j.time)}</td>
                     <td className="nw">
                       {opLabel(j.op)}
                       {j.level === 'R2' ? <span className="lvl">R2</span> : null}
@@ -127,7 +136,7 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
                         ) : null}
                         {/* the reason is text in the row, not a tooltip on a disabled button */}
                         {j.op !== 'rollback' && !j.canRollback && !j.rolledBack && j.why ? <span className="mute small">{t(`Нельзя: ${j.why}`, `Not possible: ${j.why}`)}</span> : null}
-                        {j.canRollback && !ok ? <span className="mute small">{t(`Нужен уровень ${j.level} в шапке`, `Needs level ${j.level} in the header`)}</span> : null}
+                        {j.canRollback && !ok ? <span className="mute small">{pickLevel(j.level)}</span> : null}
                         {batchHead && !levelOk(level, 'R2') ? <span className="mute small">{t('Пакет откатывается на уровне R2', 'A batch rolls back at level R2')}</span> : null}
                       </div>
                     </td>
