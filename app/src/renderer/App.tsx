@@ -29,7 +29,7 @@ import { DEFAULT_FILTERS, restoreUi } from './keep'
 import type { Ui, View } from './keep'
 import { Help, fxLabel } from './views/Help'
 import type { Fx, Topic } from './views/Help'
-import { levelLabel, setOpenHelp, Term, Toast } from './ui'
+import { kindLabel, levelLabel, setOpenHelp, Term, Toast } from './ui'
 import type { Tone } from './ui'
 /** A form before the write preview; `draft` is what was typed, when the preview sends the person back to it. */
 type Form =
@@ -172,16 +172,27 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
    * An action that needs a higher write level asks for it on the spot instead of sending the person to the header:
    * main shows the OS dialog (the page cannot click it). The answer of main decides, not this render's `level`.
    */
+  const asking = useRef(false)
   const ensureLevel = useCallback(
     async (need: Level): Promise<boolean> => {
       if (levelOk(level, need)) return true
+      if (asking.current) return false // a double click must not stack a second OS dialog
+      asking.current = true
       try {
+        // the mirror may be stale (just opened, a failed read): never ask main to set a level lower than the one it keeps
+        const now = await window.loadout.getWriteLevel()
+        if (levelOk(now, need)) {
+          setLevel(now)
+          return true
+        }
         const got = await window.loadout.setWriteLevel(need)
         setLevel(got)
         if (levelOk(got, need)) return true
         say(t(`Запись не разрешена, ничего не изменилось. Уровень записи: «${levelLabel(got)}»`, `Writing was not allowed, nothing changed. Write level: “${levelLabel(got)}”`), 'info')
       } catch {
         say(t('Не удалось сменить уровень записи', 'Could not change the write level'), 'error')
+      } finally {
+        asking.current = false
       }
       return false
     },
@@ -331,15 +342,17 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
       }
       if (e.key === 'F1') {
         e.preventDefault()
-        setHelp(view)
+        if (!palette) setHelp(view) // never a second modal over the palette
         return
       }
       if (withModifier(e)) return
       const tg = e.target
       if (tg instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(tg.tagName)) return
       if (palette) return
-      // Space on a button presses the button instead of toggling the selected entry; other keys do not depend on button focus
-      if (e.key === ' ' && view === 'matrix' && selEntity && !(tg instanceof HTMLButtonElement)) {
+      // Space toggles the selected entry only from the table (or with nothing focused); on a button, a summary or a term it does
+      // what that control does; other keys do not depend on focus
+      const onTable = !(tg instanceof HTMLElement) || tg === document.body || tg.tagName === 'MAIN' || tg.closest('#grid') !== null
+      if (e.key === ' ' && view === 'matrix' && selEntity && onTable) {
         e.preventDefault() // otherwise Space would scroll the page
         requestToggle(selEntity, selEntity.state === 'off' || selEntity.state === 'unknown')
       } else if (e.key === '?' || (e.code === 'Slash' && e.shiftKey)) {
@@ -382,7 +395,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
           }]
         : []),
       ...(['off', 'low', 'full'] as const).map((m) => ({ label: t(`Анимация: ${fxLabel(m)}`, `Animation: ${fxLabel(m)}`), hint: t('действие', 'action'), run: () => setFx(m) })),
-      ...rows.map((r) => ({ label: r.name, hint: r.kinds.join('+'), run: () => showRow(r) })),
+      ...rows.map((r) => ({ label: r.name, hint: r.kinds.map(kindLabel).join(' + '), run: () => showRow(r) })),
     ],
     [rows, load, showRow, level, changeLevel, selEntity, requestToggle, requestAdd, requestPlugin, requestSkill, view],
   )
@@ -408,8 +421,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
         <span className="mute levelbox">
           <Term
             tip={t(
-              'Что Loadout может менять. «Только чтение» — ничего; «Вкл/выкл» — включать и выключать по флагу; «Все правки» — ещё корзина, правка, добавление, профили и установка. Кнопки действий повышают уровень сами, после окна Windows.',
-              'What Loadout may change. Read-only: nothing; On/off: turn entries on and off by a flag; All edits: also the trash, edits, additions, profiles and installs. Action buttons raise the level themselves, after a Windows dialog.',
+              'Что Loadout может менять. «Только чтение» — ничего; «Вкл/выкл» — включать и выключать по флагу; «Все правки» — ещё корзина, правка, добавление, профили и установка. Кнопки в инспекторе, «Добавить» и «Откатить» в журнале повышают уровень сами, после окна Windows; для профилей и Инструментов контекста уровень выбирается здесь.',
+              'What Loadout may change. Read-only: nothing; On/off: turn entries on and off by a flag; All edits: also the trash, edits, additions, profiles and installs. The inspector buttons, Add and Roll back in the journal raise the level themselves, after a Windows dialog; for profiles and Context Toolkit pick it here.',
             )}
           >
             {t('Запись', 'Write')}
@@ -452,7 +465,9 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
                 <button
                   key={x.name}
                   autoFocus={i === 0}
-                  onClick={() => {
+                  onClick={(ev) => {
+                    // focus back on "Add" before the list unmounts: after a refusal in the OS dialog it is not lost on <body>
+                    ev.currentTarget.closest('.addmenu')?.querySelector('button')?.focus()
                     setAddOpen(false)
                     x.run()
                   }}
@@ -554,7 +569,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             ) : view === 'doctor' ? (
               <Doctor findings={findings} onShow={showEntity} />
             ) : view === 'journal' ? (
-              <Journal level={level} refreshKey={rev} onNotice={say} />
+              <Journal level={level} refreshKey={rev} onNotice={say} ensureLevel={ensureLevel} />
             ) : view === 'profiles' ? (
               <Profiles level={level} refreshKey={rev} onNotice={say} entities={entities} />
             ) : (
@@ -623,6 +638,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             helpFrom.current = null
             setWelcome(true)
             setView('matrix')
+            requestAnimationFrame(() => document.querySelector<HTMLElement>('.welcome button.primary')?.focus())
           }}
           onClose={closeHelp}
         />

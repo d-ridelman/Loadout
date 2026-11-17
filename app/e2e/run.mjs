@@ -631,6 +631,14 @@ try {
   // a refusal in the OS dialog (Space and the button both ask) leaves R0, opens nothing and writes nothing
   await stubDialog(0)
   let askedBefore = await app.evaluate(() => globalThis.__asked)
+  // Space on another focusable control (here "Technical details") does what that control does, it does not toggle the selection
+  const tech = page.locator('aside details.tech')
+  await tech.locator('summary').focus()
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400) // a negative check: give a wrong OS dialog request time to arrive
+  must(await tech.evaluate((d) => d.open), 'Space on "Technical details" did not open them')
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore, 'Space on "Technical details" toggled the selected entry')
+  await tech.locator('summary').click()
   await page.locator('#grid').focus()
   await page.keyboard.press('Space')
   await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'Space at R0 did not ask for permission')

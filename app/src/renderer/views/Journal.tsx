@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CLIENTS } from '../../shared/model'
-import type { JournalEntry, WriteLevel } from '../../shared/model'
+import type { JournalEntry, Level, WriteLevel } from '../../shared/model'
 import { BACKUP_DIR_HINT, backupNotice } from '../../shared/backups'
 import { fmtDateTime, t } from '../../shared/i18n'
-import { PageHead, pickLevel } from '../ui'
+import { levelLabel, PageHead } from '../ui'
 import type { Notify } from '../ui'
 import { levelOk } from './Inspector'
 import { RollbackDialog } from './PlanDialog'
@@ -19,10 +19,12 @@ interface Props {
   /** Changes on every data refresh: the journal is re-read because `canRollback` depends on the current file. */
   refreshKey: number
   onNotice: Notify
+  /** Asks for a write level a rollback needs (the OS dialog); true when it is granted. */
+  ensureLevel: (need: Level) => Promise<boolean>
 }
 
 /** Journal of our operations (CONCEPT.md §5, step 8). Changes made to clients from outside do not appear here. */
-export function Journal({ level, refreshKey, onNotice }: Props) {
+export function Journal({ level, refreshKey, onNotice, ensureLevel }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' })
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -92,12 +94,12 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
           <table className="left" aria-label={t('Журнал операций', 'Operations journal')}>
             <thead>
               <tr>
-                <th scope="col">{t('ВРЕМЯ', 'TIME')}</th>
-                <th scope="col">{t('ОПЕРАЦИЯ', 'OPERATION')}</th>
-                <th scope="col">{t('ЗАПИСЬ', 'ENTRY')}</th>
-                <th scope="col">{t('ЗНАЧЕНИЕ', 'VALUE')}</th>
-                <th scope="col">{t('СТАТУС', 'STATUS')}</th>
-                <th scope="col">{t('ДЕЙСТВИЯ', 'ACTIONS')}</th>
+                <th scope="col">{t('Время', 'Time')}</th>
+                <th scope="col">{t('Операция', 'Operation')}</th>
+                <th scope="col">{t('Запись', 'Entry')}</th>
+                <th scope="col">{t('Значение', 'Value')}</th>
+                <th scope="col">{t('Статус', 'Status')}</th>
+                <th scope="col">{t('Действия', 'Actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -122,23 +124,24 @@ export function Journal({ level, refreshKey, onNotice }: Props) {
                     <td>
                       <div className="actions col">
                         {j.op === 'rollback' ? null : (
-                          <button disabled={!j.canRollback || !ok || busy !== null} onClick={() => setConfirm({ rows: [j], batch: null })}>
+                          <button disabled={!j.canRollback || busy !== null} onClick={() => void ensureLevel(j.level).then((y) => y && setConfirm({ rows: [j], batch: null }))}>
                             {t('Откатить', 'Roll back')}
                           </button>
                         )}
                         {batchHead ? (
                           <button
-                            disabled={!levelOk(level, 'R2') || busy !== null}
+                            disabled={busy !== null}
                             title={t('Откатить весь пакет профиля, начиная с последней записи', 'Roll back the whole profile batch, starting from the latest entry')}
-                            onClick={() => setConfirm({ rows: state.rows.filter((x) => x.batch === j.batch && x.op !== 'rollback' && !x.rolledBack), batch: j.batch })}
+                            onClick={() => void ensureLevel('R2').then((y) => y && setConfirm({ rows: state.rows.filter((x) => x.batch === j.batch && x.op !== 'rollback' && !x.rolledBack), batch: j.batch }))}
                           >
                             {t('Откатить пакет', 'Roll back batch')}
                           </button>
                         ) : null}
                         {/* the reason is text in the row, not a tooltip on a disabled button */}
                         {j.op !== 'rollback' && !j.canRollback && !j.rolledBack && j.why ? <span className="mute small">{t(`Нельзя: ${j.why}`, `Not possible: ${j.why}`)}</span> : null}
-                        {j.canRollback && !ok ? <span className="mute small">{pickLevel(j.level)}</span> : null}
-                        {batchHead && !levelOk(level, 'R2') ? <span className="mute small">{t('Пакет откатывается на уровне R2', 'A batch rolls back at level R2')}</span> : null}
+                        {(j.canRollback && !ok) || (batchHead && !levelOk(level, 'R2')) ? (
+                          <span className="mute small">{t(`Сейчас «${levelLabel(level)}»: сначала Loadout спросит разрешение на запись`, `The level is “${levelLabel(level)}” now: Loadout asks for permission to write first`)}</span>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

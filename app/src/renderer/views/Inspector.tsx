@@ -3,7 +3,7 @@ import type { Entity, Level, WriteLevel } from '../../shared/model'
 import { t } from '../../shared/i18n'
 import { GLYPH } from '../aggregate'
 import type { Row } from '../aggregate'
-import { Glyph, KindBadge, levelLabel, Panel, Path, Rich, Term } from '../ui'
+import { Glyph, KindBadge, kindLabel, levelLabel, Panel, Path, Rich, Term } from '../ui'
 import type { Sel } from './Matrix'
 
 /** Whether the current write level is enough for the operation. */
@@ -125,7 +125,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
               <li key={x.id}>
                 <button aria-pressed={x.id === e.id} onClick={() => onPick(x.id)}>
                   <Glyph state={x.state} /><span className="vh">{GLYPH[x.state].label}, </span> {x.scope}
-                  {x.kind !== e.kind || cell.instances.some((y) => y !== x && y.kind !== x.kind) ? ` · ${x.kind}` : ''}
+                  {x.kind !== e.kind || cell.instances.some((y) => y !== x && y.kind !== x.kind) ? ` · ${kindLabel(x.kind)}` : ''}
                 </button>
               </li>
             ))}
