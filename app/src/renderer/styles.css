@@ -114,6 +114,7 @@ aside[hidden] { display: none; }
 .alert-box p { margin: 4px 0 0; }
 .group-head { margin: 16px 0 8px; }
 .group-head:first-of-type { margin-top: 0; }
+.group-head > span { text-transform: none; }
 dd.fix, .fix { color: var(--fg); }
 .legend-box { margin: 0 0 10px; }
 .legend-box summary { cursor: pointer; color: var(--mute); font-size: 12px; width: max-content; }

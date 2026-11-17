@@ -54,7 +54,7 @@ const legendHint = (k: EntityState | 'none'): string | null =>
       broken: t('запись указывает на то, чего нет', 'the entry points to something missing'),
       cloud: t('облачный коннектор', 'cloud connector'),
       unknown: t('флаг лежит там, куда Loadout не заглядывает', 'the flag is somewhere Loadout does not read'),
-      none: t('в этом клиенте нет', 'not in this client'),
+      none: t('такой записи в этом клиенте нет', 'this client has no such entry'),
     } as Partial<Record<EntityState | 'none', string>>
   )[k] ?? null
 

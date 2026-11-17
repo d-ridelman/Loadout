@@ -26,8 +26,10 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 
 ## Features
 
-- **Matrix** of every entry across the five clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). The inspector on the right shows the file, the key and the contents without secrets.
-- **Radar, hooks, doctor.** A per-client overview, the hook pipeline by lifecycle event, and findings: broken entries, version mismatches, the same entry in several scopes, empty marketplaces, broken links to a cleaned cache, piles of third-party backups, MCP configs with secret keys.
+- **First launch**: a card says what Loadout is, that it writes nothing without a preview and your confirmation, and that the only thing it does online by itself is the update check. Close it once and it does not come back.
+- **Matrix** of every entry across the five clients: enabled, disabled, broken, version mismatch. Filters by type and state, search, keyboard navigation, command palette (`Ctrl+K`). "What the marks mean" above the table explains every mark, `+N`, the `Δ` of a fresh change and the FX switch. The inspector on the right shows the file, the key and the contents without secrets.
+- **Radar, hooks, doctor.** A per-client overview, the hook pipeline by lifecycle event, and findings: broken entries, version mismatches, the same entry in several scopes, empty marketplaces, broken links to a cleaned cache, piles of third-party backups, MCP configs with secret keys. The Doctor groups findings by severity and says how to fix each one; the "broken: N" counter in the footer opens it.
+- **Messages** after an action pop up above the footer in colour (done, error, info) and in full; screen readers announce them.
 - **Toggle** an entry that has an on/off flag: plugins, connectors, Codex entries (write level R1). Most MCP servers have no such flag: disabling one **moves it to the Loadout trash**, and enabling puts it back in the same place (R2). **Edit an MCP command, copy it to another client** (R2); JSON, TOML and YAML are translated for you.
 - **Add an MCP server** from the window. The `env` values you type go to the core and are not shown in the preview, the journal or the inspector.
 - **Install a Claude Code plugin from a marketplace.** Add a marketplace by GitHub `owner/repo`, an `https://` or SSH address, or a local folder, then pick a plugin from its catalog. Before anything runs, the window shows the exact `claude plugin …` command.
@@ -37,7 +39,7 @@ Loadout reads all five clients, shows everything in one matrix and changes only 
 - **Context Toolkit** built in: preview, apply, roll back, optional policies, and an "Efficiency" report (see below).
 - **Russian and English UI**, switched in the header (RU / EN). The first launch follows the system language; core messages follow the choice too.
 - **Updates from GitHub releases.** Loadout checks for a new version about 10 seconds after start and once a day (hourly after a failed check), offers it in a small card, downloads it only on "Download" (just the changed blocks) and installs it on "Restart and update" or when you quit after the download. The check goes only to GitHub and carries nothing about you or your configs; turn it off in the update panel (the version button at the right end of the footer). Details: [SECURITY.md](SECURITY.md#network).
-- **Client files are read-only by default** (R0). Raising the write level needs an OS confirmation dialog. Only one window runs at a time; a second launch brings the first one forward.
+- **Client files are read-only by default.** The write level in the header is named in words: "Read-only · R0", "On/off · R1" (toggles by flag), "All edits · R2" (the trash, edits, copies, installs, profiles, Context Toolkit). Raising it needs an OS confirmation dialog. Only one window runs at a time; a second launch brings the first one forward.
 
 ### Safe write pipeline
 
@@ -73,9 +75,9 @@ Operation backups and the Loadout trash keep client configs **in full and as pla
 |---|---|
 | ![Context Toolkit form](docs/screenshots/en-context-toolkit.png) | ![Context Toolkit efficiency](docs/screenshots/en-context-toolkit-efficiency.png) |
 
-| Context Toolkit: rollback preview |  |
+| Context Toolkit: rollback preview | First launch |
 |---|---|
-| ![Context Toolkit rollback](docs/screenshots/en-context-toolkit-rollback.png) |  |
+| ![Context Toolkit rollback](docs/screenshots/en-context-toolkit-rollback.png) | ![Welcome card](docs/screenshots/en-welcome.png) |
 
 The screenshots are produced by `npm run docs-shots` in `app/` (window 1920×1080, fixtures only).
 
@@ -85,10 +87,10 @@ The screenshots are produced by `npm run docs-shots` in `app/` (window 1920×108
 
 In the app it is the **Context Toolkit** section (key `7`):
 
-- **Preview** (`setup --dry-run`, writes nothing), **Apply** (needs R2 and a preview with the same settings) and **Roll back** (its own preview, removes only what Apply installed).
+- **Preview** (`setup --dry-run`, writes nothing) and **Apply** (needs R2 and a preview with the same settings). **Roll back** is a separate card below: "Show what the rollback removes", then the red button; it removes only what Apply installed and does not restore the model, advisor or effort (the output names the backup to take them from). To turn the policies off and keep the hooks, choose "Turn all off" under Policies and apply.
 - Selects for the main model, effort and the advisor model. The default is "Keep as is": nothing is passed and nothing changes.
-- Optional **policies** in `context-toolkit.json`, off until you turn them on: commit hygiene (blocks a commit with `Co-Authored-By` / `Generated with`), confirm irreversible commands (asks before `git push`, `reset --hard`, `rm -rf` and the like), stray report files, a parallel build limit.
-- **Diagnostics** (`doctor`) and **Efficiency** (`report`): Claude Code turns by model, subagent and advisor calls, blocked reads, by day for 7, 14 or 30 days.
+- Optional **policies** in `context-toolkit.json`, off until you turn them on: commit hygiene (blocks a commit with `Co-Authored-By` / `Generated with`), confirm irreversible commands (asks before `git push`, `reset --hard`, `rm -rf` and the like), stray report files, a parallel build limit. The checkboxes show what is on now; a tick switches the mode to "Turn on the selected" by itself, keeping the policies that are already on.
+- **Diagnostics** (`doctor`) and **Efficiency** (`report`): Claude Code turns by model, subagent and advisor calls, blocked reads, by day for 7, 14 or 30 days. A diagnostic fix that is a `context-toolkit setup` command becomes a button that fills the Apply form.
 
 The window starts only the `context-toolkit.exe` shipped with it, never one from `PATH`. Context Toolkit can also be installed on its own, see its README.
 
