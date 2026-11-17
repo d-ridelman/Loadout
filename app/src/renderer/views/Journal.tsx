@@ -19,7 +19,7 @@ interface Props {
   /** Changes on every data refresh: the journal is re-read because `canRollback` depends on the current file. */
   refreshKey: number
   onNotice: Notify
-  /** Asks for a write level a rollback needs (the OS dialog); true when it is granted. */
+  /** Asks for a write level a rollback needs (the confirmation window); true when it is granted. */
   ensureLevel: (need: Level) => Promise<boolean>
 }
 

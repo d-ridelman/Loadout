@@ -593,14 +593,15 @@ try {
   }
   const levelSel = page.getByLabel('Уровень записи')
   const levelIs = async (l) => (await levelSel.inputValue()) === l
-  /** The OS dialog on raising the level is replaced in the main process: `answer` 1 is "Enable", 0 is "Cancel". */
+  /** The confirmation window on raising the level is replaced in the main process: `answer` 1 is "Enable", 0 is "Cancel". */
   const stubDialog = (answer) =>
-    app.evaluate(({ dialog }, a) => {
+    app.evaluate((_electron, a) => {
       globalThis.__answer = a
       globalThis.__asked ??= 0
-      dialog.showMessageBox = async () => {
+      // main asks through this hook in the QA mode instead of opening its confirmation window (index.ts `confirm`)
+      globalThis.__loadoutConfirm = async () => {
         globalThis.__asked++
-        return { response: globalThis.__answer, checkboxChecked: false }
+        return globalThis.__answer === 1
       }
     }, answer)
   const dialog = page.locator('[role=dialog][aria-modal=true]')
@@ -656,14 +657,66 @@ try {
     await shot(page, `n1-inspector-r0-${w}`)
   }
   await resize(app, 1280, 800)
-  // a refusal in the OS dialog (Space and the button both ask) leaves R0, opens nothing and writes nothing
+  // the real confirmation window, not stubbed: main's own window in the app's style with the question, Cancel focused first; Esc refuses
+  {
+    const next = app.waitForEvent('window', { timeout: 8000 })
+    await offBtn.click()
+    const cw = await next
+    await cw.waitForSelector('#cancel', { timeout: 8000 })
+    const body = await cw.locator('body').innerText()
+    must(body.includes('Разрешить Loadout включать и выключать') && body.includes('Разрешить вкл/выкл') && body.includes('Отмена'), `the confirmation window lacks its question or buttons: ${body.slice(0, 300)}`)
+    must((await cw.evaluate(() => document.activeElement?.id)) === 'cancel', 'Cancel must have the focus in the confirmation window')
+    const vc = await axeCheck(cw, 'confirmation window')
+    must(vc.length === 0, `axe: confirmation window: ${vc.map((x) => x.id).join(', ')}`)
+    // the detail names the backups folder, here the check profile inside this working copy: the committed picture shows the default
+    // folder instead, so no path of the machine that ran the check gets into state/
+    // main shows the folder with the home directory as "~": both forms are replaced
+    const raw = join(profile, 'backups')
+    await cw.evaluate((forms) => {
+      for (const el of document.querySelectorAll('#d p')) for (const f of forms) el.textContent = el.textContent.split(f).join('%APPDATA%\\loadout-app\\backups')
+    }, [raw, tilde(raw)])
+    const shown = await cw.locator('body').innerText()
+    must(!shown.includes(repo) && !shown.includes(tilde(repo)), 'the confirmation window picture would show the path of this working copy')
+    await cw.screenshot({ path: join(shotDir, 'n2-confirm-window.png') })
+    // the window closes on the key itself, so the press may not get its own reply: the close event is what this waits for
+    await Promise.all([cw.waitForEvent('close', { timeout: 8000 }), cw.keyboard.press('Escape').catch(() => undefined)])
+    await page.waitForTimeout(300) // a negative check: a wrong level would arrive after the answer
+    must(await levelIs('R0'), 'Esc in the confirmation window must leave R0')
+    must((await dialog.count()) === 0, 'a refused confirmation must open no preview')
+    // consent with the button: the level rises to R1 and the preview opens; then back to R0 (lowering needs no confirmation)
+    const next2 = app.waitForEvent('window', { timeout: 8000 })
+    await offBtn.click()
+    const cw2 = await next2
+    await Promise.all([cw2.waitForEvent('close', { timeout: 8000 }), cw2.locator('#ok').click().catch(() => undefined)])
+    await waitFor(() => levelIs('R1'), '"Allow on/off" in the confirmation window did not raise the level')
+    await dialog.waitFor({ timeout: 8000 })
+    await page.keyboard.press('Escape')
+    await dialog.waitFor({ state: 'detached', timeout: 8000 })
+    await levelSel.selectOption('R0')
+    await waitFor(() => levelIs('R0'), 'the level went back to R0')
+    // cleaning up old copies asks in the same window, with a red (danger) button; Esc refuses and deletes nothing
+    await page.keyboard.press('5')
+    await page.getByText('Где хранятся копии и что в них').click()
+    const next3 = app.waitForEvent('window', { timeout: 8000 })
+    await page.getByRole('button', { name: 'Очистить старые копии…' }).click()
+    const cw3 = await next3
+    await cw3.waitForSelector('#ok.danger', { timeout: 8000 })
+    must((await cw3.locator('#ok').innerText()) === 'Очистить', 'the cleanup confirmation has no "Clean up" button')
+    await Promise.all([cw3.waitForEvent('close', { timeout: 8000 }), cw3.keyboard.press('Escape').catch(() => undefined)])
+    await page.locator('#notice').waitFor({ timeout: 5000 })
+    must((await page.locator('#notice').innerText()).includes('очистка отменена'), 'a refused cleanup did not say it was cancelled')
+    await page.getByText('Где хранятся копии и что в них').click()
+    await page.keyboard.press('1')
+    await clickCell('p1', 2)
+  }
+  // a refusal (Space and the button both ask) leaves R0, opens nothing and writes nothing
   await stubDialog(0)
   let askedBefore = await app.evaluate(() => globalThis.__asked)
   // Space on another focusable control (here "Technical details") does what that control does, it does not toggle the selection
   const tech = page.locator('aside details.tech')
   await tech.locator('summary').focus()
   await page.keyboard.press('Space')
-  await page.waitForTimeout(400) // a negative check: give a wrong OS dialog request time to arrive
+  await page.waitForTimeout(400) // a negative check: give a wrong confirmation request time to arrive
   must(await tech.evaluate((d) => d.open), 'Space on "Technical details" did not open them')
   must((await app.evaluate(() => globalThis.__asked)) === askedBefore, 'Space on "Technical details" toggled the selected entry')
   await tech.locator('summary').click()
@@ -680,24 +733,24 @@ try {
   await page.locator('#grid').focus()
   await page.keyboard.press('Space')
   await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'Space at R0 did not ask for permission')
-  await page.locator('#notice').waitFor({ timeout: 5000 })
-  must((await page.locator('#notice').innerText()).includes('R0'), 'a refusal does not say the level stayed R0')
+  // wait for this message, not any: the "cleanup cancelled" error from the step above may still be on screen for a moment
+  await waitFor(async () => ((await page.locator('#notice').count()) ? (await page.locator('#notice').innerText()).includes('R0') : false), 'a refusal does not say the level stayed R0', 5000)
   must((await dialog.count()) === 0, 'after a refusal the preview must not open')
   must(readFileSync(cfg, 'utf8') === original, 'after a refusal the file must not change')
-  // the header list asks the same OS dialog; a refusal there leaves R0 too
+  // the header list asks in the same confirmation window; a refusal there leaves R0 too
   askedBefore = await app.evaluate(() => globalThis.__asked)
   await levelSel.selectOption('R1')
-  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'the OS dialog was not asked')
+  await waitFor(async () => (await app.evaluate(() => globalThis.__asked)) > askedBefore, 'the confirmation window was not asked')
   // a negative check: the select is controlled and shows R0 at once, so give a wrong level time to arrive, then ask main too
   await page.waitForTimeout(600)
-  must(await levelIs('R0'), 'a refusal in the OS dialog must leave R0')
-  must((await page.evaluate(() => window.loadout.getWriteLevel())) === 'R0', 'a refusal in the OS dialog must leave R0 in main')
+  must(await levelIs('R0'), 'a refusal in the confirmation window must leave R0')
+  must((await page.evaluate(() => window.loadout.getWriteLevel())) === 'R0', 'a refusal in the confirmation window must leave R0 in main')
   // consent: the same button raises the level to what this entry needs (R1, a flag) and opens the preview
   await stubDialog(1)
   askedBefore = await app.evaluate(() => globalThis.__asked)
   await offBtn.click()
   await dialog.waitFor({ timeout: 8000 })
-  must((await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'the button must ask the OS dialog exactly once')
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'the button must ask the confirmation window exactly once')
   await waitFor(() => levelIs('R1'), 'the button raised the level to R1')
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   const dText = await dialog.innerText()
@@ -819,13 +872,13 @@ try {
   askedBefore = await app.evaluate(() => globalThis.__asked)
   await page.locator('aside').getByRole('button', { name: 'Выключить (в корзину)', exact: true }).click()
   await dialog.waitFor({ timeout: 8000 })
-  must((await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'the trash button must ask the OS dialog exactly once')
+  must((await app.evaluate(() => globalThis.__asked)) === askedBefore + 1, 'the trash button must ask the confirmation window exactly once')
   await waitFor(() => levelIs('R2'), 'the trash button raised the level to R2')
   await dialog.getByText('Строю план…').waitFor({ state: 'detached', timeout: 8000 })
   must((await dialog.innerText()).includes('в корзине Loadout'), 'the trash button did not open the trash preview')
   await page.keyboard.press('Escape')
   await dialog.waitFor({ state: 'detached', timeout: 8000 })
-  // the header list still raises the level after the OS dialog (lowering needs none)
+  // the header list still raises the level after the confirmation window (lowering needs none)
   await levelSel.selectOption('R1')
   await waitFor(() => levelIs('R1'), 'the level went down to R1')
   await levelSel.selectOption('R2')
@@ -1516,7 +1569,7 @@ try {
   must(!/context-toolkit|ctxkit/i.test(readFileSync(settingsFile, 'utf8')) && JSON.stringify(foreignCmds(JSON.parse(readFileSync(settingsFile, 'utf8')))) === JSON.stringify(foreignCmds(JSON.parse(settingsBefore))), 'the rollback after the migration left ours or touched foreign')
   await levelSel.selectOption('R0') // lowering needs no confirmation
   await waitFor(() => levelIs('R0'), 'the level went down to R0 before the Context Toolkit refusal')
-  // the page's Apply asks for R2 itself: after a preview at R0 a refusal in the OS dialog installs nothing and keeps R0
+  // the page's Apply asks for R2 itself: after a preview at R0 a refusal in the confirmation window installs nothing and keeps R0
   await page.getByRole('button', { name: /^Предпросмотр/ }).click()
   await waitFor(() => applyBtn.isEnabled(), 'the preview at R0 enables Apply (it asks for the level on click)')
   await stubDialog(0)
@@ -1667,9 +1720,9 @@ try {
     await both('upd-available')
     // a toast and the update card at the same time: both whole, no overlap, at the narrowest window too
     await up.getByLabel('Уровень записи').selectOption('R0')
-    // at R0 "Add" asks for R2 in the OS dialog; a refusal gives the info toast this check needs
-    await ua.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false })
+    // at R0 "Add" asks for R2 in the confirmation window; a refusal gives the info toast this check needs
+    await ua.evaluate(() => {
+      globalThis.__loadoutConfirm = async () => false
     })
     await addItem(up, 'MCP-сервер')
     const toast = up.locator('#notice')

@@ -25,7 +25,7 @@ Only the latest release is supported. Fixes go into a new release; older version
 
 ## What Loadout writes
 
-At the default level R0 no client file is written. Client files change only after you raise the level (R1 or R2, confirmed by an OS dialog) and confirm a preview. Loadout's own data (settings, profiles, cleanup of its own old copies after an OS confirmation) is written at any level.
+At the default level R0 no client file is written. Client files change only after you raise the level (R1 or R2, confirmed in a separate window that the main process draws and listens to; the page cannot reach it or press it for you) and confirm a preview. Loadout's own data (settings, profiles, cleanup of its own old copies after a confirmation in the same separate window) is written at any level.
 
 - **Client config files**, only the value an operation changes (toggle, trash, edit, copy, add an MCP server, apply a profile).
 - **`~/.claude/skills/<name>`** when you install a skill.

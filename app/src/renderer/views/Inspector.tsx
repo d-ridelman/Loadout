@@ -140,7 +140,7 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
         </Panel>
       ) : null}
 
-      {/* an action never waits behind a header setting: a button whose level is not granted yet asks for it (the OS dialog) and goes on */}
+      {/* an action never waits behind a header setting: a button whose level is not granted yet asks for it (the confirmation window) and goes on */}
       <div className="actions col">
         <button
           className={e.canToggle ? 'primary' : undefined}
@@ -169,8 +169,8 @@ export function Inspector({ row, sel, onPick, level, onToggle, onEdit, onCopy }:
           ? t(`Переключить нельзя: ${e.toggleWhy ?? 'не поддержано'}.`, `Cannot toggle: ${e.toggleWhy ?? 'not supported'}.`)
           : short
             ? t(
-                `Сейчас «${levelLabel(level)}». Loadout сначала спросит разрешение (окно Windows), потом покажет, что изменится.${e.toggleLevel === 'R2' ? ' У этой записи нет флага «выключено»: выключение убирает её из списка клиента и сохраняет, включение возвращает на место; куда именно, покажет предпросмотр.' : ''}`,
-                `The level is “${levelLabel(level)}” now. Loadout asks for permission first (a Windows dialog), then shows what will change.${e.toggleLevel === 'R2' ? ' This entry has no “disabled” flag: disabling takes it out of the client’s list and keeps it, enabling puts it back; the preview shows where.' : ''}`,
+                `Сейчас «${levelLabel(level)}». Loadout сначала спросит разрешение в окне подтверждения, потом покажет, что изменится.${e.toggleLevel === 'R2' ? ' У этой записи нет флага «выключено»: выключение убирает её из списка клиента и сохраняет, включение возвращает на место; куда именно, покажет предпросмотр.' : ''}`,
+                `The level is “${levelLabel(level)}” now. Loadout asks for permission first in a confirmation window, then shows what will change.${e.toggleLevel === 'R2' ? ' This entry has no “disabled” flag: disabling takes it out of the client’s list and keeps it, enabling puts it back; the preview shows where.' : ''}`,
               )
             : t('Сначала предпросмотр, потом запись с бэкапом; откатить можно в журнале.', 'A preview first, then the write with a backup; you can roll it back in the journal.')}
       </p>

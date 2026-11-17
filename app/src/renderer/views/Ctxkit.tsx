@@ -81,7 +81,7 @@ function useLoaded<T>(load: () => Promise<{ ok: true; data: T } | { ok: false; e
 interface Props {
   level: WriteLevel
   onNotice: Notify
-  /** Asks for a write level (the OS dialog); true when it is granted. */
+  /** Asks for a write level (the confirmation window); true when it is granted. */
   ensureLevel: (need: Level) => Promise<boolean>
 }
 
@@ -165,10 +165,10 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
   )
 
   const sum = report.status === 'ready' ? summarize(report.data) : null
-  // the level is not a precondition here: the button asks for R2 itself (the OS dialog), like every other write
+  // the level is not a precondition here: the button asks for R2 itself (the confirmation window), like every other write
   const canApply = previewKey === key && !busy
   const canUndo = previewKey === undoKey && !busy
-  const askFirst = t('Сначала Loadout спросит разрешение на запись (окно Windows)', 'Loadout asks for permission to write first (a Windows dialog)')
+  const askFirst = t('Сначала Loadout спросит разрешение на запись в окне подтверждения', 'Loadout asks for permission to write first, in a confirmation window')
   const spin = (b: Busy, text: string) => (busy === b ? <><span className="spin" aria-hidden="true" />{text}</> : null)
 
   return (

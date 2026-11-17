@@ -127,7 +127,7 @@ interface Props {
   refreshKey: number
   /** The current scan: the profile that matches it is marked. */
   entities: readonly Entity[]
-  /** Asks for a write level (the OS dialog); true when it is granted. */
+  /** Asks for a write level (the confirmation window); true when it is granted. */
   ensureLevel: (need: Level) => Promise<boolean>
 }
 

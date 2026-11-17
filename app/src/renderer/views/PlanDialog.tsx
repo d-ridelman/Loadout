@@ -134,7 +134,7 @@ function title(p: Plan | undefined, intent: Intent): string {
   const op = p?.op ?? intent.op
   if (op === 'add') return t('Добавить MCP-сервер', 'Add MCP server')
   if (op === 'edit') return t('Правка команды', 'Edit command')
-  if (op === 'copy') return t('Копирование в другой клиент', 'Copy to another client')
+  if (op === 'copy') return t('Копировать в другой клиент', 'Copy to another client')
   if (op === 'installSkill') return t('Установить скил', 'Install skill')
   return intent.op === 'toggle' && intent.enable ? t('Включить', 'Enable') : t('Выключить', 'Disable')
 }
@@ -241,9 +241,10 @@ export function PlanDialog({ entity, intent, onBack, onClose, onDone }: Props) {
                     <p className="mute small">{t('Устанавливайте его, только если доверяете источнику и прочитали его файлы.', 'Install it only if you trust the source and have read its files.')}</p>
                   </div>
                 ) : null}
-                {rest.map((n) => (
-                  <p key={n} className="s-stale">◐ {n}</p>
-                ))}
+                {/* a skill plan's notes are its file list and where it goes: information, not a warning (the warning is the box above) */}
+                {rest.map((n) =>
+                  state.plan.op === 'installSkill' ? <p key={n} className="mute">{n}</p> : <p key={n} className="s-stale">◐ {n}</p>,
+                )}
               </>
             )
           })()}

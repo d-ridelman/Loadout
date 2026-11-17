@@ -178,13 +178,13 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
 
   /**
    * An action that needs a higher write level asks for it on the spot instead of sending the person to the header:
-   * main shows the OS dialog (the page cannot click it). The answer of main decides, not this render's `level`.
+   * main shows the confirmation window (the page cannot click it). The answer of main decides, not this render's `level`.
    */
   const asking = useRef(false)
   const ensureLevel = useCallback(
     async (need: Level): Promise<boolean> => {
       if (levelOk(level, need)) return true
-      if (asking.current) return false // a double click must not stack a second OS dialog
+      if (asking.current) return false // a double click must not stack a second confirmation window
       asking.current = true
       try {
         // the mirror may be stale (just opened, a failed read): never ask main to set a level lower than the one it keeps
@@ -435,8 +435,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
         <span className="mute levelbox">
           <Term
             tip={t(
-              'Что Loadout может менять. «Только чтение» — ничего; «Вкл/выкл» — включать и выключать по флагу; «Все правки» — ещё корзина, правка, добавление, профили и установка. Выбирать заранее не нужно: кнопка действия сама попросит нужный уровень в окне Windows.',
-              'What Loadout may change. Read-only: nothing; On/off: turn entries on and off by a flag; All edits: also the trash, edits, additions, profiles and installs. No need to pick it first: an action button asks for the level it needs in a Windows dialog.',
+              'Что Loadout может менять. «Только чтение» — ничего; «Вкл/выкл» — включать и выключать по флагу; «Все правки» — ещё корзина, правка, добавление, профили и установка. Выбирать заранее не нужно: кнопка действия сама попросит нужный уровень в окне подтверждения.',
+              'What Loadout may change. Read-only: nothing; On/off: turn entries on and off by a flag; All edits: also the trash, edits, additions, profiles and installs. No need to pick it first: an action button asks for the level it needs in a confirmation window.',
             )}
           >
             {t('Запись', 'Write')}
@@ -445,8 +445,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
             className={`level ${level === 'R0' ? 's-on' : 's-stale'}`}
             aria-label={t('Уровень записи', 'Write level')}
             title={t(
-              'Только чтение (R0): окно ничего не пишет. Вкл/выкл (R1): включает и выключает записи флагом в конфиге клиента. Все правки (R2): ещё корзина, правка и копирование команд, новые MCP, плагины, скилы, профили и Инструменты контекста. Любая запись идёт через предпросмотр; повышение уровня подтверждается окном Windows',
-              'Read-only (R0): the window writes nothing. On/off (R1): turns entries on and off by a flag in the client config. All edits (R2): also the trash, editing and copying commands, new MCP servers, plugins, skills, profiles and Context Toolkit. Every write goes through a preview; raising the level is confirmed by a Windows dialog',
+              'Только чтение (R0): окно ничего не пишет. Вкл/выкл (R1): включает и выключает записи флагом в конфиге клиента. Все правки (R2): ещё корзина, правка и копирование команд, новые MCP, плагины, скилы, профили и Инструменты контекста. Любая запись идёт через предпросмотр; повышение уровня подтверждается в отдельном окне',
+              'Read-only (R0): the window writes nothing. On/off (R1): turns entries on and off by a flag in the client config. All edits (R2): also the trash, editing and copying commands, new MCP servers, plugins, skills, profiles and Context Toolkit. Every write goes through a preview; raising the level is confirmed in a separate window',
             )}
             value={level}
             onChange={(e) => void changeLevel(e.target.value as WriteLevel)}
@@ -480,7 +480,7 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
                   key={x.name}
                   autoFocus={i === 0}
                   onClick={(ev) => {
-                    // focus back on "Add" before the list unmounts: after a refusal in the OS dialog it is not lost on <body>
+                    // focus back on "Add" before the list unmounts: after a refusal in the confirmation window it is not lost on <body>
                     ev.currentTarget.closest('.addmenu')?.querySelector('button')?.focus()
                     setAddOpen(false)
                     x.run()
@@ -613,7 +613,8 @@ export function App({ lang, onLang, kept }: { lang: Lang; onLang: (l: Lang, ui: 
           {[
             count(entities.length, ['запись', 'записи', 'записей'], ['entry', 'entries']),
             count(rows.length, ['строка', 'строки', 'строк'], ['row', 'rows']),
-            count(CLIENTS.length, ['клиент', 'клиента', 'клиентов'], ['client', 'clients']),
+            // clients found on this computer, not the five Loadout knows: "5 clients" under "no client found" read as a contradiction
+            t(`клиентов найдено: ${new Set(entities.map((e) => e.client)).size} из ${CLIENTS.length}`, `clients found: ${new Set(entities.map((e) => e.client)).size} of ${CLIENTS.length}`),
           ].join(' · ')}
         </span>
         {updatedAt ? (

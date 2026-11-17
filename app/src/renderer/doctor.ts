@@ -194,7 +194,7 @@ export function diagnose(entities: readonly Entity[], warnings: readonly string[
       ),
       fix: t(
         'Обычно ничего. Включён ли плагин, видно в самом клиенте. Строки, где состояние не определено ни в одном клиенте, матрица по умолчанию прячет (галочка «скрыть «не определено»»).',
-        'Usually nothing. The client itself shows whether the plugin is on. Rows whose state is unknown in every client are hidden in the matrix by default (the “hide "unknown"” checkbox).',
+        'Usually nothing. The client itself shows whether the plugin is on. Rows whose state is unknown in every client are hidden in the matrix by default (the “hide unknown” checkbox).',
       ),
     })
   }
