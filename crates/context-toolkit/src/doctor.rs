@@ -373,7 +373,8 @@ pub fn opencode_findings(dir: &Path, lang: Lang) -> Vec<Finding> {
     let state = plugin_state(dir);
     // a rollback without --opencode removes the hook binary and leaves the plugin, which then passes every call
     if let (PluginState::Current | PluginState::Outdated, Some(exe)) = (&state, plugin_exe(dir)) {
-        if !exe.is_file() {
+        // only a path is checked: a bare program name from `--hook-cmd` (`node`) is found through PATH
+        if exe.is_absolute() && !exe.is_file() {
             return vec![f(
                 "opencode_plugin",
                 "warn",
@@ -623,6 +624,17 @@ mod tests {
         let gone = opencode_findings(&d, Lang::En);
         assert_eq!(sev(&gone, "opencode_plugin"), "warn");
         assert!(gone[0].message.contains("not there"));
+        // a program name from --hook-cmd is looked up in PATH by OpenCode, not here
+        fs::write(
+            &p,
+            plugin_text("node", &["g.mjs".into(), "--opencode".into()]),
+        )
+        .unwrap();
+        assert_eq!(
+            sev(&opencode_findings(&d, Lang::En), "opencode_plugin"),
+            "ok"
+        );
+        fs::write(&p, &ours).unwrap();
         fs::write(&exe, "x").unwrap();
         assert_eq!(
             sev(&opencode_findings(&d, Lang::En), "opencode_plugin"),
