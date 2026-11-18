@@ -35,7 +35,7 @@ the committed ones in `state/`.
   change is about that check; then say so and why.
 - **Flaky is a bug.** Never add a `waitForTimeout`, a sleep or a retry to make a test pass: wait for a condition the app shows. The
   short pauses already in `run.mjs` are deliberate (a section or the layout settling before a screenshot, a layout or accessibility
-  measurement or the English text check; a negative check). If the cause of a flake cannot be found, delete the test and write down why in the commit message.
+  measurement or the English text check; a negative check). If the cause of a flake cannot be found, stop and hand it to the owner: do not delete or skip the test yourself.
 - **Three rounds, then a person.** The same failure after three attempts: stop and report what you tried.
 - **A defect found by hand becomes a check of its class** (a property, an e2e assertion, a Doctor rule), shown red before the fix.
 - **Properties for promises.** Core promises (a toggle and its rollback keep every byte) are property tests (`proptest`,
