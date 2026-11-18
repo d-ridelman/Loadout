@@ -5,8 +5,8 @@ import type { CtxClient, CtxkitStatus } from '../shared/model'
 export interface CtxClientRow {
   id: CtxClient
   name: string
-  /** The form checkbox; `null`: Claude Code is always set up, OpenCode is not supported. */
-  flag: 'codex' | 'antigravity' | 'dsh' | null
+  /** The form checkbox; `null`: Claude Code is always set up. */
+  flag: 'codex' | 'antigravity' | 'dsh' | 'opencode' | null
   gets: string
   /** What it lacks and why, or what the user has to do; empty when nothing. */
   lacks: string
@@ -66,11 +66,14 @@ export const ctxClients = (): CtxClientRow[] => [
   {
     id: 'opencode',
     name: 'OpenCode',
-    flag: null,
-    gets: t('Пока не поддерживается.', 'Not supported yet.'),
+    flag: 'opencode',
+    gets: t(
+      'Остановка чтения больших файлов целиком, проверка команд оболочки (cat большого файла, рекурсивный grep, код с обратными слешами) и правок, защиты (то, что нужно подтвердить, OpenCode спросит у вас своим окном разрешения), блок правил в ~/.config/opencode/AGENTS.md, если этот файл уже есть. Ставится плагином ~/.config/opencode/plugins/loadout-context-toolkit.',
+      'Stops whole reads of large files, checks shell commands (cat of a large file, recursive grep, code with backslashes) and edits, safeguards (what needs confirming OpenCode asks you in its permission prompt), the rules block in ~/.config/opencode/AGENTS.md if that file already exists. Installed as the plugin ~/.config/opencode/plugins/loadout-context-toolkit.',
+    ),
     lacks: t(
-      'У OpenCode нет хуков-команд, только плагины на JavaScript, а их устройство как раз меняется (OpenCode 1 → 2). Правила: пока у OpenCode нет своего ~/.config/opencode/AGENTS.md, он читает ~/.claude/CLAUDE.md, и блок правил Claude Code попадает и к нему.',
-      'OpenCode has no command hooks, only JavaScript plugins, and their design is changing right now (OpenCode 1 → 2). Rules: while OpenCode has no ~/.config/opencode/AGENTS.md of its own, it reads ~/.claude/CLAUDE.md, so the Claude Code rules block reaches it too.',
+      'Только OpenCode 2 (плагины V2). После применения перезапустите OpenCode. Своего AGENTS.md setup не создаёт: пока его нет, OpenCode 2.3.1+ читает ~/.claude/CLAUDE.md вместе с блоком правил Claude Code. Нет шлюза Stop (у OpenCode нет события конца ответа) и проверки синтаксиса после правки. Проверено по исходникам OpenCode и в его среде выполнения на тестовых файлах, в живом OpenCode — нет.',
+      'OpenCode 2 only (V2 plugins). Restart OpenCode after applying. Setup does not create an AGENTS.md of its own: while there is none, OpenCode 2.3.1+ reads ~/.claude/CLAUDE.md with the Claude Code rules block. No Stop gate (OpenCode has no end-of-reply event) and no syntax check after an edit. Checked against the OpenCode sources and in its runtime on test files, not in a live OpenCode.',
     ),
   },
 ]
@@ -80,8 +83,9 @@ export function clientNow(id: CtxClient, s: CtxkitStatus['clients'] | undefined)
   const v = s?.[id]
   if (v === undefined) return { text: '…', cls: 'mute' }
   if (v === 'absent') return { text: t('не найден на этом компьютере', 'not on this computer'), cls: 'mute' }
-  if (id === 'opencode') return { text: t('○ не поддерживается', '○ not supported'), cls: 's-off' }
   if (v === 'off') return { text: t('○ не стоят', '○ not installed'), cls: 's-off' }
   // Codex runs a new hook only after it is trusted: "installed" alone would read as "working"
-  return id === 'codex' ? { text: t('● стоят; доверьте им в /hooks', '● installed; trust them in /hooks'), cls: 's-on' } : { text: t('● стоят', '● installed'), cls: 's-on' }
+  if (id === 'codex') return { text: t('● стоят; доверьте им в /hooks', '● installed; trust them in /hooks'), cls: 's-on' }
+  if (id === 'opencode') return { text: t('● плагин стоит', '● plugin installed'), cls: 's-on' }
+  return { text: t('● стоят', '● installed'), cls: 's-on' }
 }

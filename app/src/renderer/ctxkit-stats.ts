@@ -146,6 +146,7 @@ export function fixPatch(fix: string | null): Partial<SetupOptions> | null {
   for (let i = 0; i < words.length; i++) {
     const w = words[i]
     if (w === '--with-rules') patch.withRules = true
+    else if (w === '--opencode') patch.opencode = true
     else if (w === '--main-model' && /^(sonnet|opus|haiku)$/.test(words[i + 1] ?? '')) patch.mainModel = words[++i] as SetupOptions['mainModel']
     else if (w === '--effort' && /^(low|medium|high|xhigh)$/.test(words[i + 1] ?? '')) patch.effort = words[++i] as SetupOptions['effort']
     else return null

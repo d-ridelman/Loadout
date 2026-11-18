@@ -153,7 +153,12 @@ fn restore_bytes(
 }
 
 /// Deletes a file that setup created (after a backup of it), so a rollback leaves no empty husk.
-fn delete_created(path: &Path, backup_dir: &Path, what: &str, dry_run: bool) -> Result<(), String> {
+pub(super) fn delete_created(
+    path: &Path,
+    backup_dir: &Path,
+    what: &str,
+    dry_run: bool,
+) -> Result<(), String> {
     if dry_run {
         println!("  [dry-run] {what}: {}", path.display());
         return Ok(());
@@ -795,6 +800,11 @@ pub(super) fn run(
             readable_utf8(&c.join("AGENTS.md"))?;
             preflight_codex_hooks(&c.join("hooks.json"))?;
         }
+        let opencode_dir = (opts.opencode || opts.opencode_home.is_some())
+            .then(|| opencode::config_dir(opts.opencode_home.as_deref(), home));
+        if let Some(o) = &opencode_dir {
+            readable_utf8(&o.join("AGENTS.md"))?;
+        }
         let orig = read_json_object(&settings_path)?;
         let next = remove_from_settings(&orig, hook_cmd);
         let saved = read_backups(&backup_dir, "settings.json");
@@ -862,6 +872,10 @@ pub(super) fn run(
             remove_rules_block(&c.join("AGENTS.md"), &c.join("backups"), opts.dry_run)?;
             remove_codex_hooks(c, hook_cmd, opts.dry_run)?;
         }
+        if let Some(o) = &opencode_dir {
+            remove_rules_block(&o.join("AGENTS.md"), &o.join("backups"), opts.dry_run)?;
+            opencode::remove(o, opts.dry_run)?;
+        }
         Ok(orig)
     };
     let orig = match run() {
@@ -923,14 +937,16 @@ pub(super) fn run(
                 || opts.dsh
                 || opts.dsh_home.is_some()
                 || opts.codex
-                || opts.codex_home.is_some())
+                || opts.codex_home.is_some()
+                || opts.opencode
+                || opts.opencode_home.is_some())
         {
             println!(
                 "  {}",
                 t(
                     opts.lang,
-                    "[note] If setup ran with --antigravity / --dsh / --codex, their hooks now point at the removed binary: run the rollback again with the same flags.",
-                    "[note] Если setup запускался с --antigravity / --dsh / --codex, их хуки указывают на удалённый бинарь: запустите откат с теми же флагами."
+                    "[note] If setup ran with --antigravity / --dsh / --codex / --opencode, their hooks now point at the removed binary: run the rollback again with the same flags.",
+                    "[note] Если setup запускался с --antigravity / --dsh / --codex / --opencode, их хуки указывают на удалённый бинарь: запустите откат с теми же флагами."
                 )
             );
         }

@@ -365,6 +365,45 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
     out
 }
 
+/// The OpenCode plugin of `setup --opencode` in the OpenCode config `dir`: said only when the file is there, since
+/// most profiles never wire OpenCode up.
+pub fn opencode_findings(dir: &Path, lang: Lang) -> Vec<Finding> {
+    use crate::setup::opencode::{plugin_path, plugin_state, PluginState};
+    let detail = Some(plugin_path(dir).display().to_string());
+    match plugin_state(dir) {
+        PluginState::Missing => vec![],
+        PluginState::Current => vec![f(
+            "opencode_plugin",
+            "ok",
+            t(lang, "OpenCode plugin installed", "плагин OpenCode установлен"),
+            detail,
+            None,
+        )],
+        PluginState::Outdated => vec![f(
+            "opencode_plugin",
+            "warn",
+            t(
+                lang,
+                "the OpenCode plugin differs from the one this version writes (an older version, or edited by hand): rerun setup with --opencode and restart OpenCode",
+                "плагин OpenCode отличается от того, что пишет эта версия (старая версия или правка вручную): снова запустите setup с --opencode и перезапустите OpenCode",
+            ),
+            detail,
+            Some("context-toolkit setup --opencode"),
+        )],
+        PluginState::Foreign => vec![f(
+            "opencode_plugin",
+            "warn",
+            t(
+                lang,
+                "a file that is not ours sits at the OpenCode plugin path: setup --opencode will not overwrite it",
+                "на месте плагина OpenCode лежит чужой файл: setup --opencode его не перезапишет",
+            ),
+            detail,
+            None,
+        )],
+    }
+}
+
 /// What of the installation still has the old name `ctxkit`: setup moves it all (the rules block only with
 /// `--with-rules`). A warning while the hooks still run the old binary, a note for leftovers.
 fn legacy_name(
@@ -457,21 +496,25 @@ pub fn profile_path(custom: Option<PathBuf>) -> Option<PathBuf> {
 }
 
 pub fn run_doctor(args: &[String]) -> i32 {
-    let (mut json_out, mut custom) = (false, None);
+    let (mut json_out, mut custom, mut opencode_home) = (false, None, None);
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--json" => json_out = true,
-            "--profile" => {
+            flag @ ("--profile" | "--opencode-home") => {
                 let Some(v) = args.get(i + 1) else {
-                    eprintln!("ERR: missing value for --profile");
+                    eprintln!("ERR: missing value for {flag}");
                     return 2;
                 };
-                custom = Some(PathBuf::from(v));
+                if flag == "--profile" {
+                    custom = Some(PathBuf::from(v));
+                } else {
+                    opencode_home = Some(PathBuf::from(v));
+                }
                 i += 1;
             }
             "--help" | "-h" => {
-                println!("Usage: context-toolkit doctor [--json] [--profile <dir>] [--lang en|ru]");
+                println!("Usage: context-toolkit doctor [--json] [--profile <dir>] [--opencode-home <dir>] [--lang en|ru]");
                 return 0;
             }
             a if a == "--lang" || a.starts_with("--lang=") => match lang_arg(args, i) {
@@ -482,19 +525,30 @@ pub fn run_doctor(args: &[String]) -> i32 {
                 }
             },
             other => {
-                eprintln!("ERR: unknown option '{other}'. Usage: context-toolkit doctor [--json] [--profile <dir>] [--lang en|ru]");
+                eprintln!("ERR: unknown option '{other}'. Usage: context-toolkit doctor [--json] [--profile <dir>] [--opencode-home <dir>] [--lang en|ru]");
                 return 2;
             }
         }
         i += 1;
     }
-    let Some(profile) = profile_path(custom) else {
+    let Some(profile) = profile_path(custom.clone()) else {
         eprintln!("ERR: cannot determine USERPROFILE / HOME directory");
         return 1;
     };
     let lang = detect_lang(args);
     crate::set_lang(lang); // the helpers shared with setup (parse errors of the policy file, ...) speak the same language
-    let findings = diagnose(&profile, lang);
+    let mut findings = diagnose(&profile, lang);
+    // A profile given by path (a test or another home) is not checked against the real OpenCode config.
+    let opencode_dir = opencode_home.or_else(|| {
+        custom
+            .is_none()
+            .then(home_dir)
+            .flatten()
+            .map(|h| crate::setup::opencode::config_dir(None, &h))
+    });
+    if let Some(dir) = opencode_dir {
+        findings.extend(opencode_findings(&dir, lang));
+    }
     let failed = findings.iter().any(|x| x.severity == "error");
     if json_out {
         let list: Vec<Value> = findings
@@ -536,6 +590,32 @@ mod tests {
 
     fn sev(v: &[Finding], id: &str) -> &'static str {
         v.iter().find(|x| x.id == id).unwrap().severity
+    }
+
+    #[test]
+    fn opencode_plugin_is_said_only_when_there() {
+        use crate::setup::opencode::{plugin_path, plugin_text};
+        let d = temp("ctk_doctor_opencode");
+        assert!(opencode_findings(&d, Lang::En).is_empty());
+        let p = plugin_path(&d);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let ours = plugin_text("C:/h/context-toolkit.exe", &["--opencode".into()]);
+        fs::write(&p, &ours).unwrap();
+        assert_eq!(
+            sev(&opencode_findings(&d, Lang::En), "opencode_plugin"),
+            "ok"
+        );
+        fs::write(&p, ours.replace("TIMEOUT_MS = 15000", "TIMEOUT_MS = 1")).unwrap();
+        assert_eq!(
+            sev(&opencode_findings(&d, Lang::En), "opencode_plugin"),
+            "warn"
+        );
+        fs::write(&p, "export default {}\n").unwrap();
+        assert_eq!(
+            sev(&opencode_findings(&d, Lang::En), "opencode_plugin"),
+            "warn"
+        );
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

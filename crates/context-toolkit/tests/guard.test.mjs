@@ -577,6 +577,33 @@ const cases = [
     return true;
   }],
 
+  // OpenCode (`--opencode`, run by the plugin of `setup --opencode`): Claude protocol with OpenCode's tool names and
+  // fields (`read`/`write`/`edit`/`patch`/`shell`, `path`, `newString`, `patchText`); the shell may be either dialect
+  [true, () => {
+    const oc = (tool_name, tool_input, extra = {}) => runHook({ hook_event_name: 'PreToolUse', tool_name, tool_input }, ['--opencode', ...(extra.args ?? [])], extra.env ?? {});
+    const reason = (out) => JSON.parse(out).hookSpecificOutput?.permissionDecisionReason ?? '';
+    const whole = reason(oc('read', { path: bigFile }));
+    if (!whole.includes('read with offset') || whole.includes('Explore') || whole.includes('Read with')) return `read hint: ${whole}`;
+    if (oc('read', { path: bigFile, offset: 1, limit: 100 }) !== '') return 'a read slice must pass';
+    if (!reason(oc('shell', { command: `cat "${bigFile}"` })).includes('offset')) return 'cat of a big file';
+    if (!reason(oc('shell', { command: `Get-Content "${bigFile}"` })).includes('offset')) return 'PowerShell read';
+    if (oc('shell', { command: 'git status', workdir: dir }) !== '') return 'a clean command must pass silently';
+    const inline = reason(oc('shell', { command: `python -c "print('a${B}nb')"` }));
+    if (!inline.includes('edit') || inline.includes('Edit')) return `inline backslash hint: ${inline}`;
+    const patch = `*** Begin Patch\n*** Add File: ${TMP}patch.py\n+s=open(p).read()\n+s=s.replace("a${B}n","b")\n+open(p,'w').write(s)\n*** End Patch\n`;
+    if (decisionOf(oc('patch', { patchText: patch })) !== 'deny') return 'a backslash patch';
+    if (decisionOf(oc('write', { path: `${TMP}patch.py`, content: 's=open(p).read()\ns=s.replace("a\\n","b")\nopen(p,"w").write(s)\n' })) !== 'deny') return 'a backslash script via write';
+    if (oc('edit', { path: join(dir, 'x.ts'), oldString: 'a', newString: 'b' }) !== '') return 'an ordinary edit';
+    if (oc('grep', { pattern: 'x' }) !== '') return 'other tools pass';
+    const on = P('opencode', { commit_hygiene: true, confirm_irreversible: true });
+    if (decisionOf(oc('shell', { command: COAUTH }, { env: { CLAUDE_CONFIG_DIR: on } })) !== 'deny') return 'commit hygiene';
+    // `ask` stays `ask`: the plugin turns it into OpenCode's permission prompt
+    if (decisionOf(oc('shell', { command: 'git push' }, { env: { CLAUDE_CONFIG_DIR: on } })) !== 'ask') return 'confirm_irreversible asks';
+    if (decisionOf(oc('shell', { command: 'Remove-Item x -Recurse -Force' }, { env: { CLAUDE_CONFIG_DIR: on } })) !== 'ask') return 'a PowerShell irreversible command asks';
+    if (!reason(oc('read', { path: bigFile }, { args: ['--lang', 'ru'] })).includes('offset и limit')) return 'Russian read hint';
+    return true;
+  }],
+
   // CLI check mode
   [0, () => spawnSync(exe, ['check', 'node', '-v'], { encoding: 'utf8' }).status],
   [true, () => {
@@ -759,6 +786,43 @@ const cases = [
     return existsSync(codexHome) ? 'the Codex home was created' : true;
   }],
 
+  // setup --opencode writes a plugin that runs the installed hook binary: a refusal throws with the reason, `ask` goes
+  // through OpenCode's permission prompt (refused when nobody can be asked), a broken hook passes the call
+  [true, () => {
+    const root = join(dir, 'opencode-plugin');
+    const profile = join(root, 'profile');
+    const ocHome = join(root, 'opencode');
+    mkdirSync(profile, { recursive: true });
+    const args = ['setup', '--profile', profile, '--claude-json', join(root, 'c.json'), '--opencode', '--opencode-home', ocHome, '--with-rules', '--skip-version-check', '--no-agents', '--lang', 'ru'];
+    // no OpenCode config folder: skipped, nothing created
+    const skip = spawnSync(exe, args, { encoding: 'utf8' });
+    if (skip.status !== 0 || !skip.stdout.includes('OpenCode пропущен') || existsSync(ocHome)) return `no OpenCode: ${skip.stdout}${skip.stderr}`;
+    mkdirSync(ocHome);
+    const r = spawnSync(exe, args, { encoding: 'utf8' });
+    const pluginFile = join(ocHome, 'plugins', 'loadout-context-toolkit', 'index.js');
+    if (r.status !== 0 || !existsSync(pluginFile)) return `setup: ${r.stdout}${r.stderr}`;
+    // no AGENTS.md of OpenCode's own: none is made, since one would hide ~/.claude/CLAUDE.md from OpenCode 2.3.1+
+    if (existsSync(join(ocHome, 'AGENTS.md')) || !r.stdout.includes('OpenCode перестанет видеть CLAUDE.md')) return `OpenCode AGENTS.md was created: ${r.stdout}`;
+    const text = readFileSync(pluginFile, 'utf8');
+    if (!text.includes(`const EXE = ${JSON.stringify(join(profile, 'hooks', BIN_NAME).replace(/\\/g, '/'))}`) || !text.includes('const ARGS = ["--opencode","--lang","ru"]')) return `plugin command: ${text.slice(0, 600)}`;
+    const doc = JSON.parse(spawnSync(exe, ['doctor', '--json', '--profile', profile, '--opencode-home', ocHome], { encoding: 'utf8' }).stdout);
+    if (doc.findings.find((f) => f.id === 'opencode_plugin')?.severity !== 'ok') return 'doctor does not see the plugin';
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: P('opencode-plugin', { confirm_irreversible: true }) };
+    const d = spawnSync('node', [join(ROOT, 'tests', 'opencode-plugin.driver.mjs'), pluginFile, bigFile], { encoding: 'utf8', env });
+    if (d.status !== 0) return `driver: ${d.stderr}`;
+    const o = JSON.parse(d.stdout);
+    if (o.id !== 'loadout.context-toolkit') return 'plugin id';
+    if (o.readWhole.ok || !o.readWhole.message.includes('offset и limit')) return `read: ${JSON.stringify(o.readWhole)}`;
+    if (!o.readSlice.ok || !o.clean.ok || !o.otherTool.ok) return 'a clean call was refused';
+    if (o.askNoApi.ok || !o.askNoApi.message.includes('git push') || !o.askNoApi.message.includes('подтверждение человека')) return `ask without a prompt: ${JSON.stringify(o.askNoApi)}`;
+    if (!o.askApproved.ok) return `an approved ask: ${JSON.stringify(o.askApproved)}`;
+    if (o.askRejected.ok || !o.askRejected.message.includes('не подтверждён')) return `a rejected ask: ${JSON.stringify(o.askRejected)}`;
+    if (o.askUnprompted.ok || !o.askUnprompted.message.includes('подтверждение человека')) return 'an ask nobody saw passed';
+    if (o.prompts.length !== 2 || !o.prompts.every((p) => p.message.includes('git push') && p.resources[0] === 'git push' && p.source.type === 'tool')) return `prompts: ${JSON.stringify(o.prompts)}`;
+    if (!o.missingExe.ok || !o.garbage.ok) return `a broken hook refused a call: ${JSON.stringify([o.missingExe, o.garbage])}`;
+    return true;
+  }],
+
   // setup --uninstall: only ours goes, foreign hooks/keys/text stay, a second run changes nothing
   [true, () => {
     const root = join(dir, 'uninstall-test');
@@ -774,6 +838,11 @@ const cases = [
     const origCodex = { hooks: { Stop: [{ hooks: [{ type: 'command', command: 'C:/x/codex-hook.cmd', timeout: 3 }] }], PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'node C:/hooks/guard.mjs', timeout: 5 }] }] } };
     writeFileSync(join(codexHome, 'hooks.json'), JSON.stringify(origCodex, null, 2));
     writeFileSync(join(codexHome, 'AGENTS.md'), '# codex rules\n');
+    const ocHome = join(root, 'opencode');
+    const ocPlugin = join(ocHome, 'plugins', 'loadout-context-toolkit', 'index.js');
+    mkdirSync(join(ocHome, 'plugins'), { recursive: true });
+    writeFileSync(join(ocHome, 'plugins', 'status.js'), 'export default {}\n');
+    writeFileSync(join(ocHome, 'AGENTS.md'), '# oc rules');
     const foreignStop = { type: 'command', command: 'node C:/tools/ctxkit-helper/stop.js' };
     const origSettings = {
       model: 'opus',
@@ -796,7 +865,7 @@ const cases = [
     writeFileSync(claudeJson, '{}');
     writeFileSync(presets, JSON.stringify({ byAccount: { a: { presets: [{ name: 'dev', settings: { modelId: 'claude-opus-5-5', effort: 'low' } }] } } }));
 
-    const common = ['--profile', profile, '--claude-json', claudeJson, '--antigravity', '--agy-file', agyFile, '--dsh', '--dsh-home', dshHome, '--codex', '--codex-home', codexHome, '--desktop-file', presets, '--lang', 'ru'];
+    const common = ['--profile', profile, '--claude-json', claudeJson, '--antigravity', '--agy-file', agyFile, '--dsh', '--dsh-home', dshHome, '--codex', '--codex-home', codexHome, '--opencode', '--opencode-home', ocHome, '--desktop-file', presets, '--lang', 'ru'];
     const hookBin = join(profile, 'hooks', BIN_NAME);
     const setupRun = spawnSync(exe, ['setup', '--with-rules', '--desktop', '--skip-version-check', ...common], { encoding: 'utf8' });
     if (setupRun.status !== 0 || !existsSync(hookBin)) return false;
@@ -814,7 +883,10 @@ const cases = [
     const cxMd = readFileSync(join(codexHome, 'AGENTS.md'), 'utf8');
     if (!cxMd.startsWith('# codex rules') || !cxMd.includes('<!-- context-toolkit:start -->') || cxMd.includes('Explore') || cxMd.includes('checker')) return 'codex AGENTS.md';
     if (!setupRun.stdout.includes('/hooks')) return 'codex trust note';
-    const state = () => [join(codexHome, 'hooks.json'), join(codexHome, 'AGENTS.md'), join(profile, 'settings.json'), join(profile, 'CLAUDE.md'), agyFile, join(dshHome, 'AGENTS.md'), join(dshHome, 'context-toolkit-hooks.json'), join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), hookBin]
+    // OpenCode: our plugin next to a foreign one, the rules block (it asks through OpenCode's prompt) after the user's text
+    const ocMd = readFileSync(join(ocHome, 'AGENTS.md'), 'utf8');
+    if (!existsSync(ocPlugin) || !ocMd.startsWith('# oc rules') || !ocMd.includes('<!-- context-toolkit:start -->') || ocMd.includes('Explore')) return 'opencode plugin or AGENTS.md';
+    const state = () => [ocPlugin, join(ocHome, 'AGENTS.md'), join(codexHome, 'hooks.json'), join(codexHome, 'AGENTS.md'), join(profile, 'settings.json'), join(profile, 'CLAUDE.md'), agyFile, join(dshHome, 'AGENTS.md'), join(dshHome, 'context-toolkit-hooks.json'), join(dshHome, 'profiles', 'desktop', 'cordis.patch.yml'), hookBin]
       .map((f) => (existsSync(f) ? readFileSync(f, 'utf8') : null)).join('\u0000');
     const before = state();
 
@@ -851,6 +923,8 @@ const cases = [
     const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
     if (JSON.stringify(canon(JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8')))) !== JSON.stringify(canon(origCodex))) return 'codex hooks.json after the rollback';
     if (readFileSync(join(codexHome, 'AGENTS.md'), 'utf8') !== '# codex rules\n') return 'codex AGENTS.md after the rollback';
+    if (readFileSync(join(ocHome, 'AGENTS.md'), 'utf8') !== '# oc rules') return 'opencode AGENTS.md after the rollback';
+    if (existsSync(join(ocHome, 'plugins', 'loadout-context-toolkit')) || !existsSync(join(ocHome, 'plugins', 'status.js'))) return 'opencode plugin after the rollback';
 
     // a second uninstall changes nothing and makes no backup
     const after = state();

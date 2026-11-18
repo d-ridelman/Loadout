@@ -52,6 +52,10 @@ pub enum Client {
     /// Codex CLI (`~/.codex/hooks.json`): Claude hook protocol; the shell tool is `Bash` (PowerShell on Windows),
     /// edits are `apply_patch` with the patch text in `tool_input.command`, there is no read tool and no `ask`.
     Codex,
+    /// OpenCode 2 through the plugin `setup --opencode` writes: the plugin sends `execute.before` in the Claude hook
+    /// protocol with OpenCode's own tool names and fields (`read`/`write`/`edit`/`patch`/`shell`, `path`, `patchText`,
+    /// `newString`, see `opencode_input`). The shell may be either dialect; `ask` becomes OpenCode's permission prompt.
+    OpenCode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,7 +151,7 @@ fn print_help() {
            context-toolkit report [--json]     per-day counters from Claude Code transcripts\n\
            context-toolkit check <cmd...>      run a build or test with short output\n\
            context-toolkit --version           print the version\n\n\
-         Without a subcommand it is the hook: it reads the call from stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness, `--codex` Codex).\n\
+         Without a subcommand it is the hook: it reads the call from stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness, `--codex` Codex, `--opencode` OpenCode).\n\
          Formerly named ctxkit: the old name is still recognised, and `context-toolkit setup` moves an installation to the new one.",
         "Инструменты контекста {ver}: хуки и диагностика, которые держат контекст ИИ-агентов небольшим.\n\n\
          Использование:\n\
@@ -156,7 +160,7 @@ fn print_help() {
            context-toolkit report [--json]     счётчики по дням из транскриптов Claude Code\n\
            context-toolkit check <cmd...>      запустить сборку или тесты с коротким выводом\n\
            context-toolkit --version           показать версию\n\n\
-         Без подкоманды это сам хук: он читает вызов из stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness, `--codex` Codex).\n\
+         Без подкоманды это сам хук: он читает вызов из stdin (Claude Code, `--agy` Antigravity, `--dsh` DeepSeek Harness, `--codex` Codex, `--opencode` OpenCode).\n\
          Раньше назывались ctxkit: старое имя по-прежнему распознаётся, а `context-toolkit setup` переводит установку на новое."
     );
 }
@@ -188,6 +192,7 @@ fn main() {
             "--claude" => forced_client = Some(Client::Claude),
             "--dsh" => forced_client = Some(Client::Dsh),
             "--codex" => forced_client = Some(Client::Codex),
+            "--opencode" => forced_client = Some(Client::OpenCode),
             "--post" => forced_post = true,
             _ => {}
         }
@@ -262,7 +267,7 @@ fn run_hook(args: &[String], forced_client: Option<Client>, forced_post: bool) {
 
     match client {
         Client::Antigravity => handle_antigravity(&call, forced_post, lang),
-        Client::Claude | Client::Dsh | Client::Codex => {
+        Client::Claude | Client::Dsh | Client::Codex | Client::OpenCode => {
             handle_claude(&call, forced_post, lang, client)
         }
     }
@@ -390,8 +395,33 @@ fn claude_tool_name(tool: &str, client: Client) -> &str {
         // Codex names its shell `Bash` on every system (PowerShell runs it on Windows): checked like
         // Antigravity's `run_command`, in both dialects.
         (Client::Codex, "Bash") => "run_command",
+        (Client::OpenCode, "read") => "Read",
+        (Client::OpenCode, "write") => "Write",
+        (Client::OpenCode, "edit") => "Edit",
+        (Client::OpenCode, "patch" | "apply_patch") => "apply_patch",
+        // OpenCode's `shell` runs in the shell it picks for the system (PowerShell or a POSIX shell on Windows).
+        (Client::OpenCode, "shell" | "bash") => "run_command",
         _ => tool,
     }
+}
+
+/// OpenCode's tool input with the Claude Code field names added (`path`/`filePath` -> `file_path`, `newString` ->
+/// `new_string`, `patchText` -> `patch`); `content`, `command`, `workdir`, `offset`, `limit` are already the same.
+fn opencode_input(input: &Value) -> Value {
+    let mut out = input.clone();
+    if let Some(obj) = out.as_object_mut() {
+        for (from, to) in [
+            ("path", "file_path"),
+            ("filePath", "file_path"),
+            ("newString", "new_string"),
+            ("patchText", "patch"),
+        ] {
+            if let Some(v) = input.get(from) {
+                obj.entry(to).or_insert_with(|| v.clone());
+            }
+        }
+    }
+    out
 }
 
 /// The text of an `apply_patch` call: `input` (DeepSeek Harness), `patch`, or `command` (Codex).
@@ -436,7 +466,13 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
         return;
     }
     let tool = claude_tool_name(call["tool_name"].as_str().unwrap_or(""), client);
-    let input = &call["tool_input"];
+    let normalized;
+    let input = if client == Client::OpenCode {
+        normalized = opencode_input(&call["tool_input"]);
+        &normalized
+    } else {
+        &call["tool_input"]
+    };
 
     let global_cwd: Option<PathBuf> = call.get("cwd").and_then(|v| v.as_str()).map(PathBuf::from);
     let tool_workdir: Option<PathBuf> = input
@@ -464,7 +500,7 @@ fn handle_claude(call: &Value, forced_post: bool, lang: Lang, client: Client) {
 
         for path in files {
             if let Some(err) = backslash::post_syntax_error(&path, eff_cwd.as_deref()) {
-                let edit = if client == Client::Dsh || client == Client::Codex {
+                let edit = if matches!(client, Client::Dsh | Client::Codex | Client::OpenCode) {
                     if tool == "apply_patch" {
                         "apply_patch"
                     } else {
@@ -571,6 +607,36 @@ fn ask_claude(reason: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opencode_names_and_fields_become_claude_ones() {
+        let oc = |t| claude_tool_name(t, Client::OpenCode);
+        assert_eq!(
+            ["read", "write", "edit", "patch", "shell", "grep"].map(oc),
+            [
+                "Read",
+                "Write",
+                "Edit",
+                "apply_patch",
+                "run_command",
+                "grep"
+            ]
+        );
+        assert_eq!(claude_tool_name("shell", Client::Claude), "shell");
+        let v = opencode_input(
+            &json!({"path": "a.rs", "newString": "x", "patchText": "p", "offset": 3}),
+        );
+        assert_eq!(
+            v,
+            json!({"path": "a.rs", "file_path": "a.rs", "newString": "x", "new_string": "x", "patchText": "p", "patch": "p", "offset": 3})
+        );
+        // a Claude-named field already there wins; a non-object input stays as it is
+        assert_eq!(
+            opencode_input(&json!({"file_path": "b", "filePath": "c"}))["file_path"],
+            "b"
+        );
+        assert_eq!(opencode_input(&json!("x")), json!("x"));
+    }
 
     #[test]
     fn switch_values_are_trimmed_and_case_blind() {

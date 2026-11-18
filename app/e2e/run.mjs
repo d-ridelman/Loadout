@@ -1352,7 +1352,7 @@ try {
   const claudeDir = join(home, '.claude')
   const hookExe = join(claudeDir, 'hooks', 'context-toolkit.exe')
   const settingsFile = join(claudeDir, 'settings.json')
-  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 } // default form: advisor, main model, effort and policies are "do not change"
+  const opts = { withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, opencode: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep', policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2 } // default form: advisor, main model, effort and policies are "do not change"
   const ctxkitJson = join(claudeDir, 'context-toolkit.json')
   // Context Toolkit must not touch the real owner profile: hashes of the files that `setup` writes, before and after the whole step.
   // `~/.claude.json` is not compared: the running Claude Code rewrites it, setup only reads it (the checks use --claude-json pointing to a copy).
@@ -1560,7 +1560,7 @@ try {
   must((await hygiene.isChecked()) && (await slotsBox.isChecked()) && (await slotsNum.inputValue()) === '3', 'choosing "Turn on the selected" dropped the policies that are on')
   await polSel.selectOption('keep')
   // ---- rollback on a fixture copy: preview, R2, foreign hooks in place, a repeat is safe ----
-  const undoOpts = { antigravity: false, dsh: false, codex: false }
+  const undoOpts = { antigravity: false, dsh: false, codex: false, opencode: false }
   const undoRefusal = (o, dry) => page.evaluate(async ([x, d]) => (await window.loadout.ctxkitUninstall(x, d)).error ?? 'ok', [o, dry])
   const undoPreviewBtn = page.getByRole('button', { name: 'Показать, что уберёт откат', exact: true })
   const undoGoBtn = page.getByRole('button', { name: 'Откатить: убрать хуки, блок правил и бинарь' })
@@ -1572,7 +1572,7 @@ try {
   must(existsSync(claudeMd) && readFileSync(claudeMd, 'utf8').includes('<!-- context-toolkit:start -->'), 'before the rollback CLAUDE.md has no rules block')
   must((await undoGoBtn.count()) === 0, 'the rollback button is visible without a rollback preview')
   must((await undoRefusal(undoOpts, false)).includes('предпросмотр'), 'a rollback without a rollback preview (only a setup preview exists) was not rejected in main')
-  must((await undoRefusal({ antigravity: 'yes', dsh: false, codex: false }, true)).includes('параметры'), 'invalid rollback parameters were not rejected')
+  must((await undoRefusal({ antigravity: 'yes', dsh: false, codex: false, opencode: false }, true)).includes('параметры'), 'invalid rollback parameters were not rejected')
   must((await undoRefusal({ antigravity: false, dsh: false }, true)).includes('параметры'), 'rollback parameters without the Codex flag were not rejected')
   must((await undoRefusal(undoOpts, 'x')).includes('параметры'), 'an invalid rollback dryRun was not rejected')
   // busy state: right after the click the button shows "Counting…" with a spinner, the status line says it is in progress, all buttons are disabled
@@ -1673,7 +1673,7 @@ try {
   await waitFor(async () => (await page.locator('main').innerText()).includes('Откат выполнен.'), 'the repeated rollback finished')
   must(readFileSync(settingsFile, 'utf8') === settingsUndone && !existsSync(hookExe) && !(await page.locator('main [role=alert]').count()), 'the repeated rollback changed files or showed an error')
   // integration checkboxes reach setup: the rollback preview with Antigravity and DeepSeek Harness mentions them (on a copy, writes nothing)
-  const integ = await page.evaluate(async () => (await window.loadout.ctxkitUninstall({ antigravity: true, dsh: true, codex: false }, true)).data?.output ?? '')
+  const integ = await page.evaluate(async () => (await window.loadout.ctxkitUninstall({ antigravity: true, dsh: true, codex: false, opencode: false }, true)).data?.output ?? '')
   must(/antigravity/i.test(integ) && /DeepSeek/i.test(integ) && integ.includes('[dry-run]'), `the rollback preview with integrations has no lines about Antigravity and DeepSeek: ${integ.slice(0, 400)}`)
   must(englishLeft(integ).length === 0, `English phrases in the Russian rollback preview with integrations: ${englishLeft(integ).slice(0, 5).join(' // ')}`)
   must(![realHome, realHome.replaceAll('\\', '/')].some((h) => integ.toLowerCase().includes(h.toLowerCase())), 'the rollback preview with integrations showed the path of the real profile')
@@ -1684,7 +1684,7 @@ try {
     const codexBefore = readFileSync(codexHooks, 'utf8')
     const row = (name) => page.locator('table[aria-label="Клиенты Инструментов контекста"] tbody tr', { hasText: name })
     must((await row('Codex (ChatGPT)').innerText()).includes('○ не стоят'), `Codex must be "not installed" before: ${await row('Codex (ChatGPT)').innerText()}`)
-    must((await row('OpenCode').innerText()).includes('Пока не поддерживается') && (await row('OpenCode').locator('input[type=checkbox]').isDisabled()), 'OpenCode must be shown as not supported, with a disabled checkbox')
+    must((await row('OpenCode').innerText()).includes('○ не стоят') && (await row('OpenCode').innerText()).includes('шлюза Stop'), `OpenCode must be "not installed" and say what it lacks: ${await row('OpenCode').innerText()}`)
     must((await row('Antigravity').innerText()).includes('В разработке'), 'Antigravity must say what is still in progress')
     const codexBox = page.getByRole('checkbox', { name: 'Codex (ChatGPT)', exact: true })
     await codexBox.check()
@@ -1714,6 +1714,31 @@ try {
     must(!existsSync(join(codexDir, 'AGENTS.md')), 'the rollback left the AGENTS.md that setup created')
     await waitFor(async () => (await row('Codex (ChatGPT)').innerText()).includes('○ не стоят'), 'the Codex row did not go back to "not installed"')
     await codexBox.uncheck()
+    // OpenCode on the same copy: the plugin next to the fixture's own one, the rules block in AGENTS.md, the state cell, rollback
+    const ocDir = join(home, '.config', 'opencode')
+    const ocPlugin = join(ocDir, 'plugins', 'loadout-context-toolkit', 'index.js')
+    const ocBox = page.getByRole('checkbox', { name: 'OpenCode', exact: true })
+    await ocBox.check()
+    await page.getByRole('button', { name: /^Предпросмотр/ }).click()
+    await waitFor(() => applyBtn.isEnabled(), 'the preview with OpenCode ticked')
+    const ocPreview = await page.locator('pre.out').innerText()
+    // the fixture has no AGENTS.md of OpenCode's own: setup does not make one (it would hide ~/.claude/CLAUDE.md from OpenCode) and says why
+    must(ocPreview.includes('плагина OpenCode') && ocPreview.includes('перестанет видеть CLAUDE.md'), `the preview with OpenCode lacks the plugin or the AGENTS.md note: ${ocPreview.slice(-800)}`)
+    must(englishLeft(ocPreview).length === 0, `English phrases in the Russian preview with OpenCode: ${englishLeft(ocPreview).slice(0, 5).join(' // ')}`)
+    must(!existsSync(ocPlugin) && !existsSync(join(ocDir, 'AGENTS.md')), 'the preview with OpenCode changed files')
+    await applyBtn.click()
+    await waitFor(() => existsSync(ocPlugin), 'apply wrote the OpenCode plugin')
+    const ocText = readFileSync(ocPlugin, 'utf8')
+    must(ocText.includes('"--opencode","--lang","ru"') && ocText.includes(join(claudeDir, 'hooks', 'context-toolkit.exe').replaceAll('\\', '/')), `the OpenCode plugin runs another program: ${ocText.slice(0, 500)}`)
+    must(existsSync(join(ocDir, 'plugins', 'status.js')) && !existsSync(join(ocDir, 'AGENTS.md')), 'OpenCode: the fixture plugin is gone or an AGENTS.md was made')
+    await waitFor(async () => (await row('OpenCode').innerText()).includes('● плагин стоит'), 'the OpenCode row did not turn "installed"')
+    await undoPreviewBtn.click()
+    await waitFor(() => undoGoBtn.isEnabled(), 'the rollback preview with OpenCode')
+    await undoGoBtn.click()
+    await waitFor(() => !existsSync(ocPlugin), 'the rollback took the OpenCode plugin out')
+    must(existsSync(join(ocDir, 'plugins', 'status.js')), 'the rollback took the fixture plugin')
+    await waitFor(async () => (await row('OpenCode').innerText()).includes('○ не стоят'), 'the OpenCode row did not go back to "not installed"')
+    await ocBox.uncheck()
     // section keys are ignored while an input has focus: the next step switches sections with 1 and 7
     await page.evaluate(() => document.activeElement?.blur())
   }

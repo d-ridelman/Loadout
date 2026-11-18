@@ -22,7 +22,7 @@ fn fix_hint(client: Client, lang: Lang) -> &'static str {
             "Backslashes get stripped here. Modify files with apply_patch. Write a new script into a file with apply_patch and run it in a separate command; do not bypass this block by rewriting the same command.",
             "Так обратные слеши теряются. Правь файлы через apply_patch. Новый код запиши в файл через apply_patch и запусти его отдельной командой. Не обходи запрет другой формой той же команды.",
         ),
-        Client::Dsh => t(
+        Client::Dsh | Client::OpenCode => t(
             lang,
             "Backslashes get stripped here. Modify existing files with edit. Write new scripts via write and run them in a separate command; do not bypass this block by rewriting the same command.",
             "Так обратные слеши теряются. Правку существующего файла делай инструментом edit. Новый код запиши через write и запусти его отдельной командой. Не обходи запрет другой формой той же команды.",

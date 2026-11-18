@@ -94,7 +94,7 @@ const doc = (detail: string | null, severity: CtxkitDoctor['findings'][number]['
   findings: detail === null ? [] : [{ id: 'policies', severity, message: 'policies', detail, fix: null }],
 })
 const base: SetupOptions = {
-  withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep',
+  withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, opencode: false, noStopGate: false, lang: 'ru', advisor: 'keep', mainModel: 'keep', effort: 'keep',
   policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2,
 }
 
@@ -121,6 +121,7 @@ describe('Context Toolkit: policy checkboxes pick the mode themselves', () => {
   it('a doctor fix that is a setup command becomes form settings; anything else stays text', () => {
     expect(fixPatch('context-toolkit setup')).toEqual({})
     expect(fixPatch('context-toolkit setup --with-rules')).toEqual({ withRules: true })
+    expect(fixPatch('context-toolkit setup --opencode')).toEqual({ opencode: true })
     expect(fixPatch('context-toolkit setup --main-model sonnet')).toEqual({ mainModel: 'sonnet' })
     expect(fixPatch('context-toolkit setup --main-model <model> --effort <level>')).toBeNull()
     expect(fixPatch('fix the JSON or delete the file')).toBeNull()

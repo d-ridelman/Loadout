@@ -33,6 +33,7 @@ export function parseSetupOptions(raw: unknown): SetupOptions {
     antigravity: flag('antigravity'),
     dsh: flag('dsh'),
     codex: flag('codex'),
+    opencode: flag('opencode'),
     noStopGate: flag('noStopGate'),
     lang,
     advisor,
@@ -55,11 +56,11 @@ export function policyArg(o: SetupOptions): string | undefined {
   return list.length ? list.join(',') : 'none' // "enable the selected" with nothing selected is the same as "disable all"
 }
 
-/** Parses the rollback options from the page: three boolean flags, anything else is rejected. */
+/** Parses the rollback options from the page: four boolean flags, anything else is rejected. */
 export function parseUninstallOptions(raw: unknown): UninstallOptions {
   const r = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
-  if (typeof r['antigravity'] !== 'boolean' || typeof r['dsh'] !== 'boolean' || typeof r['codex'] !== 'boolean') throw new Error(t('неверные параметры Инструментов контекста', 'invalid Context Toolkit parameters'))
-  return { antigravity: r['antigravity'], dsh: r['dsh'], codex: r['codex'] }
+  if (typeof r['antigravity'] !== 'boolean' || typeof r['dsh'] !== 'boolean' || typeof r['codex'] !== 'boolean' || typeof r['opencode'] !== 'boolean') throw new Error(t('неверные параметры Инструментов контекста', 'invalid Context Toolkit parameters'))
+  return { antigravity: r['antigravity'], dsh: r['dsh'], codex: r['codex'], opencode: r['opencode'] }
 }
 
 /**
@@ -74,6 +75,7 @@ export function setupArgs(o: SetupOptions, dryRun: boolean, home?: string): stri
   if (o.antigravity) a.push('--antigravity')
   if (o.dsh) a.push('--dsh')
   if (o.codex) a.push('--codex')
+  if (o.opencode) a.push('--opencode')
   if (o.noStopGate) a.push('--no-stop-gate')
   a.push('--lang', o.lang)
   if (o.advisor !== 'keep') a.push('--advisor', o.advisor)
@@ -99,11 +101,13 @@ export function uninstallArgs(o: UninstallOptions, dryRun: boolean, lang: 'en' |
   if (o.antigravity) a.push('--antigravity')
   if (o.dsh) a.push('--dsh')
   if (o.codex) a.push('--codex')
+  if (o.opencode) a.push('--opencode')
   if (home) {
     a.push('--profile', join(home, '.claude'), '--claude-json', join(home, '.claude.json'))
     if (o.antigravity) a.push('--agy-file', join(home, '.gemini', 'config', 'hooks.json'))
     if (o.dsh) a.push('--dsh-home', join(home, '.dsh'))
     if (o.codex) a.push('--codex-home', join(home, '.codex'))
+    if (o.opencode) a.push('--opencode-home', join(home, '.config', 'opencode'))
   }
   return a
 }
@@ -116,12 +120,15 @@ function homeArgs(home: string): string[] {
     '--agy-file', join(home, '.gemini', 'config', 'hooks.json'),
     '--dsh-home', join(home, '.dsh'),
     '--codex-home', join(home, '.codex'),
+    '--opencode-home', join(home, '.config', 'opencode'),
     // for diagnostics setup reads `~/.claude.json` (the number of global MCPs): without this it would read the real file
     '--claude-json', join(home, '.claude.json'),
   ]
 }
 
 export const profileArgs = (home?: string): string[] => (home ? ['--profile', join(home, '.claude')] : [])
+/** `doctor` with a test home also checks the OpenCode plugin there (with `--profile` alone it leaves OpenCode out). */
+export const doctorArgs = (home?: string): string[] => (home ? [...profileArgs(home), '--opencode-home', join(home, '.config', 'opencode')] : [])
 
 export interface RunResult {
   code: number
@@ -160,9 +167,9 @@ export const BIN = 'context-toolkit.exe'
 export const OLD_BIN = 'ctxkit.exe'
 
 /** Install state: copies in `hooksDir` (called by the hooks) and `binDir` (PATH), a copy under the old name in `hooksDir`, and the clients. */
-export async function status(bundled: string, hooksDir: string, binDir: string, home: string, codexHome: string): Promise<CtxkitStatus> {
+export async function status(bundled: string, hooksDir: string, binDir: string, home: string, codexHome: string, opencodeDir: string): Promise<CtxkitStatus> {
   const legacy = existsSync(join(hooksDir, OLD_BIN))
-  const clients = clientStates(home, codexHome)
+  const clients = clientStates(home, codexHome, opencodeDir)
   if (!existsSync(bundled)) return { available: false, version: null, hook: 'missing', bin: 'missing', legacy, clients }
   const v = await run(bundled, ['--version'], 5000).catch(() => undefined)
   const version = /\d+\.\d+\.\d+\S*/.exec(v?.stdout ?? '')?.[0] ?? null
@@ -194,9 +201,9 @@ function hookCommands(hooks: unknown): string[] {
 
 /**
  * Where our hooks are, read from the files `setup` writes (nothing is run). A client is `absent` when its home folder is missing;
- * OpenCode has no command hooks, so it is never `on`.
+ * OpenCode is `on` while the plugin of `setup --opencode` is in its config folder (`doctor` says whether it is the current one).
  */
-export function clientStates(home: string, codexHome: string): CtxkitStatus['clients'] {
+export function clientStates(home: string, codexHome: string, opencodeDir: string): CtxkitStatus['clients'] {
   const ours = (cmds: string[]): boolean => cmds.some(runsOurBinary)
   const state = (dir: string, on: () => boolean): 'on' | 'off' | 'absent' => (!existsSync(dir) ? 'absent' : on() ? 'on' : 'off')
   const settings = readJson(join(home, '.claude', 'settings.json'))
@@ -207,7 +214,7 @@ export function clientStates(home: string, codexHome: string): CtxkitStatus['cli
     codex: state(codexHome, () => ours(hookCommands(isObj(codex) ? codex['hooks'] : undefined))),
     antigravity: state(join(home, '.gemini'), () => isObj(agy) && Object.keys(agy).some((k) => k === 'context-toolkit' || k === 'ctxkit')),
     dsh: state(join(home, '.dsh'), () => ['context-toolkit-hooks.json', 'ctxkit-hooks.json'].some((f) => existsSync(join(home, '.dsh', f)))),
-    opencode: state(join(home, '.config', 'opencode'), () => false),
+    opencode: state(opencodeDir, () => existsSync(join(opencodeDir, 'plugins', 'loadout-context-toolkit', 'index.js'))),
   }
 }
 

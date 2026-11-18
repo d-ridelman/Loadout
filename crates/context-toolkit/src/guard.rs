@@ -29,7 +29,7 @@ fn read_hint(client: Client, lang: Lang) -> &'static str {
             "find the spot first with `rg -n <pattern> <file>`, then print a slice: `sed -n '120,200p' <file>` or `Get-Content <file> | Select-Object -Skip 119 -First 80` (up to 450 lines).",
             "сначала найди место через `rg -n <шаблон> <файл>`, затем выведи фрагмент: `sed -n '120,200p' <файл>` или `Get-Content <файл> | Select-Object -Skip 119 -First 80` (до 450 строк).",
         ),
-        Client::Dsh => t(
+        Client::Dsh | Client::OpenCode => t(
             lang,
             "search first via the grep tool or delegate to subagent, then read a slice via read with offset and limit (up to 450 lines).",
             "сначала найди нужное место инструментом grep или передай субагенту, затем прочитай фрагмент через read с offset и limit (до 450 строк).",
@@ -282,7 +282,7 @@ pub fn shell_read_guard(
                 check_ps_inspect(sub, client, lang, current_cwd.as_deref())
             }
             (Client::Claude | Client::Dsh, _) => return None,
-            (Client::Antigravity | Client::Codex, _) => {
+            (Client::Antigravity | Client::Codex | Client::OpenCode, _) => {
                 check_ps_inspect(sub, client, lang, current_cwd.as_deref())
                     .or_else(|| check_bash_inspect(sub, client, lang, current_cwd.as_deref()))
             }
@@ -411,7 +411,7 @@ fn check_recursive_grep(
                 "Use the built-in `Grep` tool (or Haiku `Explore`) instead of raw recursive grep/rg in the shell to avoid bloating its output.",
                 "Используй встроенный инструмент `Grep` (или `Explore` на Haiku) вместо прямого рекурсивного grep/rg в shell, чтобы не раздувать его вывод.",
             ),
-            Client::Dsh => t(
+            Client::Dsh | Client::OpenCode => t(
                 lang,
                 "Use the built-in `grep` tool instead of raw recursive grep/rg in the shell to avoid bloating its output.",
                 "Используй встроенный инструмент `grep` вместо прямого рекурсивного grep/rg в shell, чтобы не раздувать его вывод.",

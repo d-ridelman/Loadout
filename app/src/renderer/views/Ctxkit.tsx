@@ -31,7 +31,7 @@ const SEG_COLOR = { sonnet: 'var(--green)', haiku: 'var(--cyan)', opusFable: 'va
 
 /** The default hook language is the interface language (the setting is independent afterwards); a function, not a constant: the language is chosen after import. */
 const defaults = (): SetupOptions => ({
-  withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, noStopGate: false, lang: getLang(), advisor: 'keep', mainModel: 'keep', effort: 'keep',
+  withRules: true, desktop: false, antigravity: false, dsh: false, codex: false, opencode: false, noStopGate: false, lang: getLang(), advisor: 'keep', mainModel: 'keep', effort: 'keep',
   // "Protections": by default context-toolkit.json is left alone; what is ticked counts only if "Enable selected" is chosen
   policyMode: 'keep', commitHygiene: false, confirmIrreversible: false, strayFiles: false, buildSlots: false, buildSlotsN: 2,
 })
@@ -119,7 +119,7 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
 
   const key = `setup:${JSON.stringify(opts)}`
   // rollback depends only on the integrations it removes, per checkbox
-  const undoOpts = { antigravity: opts.antigravity, dsh: opts.dsh, codex: opts.codex }
+  const undoOpts = { antigravity: opts.antigravity, dsh: opts.dsh, codex: opts.codex, opencode: opts.opencode }
   const undoKey = `uninstall:${JSON.stringify(undoOpts)}`
   const change = (patch: Partial<SetupOptions>) => {
     setOpts({ ...opts, ...patch })
@@ -296,7 +296,7 @@ export function Ctxkit({ level, onNotice, ensureLevel }: Props) {
           <fieldset className="choices">
             <legend className="mute small">{t('2. Что ещё включить (рекомендуется оставить как есть)', '2. What else to turn on (best left as is)')}</legend>
             <label><input type="checkbox" checked={!opts.noStopGate} onChange={(e) => { setGateTouched(true); change({ noStopGate: !e.target.checked }) }} /> {t('Шлюз Stop (только Claude Code): если агент поправил код и не позвал проверку (агента checker или советника), шлюз один раз вернёт его доделать', 'Stop gate (Claude Code only): if the agent edited code and did not call a review (the checker agent or the advisor), the gate sends it back once to finish')}</label>
-            <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил — короткая памятка агенту, как экономить контекст: в CLAUDE.md, а для отмеченных Codex и DeepSeek Harness — в их AGENTS.md', 'Rules block, a short note telling the agent how to save context: in CLAUDE.md, and in the AGENTS.md of Codex and DeepSeek Harness when they are ticked')}</label>
+            <label><input type="checkbox" checked={opts.withRules} onChange={(e) => change({ withRules: e.target.checked })} /> {t('Блок правил — короткая памятка агенту, как экономить контекст: в CLAUDE.md, а для отмеченных Codex, DeepSeek Harness и OpenCode — в их AGENTS.md (у OpenCode — только в уже существующий)', 'Rules block, a short note telling the agent how to save context: in CLAUDE.md, and in the AGENTS.md of Codex, DeepSeek Harness and OpenCode when they are ticked (for OpenCode only into an existing one)')}</label>
           </fieldset>
           <fieldset className="choices" aria-describedby="ctx-policy-hint">
             <legend className="mute small">{t('3. Защиты — можно не трогать (context-toolkit.json)', '3. Safeguards: can be left alone (context-toolkit.json)')}</legend>

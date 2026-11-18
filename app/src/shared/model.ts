@@ -247,6 +247,8 @@ export interface SetupOptions {
   dsh: boolean
   /** Codex hooks in `~/.codex/hooks.json` (and the rules block in its AGENTS.md with withRules) */
   codex: boolean
+  /** The OpenCode plugin in `~/.config/opencode/plugins/loadout-context-toolkit` (and the rules block in its AGENTS.md with withRules) */
+  opencode: boolean
   /** true: do not install the Stop hook (the gate) and remove ours if present */
   noStopGate: boolean
   lang: 'en' | 'ru'
@@ -275,6 +277,7 @@ export interface UninstallOptions {
   antigravity: boolean
   dsh: boolean
   codex: boolean
+  opencode: boolean
 }
 
 export interface SetupResult {

@@ -72,7 +72,14 @@ Codex runs hook commands through `cmd /C "<command>"` on Windows (`codex-rs/hook
 
 ### OpenCode
 
-Not supported. OpenCode has no command hooks: its `tool.execute.before` is a JavaScript plugin hook, and the plugin API is changing between OpenCode 1 and 2 (2026-11-17). A wrapper plugin that runs this binary is possible but unchecked. OpenCode reads `~/.claude/CLAUDE.md` while it has no `~/.config/opencode/AGENTS.md` (`opencode.ai/docs/rules`), so setup does not create that file: creating it would cut off the owner's `CLAUDE.md`.
+OpenCode 2 (checked against the sources at tag `v2.3.0`, 2026-11-18) has no command hooks, so `setup --opencode` writes a V2 plugin, `<config>/plugins/loadout-context-toolkit/index.js` (text in `src/setup/opencode-plugin.js`; `<config>` is `--opencode-home`, else `OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME/opencode`, `~/.config/opencode`). OpenCode loads plugin folders there by itself, at start. On `tool.hook("execute.before")` the plugin sends `{hook_event_name: "PreToolUse", tool_name, tool_input, cwd}` with OpenCode's names and fields as they are to `context-toolkit --opencode` (no shell, stdin, 15 s timeout):
+
+- `read`, `write`, `edit`, `patch` (`apply_patch`) and `shell` become `Read`, `Write`, `Edit`, `apply_patch` and `run_command`; `path`/`filePath`, `newString` and `patchText` become `file_path`, `new_string` and `patch`. The shell is checked in both dialects: OpenCode on Windows picks the shell itself. Deny hints name `read`, `grep`, `edit` and `write`.
+- A `deny` is thrown as an `Error` with the reason: the promise-plugin adapter turns it into a `Tool.Error`, the call does not run and the model sees the reason.
+- An `ask` goes through `ctx.permission.assert` with the action `context-toolkit`. OpenCode's base policy allows every action (`*` → `allow`), so the plugin's `permission.hook("evaluate")` raises its own action to `ask` with the reason as `message`. No prompt shown (no API, or the evaluation passed without the hook) or no confirmation means a refusal that says a person has to confirm.
+- A hook that fails, hangs or prints nothing passes the call, as everywhere.
+
+No Stop gate (OpenCode has no end-of-reply event) and no syntax check after an edit (`execute.after` cannot refuse a call). OpenCode takes the first existing file of `<config>/AGENTS.md` and, from 2.3.1, `~/.claude/CLAUDE.md` (`packages/core/src/config/plugin/instruction.ts`), so setup writes the rules block only into an `AGENTS.md` that is already there: creating one would cut off the owner's `CLAUDE.md`. `doctor` reports the plugin as current, edited or foreign. Not verified in a live OpenCode: against the sources, and the plugin run under Node and under Bun 1.4.4 (OpenCode's runtime) with a stand-in context.
 
 ### DeepSeek Harness Desktop
 

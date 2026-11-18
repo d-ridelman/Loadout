@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub(crate) mod opencode;
 mod policies;
 mod uninstall;
 
@@ -66,6 +67,8 @@ struct SetupOpts {
     dsh_home: Option<PathBuf>,
     codex: bool,
     codex_home: Option<PathBuf>,
+    opencode: bool,
+    opencode_home: Option<PathBuf>,
     hook_cmd: Option<String>,
     claude_json: Option<PathBuf>,
     skip_version_check: bool,
@@ -104,6 +107,8 @@ impl Default for SetupOpts {
             dsh_home: None,
             codex: false,
             codex_home: None,
+            opencode: false,
+            opencode_home: None,
             hook_cmd: None,
             claude_json: None,
             skip_version_check: false,
@@ -143,12 +148,14 @@ pub fn run_setup(args: &[String]) -> i32 {
             "--antigravity" => opts.antigravity = true,
             "--dsh" => opts.dsh = true,
             "--codex" => opts.codex = true,
+            "--opencode" => opts.opencode = true,
             "--skip-version-check" => opts.skip_version_check = true,
             "--no-stop-gate" => opts.no_stop_gate = true,
             "--uninstall" => opts.uninstall = true,
             flag @ ("--profile" | "--main-model" | "--advisor" | "--subagent" | "--effort"
             | "--desktop-model" | "--desktop-file" | "--agy-file" | "--dsh-home"
-            | "--codex-home" | "--hook-cmd" | "--claude-json" | "--lang" | "--policy") => {
+            | "--codex-home" | "--opencode-home" | "--hook-cmd" | "--claude-json"
+            | "--lang" | "--policy") => {
                 let Some(val) = args.get(i + 1) else {
                     eprintln!(
                         "ERR: {}",
@@ -170,6 +177,7 @@ pub fn run_setup(args: &[String]) -> i32 {
                     "--agy-file" => opts.agy_file = Some(PathBuf::from(val)),
                     "--dsh-home" => opts.dsh_home = Some(PathBuf::from(val)),
                     "--codex-home" => opts.codex_home = Some(PathBuf::from(val)),
+                    "--opencode-home" => opts.opencode_home = Some(PathBuf::from(val)),
                     "--hook-cmd" => opts.hook_cmd = Some(val.clone()),
                     "--claude-json" => opts.claude_json = Some(PathBuf::from(val)),
                     "--policy" => match policy::parse_selection(val) {
@@ -291,6 +299,15 @@ pub fn run_setup(args: &[String]) -> i32 {
         );
         opts.codex = false;
     }
+    let opencode_dir = opencode::config_dir(opts.opencode_home.as_deref(), &home);
+    if opts.opencode && !opencode_dir.exists() {
+        say!(
+            "  skip OpenCode (not found: {})",
+            "  OpenCode пропущен (не найден: {})",
+            opencode_dir.display()
+        );
+        opts.opencode = false;
+    }
 
     // Before anything is copied or written: input that setup cannot handle is refused as it is,
     // so a refusal leaves neither a copied binary nor a rewritten settings.json behind.
@@ -314,6 +331,12 @@ pub fn run_setup(args: &[String]) -> i32 {
             if opts.codex {
                 preflight_rules_file(&codex_home_dir(&opts, &home).join("AGENTS.md"))?;
             }
+            if opts.opencode {
+                preflight_rules_file(&opencode_dir.join("AGENTS.md"))?;
+            }
+        }
+        if opts.opencode {
+            opencode::preflight(&opencode_dir)?;
         }
         if opts.codex {
             preflight_codex_hooks(&codex_home_dir(&opts, &home).join("hooks.json"))?;
@@ -465,6 +488,26 @@ pub fn run_setup(args: &[String]) -> i32 {
                 );
             }
         }
+        // OpenCode reads its global AGENTS.md and, from 2.3.1, ~/.claude/CLAUDE.md only while there is none
+        // (packages/core/src/config/plugin/instruction.ts): an AGENTS.md made here would hide the user's CLAUDE.md.
+        if opts.opencode && !opencode_dir.join("AGENTS.md").exists() {
+            say!(
+                "  [note] OpenCode rules block not written: {} does not exist, and while it does not OpenCode 2.3.1+ reads ~/.claude/CLAUDE.md (with the Claude Code rules block); creating it would hide CLAUDE.md from OpenCode",
+                "  [note] блок правил OpenCode не записан: {} нет, и пока его нет, OpenCode 2.3.1+ читает ~/.claude/CLAUDE.md (с блоком правил Claude Code); если его создать, OpenCode перестанет видеть CLAUDE.md",
+                opencode_dir.join("AGENTS.md").display()
+            );
+        } else if opts.opencode {
+            // OpenCode asks through its own permission prompt (the plugin), so the asking policies keep their claim.
+            if let Err(e) = upsert_claude_md(
+                &opencode_dir.join("AGENTS.md"),
+                &opencode_dir.join("backups"),
+                &other_client_rules(&opts, true),
+                opts.dry_run,
+            ) {
+                eprintln!("ERR: {e}");
+                return 1;
+            }
+        }
     }
 
     if opts.desktop {
@@ -541,6 +584,13 @@ pub fn run_setup(args: &[String]) -> i32 {
             Lang::En => format!("{} --codex", hook_cmd.trim()),
         };
         if let Err(e) = update_codex_hooks(&codex_home_dir(&opts, &home), &cmd, opts.dry_run) {
+            eprintln!("ERR: {e}");
+            return 1;
+        }
+    }
+
+    if opts.opencode {
+        if let Err(e) = opencode::install(&opencode_dir, &hook_cmd, opts.lang, opts.dry_run) {
             eprintln!("ERR: {e}");
             return 1;
         }
@@ -2990,7 +3040,7 @@ fn print_help() {
     if is_ru() {
         println!(
             "Использование: context-toolkit setup [параметры]\n\n\
-         Автоматическая экономная настройка Claude Code, Claude Desktop, Antigravity и DeepSeek Harness:\n\
+         Автоматическая экономная настройка Claude Code, Claude Desktop, Antigravity, DeepSeek Harness, Codex и OpenCode:\n\
          - Перед записью делает копии существующих конфигов\n\
          - Создаёт агентов Explore (haiku) и checker (opus); модель, советник и effort НЕ меняются, пока не переданы --main-model / --advisor / --effort (прежняя схема: --main-model sonnet --advisor fable --effort high). Изменения печатаются как «было -> стало»; свои env/хуки/плагины сохраняются\n\
          - Подключает хуки Инструментов контекста PreToolUse/PostToolUse с \"onFailure\": \"continue\" (упавший хук не блокирует вызов; claude 2.1.295+) вместо старых записей ctxkit / claude-guard / no-inline-backslash\n\
@@ -3018,16 +3068,18 @@ fn print_help() {
            --dsh-home <path>      Другой домашний каталог DeepSeek Harness (по умолчанию: DSH_HOME или ~/.dsh)\n\
            --codex                Подключить хуки Инструментов контекста в Codex (hooks.json; доверить их в Codex через /hooks)\n\
            --codex-home <path>    Другой домашний каталог Codex (по умолчанию: CODEX_HOME или ~/.codex)\n\
+           --opencode             Подключить Инструменты контекста в OpenCode 2 (плагин plugins/loadout-context-toolkit; перезапустить OpenCode)\n\
+           --opencode-home <path> Другой каталог конфигурации OpenCode (по умолчанию: OPENCODE_CONFIG_DIR, XDG_CONFIG_HOME/opencode или ~/.config/opencode)\n\
            --hook-cmd <cmd>       Другая команда хука\n\
            --policy <list>        Политики <profile>/context-toolkit.json, которые проверяют хуки; включены ровно перечисленные, остальные выключены (без флага не меняются): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (через запятую; `none` выключает все). Печатает «было -> стало» по каждой политике; ключи файла, написанные вами, сохраняются; блок правил после --with-rules перечисляет включённые политики\n\
            --lang <en|ru>         Язык промптов, фрагментов, сообщений хуков и вывода setup (по умолчанию: en)\n\
-           --uninstall            Откат: убрать наши элементы хуков (нового и старого имени), CONTEXT_TOOLKIT_LANG и CTXKIT_LANG, блок правил в CLAUDE.md (любые маркеры) (а с --antigravity/--agy-file или --dsh/--dsh-home и их записи), раздел policies в context-toolkit.json и ctxkit.json (файл удаляется, только если его создал setup и в нём нет ничего вашего; иначе ваши ключи остаются и называются) и бинарники hooks/context-toolkit и hooks/ctxkit (в ~/.local/bin — только наши); файл возвращается байт в байт из копии, если в нём больше ничего не менялось, а CLAUDE.md / settings.json, созданный setup, удаляется. Модель, советник, effort, env субагентов, пресеты Desktop и файлы агентов НЕ трогаются: печатаются их текущие значения и копии settings.json. Работает с --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; параметры установки отвергаются\n"
+           --uninstall            Откат: убрать наши элементы хуков (нового и старого имени), CONTEXT_TOOLKIT_LANG и CTXKIT_LANG, блок правил в CLAUDE.md (любые маркеры) (а с --antigravity/--agy-file, --dsh/--dsh-home, --codex/--codex-home или --opencode/--opencode-home и их записи), раздел policies в context-toolkit.json и ctxkit.json (файл удаляется, только если его создал setup и в нём нет ничего вашего; иначе ваши ключи остаются и называются) и бинарники hooks/context-toolkit и hooks/ctxkit (в ~/.local/bin — только наши); файл возвращается байт в байт из копии, если в нём больше ничего не менялось, а CLAUDE.md / settings.json, созданный setup, удаляется. Модель, советник, effort, env субагентов, пресеты Desktop и файлы агентов НЕ трогаются: печатаются их текущие значения и копии settings.json. Работает с --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --codex, --codex-home, --opencode, --opencode-home, --lang; параметры установки отвергаются\n"
         );
         return;
     }
     println!(
         "Usage: context-toolkit setup [options]\n\n\
-         Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, and DeepSeek Harness:\n\
+         Automates low-waste setup for Claude Code, Claude Desktop, Antigravity, DeepSeek Harness, Codex and OpenCode:\n\
          - Backs up existing configs before writing\n\
          - Creates the Explore (haiku) and checker (opus) agents; model, advisor and effort are NOT changed unless you pass --main-model / --advisor / --effort (the previous scheme: --main-model sonnet --advisor fable --effort high). Changes are printed as \"was -> became\"; custom env/hooks/plugins are preserved\n\
          - Wires Context Toolkit PreToolUse/PostToolUse hooks with \"onFailure\": \"continue\" (a failing hook never blocks the call; claude 2.1.295+) replacing old ctxkit / claude-guard / no-inline-backslash entries\n\
@@ -3055,10 +3107,12 @@ fn print_help() {
            --dsh-home <path>      Override DeepSeek Harness home (default: DSH_HOME or ~/.dsh)\n\
            --codex                Wire Context Toolkit hooks into Codex (hooks.json; trust them in Codex with /hooks)\n\
            --codex-home <path>    Override Codex home (default: CODEX_HOME or ~/.codex)\n\
+           --opencode             Wire Context Toolkit into OpenCode 2 (plugin plugins/loadout-context-toolkit; restart OpenCode)\n\
+           --opencode-home <path> Override OpenCode config dir (default: OPENCODE_CONFIG_DIR, XDG_CONFIG_HOME/opencode or ~/.config/opencode)\n\
            --hook-cmd <cmd>       Override hook command path\n\
            --policy <list>        Policies of <profile>/context-toolkit.json that hooks enforce; exactly the listed ones are on, the rest off (not changed without this flag): commit-hygiene, confirm-irreversible, stray-files, build-slots=N (comma separated; `none` turns all off). Prints \"was -> became\" per policy; keys of the file you wrote yourself are kept; the rules block lists the policies that are on after --with-rules\n\
            --lang <en|ru>         Language for prompts, snippets, and hook messages (default: en)\n\
-           --uninstall            Roll back: remove our hook elements (new and old name), CONTEXT_TOOLKIT_LANG and CTXKIT_LANG, the CLAUDE.md rules block (any markers) (and, with --antigravity/--agy-file or --dsh/--dsh-home, those entries), the policies section of context-toolkit.json and ctxkit.json (the file is deleted only when setup created it and holds nothing of yours; otherwise your keys stay and are named) and the hooks/context-toolkit and hooks/ctxkit binaries (in ~/.local/bin only ours); a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --lang; setup-only options are rejected\n"
+           --uninstall            Roll back: remove our hook elements (new and old name), CONTEXT_TOOLKIT_LANG and CTXKIT_LANG, the CLAUDE.md rules block (any markers) (and, with --antigravity/--agy-file, --dsh/--dsh-home, --codex/--codex-home or --opencode/--opencode-home, those entries), the policies section of context-toolkit.json and ctxkit.json (the file is deleted only when setup created it and holds nothing of yours; otherwise your keys stay and are named) and the hooks/context-toolkit and hooks/ctxkit binaries (in ~/.local/bin only ours); a file is put back byte for byte from its backup when nothing else changed in it, and a CLAUDE.md / settings.json that setup created is deleted. Model, advisor, effort, subagent env, Desktop presets and agent files are NOT touched: their current values and the settings.json backups are printed. Works with --dry-run, --profile, --hook-cmd, --claude-json, --desktop-file, --agy-file, --dsh, --dsh-home, --codex, --codex-home, --opencode, --opencode-home, --lang; setup-only options are rejected\n"
     );
 }
 

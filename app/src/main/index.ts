@@ -583,14 +583,22 @@ void app.whenReady().then(() => {
     return guarded(() =>
       // Codex: `setup` inherits this process's environment and takes CODEX_HOME from it outside the checks, so the status
       // does too (straight from process.env: envOf hides the environment in an installed build, setup still sees it)
-      ctxkit.status(ctxBin(), join(userHome(), '.claude', 'hooks'), join(userHome(), '.local', 'bin'), userHome(), (!ctxHome() && process.env['CODEX_HOME']) || join(userHome(), '.codex')),
+      ctxkit.status(
+        ctxBin(),
+        join(userHome(), '.claude', 'hooks'),
+        join(userHome(), '.local', 'bin'),
+        userHome(),
+        (!ctxHome() && process.env['CODEX_HOME']) || join(userHome(), '.codex'),
+        // the same order as `setup --opencode`: OPENCODE_CONFIG_DIR, then XDG_CONFIG_HOME/opencode, then ~/.config/opencode
+        (!ctxHome() && (process.env['OPENCODE_CONFIG_DIR'] || (process.env['XDG_CONFIG_HOME'] && join(process.env['XDG_CONFIG_HOME'], 'opencode')))) || join(userHome(), '.config', 'opencode'),
+      ),
     )
   })
   ipcMain.handle('ctxkit:doctor', (e) => {
     guard(e)
     return guarded(async () => {
       // `doctor` exits with code 1 when there is an error-level finding: that is a normal response, so parse stdout
-      const r = await ctxkit.run(ctxBin(), ['doctor', '--json', '--lang', getLang(), ...ctxkit.profileArgs(ctxHome())], 20_000)
+      const r = await ctxkit.run(ctxBin(), ['doctor', '--json', '--lang', getLang(), ...ctxkit.doctorArgs(ctxHome())], 20_000)
       const d = ctxkit.parseDoctor(r.stdout)
       // findings may contain full paths (a settings.json parse error, a hook command): the home directory path is replaced with `~`
       const tidyOpt = (s: string | null): string | null => (s === null ? null : tidy(s))
