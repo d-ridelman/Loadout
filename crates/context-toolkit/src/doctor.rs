@@ -368,9 +368,26 @@ pub fn diagnose(profile: &Path, lang: Lang) -> Vec<Finding> {
 /// The OpenCode plugin of `setup --opencode` in the OpenCode config `dir`: said only when the file is there, since
 /// most profiles never wire OpenCode up.
 pub fn opencode_findings(dir: &Path, lang: Lang) -> Vec<Finding> {
-    use crate::setup::opencode::{plugin_path, plugin_state, PluginState};
+    use crate::setup::opencode::{plugin_exe, plugin_path, plugin_state, PluginState};
     let detail = Some(plugin_path(dir).display().to_string());
-    match plugin_state(dir) {
+    let state = plugin_state(dir);
+    // a rollback without --opencode removes the hook binary and leaves the plugin, which then passes every call
+    if let (PluginState::Current | PluginState::Outdated, Some(exe)) = (&state, plugin_exe(dir)) {
+        if !exe.is_file() {
+            return vec![f(
+                "opencode_plugin",
+                "warn",
+                t(
+                    lang,
+                    "the OpenCode plugin runs a hook program that is not there, so it checks nothing: rerun setup with --opencode, or roll back with --opencode to remove the plugin",
+                    "плагин OpenCode запускает программу хука, которой нет, и ничего не проверяет: снова запустите setup с --opencode или откат с --opencode, чтобы убрать плагин",
+                ),
+                Some(exe.display().to_string()),
+                Some("context-toolkit setup --opencode"),
+            )];
+        }
+    }
+    match state {
         PluginState::Missing => vec![],
         PluginState::Current => vec![f(
             "opencode_plugin",
@@ -599,8 +616,14 @@ mod tests {
         assert!(opencode_findings(&d, Lang::En).is_empty());
         let p = plugin_path(&d);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
-        let ours = plugin_text("C:/h/context-toolkit.exe", &["--opencode".into()]);
+        let exe = d.join("context-toolkit.exe");
+        let ours = plugin_text(&exe.to_string_lossy(), &["--opencode".into()]);
         fs::write(&p, &ours).unwrap();
+        // the hook program is gone (a rollback without --opencode): the plugin checks nothing
+        let gone = opencode_findings(&d, Lang::En);
+        assert_eq!(sev(&gone, "opencode_plugin"), "warn");
+        assert!(gone[0].message.contains("not there"));
+        fs::write(&exe, "x").unwrap();
         assert_eq!(
             sev(&opencode_findings(&d, Lang::En), "opencode_plugin"),
             "ok"

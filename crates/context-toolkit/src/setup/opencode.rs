@@ -14,8 +14,17 @@ const ARGS_LINE: &str = "const ARGS = ";
 pub(crate) fn config_dir(custom: Option<&Path>, home: &Path) -> PathBuf {
     custom
         .map(Path::to_path_buf)
-        .or_else(|| env::var_os("OPENCODE_CONFIG_DIR").map(PathBuf::from))
-        .or_else(|| env::var_os("XDG_CONFIG_HOME").map(|x| PathBuf::from(x).join("opencode")))
+        // an empty variable counts as unset, as in OpenCode (`||`)
+        .or_else(|| {
+            env::var_os("OPENCODE_CONFIG_DIR")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            env::var_os("XDG_CONFIG_HOME")
+                .filter(|v| !v.is_empty())
+                .map(|x| PathBuf::from(x).join("opencode"))
+        })
         .unwrap_or_else(|| home.join(".config").join("opencode"))
 }
 
@@ -58,23 +67,38 @@ pub(crate) enum PluginState {
 }
 
 pub(crate) fn plugin_state(dir: &Path) -> PluginState {
-    let Ok(text) = fs::read_to_string(plugin_path(dir)) else {
+    let Ok(bytes) = fs::read(plugin_path(dir)) else {
         return PluginState::Missing;
     };
-    if !text.starts_with(HEAD) {
+    // not UTF-8 is not ours (and must not be overwritten); a BOM added by an editor still is
+    let Ok(text) = String::from_utf8(bytes) else {
+        return PluginState::Foreign;
+    };
+    if !text.trim_start_matches('\u{feff}').starts_with(HEAD) {
         return PluginState::Foreign;
     }
+    match command_in(&text) {
+        Some((exe, args)) if plugin_text(&exe, &args) == text => PluginState::Current,
+        _ => PluginState::Outdated,
+    }
+}
+
+/// The program and arguments written into a plugin text of ours (its `EXE` and `ARGS` lines).
+fn command_in(text: &str) -> Option<(String, Vec<String>)> {
     let value = |prefix: &str| {
         text.lines()
             .find_map(|l| l.strip_prefix(prefix))
             .and_then(|v| serde_json::from_str::<Value>(v).ok())
     };
-    let exe = value(EXE_LINE);
-    let args: Option<Vec<String>> = value(ARGS_LINE).and_then(|v| serde_json::from_value(v).ok());
-    match (exe.as_ref().and_then(Value::as_str), args) {
-        (Some(exe), Some(args)) if plugin_text(exe, &args) == text => PluginState::Current,
-        _ => PluginState::Outdated,
-    }
+    let exe = value(EXE_LINE)?.as_str()?.to_string();
+    let args = serde_json::from_value(value(ARGS_LINE)?).ok()?;
+    Some((exe, args))
+}
+
+/// The hook program the installed plugin runs, when the plugin is ours.
+pub(crate) fn plugin_exe(dir: &Path) -> Option<PathBuf> {
+    let text = fs::read_to_string(plugin_path(dir)).ok()?;
+    command_in(&text).map(|(exe, _)| PathBuf::from(exe))
 }
 
 /// Writes the plugin (a backup of an earlier one of ours goes to `<config>/backups`: a folder under `plugins/`
@@ -228,6 +252,22 @@ mod tests {
         fs::write(plugin_path(&dir), edited).unwrap();
         assert_eq!(plugin_state(&dir), PluginState::Outdated);
         assert!(preflight(&dir).is_ok());
+        assert_eq!(
+            plugin_exe(&dir),
+            Some(PathBuf::from("C:/h/context-toolkit.exe"))
+        );
+        // a BOM from an editor keeps it ours; bytes that are not UTF-8 make it foreign (setup must not overwrite them)
+        let ours = fs::read(plugin_path(&dir)).unwrap();
+        fs::write(
+            plugin_path(&dir),
+            [b"\xef\xbb\xbf".as_slice(), &ours].concat(),
+        )
+        .unwrap();
+        assert_eq!(plugin_state(&dir), PluginState::Outdated);
+        fs::write(plugin_path(&dir), [&ours[..], b"\xe9"].concat()).unwrap();
+        assert_eq!(plugin_state(&dir), PluginState::Foreign);
+        assert!(preflight(&dir).is_err());
+        fs::write(plugin_path(&dir), &ours).unwrap();
         remove(&dir, false).unwrap();
         assert_eq!(plugin_state(&dir), PluginState::Missing);
         assert!(

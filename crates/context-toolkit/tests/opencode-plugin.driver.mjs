@@ -26,7 +26,9 @@ function permissionApi(reply, prompts) {
       if (hooks.evaluate) await hooks.evaluate(event)
       if (event.effect !== 'ask') return
       prompts.push({ message: event.message, resources: input.resources, source: input.source })
-      if (reply !== 'once') throw new Error('rejected')
+      // a plain "no" is OpenCode's Permission.DeclinedError (a tagged error); a "no" with feedback carries the feedback
+      if (reply === 'reject') throw Object.assign(new Error(''), { _tag: 'Permission.DeclinedError' })
+      if (reply === 'feedback') throw new Error('try a dry run first')
     },
   }
 }
@@ -36,7 +38,7 @@ const call = async (before, tool, input) => {
     await before({ tool, sessionID: 'ses_1', agent: 'build', messageID: 'msg_1', id: `call_${Math.random()}`, input })
     return { ok: true }
   } catch (e) {
-    return { ok: false, message: e instanceof Error ? e.message : String(e) }
+    return { ok: false, message: e instanceof Error ? e.message : String(e), tag: e?._tag }
   }
 }
 
@@ -51,6 +53,7 @@ out.otherTool = await call(plain.before, 'grep', { pattern: 'x' })
 out.askNoApi = await call(plain.before, 'shell', { command: 'git push' })
 out.askApproved = await call((await load(plugin, permissionApi('once', prompts))).before, 'shell', { command: 'git push' })
 out.askRejected = await call((await load(plugin, permissionApi('reject', prompts))).before, 'shell', { command: 'git push' })
+out.askFeedback = await call((await load(plugin, permissionApi('feedback', prompts))).before, 'shell', { command: 'git push' })
 // an assert that allows without running the evaluate hook (an older OpenCode, a policy that skipped it): nobody was asked
 out.askUnprompted = await call((await load(plugin, { assert: async () => {} })).before, 'shell', { command: 'git push' })
 out.prompts = prompts

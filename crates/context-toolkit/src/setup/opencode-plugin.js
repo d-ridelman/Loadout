@@ -56,17 +56,19 @@ const resource = (input) => [input?.command, input?.path, input?.filePath].find(
 export default {
   id: "loadout.context-toolkit",
   async setup(ctx) {
-    // Calls waiting for a prompt of ours (call id -> reason), and those whose prompt OpenCode really showed.
+    // Calls waiting for a prompt of ours (session/call id -> reason), and those our evaluate hook turned into a prompt.
     const asking = new Map()
     const prompted = new Set()
+    const key = (sessionID, callID) => `${sessionID}/${callID}`
     if (typeof ctx.permission?.hook === "function") {
       await ctx.permission.hook("evaluate", (event) => {
-        const reason = asking.get(event.source?.id)
+        const k = key(event.sessionID, event.source?.id)
+        const reason = asking.get(k)
         if (event.action !== ACTION || reason === undefined) return
         // The base policy allows every action ("*"), so ours would pass without asking anyone.
         event.effect = "ask"
         event.message = reason
-        prompted.add(event.source.id)
+        prompted.add(k)
       })
     }
     await ctx.tool.hook("execute.before", async (event) => {
@@ -83,7 +85,8 @@ export default {
       if (answer?.permissionDecision !== "ask") return
       const refuse = (why) => new Error(`${reason}\n${why}`)
       if (typeof ctx.permission?.assert !== "function") throw refuse(NEEDS_HUMAN)
-      asking.set(event.id, reason)
+      const k = key(event.sessionID, event.id)
+      asking.set(k, reason)
       let shown = false
       try {
         await ctx.permission.assert({
@@ -95,10 +98,13 @@ export default {
           metadata: { reason },
         })
       } catch (e) {
+        // A plain "no" goes back as it is: OpenCode recognises it and ends the step, as with its own prompts.
+        if (e?._tag === "Permission.DeclinedError") throw e
+        // A "no" with feedback, or a deny rule of the agent: the model gets our reason and OpenCode's message.
         throw refuse(`${DECLINED} ${e instanceof Error ? e.message : ""}`.trim())
       } finally {
-        asking.delete(event.id)
-        shown = prompted.delete(event.id)
+        asking.delete(k)
+        shown = prompted.delete(k)
       }
       // Allowed without a prompt: our evaluate hook did not run, so nobody confirmed the call.
       if (!shown) throw refuse(NEEDS_HUMAN)

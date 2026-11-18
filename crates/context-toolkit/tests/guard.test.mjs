@@ -816,9 +816,11 @@ const cases = [
     if (!o.readSlice.ok || !o.clean.ok || !o.otherTool.ok) return 'a clean call was refused';
     if (o.askNoApi.ok || !o.askNoApi.message.includes('git push') || !o.askNoApi.message.includes('подтверждение человека')) return `ask without a prompt: ${JSON.stringify(o.askNoApi)}`;
     if (!o.askApproved.ok) return `an approved ask: ${JSON.stringify(o.askApproved)}`;
-    if (o.askRejected.ok || !o.askRejected.message.includes('не подтверждён')) return `a rejected ask: ${JSON.stringify(o.askRejected)}`;
+    // a plain "no" goes back to OpenCode unchanged (it ends the step); a "no" with feedback reaches the model with our reason
+    if (o.askRejected.ok || o.askRejected.tag !== 'Permission.DeclinedError') return `a rejected ask: ${JSON.stringify(o.askRejected)}`;
+    if (o.askFeedback.ok || !o.askFeedback.message.includes('не подтверждён') || !o.askFeedback.message.includes('git push') || !o.askFeedback.message.includes('try a dry run first')) return `an ask declined with feedback: ${JSON.stringify(o.askFeedback)}`;
     if (o.askUnprompted.ok || !o.askUnprompted.message.includes('подтверждение человека')) return 'an ask nobody saw passed';
-    if (o.prompts.length !== 2 || !o.prompts.every((p) => p.message.includes('git push') && p.resources[0] === 'git push' && p.source.type === 'tool')) return `prompts: ${JSON.stringify(o.prompts)}`;
+    if (o.prompts.length !== 3 || !o.prompts.every((p) => p.message.includes('git push') && p.resources[0] === 'git push' && p.source.type === 'tool')) return `prompts: ${JSON.stringify(o.prompts)}`;
     if (!o.missingExe.ok || !o.garbage.ok) return `a broken hook refused a call: ${JSON.stringify([o.missingExe, o.garbage])}`;
     return true;
   }],

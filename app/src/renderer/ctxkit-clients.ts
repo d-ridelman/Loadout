@@ -72,8 +72,8 @@ export const ctxClients = (): CtxClientRow[] => [
       'Stops whole reads of large files, checks shell commands (cat of a large file, recursive grep, code with backslashes) and edits, safeguards (what needs confirming OpenCode asks you in its permission prompt), the rules block in ~/.config/opencode/AGENTS.md if that file already exists. Installed as the plugin ~/.config/opencode/plugins/loadout-context-toolkit.',
     ),
     lacks: t(
-      'Только OpenCode 2 (плагины V2). После применения перезапустите OpenCode. Своего AGENTS.md setup не создаёт: пока его нет, OpenCode 2.3.1+ читает ~/.claude/CLAUDE.md вместе с блоком правил Claude Code. Нет шлюза Stop (у OpenCode нет события конца ответа) и проверки синтаксиса после правки. Проверено по исходникам OpenCode и в его среде выполнения на тестовых файлах, в живом OpenCode — нет.',
-      'OpenCode 2 only (V2 plugins). Restart OpenCode after applying. Setup does not create an AGENTS.md of its own: while there is none, OpenCode 2.3.1+ reads ~/.claude/CLAUDE.md with the Claude Code rules block. No Stop gate (OpenCode has no end-of-reply event) and no syntax check after an edit. Checked against the OpenCode sources and in its runtime on test files, not in a live OpenCode.',
+      'Только OpenCode 2 (плагины V2). После применения перезапустите OpenCode. Своего AGENTS.md setup не создаёт: пока его нет, OpenCode 2.3.1+ читает ~/.claude/CLAUDE.md вместе с блоком правил Claude Code. Нет шлюза Stop (он читает транскрипты Claude Code) и проверки синтаксиса после правки (пока не сделана). Проверено по исходникам OpenCode и в его среде выполнения на тестовых файлах, в живом OpenCode — нет.',
+      'OpenCode 2 only (V2 plugins). Restart OpenCode after applying. Setup does not create an AGENTS.md of its own: while there is none, OpenCode 2.3.1+ reads ~/.claude/CLAUDE.md with the Claude Code rules block. No Stop gate (it reads Claude Code transcripts) and no syntax check after an edit (not done yet). Checked against the OpenCode sources and in its runtime on test files, not in a live OpenCode.',
     ),
   },
 ]
